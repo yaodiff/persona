@@ -212,5 +212,7 @@
   "change_machine_fallback_minutes": "予備コンピューターへ切り替えるまでのオフライン時間：{before} → {after} 分",
   "bad_machine_fallback_minutes": "1〜1440 の整数分で指定してください。",
   "machine_fallback_minutes_unchanged": "オフライン切り替えのしきい値は変更されていません。",
-  "machine_fallback_minutes_saved": "オフライン切り替えのしきい値を {value} 分に保存しました。"
+  "machine_fallback_minutes_saved": "オフライン切り替えのしきい値を {value} 分に保存しました。",
+  "title_memory_extension_standing_bytes": "メモリ拡張の常駐メモリ容量",
+  "change_memory_extension_standing_bytes": "メモリ拡張の常駐メモリ容量：{before} KB → {after} KB。次のメッセージから適用されます。容量を大きくすると、メインチャットの各メッセージに最大でその分のテキストが加わります。"
 }

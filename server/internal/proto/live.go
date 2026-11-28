@@ -1,14 +1,14 @@
 package proto
 
 // SessionLive is what a working Claude's status line says right now ("✻ Frosting… (16m 15s · ↓ 22.8k tokens ·
-// thinking with xhigh effort)"): the node reads it off the pane about once a second while a client watches the
-// session and sends it as the notification "session.live" {session_id, live}; the hub passes it to the session's
-// subscribers that asked for the feature "session_live" as {type: "live", machine_id, session_id, live}. A nil
-// live means the turn is over or the line is gone (docs/protocol/protocol.md "Live status").
+// thinking with xhigh effort)"), or the main-loop compaction Persona's plugin reports for a pane-less session. The
+// node sends it while a client watches the session as the notification "session.live" {session_id, live}; the hub
+// passes it to subscribers that asked for "session_live" as {type: "live", machine_id, session_id, live}. A nil live
+// means the turn is over, compaction ended, or the line is gone (docs/protocol/protocol.md "Live status").
 type SessionLive struct {
 	// Verb is the spinner's word without the ellipsis ("Frosting").
 	Verb string `json:"verb,omitempty"`
-	// ElapsedS is how long this turn has run, in seconds, as the line counts it.
+	// ElapsedS is how long this turn, or this compaction, has run in seconds.
 	ElapsedS int `json:"elapsed_s,omitempty"`
 	// TokensDown is the output tokens so far this turn ("↓ 22.8k tokens" is 22800).
 	TokensDown int `json:"tokens_down,omitempty"`

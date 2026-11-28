@@ -3,6 +3,7 @@
   "investigation_handoff_open": "Complete or reassign the investigation finding before closing this follow-up: {finding}",
   "investigation_parent_handoff_open": "Complete the handed-off follow-up before deleting this investigation task: {finding}",
   "investigation_review_required": "Review the current investigation findings before parking or closing this task.",
+  "native_loop_noop": "At least six scheduled checks reported no change over at least three hours. Check what the Agent is waiting for and decide whether to keep, change or end the loop.",
   "investigation_findings_open": "Give these investigation findings a follow-up, owner decision, or completion evidence first: {findings}",
   "handoff_wait": "Waiting for {task} to check {check}",
   "decision_review_changed": "This decision has changed or was already handled. Refresh before trying again.",

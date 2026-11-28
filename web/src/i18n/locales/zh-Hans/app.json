@@ -1,5 +1,5 @@
 {
-  "signed_out": "当前浏览器的登录已失效，可能已在「设置 › 设备」中被移除。请重新连接。",
+  "signed_out": "当前浏览器的登录已失效，可能已在「设置 › 高级 › 设备」中被移除。请重新连接。",
   "link_token_invalid": "链接中的 token 无效，请粘贴新的 token。",
   "title_new_chat": "新对话",
   "title_history": "Persona 对话",

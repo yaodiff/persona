@@ -691,6 +691,12 @@ func TestChannelsReadFailureNeverOverwrites(t *testing.T) {
 	// The runs' machine is known: otherwise their watchers drop them (the machine left the configuration) while the
 	// test is still looking.
 	f := newFakeHub().withMachine()
+	f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
+		return map[string]any{"channels": []channel.View{{
+			ID: "wechat_x", Kind: channel.KindIM, Source: channel.SourcePlugin,
+			Installed: true, Enabled: true, State: channel.StateConnected,
+		}}}, nil
+	})
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_example", PairedAt: time.Unix(100, 0)}, nil
 	})

@@ -2,6 +2,7 @@
 import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
 import { api, ApiError, enc } from "../../lib/api";
 import { answerCard, usePendingLine, type AnswerFrom } from "../../lib/card-answer";
+import { isCommandPrompt } from "../../lib/command-ask";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { composing } from "../../lib/send-history";
 import { EDITABLE } from "../../lib/shortcuts";
@@ -730,7 +731,7 @@ export class DelegatedCardFrame extends Component<{ d: DelegatedAnswer; children
 }
 
 /** A terminal dialog's words under its question (#6638): at most six lines in view, the rest a scroll inside them. */
-const DETAIL_FOLD = "mb-2 max-h-[6lh] text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2";
+export const DETAIL_FOLD = "mb-2 max-h-[6lh] text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2";
 
 export const CODE_BOX = "max-h-48 overflow-auto rounded-[8px] bg-inset px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-ink-2 shadow-hairline";
 
@@ -1006,7 +1007,7 @@ function SupervisorHeldCard({ ix }: { ix: Interaction }) {
 function ScreenCard({ ix }: { ix: Interaction }) {
   // The hub sets `command` only on a shell command's permission prompt (one choice, no free-text field).
   const plain = <PlainScreenCard ix={ix} />;
-  return ix.dialog?.command ? <Suspense fallback={plain}><CommandScreenCard ix={ix} /></Suspense> : plain;
+  return isCommandPrompt(ix.dialog) ? <Suspense fallback={<fieldset disabled className="contents">{plain}</fieldset>}><CommandScreenCard ix={ix} /></Suspense> : plain;
 }
 
 function PlainScreenCard({ ix }: { ix: Interaction }) {

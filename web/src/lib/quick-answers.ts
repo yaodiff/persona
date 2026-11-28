@@ -2,6 +2,8 @@
 // permission's "Deny" / "Allow" (not one that has fields to fill in), one single-choice question's options (four at most),
 // a terminal dialog's plain options (one to four, read by the hub too). Every other card opens its chat. The bodies
 // are the chat card's (views/chat/Interactions.tsx sends them through the same resolve).
+import { approvalImpact, declinesCommand } from "./approval-impact";
+import { confirmationEnabled } from "./approval-confirmation";
 import { t } from "../i18n";
 import type { Resolution } from "./answered";
 import { isCommandInput, isSecretHandoff, isSecretRun } from "./tool-detail";
@@ -37,9 +39,11 @@ export function quickAnswers(ix: Interaction): QuickChoice[] | null {
   switch (ix.kind) {
     case "permission": {
       if (needsFieldValues(ix)) return null;
+      const deny = { key: "deny", label: t("chat-interactions.deny"), body: denyBody() };
+      if (confirmationEnabled() && approvalImpact(ix)) return [deny];
       return [
         { key: "allow", label: t("chat-interactions.allow"), body: allowBody(), primary: true },
-        { key: "deny", label: t("chat-interactions.deny"), body: denyBody() },
+        deny,
       ];
     }
     case "question": {
@@ -54,7 +58,8 @@ export function quickAnswers(ix: Interaction): QuickChoice[] | null {
       const plain = (d?.options ?? []).filter((o) => !o.kind);
       // a question read off the terminal with several steps (its tab bar) or its review tab goes to the chat
       if (!d || d.multi || d.steps?.length || d.review || plain.length < 1 || plain.length > 4) return null;
-      return plain.map((o) => ({ key: o.key, label: o.label, body: { option: o.key }, hint: o.detail }));
+      const choices = confirmationEnabled() && approvalImpact(ix) ? plain.filter(o => declinesCommand(ix, o.key)) : plain;
+      return choices.map((o) => ({ key: o.key, label: o.label, body: { option: o.key }, hint: o.detail }));
     }
     default:
       return null;

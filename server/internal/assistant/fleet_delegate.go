@@ -455,7 +455,18 @@ func (s *Service) reanswer(ctx context.Context, id string, answers map[string]st
 	if sent {
 		return 0, nil // the same answer again: it went already
 	}
-	if err := s.sendToSession(ctx, ix.MachineID, ix.SessionID, text); err != nil {
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		parts = append(parts, it.Answer)
+	}
+	if handedOff, broken := s.handoffBrokenModelAnswer(ctx, ix, strings.Join(parts, "; ")); broken {
+		if !handedOff {
+			return http.StatusConflict, errModelRouteUnavailable
+		}
+		if err := s.deferWorkCard(ctx, ix, workT(s.lang(ctx), "you_skipped")); err != nil {
+			return http.StatusInternalServerError, err
+		}
+	} else if err := s.sendToSession(ctx, ix.MachineID, ix.SessionID, text); err != nil {
 		return http.StatusBadGateway, err
 	}
 	s.fleet.mu.Lock()

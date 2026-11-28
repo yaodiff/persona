@@ -24,7 +24,7 @@ const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; classNa
 };
 
 /** The task's criteria, each as its latest report or review found it, and what the supervisor said last. */
-export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: SessionLookup }) {
+export function ReviewChecklist({ todo, lookup, compact = false }: { todo: Todo; lookup?: SessionLookup; compact?: boolean }) {
   const cachedDirectionNames = useCachedDirectionNames();
   const assistant = useStore((s) => s.assistant);
   const shown = useShownManager();
@@ -35,6 +35,27 @@ export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: Session
   const parked = todo.wait == null && triage(todo, lookup, Date.now()).section === "parked";
   // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
   const extras = todo.done_at ? resultExtras(todo) : undefined;
+  const hasReviewNote = Boolean(review?.note && review.note !== todo.ask?.summary);
+  const hasAutoReview = Boolean(autoReviewLine(sup));
+  if (compact && list.length === 0 && !extras && !parked && !hasReviewNote && !hasAutoReview) {
+    return (
+      <section
+        data-testid="review-checklist"
+        data-compact-empty="true"
+        className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-label text-ink-3"
+      >
+        <span className="font-medium text-ink-2">{t("assistant-tasks.review_title")}</span>
+        <span aria-hidden>·</span>
+        <span>{t("assistant-tasks.review_none")}</span>
+        <ReviewBadge todo={todo} />
+        {sup.expect_minutes ? (
+          <span className="ml-auto text-submeta text-ink-3">
+            {t("assistant-tasks.review_expect", { minutes: sup.expect_minutes })}
+          </span>
+        ) : null}
+      </section>
+    );
+  }
   const assistantMatchesTodo = Boolean(assistant && sameManager(assistant.manager ?? shown, todo.manager));
   const authorCtx: EvidenceAuthorContext = {
     manager: todo.manager,

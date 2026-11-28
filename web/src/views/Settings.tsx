@@ -2,7 +2,7 @@ import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
-import { href, subscribeRoute } from "../lib/router";
+import { replaceReturnedEntry, href, subscribeRoute } from "../lib/router";
 import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +26,7 @@ import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setNeedsYouAutoOpen, useNeedsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
+import { setConfirmationEnabled, useApprovalConfirmation } from "../lib/approval-confirmation";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
@@ -74,7 +75,7 @@ import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type La
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
 import { SeenRowsRow } from "./settings/SeenRowsSetting";
-import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, INTEGRATIONS_SETTINGS_REGISTRATION, integrationChildState, integrationParent, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
+import { ADVANCED_HUB_TABS, AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, INTEGRATIONS_SETTINGS_REGISTRATION, integrationChildState, integrationParent, isAdvancedHubTab, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
 import { decodeIntegrationsRoute, integrationHref, integrationManager, integrationScope, isIntegrationDetailRoute, isIntegrationTab, isLegacyIntegrationTab, readIntegrationsAddress, type IntegrationsRoute, type IntegrationView } from "./settings/integrations-route";
 import { useOtherIntegrationsMode } from "./settings/integrations-mode";
 import { moduleFeaturesSource } from "../core/module-features";
@@ -215,10 +216,23 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     history.replaceState(history.state, "", BASE + redirect);
     setAddress(readSettingsLocation());
   }, [redirect]);
+  const advancedReturn = useRef<"parent" | "child" | null>(null);
   // External in-app navigation to /settings (e.g. "Change in Settings" from the sidebar while Settings is already open).
   useEffect(() => subscribeRoute(() => {
     const path = stripBase(location.pathname);
     if (path === "/settings" || path.startsWith("/settings/")) {
+      const target = settingsAt(location.search, location.hash);
+      if (advancedReturn.current === "parent" && target.tab !== "advanced") {
+        // A sidebar selection can replace Advanced between Back and Forward. Return to the child's
+        // entry before replacing it so both the actual previous page and later history survive.
+        advancedReturn.current = "child";
+        history.forward();
+        return;
+      }
+      if (advancedReturn.current === "child" && target.tab && isAdvancedHubTab(target.tab)) {
+        replaceReturnedEntry(BASE + settingsHref("advanced", null, false), categoryState(history.state));
+      }
+      advancedReturn.current = null;
       setAddress(readSettingsLocation());
     }
   }), []);
@@ -226,6 +240,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const at = unavailable ? { tab: "integrations" as const, sub: null, section: null } : settingsAt(canonical.search, canonical.hash);
   const listed = phone && !at.tab;
   const tab: Tab = at.tab ?? "general";
+  const advancedChild = isAdvancedHubTab(tab);
   const linkedManager = at.section === "repositories" || at.section === "knowledge-items"
     ? new URLSearchParams(canonical.search).get("manager") ?? undefined : undefined;
   const manager = namedManager ?? linkedManager ?? otherManager(picked ?? undefined);
@@ -330,7 +345,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     // Out of an item's page opened on its category's page: back to that page's entry, as Back does, so neither a copy of
     // it nor the item is left to go back to. A sheet open over the item has an entry of its own on top: off with both,
     // its marker taken first so its close does not go back once more.
-    if (k === tab && sub && !id && openedFromSub(state)) {
+    const returningToAdvanced = advancedChild && k === "advanced";
+    if (((k === tab && sub && !id) || returningToAdvanced) && openedFromSub(state)) {
+      if (returningToAdvanced) advancedReturn.current = "parent";
       return popSettingsItem();
     }
     // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
@@ -339,11 +356,12 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
     // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
-    else if (k === tab && !sub && id && itemIsPage(k)) {
+    else if ((k === tab && !sub && id && itemIsPage(k)) || (tab === "advanced" && isAdvancedHubTab(k))) {
       if (takeOverlayEntry()) history.replaceState(itemState(state), "", BASE + to);
       else history.pushState(itemState(state), "", BASE + to);
     } else {
-      const nextState = k === tab && sub && id && openedFromSub(state) ? state : categoryState(state);
+      const sameParent = (k === tab && sub && id) || (advancedChild && isAdvancedHubTab(k));
+      const nextState = sameParent && openedFromSub(state) ? state : categoryState(state);
       history.replaceState(nextState, "", BASE + to);
     }
     setAddress(readSettingsLocation());
@@ -378,6 +396,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     && !(tab === "connectors" && sub === "feishu-bot" && !parent);
   const up = integrationUp ? { label: integrationBackLabel(tab, parent?.view) }
     : itemOpen ? { label: t("settings.back_to", { name: tabInfo(tab).label }) } : null;
+  const backLabel = advancedChild ? t("settings.back_to", { name: TAB_INFO.advanced.label }) : up?.label ?? t("settings.back");
   const backIntegration = () => {
     if (!integration) return;
     if (parent) return popSettingsItem();
@@ -387,7 +406,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     openIntegration({ scope, view: { kind: tab === "sources" ? "data-flow" : "list" }, filter }, "root");
   };
   const goBack = () => {
-    if (integrationUp) backIntegration();
+    if (advancedChild) pick("advanced");
+    else if (integrationUp) backIntegration();
     else if (itemOpen) pick(tab);
     else toList();
   };
@@ -488,7 +508,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         {phone && at.tab ? (
           <>
-            <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={goBack} />
+            <IconButton icon="chevronLeft" label={backLabel} onClick={goBack} />
             <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{tabInfo(tab).label}</h1>
           </>
         ) : (
@@ -536,7 +556,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               style={{ animation: `fade-up 320ms ${EASE} both` }}
             >
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
-              {tab === "advanced" && <Advanced />}
+              {tab === "advanced" && <Advanced onPick={pick} />}
+              {advancedChild && !phone && (
+                <Button tone="quiet" icon="chevronLeft" aria-label={backLabel} onClick={goBack} className="-ml-2 mb-3">{TAB_INFO.advanced.label}</Button>
+              )}
               {tab === "persona" && <AssistantProfile manager={linkedManager} onTriageModel={() => pick("models", "agent.triage", "model-config")} />}
               {tab === "avatar" && (
                 <Group title={t("settings.avatar")} footer={t("settings.avatar_footer")} anchor="avatar">
@@ -722,6 +745,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
     nav.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
   }, [tab, query]);
   const tabs = search.tabs.filter(shown);
+  const selected = isAdvancedHubTab(tab) && (!query || !tabs.includes(tab)) ? "advanced" : tab;
   const groups = search.groups.filter((g) => shown(g.tab));
   const none = !!query && !tabs.length && !groups.length;
   return (
@@ -756,7 +780,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
       <nav ref={nav} aria-label={t("settings.categories")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
         {query ? (
           <>
-            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
+            {tabs.map((k) => <NavRow key={k} k={k} selected={selected === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
             {groups.length > 0 && <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{t("settings.search_in_page")}</div>}
             {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}/${g.group}`} g={g} onGroup={onGroup} />)}
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
@@ -771,7 +795,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
                   <span className="min-w-0 flex-1"><GroupTitle group={g.key} compact /></span>
                   <GroupAction group={g.key} />
                 </div>
-                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
+                {its.map((k) => <NavRow key={k} k={k} selected={selected === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
                 {hasFooter(g.key) && <p className="px-3 pt-1 pb-1.5 text-[11px] leading-snug text-ink-3"><GroupFooter group={g.key} /></p>}
               </div>
             );
@@ -925,16 +949,29 @@ function General({ onModel }: { onModel: () => void }) {
  *  fonts and colored sidebar icons. General keeps the default appearance (Match system / Light / Dark), text size,
  *  language and behavior rows. These are the same components reading the same browser storage as before, so an
  *  existing choice and the untouched default look are unchanged. */
-function Advanced() {
+function Advanced({ onPick }: { onPick: (k: Tab) => void }) {
+  const confirm = useApprovalConfirmation();
   return (
-    <Group title={t("settings.appearance")} anchor="appearance">
-      <SurfaceStyleRow />
-      <ThemeColorPicker />
-      <ExtensionThemePicker />
-      <FontRows />
-      <SidebarIconsRow />
-      <PhoneNavRow />
-    </Group>
+    <>
+      <Group title={t("settings.appearance")} anchor="appearance">
+        <SurfaceStyleRow />
+        <ThemeColorPicker />
+        <ExtensionThemePicker />
+        <FontRows />
+        <SidebarIconsRow />
+        <PhoneNavRow />
+      </Group>
+      <Group title={t("approval-impact.approvals")} anchor="outward-confirmation">
+        <Row label={t("approval-impact.setting")} hint={t("approval-impact.hint")} wrapHint>
+          <Switch label={t("approval-impact.setting")} on={confirm} onChange={setConfirmationEnabled} />
+        </Row>
+      </Group>
+      <Group title={t("settings-nav.group_hub")}>
+        {ADVANCED_HUB_TABS.map(k => (
+          <Row key={k} {...TAB_INFO[k]} wrapHint onClick={() => onPick(k)} />
+        ))}
+      </Group>
+    </>
   );
 }
 

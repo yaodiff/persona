@@ -1314,6 +1314,10 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 	if ix, ok := s.pendingIx(id); ok && ix.ToolName == workCardTool && workResolutionSends(ix, r) {
 		if sess, found := s.decoratedSession(ix.MachineID, ix.SessionID); found && stoppedAgent(sess) {
 			return &rpc.Error{Code: "agent_stopped", Message: "the agent has stopped and cannot receive this answer"}
+		} else if _, code, broken := s.brokenModelSession(ix.MachineID, ix.SessionID); broken && !(code == proto.TurnErrorModelRoute && workResolutionIsContinue(ix, r)) {
+			if _, _, canHandoff, _ := s.canHandoffBrokenModel(ctx, ix); !canHandoff {
+				return errModelRouteUnavailable
+			}
 		}
 	}
 	s.fleet.mu.Lock()

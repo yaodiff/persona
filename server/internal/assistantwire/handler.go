@@ -30,6 +30,11 @@ const AdminHeader = "X-Persona-Admin"
 // RoleHeader, never the client's.
 const DeviceNameHeader = "X-Persona-Device-Name"
 
+// DeviceIDHeader carries the hub-authenticated paired device ID (for example "dev_...") of the device a relayed
+// request came from ("" when the caller is not a paired user device), set by the hub like RoleHeader, never the
+// client's.
+const DeviceIDHeader = "X-Persona-Device-ID"
+
 // PersonHeader is "1" on a relayed request from a person's own full device (a device token with its own id, not the
 // hub's token or a pairing code), set by the hub like RoleHeader, never the client's: what may change a message held
 // for an Agent while its computer is away (#10661), whose delivery carries that person's provenance.

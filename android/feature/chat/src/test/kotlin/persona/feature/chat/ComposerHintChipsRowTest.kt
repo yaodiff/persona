@@ -21,6 +21,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
@@ -448,5 +449,56 @@ class ComposerHintChipsRowTest {
         rule.waitForIdle()
         rule.onNodeWithText("Default: agy").assertDoesNotExist()
         rule.onNodeWithText("Full access").assertDoesNotExist()
+    }
+
+    @Test fun modeHintOpensPermissionsWhenEnabledAndOverriddenLauncherStaysAligned() {
+        var style by mutableStateOf(AppStyle.Board)
+        var enabled by mutableStateOf(true)
+        var permissionTaps = 0
+        val session = mainSession()
+        rule.setContent {
+            PersonaTheme(darkTheme = true, reduceMotion = true, style = style) {
+                Box(Modifier.width(400.dp).background(PersonaTheme.palette.background).testTag("composer-container")) {
+                    LargeWindowComposer(
+                        session = session.key,
+                        state = rememberChatComposerState(),
+                        working = false,
+                        sending = false,
+                        canClear = false,
+                        service = null,
+                        onSend = {},
+                        onCommand = {},
+                        onNotice = {},
+                        assistantChat = true,
+                        enabled = enabled,
+                        hintChips = {
+                            ConversationLauncherChip(management, "box", "main", session.launcher, "codex", null) { _, _ -> }
+                        },
+                        modeHint = chatModeHint(session, includeModes = true),
+                        onPermissions = { permissionTaps++ },
+                    )
+                }
+            }
+        }
+        for (targetStyle in listOf(AppStyle.Board, AppStyle.Brief)) {
+            rule.runOnIdle { style = targetStyle; enabled = true }
+            rule.waitUntil(5_000) { rule.onAllNodes(hasText("codex")).fetchSemanticsNodes().isNotEmpty() }
+            val container = rule.onNodeWithTag("composer-container").getBoundsInRoot()
+            val launcherNode = rule.onNodeWithText("codex").assertIsDisplayed()
+            val modeNode = rule.onNodeWithText("Full access").assertIsDisplayed()
+            assertUnclippedInside(launcherNode.getBoundsInRoot(), launcherNode.getUnclippedBoundsInRoot(), container, "$targetStyle override launcher")
+            assertUnclippedInside(modeNode.getBoundsInRoot(), modeNode.getUnclippedBoundsInRoot(), container, "$targetStyle override mode")
+            assertSameHorizontalRow(launcherNode.getBoundsInRoot(), modeNode.getBoundsInRoot(), "$targetStyle override")
+            maybeSaveShot("composer-container", "composer-chips-overridden-${targetStyle.name.lowercase()}-dark.png")
+
+            val before = permissionTaps
+            modeNode.performClick()
+            assertEquals("$targetStyle tapping modeHint invokes onPermissions", before + 1, permissionTaps)
+
+            rule.runOnIdle { enabled = false }
+            rule.waitForIdle()
+            modeNode.performClick()
+            assertEquals("$targetStyle disabled composer keeps modeHint non-interactive", before + 1, permissionTaps)
+        }
     }
 }

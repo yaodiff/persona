@@ -78,6 +78,9 @@ func (b *inboxBook) policyOf(it *InboxItem) *InboxPolicy {
 
 // policyTwin is what the AI twin does with it by its policy ("" as configured); under b.mu.
 func (b *inboxBook) policyTwin(it *InboxItem) string {
+	if it.Connector != nil && it.Connector.OwnerPromise != nil {
+		return TwinNever
+	}
 	if p := b.policyOf(it); p != nil {
 		return p.Twin
 	}

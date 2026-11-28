@@ -1817,13 +1817,16 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   lastLines.current = allLines;
   // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
   const historyFrom = useMemo(() => (tr.hasMore ? loadedFrom(tr.items) : undefined), [tr.hasMore, tr.items]);
+  // While an Assistant transcript is still loading its first page, tr.items is empty and historyFrom is undefined:
+  // hold unanchored timelineFeed cards until items arrive so they do not push the centered <Loading /> out of view.
+  const holdUnanchoredFeed = Boolean(assistant && tr.loading && !tr.items.length);
   // A canonical, completed silent round leaves no empty row or feed card in the main timeline. Its full projection is
   // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
   const quiet = useMemo(() => {
     const through = detached && Date.parse(tr.items.at(-1)?.ts ?? "");
-    const scoped = through === false ? feed : Number.isFinite(through) ? feed.filter((item) => Date.parse(item.at) <= through) : NO_FEED;
+    const scoped = holdUnanchoredFeed ? NO_FEED : through === false ? feed : Number.isFinite(through) ? feed.filter((item) => Date.parse(item.at) <= through) : NO_FEED;
     return splitBackgroundActivity(allLines, scoped, historyFrom);
-  }, [allLines, feed, historyFrom, detached, tr.items]);
+  }, [allLines, feed, historyFrom, detached, tr.items, holdUnanchoredFeed]);
   const lines = quiet.timeline;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
@@ -1852,8 +1855,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   );
   const feedFrom = assistant ? historyFrom : undefined;
   const assistantLines = useMemo(
-    () => (assistant ? displayLines(lines, quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
-    [assistant, lines, quiet.timelineFeed, feedFrom],
+    () => (assistant && !holdUnanchoredFeed ? displayLines(lines, quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
+    [assistant, holdUnanchoredFeed, lines, quiet.timelineFeed, feedFrom],
   );
   const groupedAssistantLines = useMemo(() => (assistant ? groupAssistantLines(assistantLines) : NO_DISPLAY_LINES), [assistant, assistantLines]);
   const handoffGroupState = useMemo(() => new Map<string, boolean>(), [mid, sid]);

@@ -477,11 +477,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			kept[i].OriginOnly = true // persist the route's lack of acceptance authority with the signal itself
 		}
 	}
-	willInterject := slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
-	c, listed := s.session(ctx, here.MachineID, to)
-	directBlocked := !listed || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) ||
-		!willInterject && (c.Status == proto.StatusWorking || s.relayWaits(to, relayMsg{Tool: superviseTool, Urgent: anyDecision(kept)}))
-	if directBlocked && slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
+	if slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) && s.digestDirectBlocked(ctx, here.MachineID, to, kept, now) {
 		var queueableEntries []prompts.SuperviseEntry
 		var queueable, reval []superviseSignal
 		for i, g := range kept {
@@ -521,6 +517,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.todoReadyTold(ctx, holds)
 		s.prMergeWakeTold(ctx, holds)
 		s.parentCloseoutTold(ctx, holds)
+		s.topicFollowupsTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
 		s.finishFailedStartBatches(ctx, to, nil, holds, now)
 		b.mu.Lock()
@@ -576,6 +573,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.todoReadyTold(ctx, kept)
 		s.prMergeWakeTold(ctx, kept)
 		s.parentCloseoutTold(ctx, kept)
+		s.topicFollowupsTold(ctx, holds)
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 		s.finishFailedStartBatches(ctx, to, kept, settled, now)
 	}()
@@ -609,7 +607,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	render := func(list []prompts.SuperviseEntry) string { return s.renderQueuedDigest(ctx, to, list) }
 	queued := s.queuedDigestSignals(to)
-	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
+	msg := digestRelayMsg(kept, now)
 	if len(queued) > 0 && !slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
 		// The last message may still wait in the queue: this one takes its place with both.
 		all := mergeSignals(queued, kept)
@@ -638,7 +636,6 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	msg.Text, msg.Urgent = render(entries), anyDecision(kept)
 	msg.Signals = encodeDigestSignals(kept)
-	msg.Interject = slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
 	if background {
 		s.logf("supervise: %d signal(s) to the background supervisor %s", len(entries), short(to))
 	} else if to != here.Main {
@@ -647,7 +644,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	}
 	c, ok := s.session(ctx, here.MachineID, to)
-	if !ok || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) || !msg.Interject && (c.Status == proto.StatusWorking || s.relayWaits(to, msg)) {
+	if s.directRelayBlocked(c, ok, to, msg) {
 		if !s.queueDigest(to, msg, kept, now, prev) {
 			return false
 		}
@@ -701,10 +698,35 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 	b.queued[to] = list
 }
 
+// digestRelayMsg is the relay a digest of kept made at now goes out as, before its text and signals are filled in.
+// The revalidation partition and the send both decide on it, so they hold it to the same owner-presence window.
+func digestRelayMsg(kept []superviseSignal, now time.Time) relayMsg {
+	return relayMsg{
+		From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC(), Urgent: anyDecision(kept),
+		Interject: slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply }),
+	}
+}
+
+// directRelayBlocked reports whether msg can't go into conversation to directly now and has to queue instead: c is
+// the node's session for to (listed: it has one).
+func (s *Service) directRelayBlocked(c proto.Session, listed bool, to string, msg relayMsg) bool {
+	return !listed || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) ||
+		!msg.Interject && (c.Status == proto.StatusWorking || s.relayWaits(to, msg))
+}
+
+// digestDirectBlocked: a digest of kept for conversation to could not go in directly at now (directRelayBlocked, the
+// check the send makes), so the signals that need revalidation stay pending while the rest queue. It asks the node
+// for the session, so deliverDigest calls it only when such a signal rides along; otherwise the direct send looks
+// the session up itself.
+func (s *Service) digestDirectBlocked(ctx context.Context, machine, to string, kept []superviseSignal, now time.Time) bool {
+	c, listed := s.session(ctx, machine, to)
+	return s.directRelayBlocked(c, listed, to, digestRelayMsg(kept, now))
+}
+
 // supervisionSignalNeedsRevalidation reports whether an untried signal must stay in pending for delivery-time
 // revalidation rather than being persisted into a rendered queued relay.
 func supervisionSignalNeedsRevalidation(g superviseSignal) bool {
-	return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
+	return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply || g.Kind == sigTopicFollowup ||
 		g.Kind == sigNeedsUserExternalInfo && g.PREventID != "" ||
 		g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 }
@@ -861,6 +883,8 @@ func (s *Service) digestEntryChecked(ctx context.Context, g superviseSignal, web
 		return s.prMergedDigestEntry(ctx, g, web)
 	case sigParentCloseout:
 		return s.parentCloseoutDigestEntry(ctx, g, web)
+	case sigTopicFollowup:
+		return s.topicFollowupDigestEntry(ctx, g, web)
 	case sigCardlessWait:
 		// P1-1: an unreadable acceptance book is not evidence of no card — restore and retry before any claim logic.
 		if s.cardlessDigestShouldRetry(g) {
@@ -942,6 +966,9 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		return e, ok
 	}
 	switch g.Kind {
+	case sigTopicFollowup:
+		e, ok, _ := s.topicFollowupDigestEntry(ctx, g, web)
+		return e, ok
 	case sigTodoReady:
 		e, ok, _ := s.todoReadyDigestEntry(ctx, g, web)
 		return e, ok
@@ -1099,6 +1126,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			} else {
 				g.Detail = note
 			}
+		}
+	case sigLoopNoop:
+		if current, ok := s.nativeLoopNoopSignal(ctx, t); !ok || current.Key != g.Key {
+			return prompts.SuperviseEntry{}, false
 		}
 	case sigNoProgress:
 		if st != "" || !s.noProgressHolds(g) {
@@ -1411,7 +1442,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOutageRecovery: 4, sigOrphaned: 4, sigRecovered: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOutageRecovery: 4, sigOrphaned: 4, sigRecovered: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLoopNoop: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	rank[sigBlockersUnblocked], rank[sigMergeTrainTurn], rank[sigWriteConflict] = 3, 3, 3
 	at := func(e prompts.SuperviseEntry) int {
 		switch {

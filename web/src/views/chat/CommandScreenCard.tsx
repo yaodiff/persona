@@ -13,8 +13,12 @@ import type { Interaction } from "../../lib/types";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { Button, cx, Kbd } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { declinesCommand } from "../../lib/approval-impact";
+import { RowConfirm } from "../settings/SettingsParts";
+import { ApprovalImpactLine, useApprovalReview } from "./ApprovalReview";
 import { DigitHint } from "./Choice";
-import { Card, CloseBlockedAgent, OptionLabel, resolve, useCardKeys } from "./Interactions";
+import { ScrollFold } from "./fold-scroll";
+import { Card, CloseBlockedAgent, DETAIL_FOLD, OptionLabel, resolve, useCardKeys } from "./Interactions";
 import { useChatCardTapGuard } from "./card-tap-guard";
 
 export interface CommandScreenCardProps {
@@ -52,6 +56,7 @@ function CommandScreenCardView({
   const ask = commandAsk(d) ?? { command: d?.command ?? "", deadlineAllows: false };
   const pair = allowDeny(d);
   const options = d?.options ?? [];
+  const review = useApprovalReview(ix);
   const [busy, setBusy] = useState<string | null>(null);
   const pending = useRef(false);
   const run = async (key: string, action: () => Promise<unknown> | void) => {
@@ -67,6 +72,17 @@ function CommandScreenCardView({
   };
   const go = (body: Record<string, unknown>, key: string) =>
     run(key, () => (onResolve ? onResolve(body) : resolve(ix, body)));
+  const choose = (key: string) => {
+    if (!declinesCommand(ix, key) && review.request(key)) return;
+    review.cancel();
+    void go({ option: key }, key);
+  };
+  const confirm = () => {
+    if (!review.choice || pending.current) return;
+    const key = review.choice;
+    review.cancel();
+    void go({ option: key }, key);
+  };
   const handleDismiss =
     onDismiss === null || (onDismiss === undefined && ix.no_hand_back)
       ? undefined
@@ -76,37 +92,39 @@ function CommandScreenCardView({
   const keys = useCardKeys({
     digit: (n) => {
       const o = options[n - 1];
-      if (!o || busy !== null) return false;
-      void go({ option: o.key }, o.key);
+      if (!o || review.choice || busy !== null) return false;
+      choose(o.key);
       return true;
     },
     enter: () => {
-      if (busy !== null || !pair) return false;
-      void go({ option: pair.allow.key }, pair.allow.key);
+      if (review.choice || busy !== null || !pair) return false;
+      choose(pair.allow.key);
     },
   });
   return (
     <Card
       kicker={t("chat-interactions.permission_kicker")}
-      title={t("chat-commandask.title", { agent: agentLabel({ agent: ix.agent, agent_label: ix.agent_label }) })}
+      title={(d?.command === undefined ? d?.question : undefined) || t("chat-commandask.title", { agent: agentLabel({ agent: ix.agent, agent_label: ix.agent_label }) })}
       cardKeys={keys}
       tapGuard={resolvedTapGuard}
       onDismiss={handleDismiss}
       busy={busy !== null}
       footer={<div className="flex w-full min-w-0 flex-col gap-2">
-        {pair ? (
-          <span className="flex w-full min-w-0 items-center justify-between gap-2">
-            <Button tone="quiet" busy={busy === pair.deny.key} disabled={busy !== null} onClick={() => void go({ option: pair.deny.key }, pair.deny.key)}>
+        <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-2">
+          {pair && (
+            <Button tone="quiet" busy={busy === pair.deny.key} disabled={busy !== null} onClick={() => choose(pair.deny.key)}>
               {t("chat-interactions.deny")}
             </Button>
-            <Button tone="primary" busy={busy === pair.allow.key} disabled={busy !== null} onClick={() => void go({ option: pair.allow.key }, pair.allow.key)}>
+          )}
+          <RowConfirm open={review.choice !== null} confirm={t("approval-impact.confirm")} onCancel={review.cancel} onConfirm={confirm} busy={busy !== null} trigger={pair ? (
+            <Button tone="primary" busy={busy === pair.allow.key} disabled={busy !== null} onClick={() => choose(pair.allow.key)}>
               {t("chat-interactions.allow")}
               {keys.focused && <Kbd>Enter</Kbd>}
             </Button>
-          </span>
-        ) : (
-          <span className="text-[11.5px] text-ink-3">{t("chat-interactions.screen_hint")}</span>
-        )}
+          ) : (
+            <span className="text-[11.5px] text-ink-3">{t("chat-interactions.screen_hint")}</span>
+          )} />
+        </div>
         {onCloseBlockedAgent === undefined ? (
           <CloseBlockedAgent ix={ix} disabled={busy !== null} />
         ) : onCloseBlockedAgent ? (
@@ -114,16 +132,17 @@ function CommandScreenCardView({
         ) : null}
       </div>}
     >
-      <CommandAskBody ask={ask} />
+      {!ask.command && d?.detail ? <ScrollFold className={DETAIL_FOLD} data-screen-detail>{d.detail}</ScrollFold> : <CommandAskBody ask={ask} />}
+      <ApprovalImpactLine impact={review.impact} />
       {!pair && (
         <div className="flex flex-col gap-0.5">
-          {options.map((o, i) => (
+          {options.map((o, i) => (!review.choice || declinesCommand(ix, o.key)) && (
             <button
               key={o.key}
               type="button"
               disabled={busy !== null}
               data-tap-answer
-              onClick={() => void go({ option: o.key }, o.key)}
+              onClick={() => choose(o.key)}
               className="touch-hit -mx-1.5 flex items-start gap-2 rounded-control px-1.5 py-1.5 text-left transition-colors hover:bg-hover disabled:opacity-60"
             >
               <span className="mt-[1px] flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-[5px] bg-field px-1 font-mono text-[10.5px] text-ink-2 shadow-hairline">{o.key}</span>

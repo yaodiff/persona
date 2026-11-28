@@ -3,10 +3,8 @@ package persona.feature.chat
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -607,16 +605,8 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                 }
             }
         }
-        // Content-width chips at the leading edge, like the old All / task chips; a large font scrolls rather than wraps.
-        val barScroll = rememberScrollState()
-        Row(
-            Modifier.fillMaxWidth()
-                .assistantTrayEdgeFade(barScroll)
-                .horizontalScroll(barScroll)
-                .testTag("assistant-tray-bar"),
-            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        // Content-width entries at the leading edge; overflowing trays or large fonts scroll with soft edge fades.
+        AssistantTrayBar(Modifier.testTag("assistant-tray-bar")) {
             leading?.invoke()
             // Finished is there while it has rows, or its tray is open (an emptied tray stays reachable till it closes)
             for (tray in AssistantTray.entries.filter {

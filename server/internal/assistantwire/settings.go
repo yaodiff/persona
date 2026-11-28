@@ -5,6 +5,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // ---- the assistant's settings, and the conversations the hub's features start (docs/assistant/assistant.md "Boundary with hub") ----
@@ -192,6 +193,9 @@ type StartParams struct {
 	// Human attributes the first message to an app start vouched for by the hub. It is used for missing replies.
 	// The node adds no client message ID to that input. Never over the bus.
 	Human bool `json:"-"`
+	// OriginDeviceID is the hub-authenticated paired device ID that opened this conversation, set from
+	// DeviceIDHeader on POST /api/v1/assistant/conversations; never over the bus.
+	OriginDeviceID wireids.DeviceID `json:"-"`
 }
 
 // StartResult carries the conversation started for the hub.
@@ -222,20 +226,24 @@ type SendParams struct {
 	// ReplyInput is a direct app send authenticated by the hub's legacy owner credential. It only qualifies for
 	// missing-reply recovery. Internal sends and other roles cannot set it, and it does not authorize a hand-off.
 	ReplyInput bool `json:"reply_input,omitempty"`
+	// OriginDeviceID is the hub-authenticated paired device ID (for example "dev_...") that sent this message, or
+	// "" when not sent by a paired user device. Set by the hub from verified credentials, never from request body.
+	OriginDeviceID wireids.DeviceID `json:"origin_device_id,omitempty"`
 }
 
 // KeepUndeliveredParams is assistant.keep_undelivered's params. Params are the app's message as it came (text, images,
 // launcher, model; never what SendParams made of it): a retry runs SendParams again. Human is SendParams.Human for it;
 // Error the failure the owner is told, Code its code ("" for none).
 type KeepUndeliveredParams struct {
-	MachineID    string         `json:"machine_id"`
-	SessionID    string         `json:"session_id"`
-	Params       map[string]any `json:"params"`
-	Human        bool           `json:"human,omitempty"`
-	Lang         string         `json:"lang,omitempty"`
-	Code         string         `json:"code,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	CredentialID string         `json:"credential_id,omitempty"`
+	MachineID      string           `json:"machine_id"`
+	SessionID      string           `json:"session_id"`
+	Params         map[string]any   `json:"params"`
+	Human          bool             `json:"human,omitempty"`
+	Lang           string           `json:"lang,omitempty"`
+	Code           string           `json:"code,omitempty"`
+	Error          string           `json:"error,omitempty"`
+	CredentialID   string           `json:"credential_id,omitempty"`
+	OriginDeviceID wireids.DeviceID `json:"origin_device_id,omitempty"`
 	// TriedAt is when the first send began for CodeDeliveryUnknown: its line is looked for from then on. Zero means
 	// nothing was typed, so the message is simply sent again. The original start, not when the connection ended,
 	// covers a slow first attempt.

@@ -594,18 +594,14 @@ fun ChatComposer(
                     PasteImageChip(onPaste = ::pasteImages, onDismiss = clipboardImages::dismiss)
                 ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
                 if (fullToolbar && (hintChips != null || modeHint != null)) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
-                        verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
-                        itemVerticalAlignment = Alignment.CenterVertically,
-                    ) {
+                    ComposerMetaStrip {
                         hintChips?.invoke(this)
                         modeHint?.let {
-                            // Match clickable chip height so side-by-side hint pills align visually without growing row height.
-                            JChip(
-                                it,
-                                Modifier.heightIn(min = JChipTokens.height).testTag("chat-composer-mode-hint"),
+                            ComposerMetaChip(
+                                text = it,
                                 icon = PhIcons.SlidersHorizontal,
+                                modifier = Modifier.testTag("chat-composer-mode-hint"),
+                                onClick = onPermissions?.takeIf { enabled },
                             )
                         }
                     }

@@ -318,6 +318,12 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			return acceptResult{}, err
 		}
 	}
+	// A finding can refer to another card from the same acceptance book.
+	var findingErr error
+	if todoOK && t.Supervision != nil && (t.Supervision.State == reviewUserCheck ||
+		t.Supervision.State == reviewAccepted && t.DoneAt != nil && !t.stageVerified) {
+		findingErr = s.investigationCloseError(ctx, t)
+	}
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
@@ -334,11 +340,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return acceptResult{}, nil
 	}
-	if ownerCheck && !decideAsk(a) && !a.Conclusion {
-		if err := s.investigationCloseError(ctx, t); err != nil {
-			b.mu.Unlock()
-			return acceptResult{}, err
-		}
+	if findingErr != nil && ownerCheck && !decideAsk(a) && !a.Conclusion {
+		b.mu.Unlock()
+		return acceptResult{}, findingErr
 	}
 	completeDismissal := func() {}
 	if a.OutsideID != "" {

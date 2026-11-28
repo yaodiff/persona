@@ -121,9 +121,9 @@ describe("Settings' groups", () => {
     expect(groups[1].textContent).toContain(t("settings-nav.group_device"));
     expect(groups[2].textContent).toContain(t("settings-nav.group_hub"));
     expect(groups[2].textContent).toContain(t("settings-nav.hub_footer"));
-    // the rows: the assistant's profile in the first, the assistant list in the hub's, never called like a group
+    // the rows: the assistant's profile in the first, the hub's own page in the last named group, never called like a group
     expect(groups[0].textContent).toContain(t("settings-nav.tab_profile"));
-    expect(groups[2].textContent).toContain(t("settings-nav.tab_managers"));
+    expect(groups[2].textContent).toContain(t("settings-nav.tab_hub"));
     // Labs on its own: only its row, no title or line of a group
     expect(groups[3].textContent).toBe(t("settings-nav.tab_labs"));
   });

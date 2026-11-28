@@ -962,3 +962,167 @@ func TestTTSBridgeLogsErrorsWhenOnErrorUnset(t *testing.T) {
 		t.Fatalf("expected HTTP 502 in log, got %q", logged)
 	}
 }
+
+func TestTTSBridgeEnqueueTurnQueuesInOrderAndCancelsAll(t *testing.T) {
+	// Piece 1 blocks until released so Turn 2 and Turn 3 are queued while Turn 1 is active.
+	p1Started := make(chan struct{})
+	p1Release := make(chan struct{})
+	p3Started := make(chan struct{})
+	p3Canceled := make(chan struct{})
+
+	makeFrame := func(rate int, val int16) []byte {
+		samples := rate / 50
+		buf := make([]byte, samples*2)
+		for i := range samples {
+			binary.LittleEndian.PutUint16(buf[i*2:], uint16(val))
+		}
+		return buf
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/pcm")
+		w.Header().Set("X-Audio-Sample-Rate", "16000")
+		flusher, _ := w.(http.Flusher)
+
+		switch {
+		case strings.Contains(req.Input, "first"):
+			close(p1Started)
+			<-p1Release
+			_, _ = w.Write(makeFrame(16000, 1001))
+		case strings.Contains(req.Input, "second"):
+			_, _ = w.Write(makeFrame(16000, 2002))
+		case strings.Contains(req.Input, "third"):
+			close(p3Started)
+			_, _ = w.Write(makeFrame(16000, 3003))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			<-r.Context().Done()
+			close(p3Canceled)
+			return
+		default:
+			_, _ = w.Write(makeFrame(16000, 4004))
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var events []string
+	doneCh := make(chan ttsDoneEvent, 8)
+
+	b := newTTSBridge(ttsBridgeConfig{
+		client: newTTSClient(ttsClientConfig{
+			speechURL:  srv.URL + "/v1/audio/speech",
+			httpClient: srv.Client(),
+		}),
+		outputRate: 16000,
+		onStart: func(gen uint64) {
+			mu.Lock()
+			events = append(events, fmt.Sprintf("start:%d", gen))
+			mu.Unlock()
+		},
+		onFrame: func(gen uint64, frame []byte) {
+			sample := int16(binary.LittleEndian.Uint16(frame[:2]))
+			mu.Lock()
+			events = append(events, fmt.Sprintf("frame:%d:%d", gen, sample))
+			mu.Unlock()
+		},
+		onDone: func(gen uint64, cancelled bool, err error) {
+			mu.Lock()
+			events = append(events, fmt.Sprintf("done:%d:%v", gen, cancelled))
+			mu.Unlock()
+			doneCh <- ttsDoneEvent{gen: gen, cancelled: cancelled, err: err}
+		},
+	})
+	defer b.Close()
+
+	g1 := b.EnqueueTurn("voice-a")
+	b.Feed(g1, "first reply.")
+	b.EndText(g1)
+
+	select {
+	case <-p1Started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turn 1 synthesis")
+	}
+
+	// Enqueue turn 2 while turn 1 is still active: must queue without cancelling turn 1.
+	g2 := b.EnqueueTurn("voice-a")
+	b.Feed(g2, "second reply.")
+	b.EndText(g2)
+
+	if !b.Active() {
+		t.Fatal("bridge should be active while turn 1 is running and turn 2 is queued")
+	}
+
+	close(p1Release)
+
+	d1 := waitDone(t, doneCh, 2*time.Second)
+	d2 := waitDone(t, doneCh, 2*time.Second)
+	if d1.gen != g1 || d1.cancelled || d1.err != nil {
+		t.Fatalf("turn 1 done = %+v, want gen=%d cancelled=false err=nil", d1, g1)
+	}
+	if d2.gen != g2 || d2.cancelled || d2.err != nil {
+		t.Fatalf("turn 2 done = %+v, want gen=%d cancelled=false err=nil", d2, g2)
+	}
+
+	mu.Lock()
+	gotEvents := slices.Clone(events)
+	mu.Unlock()
+	wantEvents := []string{
+		fmt.Sprintf("start:%d", g1),
+		fmt.Sprintf("frame:%d:1001", g1),
+		fmt.Sprintf("done:%d:false", g1),
+		fmt.Sprintf("start:%d", g2),
+		fmt.Sprintf("frame:%d:2002", g2),
+		fmt.Sprintf("done:%d:false", g2),
+	}
+	if !slices.Equal(gotEvents, wantEvents) {
+		t.Fatalf("events = %v, want %v", gotEvents, wantEvents)
+	}
+
+	// Now start turn 3, queue turn 4 behind it, then Cancel(): both must cancel and Active() becomes false.
+	g3 := b.EnqueueTurn("voice-a")
+	b.Feed(g3, "third reply.")
+	b.EndText(g3)
+
+	select {
+	case <-p3Started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turn 3 synthesis")
+	}
+
+	g4 := b.EnqueueTurn("voice-a")
+	b.Feed(g4, "fourth reply.")
+	b.EndText(g4)
+
+	b.Cancel()
+
+	select {
+	case <-p3Canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn 3 HTTP request was not canceled on Cancel()")
+	}
+
+	d3 := waitDone(t, doneCh, 2*time.Second)
+	d4 := waitDone(t, doneCh, 2*time.Second)
+	if d3.gen != g3 || !d3.cancelled {
+		t.Fatalf("turn 3 done = %+v, want gen=%d cancelled=true", d3, g3)
+	}
+	if d4.gen != g4 || !d4.cancelled {
+		t.Fatalf("turn 4 done = %+v, want gen=%d cancelled=true", d4, g4)
+	}
+	if b.Active() {
+		t.Fatal("bridge should not be active after Cancel()")
+	}
+}

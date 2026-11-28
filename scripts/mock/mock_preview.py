@@ -311,6 +311,13 @@ def forward(port):
     return page_server() if MODE["mode"] != "old" and listening(port) else None
 
 
+def forward_error(port):
+    """Optional simulated direct-forwarding failure `(status, message)` while the dev server itself and stream mode stay live."""
+    if MODE["mode"] == "directfail" and listening(port):
+        return (502, "dev server did not answer direct loopback forwarding")
+    return None
+
+
 def install(hub):
     """Adds the preview to the mock: its feature, an agent's Storybook port, and the routes."""
     HUB["hub"] = hub

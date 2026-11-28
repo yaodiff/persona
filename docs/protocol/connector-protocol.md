@@ -134,8 +134,9 @@ Group-capable connectors submit each thread's new messages as a **batch awaiting
 - `track`: the calling conversation's track, its slug (`main` for the main track); absent when the hub cannot tell.
 - `track_kind`: the track's kind; absent when not known (the main track).
 - `categories`: the conversation's information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`; `docs/assistant/health.md` "Information categories"), `[]` for general. **Absent means not known** (an older hub, a turn not tagged yet): take it for sensitive.
+- `origin_device_id`: the hub-authenticated paired device ID (for example `dev_...`) that originated the current user turn; absent when the turn did not come from a paired user device (scheduled task, channel, extension, legacy master token, or an older hub). Set exclusively by the hub from verified credentials, never client-supplied, and updated or cleared on each turn so stale device identities never carry over.
 
-All three are optional and additive (no version change): a program that ignores them works as before. Whether the phone confirms a write stays the hub's decision, never the connector's. A connector built on `server/internal/connector/serve` reads them with `connector.CallContextOf(ctx)` inside `Call`, `Describe` and `Write`; an SDK program reads them from the params (`ConnectorCallParams`, `ConnectorDoParams`).
+All four are optional and additive (no version change): a program that ignores them works as before. Whether the phone confirms a write stays the hub's decision, never the connector's. A connector built on `server/internal/connector/serve` reads them with `connector.CallContextOf(ctx)` inside `Call`, `Describe` and `Write`; an SDK program reads them from the params (`ConnectorCallParams`, `ConnectorDoParams`).
 
 ### Guarded conditional auto-confirm
 

@@ -22,6 +22,7 @@ const (
 	sigNeedsYou      = "needs_you"      // an agent waits for an answer
 	sigTimedOut      = "timed_out"      // terminal agents stopped after unattended lack of progress
 	sigStalled       = "stalled"        // working, but nothing moved for long
+	sigLoopNoop      = "loop_noop"      // repeated no-change results from an Agent native schedule
 	sigNoProgress    = "no_progress"    // working, its session moves, but only waits and repeats: no real progress (supervise_progress.go)
 	sigAllStopped    = "all_stopped"    // every current participant stopped with nothing scheduled to resume it
 	sigInterrupted   = "interrupted"    // the model service cut its turn off
@@ -148,6 +149,8 @@ type superviseSignal struct {
 	Told bool
 	// Inbox: the Inbox item an inbox signal names, and how many new messages it tells (supervise_inbox.go).
 	Inbox *prompts.SuperviseInbox
+	// Thread guards a linked-topic notification if the task is rebound while its digest waits.
+	Thread *TodoThread
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
 	// a persisted relay payload: once admitted, the existing queue owns delivery.
 	batchTo    string
@@ -296,7 +299,7 @@ func (g superviseSignal) urgent() bool {
 		return !g.JudgeDown
 	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigRecovered, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigOwnerPresent:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigOwnerPresent, sigTopicFollowup:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -1557,7 +1560,8 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if g, ok := s.deliveryHoldSignal(ctx, t, now); ok { // an owner hold with no card goes to its supervisor first
 			s.signal(g)
 		}
-		s.briefClock(ctx, t, now)   // past its brief's clock with no end (task_brief_scope.go)
+		s.briefClock(ctx, t, now) // past its brief's clock with no end (task_brief_scope.go)
+		s.signalNativeLoopNoop(ctx, t)
 		s.watchTurn(ctx, t, agents) // a turn that ended with no working heard, or was left half handled (task_turns.go)
 	}
 	if s.expireSupervisionHolds(ctx, now) {

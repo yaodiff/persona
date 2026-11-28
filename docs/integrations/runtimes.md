@@ -619,6 +619,10 @@ engine, and reads its transcript itself; see `docs/integrations/engines.md`. The
 terminal.
 
 The web Agent session overview requests `session.info` while open for a terminal pane or a local Antigravity runtime session.
+For a runtime row without a transcript, the node adds the saved `stop_cause` to this answer, alongside the
+transcript-backed path. A runtime-owned session Persona did not start keeps that cause on its current runtime
+connection, never as a Persona-owned session record; a later working or blocked observation clears it, as a running
+terminal does.
 The node reads the conversation's `.system_generated/swarm/members.json` and adds the optional `swarm_workers`
 roster to that response. A running worker in `working` or `mentions` wake mode shows as Working or Waiting,
 respectively. Stopped and killed workers show as Stopped. The overview shows the worker count and an expandable

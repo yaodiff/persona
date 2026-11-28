@@ -163,9 +163,12 @@ type runtimeConn struct {
 	// session whose transcript holds a session's conversation (transcript: a runtime running Claude Code through its
 	// SDK, Paseo; runtimetranscript.go), and the Codex thread a session's conversation is (codex_thread: a runtime
 	// running Codex, Paseo; runtimecodex.go).
-	panes        map[string]string
-	resume       map[string][]string
-	transcripts  map[string]string
+	panes       map[string]string
+	resume      map[string][]string
+	transcripts map[string]string
+	// stopCauses are stop causes observed for runtime-owned sessions Persona did not start. They stay on this
+	// connection: such sessions have no node session record (see stateFile), and a reconnect loses this observation.
+	stopCauses   map[string]proto.StopCause
 	codexThreads map[string]string
 	// agyPaneBackground holds running tasks projected for a live terminal when the ACP row hides them.
 	agyPaneBackground map[string][]proto.BackgroundTask
@@ -446,6 +449,28 @@ func (h *runtimeConn) row(id string) (proto.Session, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.rowLocked(id)
+}
+
+func (h *runtimeConn) setStopCause(id string, cause proto.StopCause) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stopCauses == nil {
+		h.stopCauses = map[string]proto.StopCause{}
+	}
+	h.stopCauses[id] = cause
+}
+
+func (h *runtimeConn) stopCause(id string) (proto.StopCause, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cause, ok := h.stopCauses[id]
+	return cause, ok
+}
+
+func (h *runtimeConn) clearStopCause(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.stopCauses, id)
 }
 
 // rowLocked looks up a session while the caller holds h.mu.

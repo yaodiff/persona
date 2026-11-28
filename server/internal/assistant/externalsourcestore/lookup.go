@@ -87,39 +87,100 @@ func legacyLarkTopic(ctx context.Context, tx pgx.Tx, ref assistantwire.ExternalR
 }
 
 // ExternalSourceSummary describes saved data flows, including read-only repository projections.
-func (s *Store) ExternalSourceSummary(ctx context.Context, provider assistantwire.ExternalProvider, channel *assistantwire.ExternalChannelID) (assistantwire.ExternalSourceSummary, error) {
-	var out assistantwire.ExternalSourceSummary
+func (s *Store) ExternalSourceSummary(ctx context.Context, provider assistantwire.ExternalProvider, channel *assistantwire.ExternalChannelID, includeDone bool) (assistantwire.ExternalSourceSummary, error) {
+	out := assistantwire.ExternalSourceSummary{Bindings: []assistantwire.ExternalBindingMatch{}}
 	err := db.ReadSnapshot(ctx, s.database, func(tx pgx.Tx) error {
-		matches, err := explicitMatches(ctx, tx, `
-			SELECT external_ref, target_kind, target_id, id
-			FROM assistant_external_bindings
-			WHERE ($1 = '' OR external_ref->>'provider' = $1)
-			  AND ($2::text IS NULL OR COALESCE(external_ref->>'channel', '') = $2)
-			ORDER BY external_ref, target_kind, target_id`, provider, channel)
+		rows, err := tx.Query(ctx, externalSourceSummaryQuery, provider, channel)
 		if err != nil {
 			return err
 		}
-		out.Bindings = matches
-		if provider != "" && provider != assistantwire.ExternalProviderGitHub {
-			return nil
-		}
-		var instance *string
-		if channel != nil {
-			origin := string(*channel)
-			if origin == "" {
-				origin = "https://github.com"
+		defer rows.Close()
+		for rows.Next() {
+			match := assistantwire.ExternalBindingMatch{Source: assistantwire.ExternalBindingExplicit}
+			var explicitRef *assistantwire.ExternalRef
+			repo := repositorywire.Identity{Provider: "github"}
+			var link repositorywire.TaskLink
+			if err := rows.Scan(&explicitRef, &match.TargetKind, &match.TargetID, &match.BindingID, &match.TargetTitle, &match.TargetDone,
+				&repo.InstanceURL, &repo.Path, &link.Kind, &link.Number, &link.Role); err != nil {
+				return err
 			}
-			instance = &origin
+			if match.TargetDone && !includeDone {
+				out.OmittedDoneCount++
+				continue
+			}
+			if explicitRef != nil {
+				match.ExternalRef = *explicitRef
+			} else {
+				match.Source = assistantwire.ExternalBindingRepositoryLink
+				role, problem := repositorywire.NormalizeLinkRole(link.Role)
+				if problem != "" {
+					return problem
+				}
+				match.RepositoryRole = assistantwire.ExternalRepositoryRole(role)
+				match.ExternalRef, err = externalbindingadapt.RepositoryLinkRef(repo, link)
+				if err != nil {
+					return err
+				}
+			}
+			out.Bindings = append(out.Bindings, match)
 		}
-		projected, err := projectedMatches(ctx, tx, instance, nil, nil)
-		if err != nil {
-			return err
-		}
-		out.Bindings = append(matches, projected...)
-		return nil
+		return rows.Err()
 	})
+	out.TotalCount = len(out.Bindings)
 	return out, err
 }
+
+// The summary orders both sources by the same to-do timestamps. The repository identity filter
+// can use the GIN index before expanding individual links. An empty stored role means delivery.
+// The to-do projection mirrors Todo.closedForGood. The stored cancellation marker and the legacy review state
+// are also the sources for cancelled_at in formatTodo.
+const externalSourceSummaryQuery = `
+	WITH todo_targets AS NOT MATERIALIZED (
+		SELECT td.id, td.title, td.updated_at,
+			td.done_at IS NOT NULL AND (
+				td.start_error = '' OR td.done_by = 'cancelled' OR
+				(td.done_by = 'review' AND EXISTS (
+					SELECT 1 FROM todo_supervision ts WHERE ts.todo_id = td.id AND ts.state = 'cancelled'
+				))
+			) AS target_done
+		FROM todos td
+	), github_filter AS (
+		SELECT jsonb_strip_nulls(jsonb_build_object('provider', 'github',
+			'instance_url', CASE WHEN $2::text = '' THEN 'https://github.com' ELSE $2 END)) AS identity
+		WHERE $1 IN ('', 'github')
+	), repository_matches AS (
+		SELECT DISTINCT ON (t.todo_id, instance, path, kind, number)
+			t.todo_id, repo #>> '{source_snapshot,identity,instance_url}' AS instance,
+			repo #>> '{source_snapshot,identity,path}' AS path, link->>'kind' AS kind, link->>'number' AS number,
+			COALESCE(link->>'role', '') AS role, td.title, td.target_done, td.updated_at
+		FROM github_filter f
+		JOIN todo_repository_sets t ON t.repositories @> jsonb_build_array(
+			jsonb_build_object('source_snapshot', jsonb_build_object('identity', f.identity)))
+		JOIN todo_targets td ON td.id = t.todo_id
+		CROSS JOIN LATERAL jsonb_array_elements(t.repositories) AS repos(repo)
+		CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(repo->'links') = 'array' THEN repo->'links' ELSE '[]'::jsonb END) AS links(link)
+		WHERE repo #> '{source_snapshot,identity}' @> f.identity
+		  AND link->>'kind' IN ('issue', 'pull_request')
+		ORDER BY t.todo_id, instance, path, kind, number, (COALESCE(link->>'role', '') IN ('', 'delivery')) DESC, role
+	), matches AS (
+		SELECT b.external_ref, b.target_kind, b.target_id, b.id AS binding_id,
+			COALESCE(td.title, '') AS target_title, COALESCE(td.target_done, false) AS target_done,
+			COALESCE(td.updated_at, to_timestamp(0)) AS updated_at,
+			''::text AS instance, ''::text AS path, ''::text AS kind, ''::text AS number, ''::text AS role
+		FROM assistant_external_bindings b
+		LEFT JOIN todo_targets td ON b.target_kind = 'todo' AND td.id = b.target_id
+		WHERE ($1 = '' OR b.external_ref->>'provider' = $1)
+		  AND ($2::text IS NULL OR COALESCE(b.external_ref->>'channel', '') = $2)
+		UNION ALL
+		SELECT NULL, 'todo', todo_id, '', title, target_done, updated_at,
+			COALESCE(instance, ''), COALESCE(path, ''), kind, COALESCE(number, ''), role
+		FROM repository_matches
+	)
+	SELECT external_ref, target_kind, target_id, binding_id, target_title, target_done, instance, path, kind, number, role
+	FROM matches
+	ORDER BY (target_kind = 'direction') DESC, target_done, updated_at DESC, external_ref NULLS LAST, target_kind,
+		CASE WHEN external_ref IS NOT NULL THEN target_id END, target_id DESC, instance, path, kind, number
+`
 
 func explicitMatches(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]assistantwire.ExternalBindingMatch, error) {
 	rows, err := tx.Query(ctx, query, args...)

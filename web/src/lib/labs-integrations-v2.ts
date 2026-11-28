@@ -17,7 +17,7 @@ function document(manager: string, state: Settings, saved = false): Configuratio
     revision: String(state.integrations_v2),
     title: t("settings-labs.work_area"),
     groups: [{ id: "integrations-v2", title: t("settings-labs.trial"), fields: [{
-      id: field, kind: "toggle", default: false,
+      id: field, kind: "toggle", default: true,
       title: t("settings-labs.integrations_v2_title"), description: t("settings-labs.integrations_v2_hint"),
       ...(!supported && { read_only: true, disabled_reason: t("settings-labs.integrations_v2_unsupported") }),
       details: [
@@ -40,7 +40,7 @@ export function integrationsV2LabsSource(manager: string): ConfigurationSource {
       const expected = update.revision === "true";
       const refused = checkUpdate(document(manager, { manager, integrations_v2: expected }), update);
       if (refused) throw refused;
-      const value = update.reset?.includes(field) ? false : update.changes?.[field];
+      const value = update.reset?.includes(field) ? true : update.changes?.[field];
       try {
         const state = await api<Settings>("/assistant", { method: "PUT", headers, signal,
           json: { integrations_v2: value, expected_integrations_v2: expected } });

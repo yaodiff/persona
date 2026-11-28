@@ -193,53 +193,86 @@ func TestAssistantCrossEngineResumeDropsStaleManagedLauncherModel(t *testing.T) 
 	})
 
 	t.Run("cached launcher catalog drops unlisted stale model on cross-engine resume", func(t *testing.T) {
-		t.Setenv("CLAUDE_CONFIG_DIR", "")
-		f := cliTest(t)
-		probedLaunchers(t, map[string]string{codexKindLauncher: "codex"})
-		fp := f.n.executionFingerprint("claude", modelExecution{})
-		cacheKey := f.n.home + "\x00claude\x00claude\x00" + fp
-		launcherModelsCache.Lock()
-		launcherModelsCache.at[cacheKey] = time.Now()
-		launcherModelsCache.got[cacheKey] = proto.LauncherModels{
-			Models: []proto.AgentModel{
-				{ID: "claude-opus-5-5", Default: true},
-				{ID: "claude-sonnet-5-5"},
-			},
-		}
-		launcherModelsCache.Unlock()
-		t.Cleanup(func() {
-			launcherModelsCache.Lock()
-			delete(launcherModelsCache.at, cacheKey)
-			delete(launcherModelsCache.got, cacheKey)
-			launcherModelsCache.Unlock()
-		})
+		assertCachedCatalogCrossEngineResumeUsesDefault(t)
+	})
 
-		writeFakeClaudeTranscript(t, f.n, claudeConversation)
-		f.n.state.put(claudeConversation, sessionState{
-			Launcher:         "claude",
-			Cwd:              t.TempDir(),
-			Model:            "stale-haiku",
-			ModelFingerprint: "fp-stale",
-		})
+	t.Run("cached launcher catalog drops unlisted stale model despite host model env", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_MODEL", "host-gateway-model")
+		t.Setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "host-sonnet")
+		assertCachedCatalogCrossEngineResumeUsesDefault(t)
+	})
 
-		id, err := f.n.assistantSend(context.Background(), claudeConversation, "", codexKindLauncher, "hello", nil, "", "",
-			modelExecution{Model: "gpt-model", Fingerprint: "codex-fp"})
-		if err != nil {
+	t.Run("cached launcher catalog drops unlisted stale model despite host managed settings", func(t *testing.T) {
+		dir := t.TempDir()
+		policyFile := filepath.Join(dir, "managed-settings.json")
+		dropInDir := filepath.Join(dir, "managed-settings.d")
+		if err := os.MkdirAll(dropInDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		f.idle(t, id)
-
-		argv := f.file("cli-argv")
-		if strings.Contains(argv, "stale-haiku") {
-			t.Fatalf("resurrected model absent from cached catalog: %q", argv)
+		if err := os.WriteFile(policyFile, []byte(`{"model":"managed-model","env":{"ANTHROPIC_MODEL":"managed-env-model"}}`), 0o600); err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(argv, "--model default") {
-			t.Fatalf("expected --model default to override transcript stickiness, got: %q", argv)
+		if err := os.WriteFile(filepath.Join(dropInDir, "10-model.json"), []byte(`{"env":{"ANTHROPIC_DEFAULT_OPUS_MODEL":"managed-dropin"}}`), 0o600); err != nil {
+			t.Fatal(err)
 		}
-		if st, _ := f.n.state.get(claudeConversation); st.Model != "" {
-			t.Fatalf("unlisted stale model remained persisted: %+v", st)
-		}
+		prevFiles, prevDirs := claudeManagedSettings, claudeManagedSettingsDirs
+		claudeManagedSettings = []string{policyFile}
+		claudeManagedSettingsDirs = []string{dropInDir}
+		t.Cleanup(func() {
+			claudeManagedSettings, claudeManagedSettingsDirs = prevFiles, prevDirs
+		})
+		assertCachedCatalogCrossEngineResumeUsesDefault(t)
 	})
+}
+
+func assertCachedCatalogCrossEngineResumeUsesDefault(t *testing.T) {
+	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	f := cliTest(t)
+	probedLaunchers(t, map[string]string{codexKindLauncher: "codex"})
+	fp := f.n.executionFingerprint("claude", modelExecution{})
+	cacheKey := f.n.home + "\x00claude\x00claude\x00" + fp
+	launcherModelsCache.Lock()
+	launcherModelsCache.at[cacheKey] = time.Now()
+	launcherModelsCache.got[cacheKey] = proto.LauncherModels{
+		Models: []proto.AgentModel{
+			{ID: "claude-opus-5-5", Default: true},
+			{ID: "claude-sonnet-5-5"},
+		},
+	}
+	launcherModelsCache.Unlock()
+	t.Cleanup(func() {
+		launcherModelsCache.Lock()
+		delete(launcherModelsCache.at, cacheKey)
+		delete(launcherModelsCache.got, cacheKey)
+		launcherModelsCache.Unlock()
+	})
+
+	writeFakeClaudeTranscript(t, f.n, claudeConversation)
+	f.n.state.put(claudeConversation, sessionState{
+		Launcher:         "claude",
+		Cwd:              t.TempDir(),
+		Model:            "stale-haiku",
+		ModelFingerprint: "fp-stale",
+	})
+
+	id, err := f.n.assistantSend(context.Background(), claudeConversation, "", codexKindLauncher, "hello", nil, "", "",
+		modelExecution{Model: "gpt-model", Fingerprint: "codex-fp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+
+	argv := f.file("cli-argv")
+	if strings.Contains(argv, "stale-haiku") {
+		t.Fatalf("resurrected model absent from cached catalog: %q", argv)
+	}
+	if !strings.Contains(argv, "--model default") {
+		t.Fatalf("expected --model default to override transcript stickiness, got: %q", argv)
+	}
+	if st, _ := f.n.state.get(claudeConversation); st.Model != "" {
+		t.Fatalf("unlisted stale model remained persisted: %+v", st)
+	}
 }
 
 func TestAssistantCrossEngineResumeDropsSettingFollowingAndRecoveryModel(t *testing.T) {

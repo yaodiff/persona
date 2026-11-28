@@ -115,7 +115,7 @@ try {
     await page.getByRole("button", { name: "Clear mirrors", exact: true }).click();
     await page.waitForFunction(() => [...document.querySelectorAll("input")].every((input) => input.value === ""));
     assert.deepEqual(settings.get("assistant"), empty);
-    await page.getByRole("combobox", { name: "Extension manager", exact: true }).selectOption("m-two");
+    await page.getByRole("combobox", { name: "Extension downloads", exact: true }).selectOption("m-two");
     await registry.waitFor();
     await registry.fill(configured.registry_mirror);
     await catalog.fill(configured.catalog_mirror);
@@ -129,18 +129,15 @@ try {
     assert.deepEqual(settings.get("m-two"), configured);
     // Real category navigation must retain the configuration target, including the phone's list.
     const categories = page.getByRole("navigation", { name: "Settings categories", exact: true });
-    if (width === 390) {
-      await page.getByRole("button", { name: "Back to Settings", exact: true }).click();
-      await categories.getByRole("button", { name: /^Devices/ }).click();
-      await page.getByRole("button", { name: "Back to Settings", exact: true }).click();
-      await categories.getByRole("button", { name: /^hub/ }).click();
-    } else {
-      await categories.getByRole("button", { name: "Devices", exact: true }).click();
-      await categories.getByRole("button", { name: "hub", exact: true }).click();
-    }
+    if (width === 390) await page.getByRole("button", { name: "Back to Settings", exact: true }).click();
+    await categories.getByRole("button", { name: /^Advanced\b/ }).click();
+    await page.getByRole("region", { name: "Advanced", exact: true }).getByRole("button", { name: /^Devices\b/ }).click();
+    await page.getByRole("button", { name: "Back to Advanced", exact: true }).click();
+    if (width === 390) await page.getByRole("button", { name: "Back to Settings", exact: true }).click();
+    await categories.getByRole("button", { name: /^This hub\b/ }).click();
     await registry.waitFor();
     assert.equal(new URL(page.url()).searchParams.get("manager"), "m-two");
-    assert.equal(await page.getByRole("combobox", { name: "Extension manager", exact: true }).inputValue(), "m-two");
+    assert.equal(await page.getByRole("combobox", { name: "Extension downloads", exact: true }).inputValue(), "m-two");
     assert.equal(await registry.inputValue(), configured.registry_mirror);
     assert.equal(await page.getByRole("button", { name: "Clear mirrors", exact: true }).isEnabled(), true);
     const fields = await page.locator("input[type=url]").evaluateAll((inputs) => inputs.map((input) => {
@@ -160,7 +157,7 @@ try {
     const buttons = await page.getByRole("button", { name: /^(Save|Clear mirrors)$/ }).evaluateAll((elements) => elements.map((el) => ({ width: el.clientWidth, scroll: el.scrollWidth, whitespace: getComputedStyle(el).whiteSpace })));
     assert.ok(buttons.every((b) => b.scroll <= b.width && b.whitespace === "nowrap"), "Button text stays on one line");
     failRead = true;
-    await page.getByRole("combobox", { name: "Extension manager", exact: true }).selectOption("assistant");
+    await page.getByRole("combobox", { name: "Extension downloads", exact: true }).selectOption("assistant");
     await page.getByRole("alert").filter({ hasText: "Couldn't read mirror settings" }).waitFor();
     assert.equal(await registry.count(), 0, "Failed reads cannot overwrite unknown settings");
     failRead = false;
@@ -177,9 +174,9 @@ try {
     await registry.fill(configured.registry_mirror);
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await started;
-    await page.getByRole("combobox", { name: "Extension manager", exact: true }).selectOption("m-two");
+    await page.getByRole("combobox", { name: "Extension downloads", exact: true }).selectOption("m-two");
     await registry.waitFor();
-    await page.getByRole("combobox", { name: "Extension manager", exact: true }).selectOption("assistant");
+    await page.getByRole("combobox", { name: "Extension downloads", exact: true }).selectOption("assistant");
     await registry.waitFor({ state: "detached" });
     assert.equal(aReads(), before, "Returning A must not read pre-commit values");
     assert.deepEqual(settings.get("assistant"), empty, "The fixture PUT is still uncommitted");

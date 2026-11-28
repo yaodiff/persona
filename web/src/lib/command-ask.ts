@@ -17,10 +17,15 @@ export interface CommandAsk {
   deadlineAllows: boolean;
 }
 
+/** screen.describe preserves the terminal's command heading in detail even when dialogwire omits an empty command. */
+export function isCommandPrompt(d?: ScreenDialog): boolean {
+  return !!d && (d.command !== undefined || /^(Bash|PowerShell) command\b/.test(d.detail ?? ""));
+}
+
 /** The command prompt of a screen card's dialog; null for any other dialog, and from a hub before #5265. */
 export function commandAsk(d: ScreenDialog | undefined): CommandAsk | null {
   const command = d?.command?.trim();
-  if (!d || !command) return null;
+  if (!d || command === undefined) return null;
   const at = d.deadline_at ? Date.parse(d.deadline_at) : NaN;
   return {
     command,

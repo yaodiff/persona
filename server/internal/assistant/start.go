@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Starting the assistant's conversations (docs/assistant/assistant.md "Process", "New main chat"): its directory on the machine is
@@ -680,6 +681,14 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 			}
 		}()
 	}
+	if p.NewSessionID != "" {
+		s.setConversationOriginDevice(p.NewSessionID, string(p.OriginDeviceID))
+		defer func() {
+			if sess.SessionID != p.NewSessionID {
+				s.clearConversationOriginDevice(p.NewSessionID)
+			}
+		}()
+	}
 	sess, err = s.startOn(ctx, machine, p, main)
 	if errors.Is(err, ErrNoDevice) && p.MachineID == "" {
 		return proto.Session{}, s.missingAssistantMachine(ctx)
@@ -694,6 +703,7 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef, sess.OpenedBy)
 	// Its space, for when no computer lists it (conversation_space.go).
 	s.noteConversationSpaces(ctx, []db.ConversationSpace{{MachineID: sess.MachineID, SessionID: sess.SessionID, Space: p.Space}})
+	s.setConversationOriginDevice(sess.SessionID, string(p.OriginDeviceID))
 	return sess, nil
 }
 
@@ -1221,12 +1231,17 @@ func (s *Service) startRoutes() {
 		if in.Guest == nil && in.Via != "handoff" {
 			in.Prompt, own = s.fillWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
+		originDevice := ""
+		if in.Guest == nil && r.Header.Get(RoleHeader) != roleExtension {
+			originDevice = sanitizeOriginDeviceID(r.Header.Get(assistantwire.DeviceIDHeader))
+		}
 		// The main conversation is the assistant's, on its machine.
 		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, Model: in.Model, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, ServiceTier: in.ServiceTier, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
 			OpenedBy: requestOpener(r), GuestTools: guestTools,
-			Human: own && in.Via == "" && (assistantwire.HumanStartOf(r.Context()) || assistantwire.ReplyInputOf(r.Context()))})
+			Human:          own && in.Via == "" && (assistantwire.HumanStartOf(r.Context()) || assistantwire.ReplyInputOf(r.Context())),
+			OriginDeviceID: wireids.DeviceID(originDevice)})
 		var refused *pickError
 		switch {
 		case errors.As(err, &refused):
@@ -1415,6 +1430,9 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		if handled {
 			return map[string]any{ownerApprovalHandledParam: approvalTarget}, nil
 		}
+	}
+	if err == nil && said {
+		s.setConversationOriginDevice(p.SessionID, string(p.OriginDeviceID))
 	}
 	if err == nil && said && owner {
 		if err := s.releasePushes(ctx, p.SessionID); err != nil {

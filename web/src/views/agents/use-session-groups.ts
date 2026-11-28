@@ -33,17 +33,26 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
     let live = true;
     let sequence = 0;
     let retries = 0;
-    let started = 0;
+    let doneAt = 0;
     let failed = false;
+    let deferred = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const abort = new AbortController();
     const load = () => {
+      if (document.visibilityState === "hidden") {
+        deferred = true;
+        clearTimeout(timer);
+        timer = undefined;
+        return;
+      }
+      deferred = false;
       const request = ++sequence;
       clearTimeout(timer);
       timer = undefined;
-      started = Date.now();
+      doneAt = Date.now();
       void api<unknown>(path, { signal: abort.signal }).then((value) => {
         if (!live || request !== sequence) return;
+        doneAt = Date.now();
         // only a hub that says it has the answer is asked: anything else in its place is a broken answer
         if (!check.current.valid(value)) { failed = true; setRead({ path, error: t("paged-agents.invalid_page") }); return; }
         failed = false;
@@ -51,6 +60,7 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
         if (check.current.pending?.(value) && !timer) timer = setTimeout(load, Math.min(PENDING_RETRY.first * PENDING_RETRY.grow ** retries++, PENDING_RETRY.most));
       }, (e) => {
         if (!live || request !== sequence) return;
+        doneAt = Date.now();
         failed = true;
         setRead((was) => ({ path, value: was?.path === path ? was.value : undefined, error: errorText(e) }));
         if (document.visibilityState === "visible" && !timer) timer = setTimeout(load, ERROR_RETRY_MS);
@@ -59,14 +69,14 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
     load();
     const off = onShownHint(event, () => {
       retries = 0;
-      const wait = started + SESSION_LIST_METRICS.groupsRefresh - Date.now();
+      const wait = doneAt + SESSION_LIST_METRICS.groupsRefresh - Date.now();
       if (wait <= 0) load();
       else if (!timer) timer = setTimeout(load, wait); // one read for the hints of this stretch
     });
     const offHello = onHubEvent("hello", (msg) => {
       if ((failed || !isResumed(msg)) && document.visibilityState === "visible") load();
     });
-    const onVis = () => { if (failed && document.visibilityState === "visible") load(); };
+    const onVis = () => { if ((failed || deferred) && document.visibilityState === "visible") load(); };
     document.addEventListener("visibilitychange", onVis);
     return () => { live = false; clearTimeout(timer); abort.abort(); off(); offHello(); document.removeEventListener("visibilitychange", onVis); };
   }, [path, event, attempt]);

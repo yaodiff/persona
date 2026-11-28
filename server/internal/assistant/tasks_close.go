@@ -124,10 +124,13 @@ func retirable(s proto.Session, doneAt, now time.Time) bool {
 
 // retirableAfter is retirable with the time the agent must have been still.
 func retirableAfter(s proto.Session, doneAt, now time.Time, idle time.Duration) bool {
+	isRuntime := runtimeCanClose(s)
 	switch {
-	case s.Assistant, s.SourceKind != "", s.Starting, !s.StartedByPersona:
+	case s.Assistant, s.Starting, !s.StartedByPersona, s.Archived:
 		return false
-	case s.Status == proto.StatusOffline || s.PaneID == "":
+	case !isRuntime && s.SourceKind != "":
+		return false
+	case s.Status == proto.StatusOffline || (!isRuntime && s.PaneID == ""):
 		return false // not running: nothing to close
 	case s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked || s.Status == proto.StatusUnknown:
 		return false // working, waiting, or the engine cannot tell
@@ -136,9 +139,9 @@ func retirableAfter(s proto.Session, doneAt, now time.Time, idle time.Duration) 
 	case taskAgentHasUnfinishedWork(s):
 		return false // more to come, or something it runs that the user may be using
 	}
-	// Only agents a node quits with Ctrl+C in their pane (node retire.go stoppable). agy quits that way too (#11087);
-	// a runtime's agent and other work agents are left alone.
-	if s.Agent != "" && s.Agent != "claude" && s.Agent != "codex" && s.Agent != "traex" && s.Agent != "agy" {
+	// Only agents a node quits with Ctrl+C in their pane (node retire.go stoppable), or runtime-backed sessions with
+	// an explicit close capability (session.retire close_terminal). agy quits in panes too (#11087).
+	if !isRuntime && s.Agent != "" && s.Agent != "claude" && s.Agent != "codex" && s.Agent != "traex" && s.Agent != "agy" {
 		return false
 	}
 	last := doneAt
@@ -217,7 +220,7 @@ func (s *Service) closeDoneTaskAgents(ctx context.Context, refused taskCloseRefu
 			since = w.running
 		}
 		startupBlocked := now.Sub(a.doneAt) >= taskCloseIdle && blockedAtTaskStartup(c)
-		if !startupBlocked && !retirable(c, since, now) {
+		if !startupBlocked && (!retirable(c, since, now) || (runtimeCanClose(c) && !s.closeEndedTerminals(ctx))) {
 			continue
 		}
 		if s.sessionActivityReason(ctx, a.machine, a.session, now) != "" {
@@ -321,7 +324,7 @@ func (seen doneSeen) see(key [2]string, done time.Time, c proto.Session, now tim
 	w.stopped = w.stopped || stopped
 	switch {
 	case c.Starting: // still launching (the task was done before it started, #2954): neither stopped nor running yet
-	case c.Status == proto.StatusOffline || c.PaneID == "":
+	case c.Status == proto.StatusOffline || (!runtimeCanClose(c) && c.PaneID == ""):
 		w.stopped, w.running = true, time.Time{}
 	default:
 		if w.stopped {
@@ -376,6 +379,22 @@ func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who
 	}
 	if cctx.Err() != nil {
 		return false
+	}
+	if runtimeCanClose(c) {
+		if agentCloseBusy(c) || !s.closeEndedTerminals(ctx) {
+			return false
+		}
+		closed, err := s.closeEndedTerminal(cctx, machine, c.SessionID, cause)
+		if err != nil {
+			s.noteTaskCloseError(refused, who, machine, c, now, err)
+			return false
+		}
+		if !closed {
+			return false
+		}
+		delete(refused, key)
+		s.logf("%s: closed runtime agent %s/%s via session.retire (close_ended_terminals)", who, machine, c.SessionID)
+		return true
 	}
 	// Both task and long-idle retirement honor close-on-end (#10355) through the guarded stop RPC.
 	closeIt := !agentCloseBusy(c) && s.closeEndedTerminals(ctx)

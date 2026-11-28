@@ -1071,6 +1071,9 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	// A hand-over of the owner's words into a lead holds its writable plans from before the send (relay_lead_hold.go).
 	handed := s.holdForHandover(to, msg)
+	// Background, scheduled, supervision, and extension-event turns do not originate from a user's device;
+	// clear any previous human turn's origin device so it never leaks into this turn's connector calls.
+	s.clearConversationOriginDevice(to)
 	var res superviseRoundReply
 	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
 		if msg.Tool == superviseTool && !relayInDoubt(err) { // in doubt, drainRelays lets go once it knows it did not go in

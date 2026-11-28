@@ -107,6 +107,7 @@ func TestChannelReceiveConcurrentFirstThreadMessages(t *testing.T) {
 
 func TestChannelReceiveDualTopicKeepsOrderAcrossToggle(t *testing.T) {
 	s, f, h := admissionChannelService(t, true, nil)
+	setIntegrationsV2(t, s, false)
 	var release sync.Once
 	defer release.Do(func() { close(h.release) })
 	receive := func(id, thread string) {

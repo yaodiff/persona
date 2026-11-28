@@ -544,6 +544,29 @@ The assistant can put one of its conversations into the Inbox as a row, so a res
 - **The user's rules still apply**: a policy set for the source (Rules, "Policies") changes the tier like any source's.
 - **One switch.** Inbox Sources lists an **Assistant** row (`b.assistant`, icon robot) whose Add to Inbox switch is `Settings.InboxPost` (`inbox.post` on the bus; on unless turned off). Off, `inbox_post` answers that nothing was added and says to tell the user in the conversation, and tasks set to every time add nothing; rows already there stay. The Relationships view shows it with the other Persona-side sources.
 
+## Owner promise reminders in selected Lark groups
+
+The built-in lark-cli Inbox source can pilot private reminders for follow-up
+promises typed by the owner. It starts off. Set `owner_promise_groups` in the
+existing lark-cli connector options to a list of up to five group chat IDs.
+Keep the lark-cli Inbox feed enabled. Set the list to `[]` to stop the pilot.
+Ordinary Inbox collection and replied status still follow their own settings.
+
+The pilot reads recent owner text in those groups, starting with a fresh
+baseline. It considers topic replies with an explicit action and waits
+15 minutes before showing a Needs you row. An existing open to-do bound to the
+same source request suppresses the row. Other work from the same topic does
+not suppress it. A matching Persona send receipt is excluded.
+
+Optionally set `owner_promise_model` to `true` to let the configured Inbox
+triage model assess a short reply about asking the owner's assistant, together
+with one verified preceding request. The option is off by default. These
+snippets stay within the existing Inbox visibility boundary.
+
+The reminder links to the original message. Use **Add to to-dos** to record
+the action, **Hand to AI** to choose how to pass it along, or dismiss the row.
+An action on the reminder never replies in the Lark topic.
+
 ## Merge rows and Add to to-dos (2026-11-14, #6480)
 
 Two manual actions in Select mode (web, iPhone), the row menu and the detail page. Who it serves: anyone whose Inbox split one matter into several rows, or who got a deadline in a message no machine can read. Plain words only. Code: `assistant/inbox_merge.go`, `assistant/inbox_todo.go`.

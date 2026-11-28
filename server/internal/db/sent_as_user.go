@@ -100,6 +100,16 @@ func (d *DB) SentAsUsersForArchive(ctx context.Context, connector string, since,
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (SentAsUser, error) { return scanSentAsUser(r) })
 }
 
+// HasSentAsUserMessage checks the exact source receipt, including recalled
+// messages. Text or an approximately matching timestamp is insufficient.
+func (d *DB) HasSentAsUserMessage(ctx context.Context, messageRef string, since time.Time) (bool, error) {
+	var found bool
+	err := d.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM sent_as_user WHERE at >= $2 AND message_ref = $1
+	)`, messageRef, since).Scan(&found)
+	return found, err
+}
+
 // PruneSentAsUser deletes every row written before before and says how many there were.
 func (d *DB) PruneSentAsUser(ctx context.Context, before time.Time) (int64, error) {
 	tag, err := d.pool.Exec(ctx, `DELETE FROM sent_as_user WHERE at < $1`, before)

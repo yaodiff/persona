@@ -111,7 +111,7 @@
   "machine_switch_link_why_unknown": "发生未知错误。",
   "machine_switch_link_why_unavailable": "这台电脑暂时无法切换到 Persona Link。",
   "hosted_assistants_other": "同机托管的助手",
-  "hosted_assistants_settings": "设置 › Hub › 助手",
+  "hosted_assistants_settings": "设置 › 高级 › 助手",
   "manager_pending_restart_hint": "程序已随重新部署更新，该助手将在空闲后自动重启并生效。",
   "manager_older_version": "版本落后",
   "manager_version_lag_hint": "该助手仍在运行低于本机 node 的旧版本，请重启其管理服务以应用更新。",

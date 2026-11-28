@@ -8,18 +8,19 @@ import (
 
 // Streaming TTS bridge for voice calls (issue #17843).
 //
-// How call code (PR 4) uses ttsBridge:
+// How call code uses ttsBridge:
 //   - Create one ttsBridge per call once the output sample rate (16000 or 24000 Hz) is known.
-//   - When an assistant reply starts (evReply, or first evAssistant on dialects without evReply),
-//     call gen := bridge.StartTurn(voice) while holding conversation.mu and record c.ttsGen = gen.
-//   - On each assistant text delta, call bridge.Feed(c.ttsGen, delta) under conversation.mu.
-//   - On evTurnEnd, call bridge.EndText(c.ttsGen) under conversation.mu.
+//   - When an assistant reply starts producing text, call gen := bridge.EnqueueTurn(voice) while
+//     holding conversation.mu (EnqueueTurn queues consecutive replies so an earlier turn finishes
+//     speaking; StartTurn cancels any active/queued turns first).
+//   - On each assistant text delta, call bridge.Feed(gen, delta) under conversation.mu.
+//   - On evTurnEnd, call bridge.EndText(gen) under conversation.mu.
 //   - On any interruption, reconnect, suspend, or hang-up, call bridge.Cancel() under
-//     conversation.mu and clear c.ttsGen = 0; StartTurn, Feed, EndText, Cancel, and Active
-//     never block and are safe to call while holding conversation.mu.
-//   - Callbacks (onFrame, onDone, onError) run from the bridge's own goroutine with NO bridge
-//     lock held, so they may safely acquire conversation.mu. Inside onFrame/onDone, check
-//     gen == c.ttsGen under conversation.mu to discard any frame that raced with Cancel.
+//     conversation.mu and record the cancelled watermark; StartTurn, EnqueueTurn, Feed, EndText,
+//     Cancel, and Active never block and are safe to call while holding conversation.mu.
+//   - Callbacks (onStart, onFrame, onDone, onError) run from the bridge's own goroutine with NO
+//     bridge lock held, so they may safely acquire conversation.mu. Inside them, check
+//     gen > c.ttsCancelGen under conversation.mu to discard any callback that raced with Cancel.
 //   - Every delivered frame is an exact 20 ms mono PCM16 LE frame at outputRate (640 B at 16 kHz,
 //     960 B at 24 kHz); the turn's last partial frame (< 20 ms) is zero-padded to 20 ms.
 //   - When the call ends, call bridge.Close() AFTER releasing conversation.mu (e.g. next to
@@ -32,6 +33,7 @@ type ttsBridgeConfig struct {
 	outputRate      int // 16000 or 24000 (defaults to 24000 if invalid)
 	chunker         ttsChunkerConfig
 	disablePrefetch bool
+	onStart         func(gen uint64) // called once right before synthesizing the turn's first speakable piece
 	onFrame         func(gen uint64, pcm []byte)
 	onDone          func(gen uint64, cancelled bool, err error)
 	onError         func(gen uint64, err error) // called when a single piece fails and is skipped
@@ -39,25 +41,28 @@ type ttsBridgeConfig struct {
 }
 
 // ttsBridge turns streamed assistant text deltas into ordered 20 ms PCM16 frames at the call's
-// output sample rate, with generation-gated barge-in cancellation and optional 1-piece prefetch.
+// output sample rate, with generation-gated barge-in cancellation, FIFO turn queueing, and
+// optional 1-piece prefetch.
 type ttsBridge struct {
 	client          *ttsClient
 	outputRate      int
 	chunkerCfg      ttsChunkerConfig
 	disablePrefetch bool
+	onStart         func(gen uint64)
 	onFrame         func(gen uint64, pcm []byte)
 	onDone          func(gen uint64, cancelled bool, err error)
 	onError         func(gen uint64, err error)
 	logf            func(format string, args ...any)
 
-	gen       atomic.Uint64 // bumped atomically on StartTurn, Cancel, and Close
-	activeGen atomic.Uint64 // generation of active turn, or 0 when idle/cancelled/closed
+	nextGen      atomic.Uint64 // monotonic turn generation allocator (1, 2, ...)
+	cancelBefore atomic.Uint64 // every turn with gen <= cancelBefore is cancelled
+	active       atomic.Bool   // true while any uncancelled turn is running or queued
 
 	mu        sync.Mutex
 	closed    bool
-	running   *ttsTurn // turn currently owned by the worker goroutine
-	pending   *ttsTurn // latest turn waiting for the worker goroutine to pick up
-	cancelled []uint64 // pending turns cancelled before the worker picked them up
+	running   *ttsTurn   // turn currently owned by the worker goroutine
+	pending   []*ttsTurn // FIFO queue of turns waiting for the worker goroutine
+	cancelled []uint64   // queued turns cancelled before the worker picked them up
 	wake      chan struct{}
 	wg        sync.WaitGroup
 }
@@ -94,6 +99,7 @@ func newTTSBridge(cfg ttsBridgeConfig) *ttsBridge {
 		outputRate:      rate,
 		chunkerCfg:      cfg.chunker.normalized(),
 		disablePrefetch: cfg.disablePrefetch,
+		onStart:         cfg.onStart,
 		onFrame:         cfg.onFrame,
 		onDone:          cfg.onDone,
 		onError:         cfg.onError,
@@ -105,16 +111,42 @@ func newTTSBridge(cfg ttsBridgeConfig) *ttsBridge {
 	return b
 }
 
-// StartTurn begins a new turn for voice, cancelling any active turn first, and returns its
-// generation number (or 0 if the bridge is closed). Never blocks.
+// StartTurn begins a new turn for voice, cancelling any active or queued turns first, and returns
+// its generation number (or 0 if the bridge is closed). Never blocks.
 func (b *ttsBridge) StartTurn(voice string) uint64 {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return 0
 	}
-	cancelRunning := b.cancelActiveLocked()
-	gen := b.gen.Add(1)
+	cancelRunning := b.cancelAllLocked()
+	gen := b.enqueueLocked(voice)
+	b.mu.Unlock()
+
+	if cancelRunning != nil {
+		cancelRunning()
+	}
+	signalChan(b.wake)
+	return gen
+}
+
+// EnqueueTurn appends a new turn for voice after any currently active or queued turns without
+// cancelling them, and returns its generation number (or 0 if the bridge is closed). Never blocks.
+func (b *ttsBridge) EnqueueTurn(voice string) uint64 {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return 0
+	}
+	gen := b.enqueueLocked(voice)
+	b.mu.Unlock()
+
+	signalChan(b.wake)
+	return gen
+}
+
+func (b *ttsBridge) enqueueLocked(voice string) uint64 {
+	gen := b.nextGen.Add(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &ttsTurn{
 		gen:     gen,
@@ -124,14 +156,8 @@ func (b *ttsBridge) StartTurn(voice string) uint64 {
 		chunker: newTTSChunker(b.chunkerCfg),
 		notify:  make(chan struct{}, 1),
 	}
-	b.pending = t
-	b.activeGen.Store(gen)
-	b.mu.Unlock()
-
-	if cancelRunning != nil {
-		cancelRunning()
-	}
-	signalChan(b.wake)
+	b.pending = append(b.pending, t)
+	b.active.Store(true)
 	return gen
 }
 
@@ -181,17 +207,15 @@ func (b *ttsBridge) EndText(gen uint64) {
 	signalChan(notify)
 }
 
-// Cancel aborts the active turn immediately: bumps the generation atomically, cancels in-flight
-// HTTP requests, and marks the bridge inactive. Never blocks.
+// Cancel aborts the active turn and all queued turns immediately: advances the cancel watermark,
+// cancels in-flight HTTP requests, and marks the bridge inactive. Never blocks.
 func (b *ttsBridge) Cancel() {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return
 	}
-	b.gen.Add(1)
-	b.activeGen.Store(0)
-	cancelRunning := b.cancelActiveLocked()
+	cancelRunning := b.cancelAllLocked()
 	b.mu.Unlock()
 
 	if cancelRunning != nil {
@@ -200,14 +224,13 @@ func (b *ttsBridge) Cancel() {
 	signalChan(b.wake)
 }
 
-// Active reports whether a turn is currently active (started and neither finished nor cancelled).
-// Never blocks.
+// Active reports whether any uncancelled turn is currently running or queued. Never blocks.
 func (b *ttsBridge) Active() bool {
-	return b.activeGen.Load() != 0
+	return b.active.Load()
 }
 
-// Close cancels any active turn, stops accepting new turns, and waits for all bridge goroutines
-// to exit. Call Close without holding any mutex that callbacks acquire.
+// Close cancels any active or queued turns, stops accepting new turns, and waits for all bridge
+// goroutines to exit. Call Close without holding any mutex that callbacks acquire.
 func (b *ttsBridge) Close() {
 	b.mu.Lock()
 	if b.closed {
@@ -216,9 +239,7 @@ func (b *ttsBridge) Close() {
 		return
 	}
 	b.closed = true
-	b.gen.Add(1)
-	b.activeGen.Store(0)
-	cancelRunning := b.cancelActiveLocked()
+	cancelRunning := b.cancelAllLocked()
 	b.mu.Unlock()
 
 	if cancelRunning != nil {
@@ -229,29 +250,38 @@ func (b *ttsBridge) Close() {
 	b.client.closeIdle()
 }
 
-// cancelActiveLocked marks any pending or running turn as cancelled (b.mu held) and returns
+// cancelAllLocked marks every queued and running turn as cancelled (b.mu held) and returns
 // the running turn's cancel func (if any) to call outside the lock.
-func (b *ttsBridge) cancelActiveLocked() context.CancelFunc {
-	if b.pending != nil {
-		b.cancelled = append(b.cancelled, b.pending.gen)
-		b.pending.cancel()
-		b.pending = nil
+func (b *ttsBridge) cancelAllLocked() context.CancelFunc {
+	b.cancelBefore.Store(b.nextGen.Load())
+	for _, p := range b.pending {
+		b.cancelled = append(b.cancelled, p.gen)
+		p.cancel()
 	}
+	b.pending = nil
+	b.active.Store(false)
 	if b.running != nil {
 		return b.running.cancel
 	}
 	return nil
 }
 
+func (b *ttsBridge) updateActiveLocked() {
+	hasRunning := b.running != nil && b.running.gen > b.cancelBefore.Load()
+	b.active.Store(!b.closed && (hasRunning || len(b.pending) > 0))
+}
+
 func (b *ttsBridge) turnForGenLocked(gen uint64) *ttsTurn {
-	if b.closed || b.gen.Load() != gen {
+	if b.closed || gen == 0 || gen <= b.cancelBefore.Load() {
 		return nil
-	}
-	if b.pending != nil && b.pending.gen == gen {
-		return b.pending
 	}
 	if b.running != nil && b.running.gen == gen {
 		return b.running
+	}
+	for _, p := range b.pending {
+		if p.gen == gen {
+			return p
+		}
 	}
 	return nil
 }
@@ -262,9 +292,11 @@ func (b *ttsBridge) loop() {
 		b.mu.Lock()
 		cancelled := b.cancelled
 		b.cancelled = nil
-		next := b.pending
-		if next != nil {
-			b.pending = nil
+		var next *ttsTurn
+		if len(b.pending) > 0 {
+			next = b.pending[0]
+			b.pending[0] = nil
+			b.pending = b.pending[1:]
 			b.running = next
 		}
 		closed := b.closed
@@ -278,6 +310,7 @@ func (b *ttsBridge) loop() {
 			b.mu.Lock()
 			if b.running == next {
 				b.running = nil
+				b.updateActiveLocked()
 			}
 			b.mu.Unlock()
 			continue
@@ -295,6 +328,7 @@ func (b *ttsBridge) runTurn(t *ttsTurn) {
 	framer := newTTSFramer(b.outputRate)
 	var lastErr error
 	var prefetched *ttsPrefetch
+	started := false
 
 	defer func() {
 		if prefetched != nil {
@@ -304,7 +338,7 @@ func (b *ttsBridge) runTurn(t *ttsTurn) {
 	}()
 
 	isStale := func() bool {
-		return t.ctx.Err() != nil || b.gen.Load() != t.gen
+		return t.ctx.Err() != nil || t.gen <= b.cancelBefore.Load()
 	}
 
 	emitFrame := func(frame []byte) error {
@@ -359,6 +393,17 @@ func (b *ttsBridge) runTurn(t *ttsTurn) {
 					return
 				}
 				continue
+			}
+		}
+
+		if !started {
+			started = true
+			if b.onStart != nil {
+				b.onStart(t.gen)
+			}
+			if isStale() {
+				b.finishTurn(t, true, nil)
+				return
 			}
 		}
 
@@ -475,7 +520,12 @@ func (b *ttsBridge) nextPieceOrEnded(t *ttsTurn) (piece string, ok bool, ended b
 }
 
 func (b *ttsBridge) finishTurn(t *ttsTurn, cancelled bool, err error) {
-	b.activeGen.CompareAndSwap(t.gen, 0)
+	b.mu.Lock()
+	if b.running == t {
+		b.running = nil
+	}
+	b.updateActiveLocked()
+	b.mu.Unlock()
 	b.deliverDone(t.gen, cancelled, err)
 }
 

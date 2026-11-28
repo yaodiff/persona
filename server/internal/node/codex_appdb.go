@@ -291,13 +291,20 @@ func readCodexAppProjects(home string) map[string]codexAppProject {
 // (read-only, as readCodexThreads; a WAL database nobody has open is read as it is on disk, codexDBTarget): the Codex
 // App's state database, opencode's (usage_opencode.go).
 func querySQLite(ctx context.Context, db, q string, into any) error {
+	return readSQLiteJSON(ctx, db, nil, into, q)
+}
+
+// Queries containing terminal titles can use stdin to keep user text out of the process list.
+func readSQLiteJSON(ctx context.Context, db string, input io.Reader, into any, query ...string) error {
 	sqlite, err := codexSQLiteProgram()
 	if err != nil {
 		return err
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db), q)
+	args := []string{"-readonly", "-bail", "-json", "-cmd", ".timeout 2000", codexDBTarget(db)}
+	cmd := exec.CommandContext(cctx, sqlite, append(args, query...)...)
+	cmd.Stdin = input
 	hideCodexSQLiteWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {

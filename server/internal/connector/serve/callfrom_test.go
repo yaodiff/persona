@@ -22,6 +22,10 @@ func TestCallFromCrossesTheWire(t *testing.T) {
 		{"sensitive", connector.CallContext{Track: "qa-finance", TrackKind: "space", Categories: []string{"finance"}},
 			`{"name":"x_read","track":"qa-finance","track_kind":"space","categories":["finance"]}`},
 		{"not known", connector.CallContext{Track: "main"}, `{"name":"x_read","track":"main"}`},
+		{"with origin device", connector.CallContext{Track: "main", Categories: []string{}, OriginDeviceID: "dev_abc123def456"},
+			`{"name":"x_read","track":"main","categories":[],"origin_device_id":"dev_abc123def456"}`},
+		{"origin device only", connector.CallContext{OriginDeviceID: "dev_abc123def456"},
+			`{"name":"x_read","origin_device_id":"dev_abc123def456"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := CallParams{Name: "x_read", CallFrom: CallFromContext(connector.WithCallContext(context.Background(), tc.in))}
@@ -34,7 +38,7 @@ func TestCallFromCrossesTheWire(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, ok := connector.CallContextOf(back.context(context.Background()))
-			if !ok || got.Track != tc.in.Track || got.TrackKind != tc.in.TrackKind || (got.Categories == nil) != (tc.in.Categories == nil) ||
+			if !ok || got.Track != tc.in.Track || got.TrackKind != tc.in.TrackKind || got.OriginDeviceID != tc.in.OriginDeviceID || (got.Categories == nil) != (tc.in.Categories == nil) ||
 				!slices.Equal(got.Categories, tc.in.Categories) {
 				t.Fatalf("connector got %+v (%v), want %+v", got, ok, tc.in)
 			}
@@ -44,7 +48,24 @@ func TestCallFromCrossesTheWire(t *testing.T) {
 		t.Fatal("a call that says nothing gave a context")
 	}
 	var old CallParams
-	if err := json.Unmarshal([]byte(`{"name":"x_read","args":{}}`), &old); err != nil || old.Categories != nil {
+	if err := json.Unmarshal([]byte(`{"name":"x_read","args":{}}`), &old); err != nil || old.Categories != nil || old.OriginDeviceID != "" {
 		t.Fatalf("an older hub's call: %+v %v", old, err)
+	}
+	do := DoParams{
+		Name:      "x_write",
+		RequestID: "req-1",
+		CallFrom:  CallFromContext(connector.WithCallContext(context.Background(), connector.CallContext{Track: "main", OriginDeviceID: "dev_abc123def456"})),
+	}
+	b, err := json.Marshal(do)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doBack DoParams
+	if err := json.Unmarshal(b, &doBack); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := connector.CallContextOf(doBack.context(context.Background()))
+	if !ok || got.Track != "main" || got.OriginDeviceID != "dev_abc123def456" {
+		t.Fatalf("DoParams round-trip got %+v (%v)", got, ok)
 	}
 }

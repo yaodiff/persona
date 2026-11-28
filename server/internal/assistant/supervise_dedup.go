@@ -22,7 +22,7 @@ type superviseFingerprint struct {
 	At        time.Time `json:"at"`
 	Key       string    `json:"key,omitempty"` // the stretch reserved by this fingerprint; empty before #5732
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
+	// Todo bounds inactivity, daily summaries, and durable source fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
@@ -34,8 +34,8 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 		sum := sha256.Sum256([]byte(g.Key))
 		return string(key), hex.EncodeToString(sum[:])
 	}
-	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.Kind == sigOrphaned && g.WorkerSet != "" {
-		// One durable wake per to-do and canonical prerequisite/children set, outage episode, or accepted-worker set, independent of restarts or sweeps.
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.Kind == sigTopicFollowup || g.Kind == sigOrphaned && g.WorkerSet != "" {
+		// One durable wake per to-do and canonical prerequisite/children set, outage episode, topic receipt, or accepted-worker set, independent of restarts or sweeps.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind})
 		sum := sha256.Sum256([]byte(g.Key))
 		return string(key), hex.EncodeToString(sum[:])
@@ -96,7 +96,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	if keyIsNews(g.Kind) || (g.Kind == sigOrphaned && strings.HasPrefix(g.Key, nodeRecoveryKeyPrefix)) {
 		fields = append(fields, g.Key)
 	}
-	if g.Kind == sigAllStopped {
+	if g.Kind == sigAllStopped || g.Kind == sigLoopNoop {
 		fields = []any{g.Key} // reworded triage on the same stopped turn is not a new period of inactivity
 	}
 	payload, _ := json.Marshal(fields)
@@ -111,7 +111,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigReviewNudge, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigRecovered,
+	case sigLoopNoop, sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigReviewNudge, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigRecovered,
 		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
 		return true
 	}
@@ -127,7 +127,7 @@ func keptUntilChange(g superviseSignal) bool {
 	switch g.Kind {
 	case sigReport:
 		return g.Report != upReportQuestion && g.Report != upReportBlocked
-	case sigIdle, sigUnjudged, sigStalled, sigNoProgress, sigReview, sigOrphaned, sigInterrupted, sigOverdue, sigTimedOut:
+	case sigIdle, sigUnjudged, sigStalled, sigNoProgress, sigLoopNoop, sigReview, sigOrphaned, sigInterrupted, sigOverdue, sigTimedOut:
 		return true
 	}
 	return false
@@ -218,7 +218,8 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || signals[i].Kind == sigPRMerged || signals[i].Kind == sigNeedsUserExternalInfo || signals[i].Kind == sigRecovered || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
-		if g := signals[i]; g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.todoV2Wake() || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		if g := signals[i]; g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.Kind == sigTopicFollowup ||
+			g.todoV2Wake() || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
 			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint
@@ -269,8 +270,8 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 	next := maps.Clone(history)
 	changed := false
 	for _, g := range signals {
-		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo || g.Kind == sigOutageRecovery || g.todoV2Wake() ||
-			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
+		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo || g.Kind == sigOutageRecovery || g.Kind == sigTopicFollowup ||
+			g.todoV2Wake() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 		if !stable {
 			// Unmarked legacy deliveries retain their established acknowledgment path.
 			t, ok := s.todoNow(g.Todo)

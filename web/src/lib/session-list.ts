@@ -123,6 +123,10 @@ export interface SessionListOptions<T> {
   counts?: boolean;
   /** Optional concurrency gate for refresh reads (e.g., throttling multiple open grouped sections). */
   schedule?: (run: () => Promise<void>, signal: AbortSignal) => Promise<void>;
+  /** Hold hint invalidations while the tab is hidden and refresh once when it becomes visible again. */
+  pauseWhenHidden?: boolean;
+  /** Coalescing window while the tab is hidden (when pauseWhenHidden is false); defaults to 15 s. */
+  hiddenWindowMs?: number;
 }
 
 /** What a `sessions_list` hint says of the change it follows (`sessions_list_changes`, #6685): the revision before it,
@@ -158,6 +162,8 @@ export class SessionList<T> {
   /** When the last invalidation's read went out, then when it came back (0 when none): a hint inside the window waits
    *  for the window's end. */
   protected invalidatedAt = 0;
+  private hiddenWait: number;
+  private offVis?: () => void;
   private lastFailure: "load" | "more" = "load";
   private summary: boolean;
   private roots: boolean;
@@ -191,6 +197,7 @@ export class SessionList<T> {
     this.pageCounts = options.pageCounts ?? (() => false);
     this.counted = options.counts ?? true;
     this.schedule = options.schedule;
+    this.hiddenWait = options.pauseWhenHidden ? Infinity : (options.hiddenWindowMs ?? 15_000);
   }
 
   isSummary(): boolean { return this.summary; }
@@ -274,22 +281,37 @@ export class SessionList<T> {
    *  fast and local-first). A hint read at once whenever a read was out kept a busy fleet's list reading back to back:
    *  `loading` never cleared, so Load more stayed hidden and a queued page never ran. A grouped list's section also
    *  passes over hints naming none of its rows (lib/section-list.ts, #9176). */
-  invalidate(): void {
+  invalidate(hint?: ListChangeHint): void {
+    const rev = hint?.revision;
+    if (typeof rev === "string" && rev && this.checkpoint === rev && this.snapshot.loaded && !this.snapshot.error && !this.work.promise && !this.work.load) return;
     if (this.invalidationQueued) return;
     this.invalidationQueued = true;
     const generation = this.generation;
     queueMicrotask(() => {
       if (!this.current(generation) || !this.invalidationQueued) return;
-      // inside the last read's window (none yet: invalidatedAt 0 is long past)
-      const wait = this.invalidatedAt + 2_000 - Date.now();
+      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      const wait = this.invalidatedAt + (hidden ? this.hiddenWait : 2_000) - Date.now();
       if (wait > 0) {
-        // invalidationQueued stays set: further hints of this window return at once. The window's end clears it
-        // first, or its own invalidate would return at once too and no hint would ever read again.
-        this.invalidationTimer = setTimeout(() => {
-          this.invalidationTimer = undefined;
-          this.invalidationQueued = false;
-          this.invalidate();
-        }, wait);
+        if (hidden && !this.offVis) {
+          const wake = () => {
+            if (document.visibilityState === "hidden") return;
+            this.offVis?.();
+            this.offVis = undefined;
+            clearTimeout(this.invalidationTimer);
+            this.invalidationTimer = undefined;
+            this.invalidationQueued = false;
+            this.invalidate();
+          };
+          document.addEventListener("visibilitychange", wake);
+          this.offVis = () => document.removeEventListener("visibilitychange", wake);
+        }
+        if (Number.isFinite(wait)) {
+          this.invalidationTimer = setTimeout(() => {
+            this.invalidationTimer = undefined;
+            this.invalidationQueued = false;
+            this.invalidate();
+          }, wait);
+        }
         return;
       }
       this.invalidationQueued = false;
@@ -306,6 +328,8 @@ export class SessionList<T> {
     this.generation++;
     this.work = { generation: this.generation, load: false, more: false, kind: null };
     this.invalidationQueued = false;
+    this.offVis?.();
+    this.offVis = undefined;
     clearTimeout(this.invalidationTimer); // undefined (none pending) is a no-op
     this.invalidationTimer = undefined;
     this.invalidatedAt = 0;

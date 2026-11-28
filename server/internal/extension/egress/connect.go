@@ -18,23 +18,30 @@ const (
 
 type connectDialKey struct{}
 
+type connectKey struct {
+	host, port string
+	upstream   string // normalized HTTP proxy endpoint, empty for a direct route
+}
+
 // connectPlan retains only the addresses already checked for this request. A cache
 // hit changes their order, never the permission check or the DNS answer itself.
 type connectPlan struct {
 	net.Conn
-	key, target string
-	remaining   []string
+	key       connectKey
+	target    string
+	remaining []string
+	attempt   dialAttempt
 }
 
 func (c *connectPlan) CloseWrite() error { return closeWrite(c.Conn) }
 
-func (p *Proxy) dialResolved(ctx context.Context, host, port string, ips []net.IP) (net.Conn, error) {
-	attempt := func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) }
+// dialResolved races checked addresses and carries the selected route into any TLS CONNECT retries.
+func (p *Proxy) dialResolved(ctx context.Context, key connectKey, ips []net.IP, attempt dialAttempt) (net.Conn, error) {
 	connect, _ := ctx.Value(connectDialKey{}).(bool)
+	port := key.port
 	if !connect || len(ips) < 2 {
 		return dialRace(ctx, ips, port, attempt)
 	}
-	key := net.JoinHostPort(host, port)
 	p.mu.Lock()
 	last := p.lastGood[key]
 	p.mu.Unlock()
@@ -51,7 +58,7 @@ func (p *Proxy) dialResolved(ctx context.Context, host, port string, ips []net.I
 		if err != nil {
 			return nil, err
 		}
-		return &connectPlan{Conn: c, key: key, target: target}, nil
+		return &connectPlan{Conn: c, key: key, target: target, attempt: attempt}, nil
 	})
 	if err != nil {
 		return nil, err
@@ -68,11 +75,11 @@ func (p *Proxy) dialResolved(ctx context.Context, host, port string, ips []net.I
 	return plan, nil
 }
 
-func (p *Proxy) rememberConnect(key, target string) {
+func (p *Proxy) rememberConnect(key connectKey, target string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.lastGood == nil {
-		p.lastGood = make(map[string]string)
+		p.lastGood = make(map[connectKey]string)
 	}
 	if _, ok := p.lastGood[key]; !ok && len(p.lastGood) >= connectCacheMost {
 		// This is only a hint: any entry can be evicted without changing reachability.
@@ -159,7 +166,7 @@ func prependConnect(c net.Conn, b []byte) net.Conn {
 // The server may speak first on any port (including 443); never hold its banner
 // waiting for the client. An idle/slow client gets one second to finish its hello,
 // then ordinary relay resumes with all bytes intact and no replay or new timeout.
-// Single-address destinations and upstream proxies do not have a connectPlan.
+// A plan is only needed for CONNECT tunnels with multiple checked addresses.
 func (p *Proxy) prepareConnect(ctx context.Context, near net.Conn, plan *connectPlan) (net.Conn, net.Conn, error) {
 	wait, budget := p.connectWait, p.connectBudget
 	if wait <= 0 {
@@ -202,7 +209,7 @@ func (p *Proxy) tryConnect(ctx context.Context, near net.Conn, plan *connectPlan
 		if i > 0 {
 			actx, cancel := context.WithDeadline(ctx, deadline)
 			var err error
-			far, err = p.dial(actx, "tcp", target)
+			far, err = plan.attempt(actx, target)
 			cancel()
 			if err != nil {
 				failed = append(failed, fmt.Errorf("%s: %w", target, err))

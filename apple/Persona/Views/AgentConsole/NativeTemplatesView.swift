@@ -26,21 +26,21 @@ struct NativeTemplatesView: View {
                     importRows
                 }
             } header: {
-                Text(candidate == nil ? "Templates" : candidate!.title)
+                Text(candidate?.title ?? String(localized: "Templates"))
             } footer: {
                 if let error { Text(error).foregroundStyle(Theme.danger) }
                 else if candidate == nil { Text("A template changes this iPhone only after you preview and apply it. External conversations are included in Agents, not a separate tab.") }
             }
 
             if candidate == nil {
-                Section("Built in") {
+                Section("Built-in") {
                     Button {
                         candidate = .default
                         plan = store.plan(.default)
                         error = nil
                     } label: {
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text("Default")
+                            Text(PersonaTemplate.default.title)
                             Text(PersonaTemplate.default.detail).font(Theme.Font.secondary).foregroundStyle(.secondary)
                         }
                     }
@@ -106,7 +106,8 @@ struct NativeTemplatesView: View {
             .padding(.vertical, Theme.Space.xxs)
         }
         if already > 0 {
-            Text(String(format: String(localized: "%d item is already set."), already)).font(Theme.Font.secondary).foregroundStyle(.secondary)
+            Text(String(localized: "\(already) item is already set."))
+                .font(Theme.Font.secondary).foregroundStyle(.secondary)
         }
         if visible.isEmpty && already > 0 {
             Text("This template changes nothing here.").foregroundStyle(.secondary)

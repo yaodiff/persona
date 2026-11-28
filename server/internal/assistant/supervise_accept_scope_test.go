@@ -89,11 +89,11 @@ func TestAcceptedReviewDeferredScope(t *testing.T) {
 			cur := todoNow(s, todo.ID)
 			ask, hasAsk := s.askCopy(todo.ID)
 			switch route {
-			case "bare", "unlinked", "closed":
+			case "bare", "unlinked", "closed", "user_check":
 				if err == nil {
 					t.Fatalf("accepted with deferred scope and no owner action: %s", result)
 				}
-				for _, want := range []string{"deferred scope", "needs_user", "user_check: true", "linked follow-up to-do"} {
+				for _, want := range []string{"deferred scope", "needs_user", "linked follow-up to-do"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("refusal omits %q: %v", want, err)
 					}
@@ -108,13 +108,6 @@ func TestAcceptedReviewDeferredScope(t *testing.T) {
 				review := triageLatestReview(cur.Supervision)
 				if review.DeferredScope != deferred || review.FollowUpTodoID != fields["follow_up_todo_id"] {
 					t.Fatalf("acceptance did not record the hand-off: %+v", review)
-				}
-			case "user_check":
-				if err != nil || cur.DoneAt != nil || cur.Supervision.State != reviewUserCheck || !hasAsk || !ask.AcceptedAt.IsZero() {
-					t.Fatalf("personal verification did not keep the task open with an ask: %s, %v, %+v", result, err, ask)
-				}
-				if ask.How != deferred {
-					t.Fatalf("verification does not show the deferred scope: %+v", ask)
 				}
 			case "existing_decide":
 				if err != nil || cur.Supervision.State != reviewNeedsUser || len(cur.Supervision.Reviews) != len(before.Supervision.Reviews) ||

@@ -1208,10 +1208,10 @@ function onMessage(msg: Record<string, unknown>) {
       break;
     case "sessions_list":
       // A hint is not a checkpoint. Even resumed connections must check the HTTP epoch.
-      runtimeSessions.invalidate();
+      runtimeSessions.invalidate(msg);
       if (supportsPagedAgents(state.features)) {
         const agentsList = runtimeAgents.getSnapshot();
-        if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
+        if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate(msg);
       }
       break;
     case "sessions": {

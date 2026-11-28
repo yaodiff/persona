@@ -3,6 +3,7 @@ package transcript
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -96,7 +97,8 @@ type entry struct {
 		ResetsAt json.RawMessage `json:"resetsAt"` // epoch seconds
 	} `json:"quotaLimits"`
 	// system/scheduled_task_fire: the /loop prompt that is about to run.
-	Prompt string `json:"prompt"`
+	Prompt     string `json:"prompt"`
+	LoopTaskID string `json:"taskId"`
 	// ContextBreakdown is an optional native context category split when an engine writes one into the transcript.
 	ContextBreakdown *proto.ContextBreakdown `json:"context_breakdown"`
 }
@@ -845,6 +847,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 			it := mk(0, "system", proto.KindNotice)
 			it.Text, it.Wake = text, true
+			it.NativeLoopID = proto.NativeLoopID(cmp.Or(e.LoopTaskID, "native-loop"))
 			return []proto.Item{it}
 		case "away_summary":
 			recap := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rawString(e.Content)), "(disable recaps in /config)"))

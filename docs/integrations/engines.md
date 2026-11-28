@@ -178,6 +178,8 @@ Space ids carry no host kind, so a session's row names its host (`space_kind`), 
 
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
+**Fresh TRAE CLI conversations in Herdr and Herdr App** use the terminal's own lifecycle state. A plain start can be matched by its exact conversation title and a same-thread log from its own foreground client. The [TRAE CLI integration](codex.md#trae-cli) describes the process-start and ambiguity checks.
+
 **Antigravity CLI panes** show chat history once the pane's conversation ID is known. Two sources report it, and either is
 enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. On Linux the
 node also reads it from the `presence/<conversation>.lock` the pane's foreground agy holds open, in herdr, Herdr App and
@@ -399,6 +401,9 @@ required evidence still opens the tab and leaves it open. Git worktrees, branche
   manager closes an Agent's tab when its session ends, through the user's close paths only (`session.retire` with
   `close_terminal`, plus `after_exit` for the shell an Agent that quit left): a done or cancelled task's idle Agent instead of
   stopping it, and an Agent seen running that then quit, told to (`/exit`, stop cause `exit`) or by itself (no stop cause).
+  For a runtime-backed task session that declares `capabilities.close`, has no terminal, and is not an assistant
+  conversation, the same path uses the runtime's own close; a runtime that declares a terminal remains refused, and an
+  older node's refusal leaves the session open.
   Not an end, so the terminal stays (until the grace period below, if it is on): the user's Stop, an idle stop, a restart. Never closed: a busy Agent (working, waiting
   for an answer, background work, running subagents or workflows, a `/loop`, queued messages, a server it runs), assistant
   conversations, other tools' sessions, Agents Persona did not start, panes without Persona's mark for the session. An

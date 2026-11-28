@@ -231,6 +231,9 @@ const (
 	// ConnectorsLarkReply: connectorwire.LarkReplyWatch -> connectorwire.LarkReplyObservation. A narrow read of an
 	// explicitly bound Lark topic, through the configured built-in reader; it never sends or changes read state.
 	ConnectorsLarkReply = "connectors.lark_reply"
+	// ConnectorsLarkTopic: connectorwire.LarkTopicWatch -> connectorwire.LarkTopicObservation.
+	// The same configured read-only source, for human activity in an existing task-topic binding.
+	ConnectorsLarkTopic = "connectors.lark_topic"
 
 	// AppInteractions is the hub's interaction queue (InteractionsGet, InteractionsAnswer).
 	AppInteractions = "interactions"

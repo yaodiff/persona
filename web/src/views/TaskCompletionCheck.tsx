@@ -5,6 +5,7 @@ import { defaultManager, onDefaultManager, useKnownDefault } from "../lib/manage
 import { checkTaskCompletion, completionCheckError, type TaskDoneCheck } from "../lib/task-completion-check";
 import type { Todo } from "../lib/todos";
 import { Button, Loading } from "../ui/atoms";
+import { InfoTip } from "../ui/InfoTip";
 
 export interface TaskCompletionCheckDeps {
   /** Execute the completion check (defaults to `lib/task-completion-check.ts`'s `checkTaskCompletion`). */
@@ -32,6 +33,8 @@ export interface TaskCompletionCheckDeps {
 export interface TaskCompletionCheckProps {
   todo: Todo;
   deps?: TaskCompletionCheckDeps;
+  /** Compact single-row layout under todos_v2 (#17938): moves explanatory prose into an InfoTip. */
+  compact?: boolean;
 }
 
 export interface TaskCompletionCheckViewProps {
@@ -40,6 +43,7 @@ export interface TaskCompletionCheckViewProps {
   error?: string;
   result?: { check: TaskDoneCheck; at: Date };
   language?: string;
+  compact?: boolean;
   onRun: () => void;
 }
 
@@ -48,27 +52,28 @@ const subscribeDefaultMgr = (listener: () => void) => onDefaultManager(() => lis
 const defaultNow = () => new Date();
 
 /** Each check belongs to one task, manager and login, including when an editor stays mounted across pairing. */
-export function TaskCompletionCheck({ todo, deps }: TaskCompletionCheckProps) {
+export function TaskCompletionCheck({ todo, deps, compact }: TaskCompletionCheckProps) {
   const controlledOwner = deps?.credentialOwner !== undefined || deps?.subscribeCredentialOwner !== undefined || deps?.onCredentialChange !== undefined;
   return controlledOwner
-    ? <ControlledOwnerBridge todo={todo} deps={deps!} />
-    : <DefaultOwnerBridge todo={todo} deps={deps} />;
+    ? <ControlledOwnerBridge todo={todo} deps={deps!} compact={compact} />
+    : <DefaultOwnerBridge todo={todo} deps={deps} compact={compact} />;
 }
 
 interface OwnerResolvedProps {
   todo: Todo;
   deps?: TaskCompletionCheckDeps;
+  compact?: boolean;
   owner: string;
   readOwner: () => string;
   listenCredential: (retire: () => void) => () => void;
 }
 
-function DefaultOwnerBridge({ todo, deps }: TaskCompletionCheckProps) {
+function DefaultOwnerBridge({ todo, deps, compact }: TaskCompletionCheckProps) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  return <ManagerBridge todo={todo} deps={deps} owner={owner} readOwner={credentialOwner} listenCredential={onCredentialChange} />;
+  return <ManagerBridge todo={todo} deps={deps} compact={compact} owner={owner} readOwner={credentialOwner} listenCredential={onCredentialChange} />;
 }
 
-function ControlledOwnerBridge({ todo, deps }: { todo: Todo; deps: TaskCompletionCheckDeps }) {
+function ControlledOwnerBridge({ todo, deps, compact }: { todo: Todo; deps: TaskCompletionCheckDeps; compact?: boolean }) {
   const credentialDep = deps.credentialOwner;
   const readOwner = useCallback(
     () => (typeof credentialDep === "function" ? credentialDep() : typeof credentialDep === "string" ? credentialDep : credentialOwner()),
@@ -83,7 +88,7 @@ function ControlledOwnerBridge({ todo, deps }: { todo: Todo; deps: TaskCompletio
     if (subCred) return subCred(() => { if (readOwner() !== owner) retire(); });
     return credentialDep === undefined ? onCredentialChange(retire) : () => {};
   }, [onCred, subCred, readOwner, owner, credentialDep]);
-  return <ManagerBridge todo={todo} deps={deps} owner={owner} readOwner={readOwner} listenCredential={listenCredential} />;
+  return <ManagerBridge todo={todo} deps={deps} compact={compact} owner={owner} readOwner={readOwner} listenCredential={listenCredential} />;
 }
 
 function ManagerBridge(props: OwnerResolvedProps) {
@@ -94,7 +99,7 @@ function ManagerBridge(props: OwnerResolvedProps) {
     : <DefaultManagerBridge {...props} />;
 }
 
-function DefaultManagerBridge({ todo, deps, owner, readOwner, listenCredential }: OwnerResolvedProps) {
+function DefaultManagerBridge({ todo, deps, compact, owner, readOwner, listenCredential }: OwnerResolvedProps) {
   const knownDefault = useKnownDefault();
   const manager = todo.manager || knownDefault || defaultManager();
   return <CompletionCheck
@@ -102,11 +107,11 @@ function DefaultManagerBridge({ todo, deps, owner, readOwner, listenCredential }
     todo={todo} manager={manager} owner={owner}
     readOwner={readOwner} readManager={defaultManager}
     listenCredential={listenCredential} listenManager={onDefaultManager}
-    deps={deps}
+    deps={deps} compact={compact}
   />;
 }
 
-function ControlledManagerBridge({ todo, deps, owner, readOwner, listenCredential }: OwnerResolvedProps & { deps: TaskCompletionCheckDeps }) {
+function ControlledManagerBridge({ todo, deps, compact, owner, readOwner, listenCredential }: OwnerResolvedProps & { deps: TaskCompletionCheckDeps }) {
   const managerDep = deps.defaultManager;
   const readManager = useCallback(
     () => (typeof managerDep === "function" ? managerDep() : typeof managerDep === "string" ? managerDep : defaultManager()),
@@ -127,7 +132,7 @@ function ControlledManagerBridge({ todo, deps, owner, readOwner, listenCredentia
     todo={todo} manager={manager} owner={owner}
     readOwner={readOwner} readManager={readManager}
     listenCredential={listenCredential} listenManager={listenManager}
-    deps={deps}
+    deps={deps} compact={compact}
   />;
 }
 
@@ -140,9 +145,10 @@ interface CompletionCheckProps {
   listenCredential: (retire: () => void) => () => void;
   listenManager: (notify: () => void) => () => void;
   deps?: TaskCompletionCheckDeps;
+  compact?: boolean;
 }
 
-function CompletionCheck({ todo, manager, owner, readOwner, readManager, listenCredential, listenManager, deps }: CompletionCheckProps) {
+function CompletionCheck({ todo, manager, owner, readOwner, readManager, listenCredential, listenManager, deps, compact }: CompletionCheckProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [result, setResult] = useState<{ check: TaskDoneCheck; at: Date }>();
@@ -208,11 +214,38 @@ function CompletionCheck({ todo, manager, owner, readOwner, readManager, listenC
   };
 
   const language = typeof deps?.language === "function" ? deps.language() : deps?.language;
-  return <TaskCompletionCheckView supervised={!!todo.supervision} busy={busy} error={error} result={result} language={language} onRun={() => void run()} />;
+  return <TaskCompletionCheckView supervised={!!todo.supervision} busy={busy} error={error} result={result} language={language} compact={compact} onRun={() => void run()} />;
 }
 
 /** Pure presentational view for the task completion check panel. */
-export function TaskCompletionCheckView({ supervised, busy, error, result, language, onRun }: TaskCompletionCheckViewProps) {
+export function TaskCompletionCheckView({ supervised, busy, error, result, language, compact = false, onRun }: TaskCompletionCheckViewProps) {
+  if (compact) {
+    const explanation = supervised
+      ? `${t("todos.check_explanation")} ${t("todos.check_supervised")}`
+      : t("todos.check_explanation");
+    return (
+      <section
+        aria-label={t("todos.check_section")}
+        aria-busy={busy}
+        className="mt-3 min-w-0 rounded-control border border-line bg-canvas px-3 py-2"
+        data-testid="task-completion-check"
+        data-compact="true"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            <span className="text-label font-medium text-ink-2">{t("todos.check_section")}</span>
+            <InfoTip name={t("todos.check_section")} text={explanation} />
+          </span>
+          <Button tone="secondary" size="sm" icon="check" disabled={busy} testId="task-completion-check-run" onClick={onRun}>
+            {t(error ? "todos.check_retry" : result ? "todos.check_again" : "todos.check_action")}
+          </Button>
+        </div>
+        {busy && <div className="mt-2.5"><Loading label={t("todos.check_wait")} /></div>}
+        {error && <p role="alert" className="mt-2.5 text-meta leading-[1.6] text-red">{error}</p>}
+        {result && <CompletionCheckResult check={result.check} at={result.at} supervised={supervised} language={language} />}
+      </section>
+    );
+  }
   return (
     <section aria-label={t("todos.check_section")} aria-busy={busy} className="mt-4 min-w-0 rounded-control bg-inset p-3.5 shadow-hairline" data-testid="task-completion-check">
       <div className="flex flex-wrap items-center justify-between gap-2">

@@ -637,4 +637,30 @@ describe("To-dos grouped by 常驻", () => {
     expect(doneToggle()?.getAttribute("aria-expanded")).toBe("true");
     expect(visibleIds()).toEqual(["small-done-1", "small-done-2"]);
   });
+
+  it("renders a labeled Directions trigger in the top header under todos_v2=true and keeps legacy icon button when off (#17938)", async () => {
+    seed({
+      todos: TODOS,
+      todoBoard: null,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: false },
+    });
+    await render();
+    expect(host.querySelector("[data-testid=todos-direction-details-trigger]")).toBeNull();
+    expect(host.querySelector(`button[aria-label="${t("external-sources.direction_details")}"]`)).toBeTruthy();
+
+    seed({
+      todos: TODOS,
+      todoBoard: null,
+      assistant: { machine_id: "m1", main: "main", conversations: [], todos_v2: true },
+    });
+    await render();
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todos-direction-details-trigger]")!;
+    expect(trigger).toBeTruthy();
+    expect(trigger.textContent).toContain(t("todos.header_directions"));
+    expect(trigger.getAttribute("aria-label")).toBe(t("external-sources.direction_details"));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(menuItems().map((el) => el.textContent?.trim())).toContain("Infrastructure");
+  });
 });

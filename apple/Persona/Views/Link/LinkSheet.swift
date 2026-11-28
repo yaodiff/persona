@@ -151,6 +151,11 @@ struct LinkSheet: View {
     @State private var instruction = ""
     /// Opens full screen (2026-10-28: half a screen was too little to read); pull down to 0.6 to see the chat again.
     @State private var detent: PresentationDetent = .large
+    #if os(iOS)
+    @State private var previewMode = PreviewCardModeState()
+    @State private var streamReloadToken = 0
+    @State private var streamCopyURL: String? = nil
+    #endif
 
     init(target: LinkTarget, key: SessionKey? = nil, choosePreview: ((PreviewOption) -> Void)? = nil) {
         self.target = target
@@ -177,13 +182,21 @@ struct LinkSheet: View {
             } else {
                 #if os(iOS)
                 if let key, target.forwarded != nil {
-                    // A machine's dev server from a chat: the preview's bar under it (#150).
+                    // A machine's dev server from a chat: the preview's bar under it (#150), with optional computer stream mode.
                     PreviewPage(
                         url: activeURL,
                         key: key,
                         title: $title,
                         forwardedLabel: target.forwarded,
+                        modeState: previewMode,
+                        hubHasPreview: hubHasPreview,
+                        streamReloadToken: streamReloadToken,
+                        streamCopyURL: $streamCopyURL,
+                        onSyncDirectURL: { updated in
+                            if updated != activeURL { activeURL = updated }
+                        },
                         onRetry: { reloadPage() },
+                        onRetryAfterReprobe: { reloadPage(clearReprobe: false) },
                         onOpenExternal: { openExternalLink($0) },
                         onReprobePort: { await model.reprobeForwardedPort($0) }
                     ) { selected, kind in pick(selected, kind: kind) }
@@ -200,9 +213,20 @@ struct LinkSheet: View {
         .presentationBackground(Theme.pageBackground) // pages with a clear background let the chat show through
         .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.6))) // the chat stays usable behind
         .presentationContentInteraction(.resizes) // a swipe up grows the sheet before it scrolls the page
-        .onChange(of: target.url) { _, next in activeURL = next }
+        .onChange(of: target.url) { _, next in
+            activeURL = next
+            #if os(iOS)
+            previewMode = PreviewCardModeState()
+            streamCopyURL = nil
+            #endif
+        }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active, target.forwarded != nil {
+            #if os(iOS)
+            let isDirect = previewMode.mode == .direct
+            #else
+            let isDirect = true
+            #endif
+            if newPhase == .active, target.forwarded != nil, isDirect {
                 Task { await ensureForwardedReady(reloadIfMoved: true) }
             }
         }
@@ -233,21 +257,38 @@ struct LinkSheet: View {
             forwardedLabel: target.forwarded,
             title: $title,
             onRetry: { reloadPage() },
+            onRetryAfterReprobe: { reloadPage(clearReprobe: false) },
             onOpenExternal: { openExternalLink($0) },
             onReprobePort: target.forwarded != nil ? { await model.reprobeForwardedPort($0) } : nil
         ) { selected, kind in pick(selected, kind: kind) }
             .ignoresSafeArea(.container, edges: .bottom) // full screen: the page runs under the home indicator
     }
 
-    /// A forwarded page whose chat's hub has previews: its subtitle lists the session's other servers.
-    private var canChoose: Bool {
+    private var hubHasPreview: Bool {
         #if os(iOS)
-        guard let key, target.forwarded != nil, choosePreview != nil else { return false }
+        guard let key else { return false }
         return model.features(key.group).contains(PreviewLogic.feature)
         #else
         false
         #endif
     }
+
+    /// A forwarded page whose chat's hub has previews: its subtitle lists the session's other servers.
+    private var canChoose: Bool {
+        #if os(iOS)
+        guard key != nil, target.forwarded != nil, choosePreview != nil else { return false }
+        return hubHasPreview
+        #else
+        false
+        #endif
+    }
+
+    #if os(iOS)
+    private var previewMachineName: String {
+        guard let key else { return "" }
+        return model.machine(key.machineRef)?.title ?? key.machineID
+    }
+    #endif
 
     private var header: some View {
         HStack(spacing: Theme.Space.m) {
@@ -286,14 +327,43 @@ struct LinkSheet: View {
                     .accessibilityLabel("Add this document as context")
             }
             if feishuRoute == nil {
-                Button { Haptics.tap(); reloadPage() } label: { ThemedIcon(Theme.Icon.reload) }
+                Button {
+                    Haptics.tap()
+                    #if os(iOS)
+                    if previewMode.mode == .stream {
+                        streamReloadToken += 1
+                    } else {
+                        reloadPage()
+                    }
+                    #else
+                    reloadPage()
+                    #endif
+                } label: { ThemedIcon(Theme.Icon.reload) }
                     .accessibilityLabel("Refresh")
                     .accessibilityIdentifier("link-reload")
             }
             Menu {
-                Button { UIPasteboard.general.url = activeURL; Haptics.success() } label: { Label("Copy Link", systemImage: Theme.Icon.link) }
+                Button {
+                    #if os(iOS)
+                    if previewMode.mode == .stream, let copy = streamCopyURL {
+                        UIPasteboard.general.string = copy
+                    } else {
+                        UIPasteboard.general.url = activeURL
+                    }
+                    #else
+                    UIPasteboard.general.url = activeURL
+                    #endif
+                    Haptics.success()
+                } label: { Label("Copy Link", systemImage: Theme.Icon.link) }
+                #if os(iOS)
+                if key != nil, target.forwarded != nil, hubHasPreview {
+                    previewModeMenuItems
+                }
+                #endif
                 if target.forwarded == nil { browserItems } // the phone's loopback means nothing to another app
             } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                .accessibilityLabel("More")
+                .accessibilityIdentifier("link-more")
         }
         .font(Theme.Font.title)
         .padding(.horizontal, Theme.Space.l)
@@ -309,6 +379,44 @@ struct LinkSheet: View {
         Button { UIApplication.shared.open(target.url) } label: { Label("Open in Safari", systemImage: Theme.Icon.safari) }
         ShareLink(item: target.url) { Label("Share", systemImage: Theme.Icon.share) }
     }
+
+    #if os(iOS)
+    @ViewBuilder private var previewModeMenuItems: some View {
+        if previewMode.mode == .stream {
+            Button {
+                Haptics.tap()
+                previewMode.switchToDirectManually()
+            } label: {
+                Label(String(localized: "View directly"), systemImage: Theme.Icon.phone)
+            }
+            .accessibilityIdentifier("preview-switch-direct")
+        } else if previewMode.canOfferStream(hubHasPreview: hubHasPreview) {
+            Button {
+                Haptics.tap()
+                previewMode.switchToStreamManually(hubHasPreview: hubHasPreview)
+            } label: {
+                Label(String(localized: "View through the computer"), systemImage: Theme.Icon.screen)
+            }
+            .accessibilityIdentifier("preview-switch-stream")
+        } else if let unavailable = previewMode.streamUnavailable {
+            Section {
+                Button {} label: {
+                    Label(unavailableStreamMenuNote(unavailable), systemImage: Theme.Icon.info)
+                }
+                .disabled(true)
+            }
+        }
+    }
+
+    private func unavailableStreamMenuNote(_ reason: PreviewStreamUnavailableReason) -> String {
+        switch reason {
+        case .noBrowser:
+            String(localized: "View through the computer unavailable: no browser on \(previewMachineName)")
+        case .nodeOutdated:
+            String(localized: "View through the computer unavailable: update Persona on \(previewMachineName)")
+        }
+    }
+    #endif
 
     private func pick(_ text: String, kind: String) {
         guard let key else {
@@ -337,9 +445,9 @@ struct LinkSheet: View {
     }
 
     /// Rebuilds an invalidated loopback forward listener if needed before reloading the page.
-    private func reloadPage() {
+    private func reloadPage(clearReprobe: Bool = true) {
         guard target.forwarded != nil || PortForwarder.shared.key(for: activeURL) != nil else {
-            WebViewPool.shared.reload(activeURL)
+            WebViewPool.shared.reload(activeURL, clearReprobe: clearReprobe)
             return
         }
         let currentURL = activeURL
@@ -348,9 +456,9 @@ struct LinkSheet: View {
             do {
                 let readyURL = try await PortForwarder.shared.ensureReady(for: currentURL)
                 if readyURL != currentURL { activeURL = readyURL }
-                WebViewPool.shared.reload(currentURL, at: readyURL)
+                WebViewPool.shared.reload(currentURL, at: readyURL, clearReprobe: clearReprobe)
             } catch {
-                WebViewPool.shared.existing(for: currentURL)?.pageState.loadError = .from(portError: .listenerFailed)
+                WebViewPool.shared.existing(for: currentURL)?.pageState.recordFailure(.from(portError: .listenerFailed))
             }
         }
     }
@@ -420,16 +528,32 @@ struct WebPageError: Equatable {
     var symbol: String
     var title: String
     var message: String
+    var kind: PreviewDirectFailureKind = .other
 
     @MainActor static func from(portError: PortForwardError) -> WebPageError {
-        WebPageError(symbol: portError.symbol, title: portError.title, message: portError.message)
+        WebPageError(
+            symbol: portError.symbol,
+            title: portError.title,
+            message: portError.message,
+            kind: .from(portError: portError)
+        )
     }
 
     @MainActor static var declinedSelfSigned: WebPageError {
         WebPageError(
             symbol: Theme.Icon.error,
             title: String(localized: "Untrusted Local Certificate"),
-            message: String(localized: "This dev server uses a self-signed certificate that wasn't trusted. Tap Retry if you want to trust it for this session.")
+            message: String(localized: "This dev server uses a self-signed certificate that wasn't trusted. Tap Retry if you want to trust it for this session."),
+            kind: .declinedSelfSigned
+        )
+    }
+
+    @MainActor static var timedOut: WebPageError {
+        WebPageError(
+            symbol: Theme.Icon.error,
+            title: String(localized: "Request Timed Out"),
+            message: String(localized: "The page took too long to respond. Try again."),
+            kind: .timedOut
         )
     }
 
@@ -437,7 +561,8 @@ struct WebPageError: Equatable {
         WebPageError(
             symbol: Theme.Icon.error,
             title: String(localized: "Page Reload Needed"),
-            message: String(localized: "The web page stopped unexpectedly. Tap Retry to load it again.")
+            message: String(localized: "The web page stopped unexpectedly. Tap Retry to load it again."),
+            kind: .processTerminated
         )
     }
 
@@ -453,34 +578,34 @@ struct WebPageError: Equatable {
                 return WebPageError(
                     symbol: Theme.Icon.offline,
                     title: String(localized: "No Internet Connection"),
-                    message: String(localized: "Check your network connection and try again.")
+                    message: String(localized: "Check your network connection and try again."),
+                    kind: .noInternet
                 )
             case NSURLErrorTimedOut:
-                return WebPageError(
-                    symbol: Theme.Icon.error,
-                    title: String(localized: "Request Timed Out"),
-                    message: String(localized: "The page took too long to respond. Try again.")
-                )
+                return .timedOut
             case NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
                  NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateNotYetValid,
                  NSURLErrorSecureConnectionFailed:
                 return WebPageError(
                     symbol: Theme.Icon.error,
                     title: String(localized: "Certificate Not Trusted"),
-                    message: String(localized: "This site's security certificate isn't trusted.")
+                    message: String(localized: "This site's security certificate isn't trusted."),
+                    kind: .tlsUntrusted
                 )
             case NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost:
                 if forwardedKey != nil {
                     return WebPageError(
                         symbol: Theme.Icon.error,
                         title: String(localized: "Couldn't Open Preview"),
-                        message: String(localized: "Couldn't reach the server on your computer. Make sure it's still running and try again.")
+                        message: String(localized: "Couldn't reach the server on your computer. Make sure it's still running and try again."),
+                        kind: .connectionLost
                     )
                 }
                 return WebPageError(
                     symbol: Theme.Icon.error,
                     title: String(localized: "Couldn't Load Page"),
-                    message: String(localized: "Couldn't connect to this page. Check your connection and try again.")
+                    message: String(localized: "Couldn't connect to this page. Check your connection and try again."),
+                    kind: .connectionLost
                 )
             default:
                 break
@@ -489,7 +614,8 @@ struct WebPageError: Equatable {
         return WebPageError(
             symbol: Theme.Icon.error,
             title: String(localized: "Couldn't Load Page"),
-            message: error.localizedDescription
+            message: error.localizedDescription,
+            kind: .other
         )
     }
 }
@@ -610,6 +736,7 @@ final class WebPageState {
     var loadError: WebPageError?
     var pendingTrustPrompt: LoopbackTrustPrompt?
     var pendingDialog: WebDialog?
+    var awaitingCommit = false
     @ObservationIgnored var dialogQueue: [WebDialog] = []
     @ObservationIgnored var initialURL: URL?
     @ObservationIgnored var forwardedLabel: String?
@@ -617,13 +744,23 @@ final class WebPageState {
     @ObservationIgnored var declinedSelfSigned = false
     @ObservationIgnored var didReprobeCachedPort = false
     @ObservationIgnored var onRetry: (() -> Void)?
+    @ObservationIgnored var onRetryAfterReprobe: (() -> Void)?
+    @ObservationIgnored var onFailure: ((WebPageError) -> Void)?
+    @ObservationIgnored var onCommitted: (() -> Void)?
     @ObservationIgnored var onOpenExternalURL: ((URL) -> Void)?
     @ObservationIgnored var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)?
 
-    func resetForReload() {
+    func resetForReload(clearReprobe: Bool = true) {
         loadError = nil
+        awaitingCommit = true
         declinedSelfSigned = false
-        didReprobeCachedPort = false
+        if clearReprobe { didReprobeCachedPort = false }
+    }
+
+    func recordFailure(_ error: WebPageError) {
+        awaitingCommit = false
+        loadError = error
+        onFailure?(error)
     }
 
     func enqueueDialog(_ dialog: WebDialog) {
@@ -664,16 +801,20 @@ final class WebViewBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         state.loadError = nil
+        state.awaitingCommit = true
         state.declinedSelfSigned = false
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         state.loadError = nil
+        state.awaitingCommit = false
         state.didReprobeCachedPort = false
+        state.onCommitted?()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         state.loadError = nil
+        state.awaitingCommit = false
         state.didReprobeCachedPort = false
     }
 
@@ -686,7 +827,7 @@ final class WebViewBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        state.loadError = .processTerminated
+        state.recordFailure(.processTerminated)
     }
 
     func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
@@ -743,8 +884,8 @@ final class WebViewBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
         let ns = error as NSError
         if ns.domain == "WebKitErrorDomain" && ns.code == 102 { return } // Frame load interrupted by policy/redirect
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled {
-            if state.declinedSelfSigned {
-                state.loadError = .declinedSelfSigned
+            if state.declinedSelfSigned && state.loadError == nil {
+                state.recordFailure(.declinedSelfSigned)
             }
             return
         }
@@ -757,22 +898,26 @@ final class WebViewBridge: NSObject, WKNavigationDelegate, WKUIDelegate {
                 guard let self else { return }
                 let outcome = await reprobe(forwardedKey)
                 if outcome == .live {
-                    self.state.onRetry?()
+                    if let retryOnce = self.state.onRetryAfterReprobe {
+                        retryOnce()
+                    } else {
+                        self.state.onRetry?()
+                    }
                 } else {
-                    self.state.loadError = WebPageError.from(
+                    self.state.recordFailure(WebPageError.from(
                         navigationError: capturedError,
                         forwardedKey: forwardedKey,
                         declinedSelfSigned: self.state.declinedSelfSigned
-                    )
+                    ))
                 }
             }
             return
         }
-        state.loadError = WebPageError.from(
+        state.recordFailure(WebPageError.from(
             navigationError: error,
             forwardedKey: forwardedKey,
             declinedSelfSigned: state.declinedSelfSigned
-        )
+        ))
     }
 
     // MARK: WKUIDelegate
@@ -892,11 +1037,11 @@ final class WebViewPool {
     /// The sheet's Refresh: the page again from the server, not from the cache. A view that never got a page (its first
     /// load failed: `url` is nil or an error overlay is shown) loads it afresh; if a rebuilt listener moved to a new
     /// local port (`newURL`), re-keys the pooled view and loads `newURL`.
-    func reload(_ url: URL, at newURL: URL? = nil) {
+    func reload(_ url: URL, at newURL: URL? = nil, clearReprobe: Bool = true) {
         let oldKey = url.absoluteString
         guard let v = views[oldKey] else { return }
         let hadError = v.pageState.loadError != nil
-        v.pageState.resetForReload()
+        v.pageState.resetForReload(clearReprobe: clearReprobe)
         if let newURL, newURL != url {
             let newKey = newURL.absoluteString
             views[oldKey] = nil
@@ -991,12 +1136,21 @@ struct WebPageView: View {
     var forwardedLabel: String? = nil
     @Binding var title: String
     var nav: WebNav? = nil
+    var canFallbackToStream: ((WebPageError) -> Bool)? = nil
+    var onSwitchToStream: (() -> Void)? = nil
+    var onDirectFailure: ((WebPageError) -> Void)? = nil
+    var onDirectCommitted: (() -> Void)? = nil
     var onRetry: () -> Void
+    var onRetryAfterReprobe: (() -> Void)? = nil
     var onOpenExternal: (URL) -> Void
     var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)? = nil
     var onPick: (String, String) -> Void
     @State private var pageState: WebPageState?
     @State private var promptInput = ""
+
+    /// Bounded direct-load watchdog: if a forwarded page stalls without committing (and no TLS prompt is up), treat it
+    /// as timed out so computer-stream fallback can take over cleanly.
+    private static let directLoadTimeout: Duration = .seconds(15)
 
     private var activeAlertMessage: String? {
         if case .alert(let msg, _) = pageState?.pendingDialog?.kind { return msg }
@@ -1013,6 +1167,13 @@ struct WebPageView: View {
         return nil
     }
 
+    private var directWatchdogActive: Bool {
+        onDirectFailure != nil
+            && (pageState?.awaitingCommit == true)
+            && pageState?.loadError == nil
+            && pageState?.pendingTrustPrompt == nil
+    }
+
     var body: some View {
         ZStack {
             PooledWebView(
@@ -1021,25 +1182,39 @@ struct WebPageView: View {
                 nav: nav,
                 forwardedLabel: forwardedLabel,
                 onRetry: onRetry,
+                onRetryAfterReprobe: onRetryAfterReprobe,
+                onDirectFailure: onDirectFailure,
+                onDirectCommitted: onDirectCommitted,
                 onOpenExternal: onOpenExternal,
                 onReprobePort: onReprobePort,
                 onPick: onPick,
                 onState: { pageState = $0 }
             )
             if let error = pageState?.loadError {
+                let secondary: (title: String, run: () -> Void)? = {
+                    guard let onSwitchToStream, canFallbackToStream?(error) == true else { return nil }
+                    return (title: String(localized: "View through the computer"), run: onSwitchToStream)
+                }()
                 ScrollView {
                     EmptyStateView(
                         symbol: error.symbol,
                         title: error.title,
                         message: error.message,
                         action: (title: String(localized: "Retry"), run: onRetry),
-                        tint: Theme.caution
+                        tint: Theme.caution,
+                        secondaryAction: secondary
                     )
                     .containerRelativeFrame(.vertical)
                 }
                 .background(Theme.pageBackground)
                 .accessibilityIdentifier("webview-error-overlay")
             }
+        }
+        .task(id: directWatchdogActive) {
+            guard directWatchdogActive else { return }
+            do { try await Task.sleep(for: Self.directLoadTimeout) } catch { return }
+            guard directWatchdogActive, let state = pageState else { return }
+            state.recordFailure(.timedOut)
         }
         .alert(
             String(localized: "Untrusted Local Certificate"),
@@ -1048,9 +1223,9 @@ struct WebPageView: View {
                 set: { shown in
                     if !shown, let p = pageState?.pendingTrustPrompt {
                         pageState?.declinedSelfSigned = true
-                        pageState?.loadError = .declinedSelfSigned
                         p.resolve(trust: false)
                         pageState?.pendingTrustPrompt = nil
+                        pageState?.recordFailure(.declinedSelfSigned)
                     }
                 }
             )
@@ -1058,9 +1233,9 @@ struct WebPageView: View {
             Button(String(localized: "Don't Trust"), role: .cancel) {
                 if let p = pageState?.pendingTrustPrompt {
                     pageState?.declinedSelfSigned = true
-                    pageState?.loadError = .declinedSelfSigned
                     p.resolve(trust: false)
                     pageState?.pendingTrustPrompt = nil
+                    pageState?.recordFailure(.declinedSelfSigned)
                 }
             }
             Button(String(localized: "Trust for This Session")) {
@@ -1148,6 +1323,9 @@ struct PooledWebView: UIViewRepresentable {
     var nav: WebNav? = nil
     var forwardedLabel: String? = nil
     var onRetry: (() -> Void)? = nil
+    var onRetryAfterReprobe: (() -> Void)? = nil
+    var onDirectFailure: ((WebPageError) -> Void)? = nil
+    var onDirectCommitted: (() -> Void)? = nil
     var onOpenExternal: ((URL) -> Void)? = nil
     var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)? = nil
     var onPick: (String, String) -> Void
@@ -1177,6 +1355,9 @@ struct PooledWebView: UIViewRepresentable {
         v.pageState.initialURL = url
         v.pageState.forwardedLabel = forwardedLabel
         v.pageState.onRetry = onRetry
+        v.pageState.onRetryAfterReprobe = onRetryAfterReprobe
+        v.pageState.onFailure = onDirectFailure
+        v.pageState.onCommitted = onDirectCommitted
         v.pageState.onOpenExternalURL = onOpenExternal
         v.pageState.onReprobePort = onReprobePort
     }

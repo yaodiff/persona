@@ -212,5 +212,7 @@
   "change_machine_fallback_minutes": "Offline minutes before computer failover: {before} → {after} minutes",
   "bad_machine_fallback_minutes": "Choose a whole number from 1 to 1440 minutes.",
   "machine_fallback_minutes_unchanged": "The offline failover threshold is unchanged.",
-  "machine_fallback_minutes_saved": "Offline failover threshold saved as {value} minutes."
+  "machine_fallback_minutes_saved": "Offline failover threshold saved as {value} minutes.",
+  "title_memory_extension_standing_bytes": "Memory extension's always-on memory size",
+  "change_memory_extension_standing_bytes": "Memory extension's always-on memory size: {before} KB → {after} KB. Applies from the next message; a larger size adds up to that much text to every main-chat message."
 }

@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeedItem } from "../../lib/feed";
 import type { Item, Session } from "../../lib/types";
+import { t } from "../../i18n";
 import type { Transcript } from "./useTranscript";
 
 vi.hoisted(() => {
@@ -59,9 +60,15 @@ const feedSpies = vi.hoisted(() => ({
 }));
 const feedState = vi.hoisted(() => ({
   items: [] as FeedItem[],
+  feeds: {} as Record<string, FeedItem[]>,
   listeners: new Set<() => void>(),
   set(next: FeedItem[]) {
     feedState.items = next;
+    feedState.feeds = { ...feedState.feeds, main: next };
+    feedState.listeners.forEach((l) => l());
+  },
+  setFor(conversation: string, next: FeedItem[]) {
+    feedState.feeds = { ...feedState.feeds, [conversation]: next };
     feedState.listeners.forEach((l) => l());
   },
 }));
@@ -87,8 +94,8 @@ vi.mock("../../lib/feed", async (orig) => {
           feedState.listeners.add(l);
           return () => feedState.listeners.delete(l);
         },
-        () => select({ ...real.getFeedState(), feeds: { main: feedState.items } }),
-        () => select({ ...real.getFeedState(), feeds: { main: feedState.items } }),
+        () => select({ ...real.getFeedState(), feeds: { main: feedState.items, ...feedState.feeds } }),
+        () => select({ ...real.getFeedState(), feeds: { main: feedState.items, ...feedState.feeds } }),
       ),
     displayLines: (...args: Parameters<typeof real.displayLines>) => {
       feedSpies.displayLines(...args);
@@ -134,6 +141,7 @@ beforeEach(() => {
   feedSpies.loadedFrom.mockClear();
   transcriptState.reset({ items: baseItems, hasMore: true, streaming: "", streamEnded: false });
   feedState.items = [oldFeedItem, currentFeedItem];
+  feedState.feeds = { main: [oldFeedItem, currentFeedItem] };
   Object.assign(getState(), {
     loaded: true,
     assistant: { machine_id: "m", main: "main", conversations: [] },
@@ -218,5 +226,56 @@ describe("ChatView assistant displayLines memoization", () => {
     });
     expect(host.textContent).toContain("Older historical notice");
     expect(feedSpies.displayLines).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds unanchored timelineFeed task cards while an Assistant conversation is loading, then interleaves by historyFrom once items arrive", async () => {
+    const topicFeed: FeedItem[] = Array.from({ length: 24 }, (_, idx) => ({
+      id: `topic-feed-${idx}`,
+      conversation: "topic-1",
+      at: new Date(Date.parse("2026-11-15T08:00:00Z") + idx * 10 * 60_000).toISOString(),
+      kind: "notice",
+      body: { text: `Historical task card #${idx}` },
+    }));
+    upsertSession({ machine_id: "m", session_id: "topic-1", title: "Topic", status: "idle", state: "idle", assistant: true } as Session);
+    feedState.setFor("topic-1", topicFeed);
+    transcriptState.reset({ items: [], loading: true, firstRead: false, hasMore: false, streaming: "", streamEnded: false });
+    feedSpies.displayLines.mockClear();
+
+    await act(async () => {
+      root.render(<ChatView mid="m" sid="topic-1" assistant />);
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    // While /items has not returned, <Loading /> is shown and none of the 24 unanchored historical cards render.
+    expect(host.textContent).toContain(t("chat-chatview.loading_chat"));
+    expect(host.textContent).not.toContain("Historical task card #0");
+    expect(host.textContent).not.toContain("Historical task card #23");
+    expect(feedSpies.displayLines).not.toHaveBeenCalled();
+
+    // Once /items arrives with hasMore=true anchored at 11:00Z, only cards >= 11:00Z (#18..#23) interleave.
+    const arrived: Item[] = [
+      { id: "u-topic-1", seq: 200, role: "user", kind: "text", text: "Topic prompt", ts: "2026-11-15T11:00:00Z" },
+      { id: "a-topic-1", seq: 201, role: "assistant", kind: "text", text: "Topic reply", ts: "2026-11-15T11:25:00Z" },
+    ];
+    await act(async () => {
+      transcriptState.update({ items: arrived, loading: false, firstRead: true, hasMore: true });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    expect(host.textContent).not.toContain(t("chat-chatview.loading_chat"));
+    expect(host.textContent).toContain("Topic prompt");
+    expect(host.textContent).toContain("Topic reply");
+    expect(host.textContent).not.toContain("Historical task card #0");
+    expect(host.textContent).not.toContain("Historical task card #17");
+    expect(host.textContent).toContain("Historical task card #18");
+    expect(host.textContent).toContain("Historical task card #23");
+
+    // Truly empty loaded conversation (!loading && !items.length) keeps rendering its feed items.
+    await act(async () => {
+      transcriptState.update({ items: [], loading: false, firstRead: true, hasMore: false });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(host.textContent).toContain("Historical task card #0");
+    expect(host.textContent).toContain("Historical task card #23");
   });
 });

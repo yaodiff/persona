@@ -116,8 +116,10 @@ type Node struct {
 	networkDiagAt func() machineNetworkOptions
 	// fileReadDeps replaces file.read's filesystem operations in tests.
 	fileReadDeps *fileReadDependencies
-	// repoMirrors coordinates opt-in managed bare mirrors under ~/.persona/repos/ (repo_mirror.go).
+	// repoMirrors coordinates managed bare mirrors under ~/.persona/repos/ (repo_mirror.go).
 	repoMirrors repoMirrorManager
+	// remoteFetches is shared by workspace preparation and mirror synchronization.
+	remoteFetches remoteFetchCoordinator
 	// usageMap is the disk usage map's scans, cache and trash record (machine_storage_usage.go), made on first use.
 	usageMap usageMapState
 
@@ -395,6 +397,7 @@ type Node struct {
 	// agentsGen numbers each merge of hostAgents as it is taken; agentsCommitted is the newest one written into agents. A
 	// merge gives way only to a newer one already written, never to one still running (#17826).
 	hostAgents      map[string][]host.Agent
+	traexEvidence   map[string]traexHostEvidence // same host snapshots, retained across partial refreshes
 	hostSnapSeq     map[string]uint64
 	hostLayoutSeq   map[string]uint64
 	hostAgentsSeq   map[string]uint64

@@ -1,0 +1,28 @@
+{
+  "question": "Do you want to proceed?",
+  "detail": "Bash command\ngit push origin main\nPush the release commit",
+  "options": [
+    {
+      "key": "1",
+      "label": "Yes",
+      "keys": [
+        "1"
+      ]
+    },
+    {
+      "key": "2",
+      "label": "Yes, and don't ask again for git push commands in /code/app",
+      "keys": [
+        "2"
+      ]
+    },
+    {
+      "key": "3",
+      "label": "No, and tell Claude what to do differently (esc)",
+      "keys": [
+        "3"
+      ]
+    }
+  ],
+  "rev": "0e47695e3608"
+}

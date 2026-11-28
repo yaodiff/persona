@@ -539,13 +539,14 @@ function buttonsOnNotifications(): boolean {
  * gets Allow / Deny where the browser can draw them (#4464): the worker shows it and an open page answers a button
  * (lib/notification-answer.ts); elsewhere it is the plain one.
  */
-export function postNotification(n: { title: string; body: string; tag: string; url: string; icon?: string; ix?: string; created_at?: string; silent?: boolean }, open: () => void): void {
+export function postNotification(n: { title: string; body: string; tag: string; url: string; icon?: string; ix?: string; created_at?: string; review?: boolean; silent?: boolean }, open: () => void): void {
   if (!systemNotifyActive()) return;
-  if (typeof window !== "undefined" && !(n.ix && buttonsOnNotifications()) && window.personaDesktop?.notify({ title: n.title, body: n.body, tag: n.tag, route: n.url, silent: n.silent, ix: n.ix })) return;
+  if (typeof window !== "undefined" && !(n.ix && buttonsOnNotifications()) && window.personaDesktop?.notify({ title: n.title, body: n.body, tag: n.tag, route: n.url, silent: n.silent, ix: n.review ? undefined : n.ix })) return;
   if (n.ix && buttonsOnNotifications()) {
     // Chrome doesn't let the worker's notification replace the page's under the same tag: take the page's back first
     closePageNotification(n.tag);
-    const actions = [{ action: "allow", title: t("chat-interactions.allow") }, { action: "deny", title: t("chat-interactions.deny") }];
+    const approve = n.review ? { action: "open", title: t("approval-impact.review") } : { action: "allow", title: t("chat-interactions.allow") };
+    const actions = [approve, { action: "deny", title: t("chat-interactions.deny") }];
     navigator.serviceWorker.ready
       .then((reg) => reg.showNotification(n.title, { body: n.body, tag: n.tag, icon: n.icon, silent: n.silent, data: { url: n.url, ix: n.ix, ...(n.created_at ? { created_at: n.created_at } : {}) }, actions } as NotificationOptions))
       .catch(() => postNotification({ ...n, ix: undefined, created_at: undefined }, open));

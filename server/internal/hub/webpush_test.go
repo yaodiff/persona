@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +58,12 @@ func newFakePushService(t *testing.T) *fakePushService {
 			select {
 			case <-hold:
 			case <-r.Context().Done():
+				// A canceled held request must abort without writing any status
+				// (neither the queued status nor an implicit 200 on return): over
+				// TLS, crypto/tls.(*Conn).Close writes close_notify before closing
+				// the TCP socket, which can cancel r.Context() while the client's
+				// readLoop can still read a response written here (#15155).
+				panic(http.ErrAbortHandler)
 			}
 		}
 		w.WriteHeader(status)
@@ -524,6 +531,44 @@ func TestWebPushDispatchAdvancesAfterTimeout(t *testing.T) {
 	}
 	if got[0].status != 0 || got[0].err == nil || got[1].status != http.StatusCreated || got[1].err != nil {
 		t.Fatalf("outcomes %+v; want the old timeout before the new 201", got)
+	}
+}
+
+// Regression for #15155: when a TLS client times out on a held request, crypto/tls.(*Conn).Close writes
+// a TLS close_notify alert before closing the underlying TCP socket. If the server cancels r.Context()
+// and writes 201 (or returns normally to write an implicit 200) in that window, the client's readLoop
+// can observe a 201 success instead of the timeout error. A canceled held request must abort without
+// writing any HTTP response bytes.
+func TestFakePushServiceAbortsCanceledHeldRequestWithoutResponse(t *testing.T) {
+	f := newFakePushService(t)
+	hold := f.hold("/push/canceled")
+	defer close(hold)
+
+	tr := f.srv.Client().Transport.(*http.Transport)
+	tlsCfg := tr.TLSClientConfig.Clone()
+	tlsCfg.ServerName = "127.0.0.1"
+	conn, err := tls.Dial("tcp", f.srv.Listener.Addr().String(), tlsCfg)
+	if err != nil {
+		t.Fatalf("tls dial: %v", err)
+	}
+	defer conn.Close()
+
+	req := "POST /push/canceled HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"
+	if _, err := io.WriteString(conn, req); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	// Wait until the handler has taken the hold and entered its select.
+	if got := f.next(t); got.path != "/push/canceled" {
+		t.Fatalf("path = %q; want /push/canceled", got.path)
+	}
+	// Send only TLS close_notify (the first step of tls.Conn.Close) while the TCP socket stays readable.
+	if err := conn.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	raw, _ := io.ReadAll(conn)
+	if len(raw) != 0 {
+		t.Fatalf("canceled held request wrote HTTP response bytes %q; want aborted connection with no response", raw)
 	}
 }
 

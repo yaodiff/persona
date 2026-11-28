@@ -138,7 +138,11 @@ type Machine struct {
 	reconnectGrace             time.Duration // shown as it was this long after its node disconnected (warm.go; tests: shorter)
 	reloadUntil                time.Time     // a resident announced exec; never extends display/reconnect grace
 	storeWait                  time.Duration // how long a node event waits on the store (nodeStoreWait; tests: shorter)
-	engineMu                   sync.Mutex
+	// stateWriterOnce/stateWriter move state.put Store writes onto one ordered writer goroutine per Machine
+	// (machine_state_writer.go), so a stalled Store cannot hold the node's rpc read loop.
+	stateWriterOnce sync.Once
+	stateWriter     *nodeStateWriter
+	engineMu        sync.Mutex
 	// eventRetire admits an ordinary event callback or retires its connection; never lets a retired event follow the replacement.
 	eventRetire sync.Mutex
 	link        *mgrLink      // kind link: the link Persona Link keeps open, nil while there is none
@@ -1081,24 +1085,12 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			devicewire.ShareCreationLog(m.d.logf, "", "manager_persist", "invalid_state")
 			return
 		}
-		received, committed := "received_without_receipt", "committed_without_receipt"
+		received := "received_without_receipt"
 		if p.State.CreationID != "" && p.State.Incarnation != "" {
-			received, committed = "received_with_receipt", "committed_with_receipt"
+			received = "received_with_receipt"
 		}
 		devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", received)
-		if s, ok := m.d.opts.Store.(nodeStateStore); ok {
-			// Written here, in order (the latest put of a session wins), but bounded: a store that does not answer must
-			// not hold the node's read loop, and with it every reply and event of the node (nodeStoreWait).
-			ctx, cancel := m.storeCtx()
-			if err := s.PutNodeSession(ctx, m.cfg.ID, p.SessionID, p.State); err != nil {
-				devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_error")
-			} else {
-				devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", committed)
-			}
-			cancel()
-		} else {
-			devicewire.ShareCreationLog(m.d.logf, p.SessionID, "manager_persist", "store_unavailable")
-		}
+		m.persistNodeState(p.SessionID, p.State)
 		return // the manager's alone
 	case proto.EventModeSet:
 		m.onModeSet(params)

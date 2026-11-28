@@ -61,7 +61,7 @@ func TestChannelThreadModeAndIdleHoursAPIRoundTripAndValidation(t *testing.T) {
 	})
 	s := newServiceOn(t, f, st)
 
-	// Default GET detail exposes thread_mode=channel_default and thread_idle_hours=0.
+	// A thread-capable plugin defaults to per-topic routing with the standard idle timeout.
 	rec := channelAPIRequest(t, s, http.MethodGet, "/api/v1/channels/examplechat", "full", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET detail: %d %s", rec.Code, rec.Body.String())
@@ -70,7 +70,7 @@ func TestChannelThreadModeAndIdleHoursAPIRoundTripAndValidation(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.ThreadMode != channel.ThreadModeChannelDefault || detail.ThreadIdleHours != 0 {
+	if detail.ThreadMode != channel.ThreadModePerTopic || detail.ThreadIdleHours != 0 {
 		t.Fatalf("default detail: thread_mode=%q thread_idle_hours=%d", detail.ThreadMode, detail.ThreadIdleHours)
 	}
 
@@ -168,6 +168,7 @@ func TestChannelThreadModeAndIdleHoursAPIRoundTripAndValidation(t *testing.T) {
 
 func TestChannelRoutingGatedByIntegrationsV2AndLosslessRollback(t *testing.T) {
 	s, f, _ := threadsChannelService(t, true)
+	setIntegrationsV2(t, s, false)
 	ctx := context.Background()
 	clock := &fakeClock{now: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)}
 	s.setChannelTestClock(clock.Now)

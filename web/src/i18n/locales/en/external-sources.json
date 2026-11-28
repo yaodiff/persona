@@ -95,6 +95,15 @@
   "defaults_saved": "Channel defaults saved",
   "flows": "Connected work",
   "no_flows": "No directions or to-dos are connected yet.",
+  "no_active_flows": "No active connected work.",
+  "completed": "Completed",
+  "show_more": "Show {count} more",
+  "show_fewer": "Show fewer",
+  "show_completed": "Show completed ({count})",
+  "hide_completed": "Hide completed",
+  "flows_count_active": "{count} active",
+  "flows_count_total_one": "{count} item",
+  "flows_count_total_other": "{count} items",
   "repository_link": "Repository link",
   "source_details": "Source details"
 }

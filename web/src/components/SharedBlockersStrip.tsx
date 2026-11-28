@@ -6,21 +6,27 @@ import { Icon, type IconName } from "../ui/icons";
 function blockerIcon(kind: SharedBlockerKind): IconName {
   if (kind === "pull_request") return "pullRequest";
   if (kind === "issue") return "alertCircle";
+  if (kind === "todo") return "todo";
   return "link";
 }
 
 /**
- * Compact shared external blockers summary strip shown at the top of the Web To-dos list
- * when `todos_v2 === true` and at least one shared blocker (`count >= 2`) is present (#14728).
+ * Compact shared blockers summary strip shown at the top of the Web To-dos list
+ * when `todos_v2 === true` and at least one shared blocker (`count >= 2`) is present (#14728, #17938).
+ * Covers both external blockers (PR/issue/target) and internal prerequisite to-dos.
  */
 export function SharedBlockersStrip({
   blockers,
   selectedKey,
   onSelect,
+  onOpenTodo,
+  openableTodoIds,
 }: {
   blockers: readonly SharedBlocker[];
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
+  onOpenTodo?: (todoId: string) => void;
+  openableTodoIds?: ReadonlySet<string>;
 }) {
   if (blockers.length === 0) return null;
 
@@ -51,6 +57,13 @@ export function SharedBlockersStrip({
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {blockers.map((blocker) => {
             const selected = selectedKey === blocker.key;
+            const canOpenTodo = Boolean(
+              blocker.kind === "todo" &&
+                blocker.todo_id &&
+                onOpenTodo &&
+                (!openableTodoIds || openableTodoIds.has(blocker.todo_id)),
+            );
+            const hasTrailingAction = Boolean(blocker.url) || canOpenTodo;
             return (
               <div
                 key={blocker.key}
@@ -66,10 +79,11 @@ export function SharedBlockersStrip({
                   aria-pressed={selected}
                   data-testid="shared-blocker-chip"
                   data-blocker-key={blocker.key}
+                  data-blocker-kind={blocker.kind}
                   onClick={() => onSelect(selected ? null : blocker.key)}
                   className={cx(
                     "flex min-w-0 items-center gap-1.5 py-1 pl-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-                    blocker.url ? "rounded-l-control pr-1.5" : "rounded-control pr-2",
+                    hasTrailingAction ? "rounded-l-control pr-1.5" : "rounded-control pr-2",
                   )}
                 >
                   <Icon
@@ -91,7 +105,7 @@ export function SharedBlockersStrip({
                   </span>
                 </button>
 
-                {blocker.url && (
+                {blocker.url ? (
                   <a
                     href={blocker.url}
                     target="_blank"
@@ -108,7 +122,24 @@ export function SharedBlockersStrip({
                   >
                     <Icon name="external" size={11} />
                   </a>
-                )}
+                ) : canOpenTodo && blocker.todo_id && onOpenTodo ? (
+                  <button
+                    type="button"
+                    data-testid="shared-blocker-open-todo"
+                    data-todo-id={blocker.todo_id}
+                    aria-label={t("todos.shared_blockers_open_link", { label: blocker.label })}
+                    title={t("todos.shared_blockers_open_link", { label: blocker.label })}
+                    onClick={() => onOpenTodo(blocker.todo_id!)}
+                    className={cx(
+                      "touch-hit flex shrink-0 items-center justify-center rounded-r-control border-l px-1.5 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                      selected
+                        ? "border-accent/30 text-accent hover:bg-accent/15"
+                        : "border-line text-ink-3 hover:bg-hover hover:text-ink",
+                    )}
+                  >
+                    <Icon name="arrowUpRight" size={11} />
+                  </button>
+                ) : null}
               </div>
             );
           })}

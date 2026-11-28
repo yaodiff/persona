@@ -95,6 +95,13 @@ export function homeDir(userProfile: string | undefined, home: string | undefine
 /** One message the node handed over: its id, the text, and the time after which it must not be submitted. */
 export type Message = { id: string; text: unknown; deadlineMs: number }
 
+/** A main-loop compaction report the node uses for watched pane-less Claude sessions. */
+export type CompactionPhase = 'start' | 'end'
+export type CompactionTrigger = 'manual' | 'auto' | 'plugin' | 'precompute'
+
+/** Short enough that a missing node never keeps work queued behind the report. */
+export const COMPACTION_REPORT_TIMEOUT_MS = 1_000
+
 /** An owner Stop handed over by the node to cancel the running main-loop turn via $.turn.abort. */
 export type InterruptRequest = { id: string; deadlineMs: number }
 
@@ -230,6 +237,15 @@ export function readPoll(status: number, body: string): PollAnswer {
     permissions: answer.permissions === true,
     retryMs: retryOf(answer, 0),
   }
+}
+
+/** The body of `POST /claude-plugin/v1/compact`. */
+export function buildCompactionPayload(
+  sessionId: string,
+  phase: CompactionPhase,
+  trigger: CompactionTrigger,
+): Record<string, unknown> {
+  return { session_id: sessionId, phase, trigger }
 }
 
 /** Parses and validates a `PermissionDecision` object. */

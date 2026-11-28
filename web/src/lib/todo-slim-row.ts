@@ -2,11 +2,14 @@
 // Strictly used inside `todos_v2 === true` branches; legacy mode never calls these.
 
 import { t } from "../i18n";
-import { waitSummary } from "./state-labels";
+import { shouldShowRowRepoGate } from "../features/todos/repo-gate";
+import { serverWaitReason, waitName, waitSummary } from "./state-labels";
 import { parkedLine } from "./supervision";
 import { cancellationReason } from "./todo-details";
 import { isAgentTask } from "./todo-list-filter";
+import { isRawTodoId } from "./todo-shared-blockers";
 import { openMergePRs, type OwnerNeed, type TriageSection } from "./todo-triage";
+import type { TodoWait } from "./todo-wait-wire";
 import { askTone, heldDelivery, isCancelled, openAsk, responsibleOf, type Todo } from "./todos";
 
 export type SlimCueTone = "attention" | "red" | "green" | "orange" | "muted";
@@ -106,7 +109,11 @@ export function isPersonalSlimRow(
     todo.delivery ||
     todo.start_error ||
     responsibleOf(todo) ||
-    (todo.repo_gate && todo.repo_gate.state !== "reference_only" && todo.repo_gate.target_count > 0)
+    shouldShowRowRepoGate(todo.repo_gate, {
+      effectiveSection: options.effectiveSection,
+      done: Boolean(todo.done_at),
+      hasExecutionFailure: Boolean(todo.start_error),
+    })
   ) {
     return false;
   }
@@ -120,8 +127,206 @@ export function repoCountOf(todo: Todo & { repositories?: readonly unknown[] }):
   return Math.max(repos, spaces);
 }
 
+const PR_NUM_RE = /(?:#|!|\/(?:pull|merge_requests)\/)(\d+)/i;
+
+function extractPrNumber(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  return PR_NUM_RE.exec(raw)?.[1];
+}
+
 /**
- * Picks the single highest-signal secondary cue for line 2 of a slim task row under todos_v2 (#14830),
+ * Reports whether a wait target string merely names the same PR/MR already shown on line 1
+ * (e.g. "PR #1446", "PR #1446 (nwverse/persona)", "nwverse/persona#1446", or its URL).
+ */
+export function waitTargetDuplicatesLine1PR(target: string, line1PrText?: string): boolean {
+  const num = extractPrNumber(line1PrText);
+  if (!num) return false;
+  const trimmed = target.trim();
+  if (!trimmed) return false;
+  const escaped = num.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matchRe = new RegExp(`(?:\\b(?:PR|MR)\\s*[#!]?${escaped}\\b|[#!]${escaped}\\b|\\/(?:pull|merge_requests)\\/${escaped}\\b)`, "i");
+  if (!matchRe.test(trimmed)) return false;
+  // Strip PR/MR label, repo slug, URL, and punctuation: if nothing substantive remains, it's a pure duplicate.
+  const remainder = trimmed
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/\b(?:PR|MR)\s*[#!]?\d+\b/gi, "")
+    .replace(/[a-z0-9_.-]+\/[a-z0-9_.-]+(?:[#!]?\d+)?/gi, "")
+    .replace(/[#!]?\d+/g, "")
+    .replace(/[\s()[\]·,:：\-_/]+/g, "");
+  return remainder.length === 0;
+}
+
+function resolveWaitTarget(
+  wait: TodoWait,
+  todosById?: ReadonlyMap<string, Pick<Todo, "id" | "title">>,
+): { target: string; fromTodo: boolean } {
+  const handoffId = wait.handoff_todo_id?.trim();
+  const raw = wait.waiting_on?.trim() ?? "";
+
+  if (raw && !isRawTodoId(raw)) {
+    return { target: raw, fromTodo: Boolean(handoffId) };
+  }
+
+  const lookupId = (raw && isRawTodoId(raw) ? raw : handoffId) || "";
+  if (lookupId) {
+    const resolved = todosById?.get(lookupId)?.title?.trim();
+    if (resolved) return { target: resolved, fromTodo: true };
+    if (raw && isRawTodoId(raw)) {
+      return { target: t("todos.shared_blockers_unknown_todo"), fromTodo: true };
+    }
+  }
+  return { target: "", fromTodo: Boolean(handoffId) };
+}
+
+function isPrerequisiteWait(todo: Todo, wait: TodoWait, resolvedFromTodo: boolean): boolean {
+  if (wait.kind === "todo_handoff" || Boolean(wait.handoff_todo_id) || resolvedFromTodo) return true;
+  if (todo.active_blockers?.some((b) => b.state === "active" && (b.kind === "todo_done" || b.kind === "todo_stage"))) {
+    return true;
+  }
+  return Boolean(todo.prerequisite_blockers?.length);
+}
+
+function prBlockerCue(wait: TodoWait): { tone: SlimCueTone; label: string } | undefined {
+  const blockers = wait.pr_blockers;
+  if (!blockers?.length) return undefined;
+  if (blockers.includes("conflicts")) return { tone: "red", label: t("todos.slim_pr_conflicts") };
+  if (blockers.includes("checks_failing")) return { tone: "red", label: t("todos.slim_pr_ci_failed") };
+  if (blockers.includes("changes_requested")) return { tone: "orange", label: t("todos.slim_pr_changes") };
+  if (blockers.includes("review_required")) return { tone: "muted", label: t("todos.slim_wait_merge_review") };
+  if (blockers.includes("checks_pending")) return { tone: "muted", label: t("todos.slim_pr_checks_pending") };
+  return undefined;
+}
+
+function gateFallbackCueForLine1PR(todo: Todo): SlimSecondaryCue {
+  switch (todo.repo_gate?.state) {
+    case "blocked_conflict":
+      return { tone: "red", text: t("todos.slim_pr_conflicts"), testId: "todo-slim-cue" };
+    case "blocked_ci":
+      return { tone: "red", text: t("todos.slim_pr_ci_failed"), testId: "todo-slim-cue" };
+    case "blocked_changes":
+      return { tone: "orange", text: t("todos.slim_pr_changes"), testId: "todo-slim-cue" };
+    case "awaiting_review":
+      return { tone: "muted", text: t("todos.slim_wait_merge_review"), testId: "todo-slim-cue" };
+    case "checks_pending":
+      return {
+        tone: "muted",
+        text: todo.repo_gate.reason === "checks_pending" ? t("todos.slim_pr_checks_pending") : t("todos.slim_wait_pr_merge"),
+        testId: "todo-slim-cue",
+      };
+    default:
+      return { tone: "muted", text: t("todos.slim_wait_pr_merge"), testId: "todo-slim-cue" };
+  }
+}
+
+/**
+ * Formats a concise, high-signal wait cue for slim task rows under todos_v2 (#17938):
+ * - Avoids verbose prefixes like "等待外部变化：" that truncate real prerequisite titles.
+ * - Drops redundant PR numbers already rendered on line 1.
+ * - Resolves any raw `todo_...` wait targets via `todosById` so raw IDs never surface.
+ */
+export function slimWaitCue(
+  todo: Todo,
+  wait: TodoWait,
+  options: {
+    line1PrText?: string;
+    todosById?: ReadonlyMap<string, Pick<Todo, "id" | "title">>;
+  } = {},
+): SlimSecondaryCue {
+  const kind = serverWaitReason(wait);
+  const { target, fromTodo } = resolveWaitTarget(wait, options.todosById);
+  const dupPR = Boolean(target && waitTargetDuplicatesLine1PR(target, options.line1PrText));
+  const prereq = isPrerequisiteWait(todo, wait, fromTodo);
+  const reason = wait.reason?.trim() ?? "";
+
+  switch (kind) {
+    case "pr_merge": {
+      const blocker = prBlockerCue(wait);
+      if (blocker) {
+        return {
+          tone: blocker.tone,
+          text: target && !dupPR ? `${blocker.label} · ${target}` : blocker.label,
+          testId: "todo-slim-cue",
+        };
+      }
+      return {
+        tone: "muted",
+        text: target && !dupPR ? t("todos.slim_wait_pr_merge_target", { target }) : t("todos.slim_wait_pr_merge"),
+        testId: "todo-slim-cue",
+      };
+    }
+    case "merge_review":
+      return {
+        tone: "muted",
+        text: target && !dupPR ? t("todos.slim_wait_merge_review_target", { target }) : t("todos.slim_wait_merge_review"),
+        testId: "todo-slim-cue",
+      };
+    case "todo_handoff":
+      return {
+        tone: "muted",
+        text: target
+          ? t("todos.slim_wait_prereq_target", { target })
+          : reason || t("todos.slim_wait_prereq"),
+        testId: "todo-slim-cue",
+      };
+    case "person_reply":
+      return {
+        tone: "muted",
+        text: target
+          ? t("todos.slim_wait_reply_target", { target })
+          : reason || t("todos.slim_wait_reply"),
+        testId: "todo-slim-cue",
+      };
+    case "date":
+      return {
+        tone: "muted",
+        text: target
+          ? t("todos.slim_wait_date_target", { target })
+          : reason || t("todos.slim_wait_date"),
+        testId: "todo-slim-cue",
+      };
+    case "agent":
+      return {
+        tone: "muted",
+        text: target ? t("todos.slim_wait_agent_target", { target }) : reason || waitName("agent"),
+        testId: "todo-slim-cue",
+      };
+    case "usage_limit":
+      return { tone: "muted", text: waitSummary(wait), testId: "todo-slim-cue" };
+    case "external_event": {
+      if (dupPR) {
+        return gateFallbackCueForLine1PR(todo);
+      }
+      if (target) {
+        return {
+          tone: "muted",
+          text: prereq ? t("todos.slim_wait_prereq_target", { target }) : t("todos.slim_wait_target", { target }),
+          testId: "todo-slim-cue",
+        };
+      }
+      if (reason && !isRawTodoId(reason)) {
+        return { tone: "muted", text: reason, testId: "todo-slim-cue" };
+      }
+      return { tone: "muted", text: prereq ? t("todos.slim_wait_prereq") : t("todos.slim_wait_external"), testId: "todo-slim-cue" };
+    }
+    default: {
+      if (dupPR) return gateFallbackCueForLine1PR(todo);
+      if (target) {
+        return {
+          tone: "muted",
+          text: prereq ? t("todos.slim_wait_prereq_target", { target }) : t("todos.slim_wait_target", { target }),
+          testId: "todo-slim-cue",
+        };
+      }
+      if (reason && !isRawTodoId(reason)) {
+        return { tone: "muted", text: reason, testId: "todo-slim-cue" };
+      }
+      return { tone: "muted", text: waitName("parked"), testId: "todo-slim-cue" };
+    }
+  }
+}
+
+/**
+ * Picks the single highest-signal secondary cue for line 2 of a slim task row under todos_v2 (#14830, #17938),
  * dropping redundant status labels that repeat the section heading and verbose 3rd-line process prose.
  */
 export function slimSecondaryCue(
@@ -134,6 +339,8 @@ export function slimSecondaryCue(
     due?: string;
     overdue: boolean;
     now?: number;
+    line1PrText?: string;
+    todosById?: ReadonlyMap<string, Pick<Todo, "id" | "title">>;
   },
 ): SlimSecondaryCue | null {
   if (options.failedOpen) {
@@ -154,7 +361,12 @@ export function slimSecondaryCue(
     };
   }
 
-  if (todo.wait != null) return { tone: "muted", text: waitSummary(todo.wait), testId: "todo-slim-cue" };
+  if (todo.wait != null) {
+    return slimWaitCue(todo, todo.wait, {
+      line1PrText: options.line1PrText,
+      todosById: options.todosById,
+    });
+  }
   if (view.supervisorLabel) return { tone: "muted", text: view.supervisorLabel, testId: "todo-slim-cue" };
 
   if (options.effectiveSection === "waiting") {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"io"
 	"net/http"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/memtrim"
-	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -137,9 +137,9 @@ func httpParams(req assistantwire.HTTPRequest) any {
 func relayHTTPTimeout(pattern string) time.Duration {
 	switch pattern {
 	case assistantwire.RouteBackendWorkspacePrepare:
-		return assistantwire.BackendWorkspacePrepareTimeout(repositorywire.MaxTaskRepositories)
+		return assistantwire.BackendWorkspacePrepareTimeout(nodeproto.TaskWorkspaceMaxRepositories)
 	case assistantwire.RouteRepoMirrorSync:
-		return repositorywire.MirrorEnsureTimeout + time.Minute
+		return nodeproto.RepoMirrorEnsureSeconds*time.Second + time.Minute
 	default:
 		return 5 * time.Minute
 	}
@@ -165,6 +165,10 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 	delete(req.Header, assistantwire.DeviceNameHeader)
 	if p.Name != "" { // and which device: the manager records who switched a model profile
 		req.Header[assistantwire.DeviceNameHeader] = []string{p.Name}
+	}
+	delete(req.Header, assistantwire.DeviceIDHeader)
+	if devID := originDeviceID(r.Context()); devID != "" { // paired user device ID for turn-level connector call context
+		req.Header[assistantwire.DeviceIDHeader] = []string{devID}
 	}
 	delete(req.Header, assistantwire.PersonHeader)
 	if personSent(r.Context()) { // and whether a person's own app asks: what may change a held message (#10661)

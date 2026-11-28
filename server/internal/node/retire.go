@@ -81,6 +81,14 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 	if err := n.resolveStopRuntime(ctx, id); err != nil {
 		return false, err
 	}
+	if !cause.AllowsSupervisorResume() || cause == proto.StopRestart || cause == proto.StopTimeout {
+		cause = proto.StopUser
+	}
+	if !guard.Active {
+		if h, ok := n.runtimeCloseTarget(id); ok {
+			return n.closeRuntimeWithCause(ctx, h, id, cause)
+		}
+	}
 	unlock, _, ok, err := n.stoppable(id, true)
 	if err != nil {
 		return false, err
@@ -101,13 +109,105 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 			return false, nil
 		}
 	}
-	if !cause.AllowsSupervisorResume() || cause == proto.StopRestart || cause == proto.StopTimeout {
-		cause = proto.StopUser
-	}
 	if err := n.closeWithCause(ctx, id, cause); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// runtimeCanClose is a runtime row the owner's close-on-end setting may release: it runs outside a terminal, is not
+// an assistant conversation, and explicitly advertises close.
+func runtimeCanClose(row proto.Session) bool {
+	return row.SourceKind == proto.SourceRuntime && !row.Assistant && row.PaneID == "" &&
+		row.Capabilities != nil && !row.Capabilities.Terminal &&
+		row.Capabilities.Close != nil && *row.Capabilities.Close
+}
+
+// runtimeCloseTarget returns the runtime that owns id when its listed row is closeable and still, without treating a
+// runtime's row as a terminal session. A row that is working, blocked, unknown, or starting keeps the refusal a terminal
+// retire would give it.
+func (n *Node) runtimeCloseTarget(id string) (*runtimeConn, bool) {
+	h, _, _ := n.runtimes.belongs(id)
+	if h == nil {
+		return nil, false
+	}
+	if a, ok := n.agent(id); ok && a.PaneID != "" {
+		return h, false
+	}
+	h.mu.Lock()
+	pane := h.panes[id]
+	h.mu.Unlock()
+	if pane != "" {
+		return h, false
+	}
+	row, ok := h.row(id)
+	if !ok || !runtimeCanClose(row) || n.isAssistantSession(id) || n.runtimeAssistant(id) {
+		return h, false
+	}
+	switch row.Status {
+	case proto.StatusIdle, proto.StatusDone:
+	default:
+		return h, false
+	}
+	if row.Starting {
+		return h, false
+	}
+	return h, true
+}
+
+// runtimeClose uses the runtime's own close for a live, terminal-less runtime session. The runtime's close is the
+// existing session.close path, including its capability check and gate release; retire reports it as closed only when
+// that call succeeds.
+func (n *Node) runtimeClose(ctx context.Context, h *runtimeConn, id string) (bool, error) {
+	params, err := json.Marshal(map[string]any{"session_id": id})
+	if err != nil {
+		return false, err
+	}
+	_, err, handled := n.runtimeHandle(ctx, h, "session.close", params)
+	if !handled {
+		return false, refusal(notRetirable, "this runtime session has no close", nil)
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// closeRuntimeWithCause records provenance around the runtime's irreversible close. It mirrors
+// closeWithCauseChecked: an automatic close starts as unknown and becomes its requested cause only after the runtime
+// confirmed the close; a user close keeps the save/readback guarantee before the runtime is asked when Persona owns a
+// session record. Runtime-owned sessions Persona did not start keep their cause on this runtime connection, never in
+// the node's Persona-owned state.
+func (n *Node) closeRuntimeWithCause(ctx context.Context, h *runtimeConn, id string, cause proto.StopCause) (closed bool, err error) {
+	if cause == proto.StopUser {
+		if err := n.runtimeStopCause(ctx, h, id, proto.StopUser, true); err != nil {
+			return false, err
+		}
+		defer h.setStopCause(id, proto.StopUser)
+	} else {
+		_ = n.runtimeStopCause(ctx, h, id, proto.StopUnknown, false)
+		defer func() {
+			if closed {
+				_ = n.runtimeStopCause(ctx, h, id, cause, false)
+			}
+		}()
+	}
+	return n.runtimeClose(ctx, h, id)
+}
+
+// runtimeStopCause records runtime close provenance. A session Persona started keeps its session record and the
+// durable save/readback path; a runtime-owned session Persona only observes has no record by design, so its cause is
+// kept on the connection rather than creating ownership.
+func (n *Node) runtimeStopCause(ctx context.Context, h *runtimeConn, id string, cause proto.StopCause, durable bool) error {
+	h.setStopCause(id, cause)
+	if _, owned := n.state.get(id); !owned {
+		return nil
+	}
+	if durable && cause == proto.StopUser {
+		return n.saveStopCause(ctx, id, cause)
+	}
+	n.state.stopped(id, cause)
+	return nil
 }
 
 // verifyRetireActivityGuardLocked checks live host state and current transcript activity under n.recovery and n.typing

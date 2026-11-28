@@ -7,7 +7,7 @@ const opts = (n: number) => Array.from({ length: n }, (_, i) => ({ label: `选�
 
 describe("quickAnswers (#4090, as iOS's 需要你 cards)", () => {
   it("allows or denies a permission with the chat card's bodies", () => {
-    const q = quickAnswers(ix({ tool_name: "Bash", tool_input: { command: "swift test" } }))!;
+    const q = quickAnswers(ix({ tool_name: "Bash", tool_input: { command: "git status" } }))!;
     expect(q.map((c) => c.label)).toEqual(["允许", "拒绝"]);
     expect(q[0].body).toEqual({ allow: true });
     expect(q[1].body).toEqual({ allow: false, message: "用户已拒绝" });

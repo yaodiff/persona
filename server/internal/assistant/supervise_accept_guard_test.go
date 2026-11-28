@@ -70,7 +70,7 @@ func TestAcceptGuardRefusesOwnerOnlyBlocker(t *testing.T) {
 }
 
 // #12026 case 2: a read-only evaluation came back inconclusive / partly effective; a bare accepted is refused and the
-// error names user_check, needs_user and a follow-up to-do.
+// error names needs_user and a follow-up to-do.
 func TestAcceptGuardRefusesInconclusiveResult(t *testing.T) {
 	s, _, todo := guardedReviewTask(t, "Eval finished: Inconclusive. One question still retrieves the wrong page, and most "+
 		"of the skill changes showed no effect or the opposite effect.")
@@ -81,7 +81,7 @@ func TestAcceptGuardRefusesInconclusiveResult(t *testing.T) {
 		"checks": metChecks()})
 	_, err := s.runTool(ctx, "server", "conv1", "task_review", raw)
 	if err == nil || !strings.Contains(err.Error(), "bare accepted refused") ||
-		!strings.Contains(err.Error(), "user_check") || !strings.Contains(err.Error(), "follow-up to-do") {
+		!strings.Contains(err.Error(), "needs_user") || !strings.Contains(err.Error(), "follow-up to-do") {
 		t.Fatalf("inconclusive result accepted: %v", err)
 	}
 	if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision.State != reviewPending {
@@ -261,25 +261,62 @@ func TestAcceptGuardAllowsNeedsUserAndUserCheck(t *testing.T) {
 	}
 }
 
-// accepted with user_check: true is the guard's named way out for an inconclusive read-only result. It accepts the
-// review and keeps the to-do open with a "Please verify" ask for the owner.
-func TestAcceptGuardAllowsUserCheck(t *testing.T) {
-	s, _, todo := guardedReviewTask(t, "Inconclusive: the change had no measurable effect; one question still retrieves the wrong page.")
-	ctx := context.Background()
-	raw := reviewRaw(t, todo.ID, map[string]any{"verdict": "accepted", "user_check": true,
-		"note": "评测结论不确定，留给用户看结果再定", "checks": metChecks()})
-	res, err := s.runTool(ctx, "server", "conv1", "task_review", raw)
-	if err != nil {
-		t.Fatalf("accepted with user_check refused: %v", err)
+func TestAcceptGuardDoesNotAllowUserCheckBypass(t *testing.T) {
+	s, _, todo := guardedReviewTask(t, "Inconclusive: the change had no measurable effect.")
+	raw := reviewRaw(t, todo.ID, map[string]any{"verdict": "accepted", "user_check": true, "checks": metChecks()})
+	if _, err := s.runTool(t.Context(), "server", "conv1", "task_review", raw); err == nil ||
+		!strings.Contains(err.Error(), "does not settle") {
+		t.Fatalf("user_check skipped the acceptance guard: %v", err)
 	}
-	if !strings.Contains(res, "user_check") {
-		t.Fatalf("user_check result: %s", res)
+	if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision.State != reviewPending {
+		t.Fatalf("refusal changed the task: %+v", cur.Supervision)
 	}
-	if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision.State != reviewUserCheck {
-		t.Fatalf("user_check did not keep the task open awaiting verification: %+v", cur.Supervision)
+	if ask, ok := s.askCopy(todo.ID); ok {
+		t.Fatalf("refusal left a verification request: %+v", ask)
 	}
-	ask, ok := s.askCopy(todo.ID)
-	if !ok || !ask.AcceptedAt.IsZero() {
-		t.Fatalf("no open owner ask after user_check: ok=%v ask=%+v", ok, ask)
+}
+
+func TestCloseoutFollowUpRequiresDisposition(t *testing.T) {
+	for _, field := range []string{"Missing", "Waiting"} {
+		t.Run(field, func(t *testing.T) {
+			const pending = "Pending separate cache inspection"
+			s, _, todo := guardedReviewTask(t, "The investigation is ready.\n\n### Persona 工作报告\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n- Delivery: none\n- "+field+": "+pending+"\n\n---")
+			fields := map[string]any{"verdict": reviewAccepted, "user_check": true, "checks": metChecks()}
+			review := func() error {
+				_, err := s.runTool(t.Context(), "server", "conv1", "task_review", reviewRaw(t, todo.ID, fields))
+				return err
+			}
+			if err := review(); err == nil || !strings.Contains(err.Error(), pending) {
+				t.Fatalf("unrouted %s accepted: %v", field, err)
+			}
+			follow := createRequestAndPiece(t, s, "conv1", pending, "", todo.ID, nil)
+			fields["deferred_scope"], fields["follow_up_todo_id"] = pending, follow.ID
+			if err := review(); err != nil {
+				t.Fatalf("routed %s refused: %v", field, err)
+			}
+			current := todoNow(s, todo.ID)
+			if current.Supervision.State != reviewUserCheck || current.DoneAt != nil {
+				t.Fatalf("the original result should await verification: %+v", current.Supervision)
+			}
+		})
+	}
+}
+
+func TestCloseoutFollowUpAllowsCannotOutcome(t *testing.T) {
+	for _, field := range []string{"Missing", "Waiting"} {
+		t.Run(field, func(t *testing.T) {
+			s, _, todo := guardedReviewTask(t, "The vendor has retired its API.\n\n### Persona 工作报告\n- Status: blocked\n- Merged: n/a\n- Deployed: n/a\n- Delivery: none\n- "+field+": Pending vendor access\n\n---")
+			raw := reviewRaw(t, todo.ID, map[string]any{
+				"verdict": reviewAccepted,
+				"outcome": outcomeCannot,
+				"reason":  "The vendor has retired its API.",
+			})
+			if _, err := s.runTool(t.Context(), "server", "conv1", "task_review", raw); err != nil {
+				t.Fatalf("terminal cannot review refused with Closeout %s: %v", field, err)
+			}
+			if current := todoNow(s, todo.ID); current.DoneAt == nil {
+				t.Fatal("terminal cannot review left the task open")
+			}
+		})
 	}
 }

@@ -33,6 +33,9 @@ type VoiceInstructions struct {
 	// Paused: the session comes after the upstream was paused while the bound conversation worked (protocol 2,
 	// docs/assistant/voice.md 4.9 "Suspension"), not after a drop: History is what was said before the pause.
 	Paused bool
+	// TTS: external streaming TTS speaks this call's text output (#17843); includes voice/tts_after_ack so the
+	// model stays quiet after a brief barge-in acknowledgement instead of adding an unprompted follow-up line.
+	TTS bool
 }
 
 // VoiceTarget is the conversation a call is bound to, as its session starts (voice/target, docs/assistant/voice.md "Context for the
@@ -79,6 +82,8 @@ type VoiceMeeting struct {
 	History []VoiceLine
 	// Waiting are the questions handed to the room whose answer has not come back yet.
 	Waiting []string
+	// TTS: external streaming TTS speaks this meeting call's text output (#17843, voice/tts_after_ack).
+	TTS bool
 }
 
 func RenderVoiceMeeting(d VoiceMeeting) string { return render("voice/meeting", d) }

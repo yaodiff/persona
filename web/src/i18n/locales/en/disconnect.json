@@ -1,6 +1,6 @@
 {
   "failed_title": "This browser's access wasn't revoked",
-  "failed_body": "The hub didn't revoke this browser's token. If you sign out anyway, the token stays valid on the hub until it's revoked in Settings › Devices.",
+  "failed_body": "The hub didn't revoke this browser's token. If you sign out anyway, the token stays valid on the hub until it's revoked in Settings › Advanced › Devices.",
   "sign_out_anyway": "Sign out anyway",
   "retry": "Try again",
   "nothing_title": "Nothing to revoke",

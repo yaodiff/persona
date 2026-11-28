@@ -12,9 +12,10 @@ import (
 // information categories. Categories absent means not known (an older hub, or not told): a connector takes that for
 // sensitive; an empty list is general.
 type CallFrom struct {
-	Track      string    `json:"track,omitempty"`
-	TrackKind  string    `json:"track_kind,omitempty"`
-	Categories *[]string `json:"categories,omitempty"`
+	Track          string    `json:"track,omitempty"`
+	TrackKind      string    `json:"track_kind,omitempty"`
+	Categories     *[]string `json:"categories,omitempty"`
+	OriginDeviceID string    `json:"origin_device_id,omitempty"`
 }
 
 // CallFromContext is what ctx says of where its call comes from (connector.WithCallContext), for the hub's side of
@@ -24,7 +25,7 @@ func CallFromContext(ctx context.Context) CallFrom {
 	if !ok {
 		return CallFrom{}
 	}
-	out := CallFrom{Track: c.Track, TrackKind: c.TrackKind}
+	out := CallFrom{Track: c.Track, TrackKind: c.TrackKind, OriginDeviceID: c.OriginDeviceID}
 	if c.Categories != nil {
 		cats := slices.Clone(c.Categories)
 		out.Categories = &cats
@@ -34,10 +35,10 @@ func CallFromContext(ctx context.Context) CallFrom {
 
 // context is ctx carrying f, for the connector's side (connector.CallContextOf). Nothing said leaves ctx as it is.
 func (f CallFrom) context(ctx context.Context) context.Context {
-	if f.Track == "" && f.TrackKind == "" && f.Categories == nil {
+	if f.Track == "" && f.TrackKind == "" && f.Categories == nil && f.OriginDeviceID == "" {
 		return ctx
 	}
-	c := connector.CallContext{Track: f.Track, TrackKind: f.TrackKind}
+	c := connector.CallContext{Track: f.Track, TrackKind: f.TrackKind, OriginDeviceID: f.OriginDeviceID}
 	if f.Categories != nil {
 		c.Categories = append([]string{}, *f.Categories...)
 	}

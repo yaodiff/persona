@@ -19,10 +19,17 @@ import (
 )
 
 func (e *workspaceExecutor) sourceFetchTimeout(transport string, createdCommonDir bool) time.Duration {
-	if createdCommonDir && !filepath.IsAbs(transport) && !strings.HasPrefix(transport, "file://") {
+	if createdCommonDir && remoteFetchKey(transport) != "" {
 		return cmp.Or(e.coldFetchTimeout, taskworkspace.ColdFetchTimeout)
 	}
 	return taskworkspace.GitTimeout
+}
+
+// sourceGit takes any network slot before starting the Git command timeout.
+func (e *workspaceExecutor) sourceGit(ctx context.Context, transport string, timeout time.Duration, dir string, args ...string) (string, error) {
+	return e.n.remoteFetches.run(ctx, transport, func(ctx context.Context) (string, error) {
+		return e.gitWithTimeout(ctx, timeout, dir, args...)
+	})
 }
 
 func workspaceFetchErrorCode(err error, fallback string) string {
@@ -124,9 +131,9 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	case "tag":
 		requested = "refs/tags/" + strings.TrimPrefix(requested, "refs/tags/")
 	}
-	listing, err := e.git(ctx, e.journal.Plan.RootPath, "ls-remote", "--symref", "--", transport, requested)
+	listing, err := e.sourceGit(ctx, transport, taskworkspace.GitTimeout, e.journal.Plan.RootPath, "ls-remote", "--symref", "--", transport, requested)
 	if err != nil {
-		return "source_unavailable"
+		return workspaceFetchErrorCode(err, "source_unavailable")
 	}
 	resolvedRef := requested
 	var advertised string
@@ -141,9 +148,9 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	}
 	if ref.Kind == "default" && resolvedRef == "HEAD" {
 		if listing == "" {
-			heads, err := e.git(ctx, e.journal.Plan.RootPath, "ls-remote", "--heads", "--", transport)
+			heads, err := e.sourceGit(ctx, transport, taskworkspace.GitTimeout, e.journal.Plan.RootPath, "ls-remote", "--heads", "--", transport)
 			if err != nil {
-				return "source_unavailable"
+				return workspaceFetchErrorCode(err, "source_unavailable")
 			}
 			if heads == "" {
 				return "no_commits"
@@ -167,7 +174,7 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	// Fetch the selected ref explicitly; FETCH_HEAD then identifies its actual
 	// remote object even if other refs in this store are stale.
 	timeout := e.sourceFetchTimeout(transport, createdCommonDir)
-	if _, err = e.gitWithTimeout(ctx, timeout, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+	if _, err = e.sourceGit(ctx, transport, timeout, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		if ref.Kind == "commit" {
 			return workspaceFetchErrorCode(err, "ref_not_found")
 		}
@@ -194,7 +201,7 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	return ""
 }
 
-// sourceFromMirror leverages an opt-in managed bare mirror (~/.persona/repos/<repo_id>.git) to
+// sourceFromMirror uses a managed bare mirror (~/.persona/repos/<repo_id>.git) to
 // populate the workspace's self-contained private bare repository locally (no objects/info/alternates,
 // keeping remote.origin.url pointing at the real upstream transport). Returns used=false whenever
 // the mirror is unavailable, mismatched, or lacks the requested ref so the caller falls back cleanly

@@ -154,8 +154,8 @@ func TestExtensionTrustThroughManagerRouting(t *testing.T) {
 			Labs *bool `json:"integrations_v2"`
 		}
 		raw := trustScopeRequest(t, srv, http.MethodGet, "/api/v1/assistant", id, full, "", http.StatusOK)
-		if err := json.Unmarshal(raw, &settings); err != nil || settings.Labs == nil || *settings.Labs {
-			t.Fatalf("%s: expected Labs off in the default settings (%v)", id, err)
+		if err := json.Unmarshal(raw, &settings); err != nil || settings.Labs == nil || !*settings.Labs {
+			t.Fatalf("%s: expected integrations_v2 on in the default settings (%v)", id, err)
 		}
 	}
 	checkTrust := func(id, trust string, cats []string) {

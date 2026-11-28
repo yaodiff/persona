@@ -196,7 +196,11 @@
                   },
                   "follow_up_todo_id": {
                     "type": "string",
-                    "description": "Independent supervised to-do with the finding’s exact next action in done_when."
+                    "description": "Supervised to-do with the exact next action in done_when."
+                  },
+                  "needs_user_todo_id": {
+                    "type": "string",
+                    "description": "Child to-do with a needs_user card whose reason is the exact next action."
                   },
                   "wait_target": {
                     "type": "string",

@@ -253,18 +253,23 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string, row startRow
 		s.logf("task %s: reopened: its agent works again", t.ID)
 	}
 	s.clearDoneProgress(ctx, t.ID)
-	s.taskWorks(ctx, t)
+	s.taskWorks(ctx, t, row.NativeLoop)
 }
 
 // taskWorks is what follows a turn's start on open task t: the stretch of work begins now, and what was judged or
 // waited for before is moot. s.tasks.completionMu is held (taskWorking, or taskStartMissed for a start nobody heard).
-func (s *Service) taskWorks(ctx context.Context, t Todo) {
+func (s *Service) taskWorks(ctx context.Context, t Todo, nativeLoop bool) {
 	now := time.Now()
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = now
 	s.tasks.mu.Unlock()
 	if err := s.recordTodoCloseDecline(ctx, t.ID, time.Time{}); err != nil {
 		s.logf("task %s: clearing close decline: %v", t.ID, err)
+	}
+	// A native loop can wake itself. Keep the park until its completed
+	// transcript establishes that its turn advanced the work.
+	if nativeLoop && t.Supervision.state(t) == reviewParked {
+		return
 	}
 	s.interruptsSoon()          // an interrupted receipt of it reads resumed now (interruptions.go)
 	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
@@ -661,7 +666,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	// Reserve first: resumed-work idle retraction may wait on the turn ledger, and a look must be able to observe this
 	// receipt while that ledger is held. The task's other work still happens before its receipt is written.
 	if missedStart {
-		if !s.taskStartMissed(ctx, t.ID) {
+		if !s.taskStartMissed(ctx, t.ID, last.Loop != nil || nativeLoopStart(items).NativeLoopID != "") {
 			s.releaseReceipt(ctx, t.ID, machine, sid, reserved)
 			return settleRefused
 		}
@@ -765,7 +770,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		}
 		s.forgetStop(last.MachineID, last.SessionID, stop)
 		// The ledger keeps the verdict with the turn, for a manager started again (silent_turns.go).
-		if e, again := s.takeTurnAs(cctx, t, last, items, end, named, since, turnInterrupted, quiet); again {
+		if e, again := s.takeTurnAs(cctx, t, last, items, end, named, since, turnInterrupted, quiet, ""); again {
 			// This very turn was taken up before: no second receipt. Its verdict is on the row all the same, where the
 			// ledger has it (just put there for a turn taken without it) and the row does not show it yet.
 			if m, ok := s.quietMarks(last.MachineID)[last.SessionID]; e.Silent != "" && (!ok || !m.holds(last)) {
@@ -819,9 +824,24 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	}
 	// A paged reply may have lost its tail (the file lines and the closeout are there): read the whole item.
 	text = s.taskAnswer(cctx, last.MachineID, last.SessionID, items, text)
-	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
+	current, ok := s.todoNow(t.ID)
+	if !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
 		s.logf("task %s: cancelled or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
 		return settleRefused
+	}
+	fire := nativeLoopStart(items)
+	if evidence := nativeLoopNoopEvidence(current, fire, text); current.DoneAt == nil && named && !stopped && evidence != "" {
+		s.takeTurnAs(cctx, t, last, items, end, true, since, turnLoopNoop, "", evidence)
+		s.signalNativeLoopNoop(cctx, t)
+		return settleTaken
+	}
+	if read && text != "" && !stopped && current.Supervision.state(current) == reviewParked &&
+		(last.Loop != nil || fire.NativeLoopID != "") {
+		began := since
+		if !fire.TS.IsZero() {
+			began = fire.TS
+		}
+		s.finishNativeLoopPark(cctx, current, began)
 	}
 	s.forgetStop(last.MachineID, last.SessionID, stop) // a Stop that came after its output: this turn's
 	// The files it handed over (task_files.go, #10511): copied to the computer of the conversation that hears of it.
@@ -969,7 +989,7 @@ func (s *Service) successorOpens(ctx context.Context, t Todo, started proto.Sess
 	}
 	s.logf("task %s: reopened: the owner's message started a new agent for it", t.ID)
 	if cur, ok := s.taskOf(ctx, started.MachineID, started.SessionID); ok && cur.ID == t.ID {
-		s.taskWorks(ctx, cur)
+		s.taskWorks(ctx, cur, false)
 	}
 }
 

@@ -1,5 +1,5 @@
 {
-  "signed_out": "This browser was signed out. It may have been removed in Settings › Devices. Connect again.",
+  "signed_out": "This browser was signed out. It may have been removed in Settings › Advanced › Devices. Connect again.",
   "link_token_invalid": "The token in this link isn't valid. Paste a new one.",
   "title_new_chat": "New chat",
   "title_history": "Persona chats",

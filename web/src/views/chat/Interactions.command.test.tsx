@@ -4,6 +4,7 @@
 // prompt's Yes / No with Allow / Deny, which send the prompt's own options. A hub before #5265 sends none of the new
 // fields: the card stays the terminal's question with its numbered options. The hub is faked (apiOp).
 import { act } from "react";
+import serializedDialog from "../../lib/testdata/terminal-approval.json";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -51,7 +52,7 @@ const card = (deadlineIn: number): Interaction => ({
 /** The plain words' own chunk (lazyPage) is in and drawn. */
 const body = () => vi.waitFor(async () => {
   await act(async () => {});
-  expect(host.querySelector("[data-screen-command]")).not.toBeNull();
+  expect(host.querySelector("[data-screen-command], [data-screen-detail]")).not.toBeNull();
 }, { timeout: 3000 });
 
 const button = (label: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
@@ -113,21 +114,31 @@ describe("a command's permission prompt", () => {
     await body();
     act(() => button(t("chat-interactions.allow")).click());
     await flush();
-    expect(calls.at(-1)?.body).toMatchObject({ option: "1" });
+    expect(calls).toEqual([]); // Terminal text is reconstructed for display, even when it looks local.
+    act(() => button(t("approval-impact.confirm")).click());
+    await flush();
+    expect(calls.map(c => c.body)).toEqual([{ option: "1" }]);
     act(() => root.render(<InteractionCard ix={{ ...card(104), id: "scr_m_s_other" }} />));
     act(() => button(t("chat-interactions.deny")).click());
     await flush();
     expect(calls.at(-1)?.body).toMatchObject({ option: "2" });
   });
 
-  it("stays the terminal's question from a hub before #5265", () => {
+  it("keeps the serialized terminal question and requires confirmation with no command on the wire", async () => {
     const old = card(104);
-    old.dialog = { question: "Do you want to proceed?", rev: "r1", detail: "Bash command\nrm -rf build", options: old.dialog!.options };
-    act(() => root.render(<InteractionCard ix={old} />));
-    expect(host.textContent).toContain("Do you want to proceed?");
-    expect(host.textContent).toContain("rm -rf build");
-    expect(host.textContent).toContain("Yes");
-    expect(host.querySelector("[data-screen-countdown]")).toBeNull();
+    // JSON marshaled from screen.ParseDialog(permissionScreen) in the node's dialog tests.
+    old.dialog = serializedDialog;
+    expect(serializedDialog).not.toHaveProperty("command");
+    await act(async () => root.render(<InteractionCard ix={old} />));
+    expect(host.textContent).toContain(serializedDialog.question);
+    expect(host.textContent).toContain(serializedDialog.detail);
+    expect(host.textContent).toContain(t("approval-impact.unknown"));
+    const yes = [...host.querySelectorAll<HTMLButtonElement>("button[data-tap-answer]")].find(b => b.textContent?.endsWith("Yes"))!;
+    act(() => yes.click());
+    expect(calls).toEqual([]);
+    act(() => button(t("approval-impact.confirm")).click());
+    await flush();
+    expect(calls.map(c => c.body)).toEqual([{ option: "1" }]);
   });
 
   it("folds a long command read without its fields, so its choices sit right under it (#6638)", () => {
@@ -146,4 +157,31 @@ describe("a command's permission prompt", () => {
     expect(fold.contains(yes)).toBe(false);
     expect(fold.compareDocumentPosition(yes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+});
+
+it.each([["git push", "push"], ["ls", "unknown"], ["", "unknown"], ["   ", "unknown"]])("confirms a terminal command (%s) and sends its chosen option once", async (command, impact) => {
+  const ix = card(104);
+  ix.dialog = { ...ix.dialog, command };
+  await act(async () => root.render(<InteractionCard ix={ix} />));
+  await body();
+  expect(host.textContent).toContain(t(`approval-impact.${impact}`));
+  act(() => button(t("chat-interactions.allow")).click());
+  expect(calls).toEqual([]);
+  act(() => button(t("approval-impact.confirm")).click());
+  await flush();
+  expect(calls.map(call => call.body)).toEqual([{ option: "1" }]);
+});
+
+it.each(["Deny", "拒绝", "拒否"])("sends a terminal refusal (%s) directly from the card and offers it in Overview", async label => {
+  const { quickAnswers } = await import("../../lib/quick-answers");
+  const ix = card(104);
+  ix.dialog = { command: "", options: [{ key: "yes", label: "Yes" }, { key: "stop", label }] };
+  expect(quickAnswers(ix)?.map(choice => choice.body)).toEqual([{ option: "stop" }]);
+  await act(async () => root.render(<InteractionCard ix={ix} />));
+  await body();
+  const deny = [...host.querySelectorAll("button")].find(b => b.textContent?.includes(label))!;
+  act(() => deny.click());
+  await flush();
+  expect(calls.map(c => c.body)).toEqual([{ option: "stop" }]);
+  expect(button(t("approval-impact.confirm"))).toBeUndefined();
 });

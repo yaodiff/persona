@@ -32,6 +32,7 @@ type findingDisposition struct {
 	WaitTarget string `json:"wait_target,omitempty"`
 	Done       string `json:"done_evidence,omitempty"`
 	Drop       string `json:"owner_drop_decision_id,omitempty"`
+	NeedsUser  string `json:"needs_user_todo_id,omitempty"`
 }
 
 type findingReview struct {
@@ -173,8 +174,9 @@ func (r *investigationFindings) review(t Todo, v *Supervision, in findingReview,
 		seen[d.ID] = true
 		d.FollowUp, d.WaitTarget = strings.TrimSpace(d.FollowUp), clip(oneLine(d.WaitTarget), 200)
 		d.Done, d.Drop = clip(oneLine(d.Done), 600), strings.TrimSpace(d.Drop)
+		d.NeedsUser = strings.TrimSpace(d.NeedsUser)
 		count := 0
-		for _, value := range []string{d.FollowUp, d.WaitTarget, d.Done, d.Drop} {
+		for _, value := range []string{d.FollowUp, d.WaitTarget, d.Done, d.Drop, d.NeedsUser} {
 			if value != "" {
 				count++
 			}
@@ -392,6 +394,39 @@ func (s *Service) investigationActionCovered(parent Todo, f recordedFinding) boo
 	return findingActionMet(target.Supervision, f.Next)
 }
 
+// A pending finding can open a decision on a linked piece without starting another Agent.
+func (s *Service) investigationDecisionPiece(ctx context.Context, self string, child Todo, question string) bool {
+	parent, ok := s.todoNow(child.PartOf)
+	return ok && parent.DoneAt == nil && parent.Supervision != nil && parent.Supervision.Investigation != nil &&
+		s.canReviewLedger(ctx, self, parent, parent.Supervision) &&
+		slices.ContainsFunc(parent.Supervision.Investigation.Items, func(f recordedFinding) bool { return f.Next == question })
+}
+
+// A separate to-do owns the card so accepting the investigation cannot retire it.
+func (s *Service) investigationDecisionCovers(ctx context.Context, parent Todo, f recordedFinding) bool {
+	target, ok := s.todoNow(f.Disposition.NeedsUser)
+	if !ok || target.ID == parent.ID || target.PartOf != parent.ID || target.Cancelled() {
+		return false
+	}
+	ask, ok := s.askCopy(target.ID)
+	if !ok || !decideAsk(&ask) || ask.Superseded || acceptAskStale(&ask, target) ||
+		ask.Reason != f.Next || ask.AskedAt.Before(f.ReportedAt.Truncate(time.Microsecond)) {
+		return false
+	}
+	if target.Supervision.state(target) == reviewNeedsUser && decisionOpen(&ask, target) {
+		return true
+	}
+	st := s.todoDB()
+	if ask.AcceptedAt.IsZero() || st == nil {
+		return false
+	}
+	decisions, err := st.ListTodoDecisions(ctx, target.ID, false)
+	return err == nil && slices.ContainsFunc(decisions, func(d db.TodoDecisionRow) bool {
+		return d.Question == f.Next && !d.CreatedAt.Before(ask.AskedAt.Truncate(time.Microsecond)) &&
+			(d.Source == db.DecisionManual || ask.ByDefault && d.Source == db.DecisionAgent)
+	})
+}
+
 func findingActionMet(v *Supervision, next string) bool {
 	if v == nil {
 		return false
@@ -435,6 +470,8 @@ func (s *Service) investigationTransitionError(ctx context.Context, t Todo, v *S
 		case d.Done != "" && findingActionMet(v, f.Next):
 			continue
 		case d.FollowUp != "" && s.investigationActionCovered(t, f):
+			continue
+		case d.NeedsUser != "" && s.investigationDecisionCovers(ctx, t, f):
 			continue
 		case d.Drop != "" && s.investigationDropRecorded(ctx, t.ID, f):
 			continue
@@ -503,6 +540,10 @@ func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *f
 					problem = fmt.Errorf("finding %q needs an exact scoped next-action check with completion evidence", f.ID)
 					return false
 				}
+			}
+			if f.Disposition.NeedsUser != "" && !s.investigationDecisionCovers(ctx, current, f) {
+				problem = fmt.Errorf("finding %q needs a separate child to-do with an open or answered owner decision for its exact next action", f.ID)
+				return false
 			}
 			if f.Disposition.Drop != "" && !s.investigationDropRecorded(ctx, t.ID, f) {
 				problem = fmt.Errorf("finding %q needs a current explicit owner decision to drop it", f.ID)

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +14,7 @@ import (
 )
 
 // With github.proxy set, the device flow (code and polling) and the REST API all go to the proxy, addressed to
-// GitHub's hosts; nothing goes to GitHub directly.
+// GitHub's hosts; nothing goes to GitHub directly or through the proxy the environment names.
 func TestProxyCarriesEverything(t *testing.T) {
 	ctx := context.Background()
 	var mu sync.Mutex
@@ -43,6 +44,19 @@ func TestProxyCarriesEverything(t *testing.T) {
 		}
 	}))
 	t.Cleanup(proxy.Close)
+	// github.proxy wins over the environment's proxy: nothing may reach this one.
+	trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Host == "" { // a node's port probe, as above
+			http.NotFound(w, r)
+			return
+		}
+		t.Errorf("went through the environment's proxy: %s %s", r.Method, r.URL)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(trap.Close)
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", trap.URL)
+	t.Setenv("HTTPS_PROXY", trap.URL)
 
 	var cfg Config
 	if err := json.Unmarshal([]byte(`{"proxy":"`+proxy.URL+`"}`), &cfg); err != nil || cfg.Proxy != proxy.URL {
@@ -67,10 +81,49 @@ func TestProxyCarriesEverything(t *testing.T) {
 	}
 }
 
-// Without github.proxy the connector talks to GitHub directly, even when the environment names a proxy.
-func TestNoProxyIsDirect(t *testing.T) {
-	trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// Without github.proxy the connector follows the process's proxy environment: the device flow goes to the proxy
+// HTTP_PROXY names, addressed to GitHub's host.
+func TestNoProxyFollowsEnvironment(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Host == "" { // not a proxy request: a node's port probe (GET /, node/ports.go) asks this server directly
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Host+r.URL.Path)
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"device_code":"dc","user_code":"ENVP-0003","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`))
+	}))
+	t.Cleanup(proxy.Close)
+	clearProxyEnv(t)
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+	c := New(Config{}, "", nil)
+	c.web, c.api = "http://github.example", "http://api.github.example" // hosts only the proxy knows
+	c.UseSecrets(&memSecrets{})
+	if p, err := c.LoginStep(context.Background(), "", nil); err != nil || p.UserCode != "ENVP-0003" {
+		t.Fatalf("code through the environment's proxy: %+v %v", p, err)
+	}
+	mu.Lock()
+	got := strings.Join(seen, ", ")
+	mu.Unlock()
+	if want := "POST github.example/login/device/code"; got != want {
+		t.Fatalf("through the environment's proxy:\n got %s\nwant %s", got, want)
+	}
+}
+
+// With neither github.proxy nor a proxy in the environment, and for a host NO_PROXY lists, the connector talks to
+// GitHub directly. The host is one no proxy rule exempts by itself (a loopback address always goes direct), reached
+// through a dialer that lands every connection on the fake GitHub.
+func TestNoProxyAnywhereIsDirect(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"device_code":"dc","user_code":"DRCT-0002","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`))
+	}))
+	t.Cleanup(gh.Close)
+	trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Host == "" { // a node's port probe, as above
 			http.NotFound(w, r)
 			return
 		}
@@ -78,18 +131,40 @@ func TestNoProxyIsDirect(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	t.Cleanup(trap.Close)
-	t.Setenv("HTTP_PROXY", trap.URL)
-	t.Setenv("HTTPS_PROXY", trap.URL)
-	t.Setenv("NO_PROXY", "")
-	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"device_code":"dc","user_code":"DRCT-0002","verification_uri":"https://github.com/login/device","expires_in":900,"interval":5}`))
-	}))
-	t.Cleanup(gh.Close)
-	c := New(Config{}, "", nil)
-	c.web, c.api = gh.URL, gh.URL
-	c.UseSecrets(&memSecrets{})
-	if p, err := c.LoginStep(context.Background(), "", nil); err != nil || p.UserCode != "DRCT-0002" {
-		t.Fatalf("direct: %+v %v", p, err)
+	direct := func(t *testing.T) {
+		t.Helper()
+		c := New(Config{}, "", nil)
+		c.web, c.api = "http://github.example", "http://api.github.example"
+		trapAddr := trap.Listener.Addr().String()
+		c.client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr != trapAddr {
+				addr = gh.Listener.Addr().String()
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		}
+		c.UseSecrets(&memSecrets{})
+		if p, err := c.LoginStep(context.Background(), "", nil); err != nil || p.UserCode != "DRCT-0002" {
+			t.Fatalf("direct: %+v %v", p, err)
+		}
+	}
+	t.Run("no proxy in the environment", func(t *testing.T) {
+		clearProxyEnv(t)
+		direct(t)
+	})
+	t.Run("a host NO_PROXY lists", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("HTTP_PROXY", trap.URL)
+		t.Setenv("HTTPS_PROXY", trap.URL)
+		t.Setenv("NO_PROXY", "github.example")
+		direct(t)
+	})
+}
+
+// clearProxyEnv leaves the test with no proxy in its environment, whatever the machine running it has set.
+func clearProxyEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "REQUEST_METHOD"} {
+		t.Setenv(k, "")
 	}
 }
 

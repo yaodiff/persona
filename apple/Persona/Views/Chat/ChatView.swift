@@ -1578,6 +1578,7 @@ struct ChatView: View {
             SentPhotos(images: items.compactMap(\.image)).padding(.bottom, -8)
         case .work(let id, let items, let live, let start, let end):
             WorkLine(items: items, live: live, start: start, end: end, open: isOpen(id, live: live), agents: live ? agentsWorking : nil,
+                     compaction: live ? model.liveCompaction(key) : nil,
                      accepting: live && items.isEmpty && sendPhase == .processing && !status.isActive,
                      openTerminal: live && style == .dev && session?.canTerminal == true ? { openTerminal() } : nil) {
                 toggleWork(id, fromHeader: true)
@@ -8198,6 +8199,7 @@ struct WorkLine: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.isEmpty == b.isEmpty && a.counts == b.counts && a.live == b.live && a.accepting == b.accepting && a.start == b.start && a.end == b.end
             && a.open == b.open && (a.openTerminal == nil) == (b.openTerminal == nil) && a.agents == b.agents && a.doing == b.doing
+            && a.compaction == b.compaction
     }
 
     private let isEmpty: Bool
@@ -8212,12 +8214,15 @@ struct WorkLine: View, Equatable {
     /// Otherwise, while it runs, the step it names instead of its counts (#2987); drawn as `shown`, which follows it at
     /// most about twice a second.
     private let doing: WorkNow?
+    /// Persona's plugin says the main loop is compacting: the running line says so for as long as the same push lasts.
+    private let compaction: SessionLiveCompactionPresentation?
     @State private var shown: WorkNow?
     @State private var shownAt = Date.distantPast
     let openTerminal: (() -> Void)?
     let toggle: () -> Void
 
     init(items: [WorkItem], live: Bool, start: Date?, end: Date?, open: Bool, agents: AgentsWorking? = nil,
+         compaction: SessionLiveCompactionPresentation? = nil,
          accepting: Bool = false, openTerminal: (() -> Void)?, toggle: @escaping () -> Void) {
         isEmpty = items.isEmpty
         counts = WorkSummary(items)
@@ -8227,6 +8232,7 @@ struct WorkLine: View, Equatable {
         self.end = end
         self.open = open
         self.agents = live ? agents : nil
+        self.compaction = live ? compaction : nil
         doing = live && self.agents == nil ? WorkNow.of(items) : nil
         _shown = State(initialValue: doing)
         self.openTerminal = openTerminal
@@ -8327,7 +8333,20 @@ struct WorkLine: View, Equatable {
     }
 
     @ViewBuilder private func summary(now: Date) -> some View {
-        if let step { stepSummary(step, now: now) } else { counted(now: now) }
+        if let compaction { compactionSummary(compaction) } else if let step { stepSummary(step, now: now) } else { counted(now: now) }
+    }
+
+    /// The same words as the web for this push, with the elapsed time the node sent.
+    private func compactionSummary(_ compaction: SessionLiveCompactionPresentation) -> some View {
+        HStack(spacing: Theme.Space.flush) {
+            Text(Self.compactionWords).truncationMode(.tail)
+            let took = compaction.compactDuration
+            if !took.isEmpty {
+                Text(took).fixedSize()
+            }
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
 
     /// One line: the step's words give way (a path or a command in the middle, a sentence at the end), "+2" and the
@@ -8352,6 +8371,11 @@ struct WorkLine: View, Equatable {
 
     private func label(now: Date, short: Bool) -> String {
         if accepting { return String(localized: "Processing…") }
+        if let compaction {
+            let took = compaction.compactDuration
+            let words = Self.compactionWords
+            return took.isEmpty ? words : "\(words) · \(took)"
+        }
         // The step in full: the line may have cut it.
         if let step { return step.text + step.trailer(took: Self.duration(from: start, to: now)) }
         let parts = agents.map { [SubagentGridText.working(count: $0.count, doing: $0.doing, short: short)] } ?? (short ? counts.short : counts.full)
@@ -8370,10 +8394,23 @@ struct WorkLine: View, Equatable {
 
     static func duration(from start: Date?, to end: Date) -> String {
         guard let start else { return "" }
-        let s = max(0, Int(end.timeIntervalSince(start)))
+        return duration(seconds: max(0, Int(end.timeIntervalSince(start))))
+    }
+
+    static func duration(seconds s: Int) -> String {
         if s < 60 { return String(localized: "\(s) s") }
         if s < 3600 { return s % 60 == 0 ? String(localized: "\(s / 60) min [Chat View a38788]") : String(localized: "\(s / 60)m \(s % 60)s") }
         return String(localized: "\(s / 3600) hr \(s % 3600 / 60) min")
+    }
+
+    /// The web's running-status words verbatim, within each interface language.
+    private static var compactionWords: String { String(localized: "Compacting context…") }
+}
+
+private extension SessionLiveCompactionPresentation {
+    var compactDuration: String {
+        guard let elapsedS else { return "" }
+        return WorkLine.duration(seconds: max(0, elapsedS))
     }
 }
 

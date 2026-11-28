@@ -305,6 +305,20 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	if g != nil && g.Kind == SuggestReply && in.Action == suggestConfirm && !g.Handback {
 		return s.confirmSuggestionReplyLocked(ctx, it, g, in, inboxCfg.ReplyPolicy, policy, preVeto, vetoErr)
 	}
+	ownerPromise := it.Connector != nil && it.Connector.OwnerPromise != nil
+	if ownerPromise && g != nil && g.Kind == SuggestTodo && in.Action == suggestReject {
+		write := beginWrite(it)
+		it.Suggestion = nil
+		b.file(it, time.Now(), "dismissed")
+		b.settle(write)
+		b.mu.Unlock()
+		if s.saveWrites(ctx, []*inboxWrite{write}, "the dismissed promise")[it.ID] {
+			return InboxItem{}, errInboxNotPersisted
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return it.listed(), nil
+	}
 	if g != nil && g.Conversation != nil {
 		resetInboxFollowChecks(it)
 		return s.actOnHandedSuggestion(ctx, it, g, in, text) // it lets b.mu go
@@ -393,10 +407,25 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		if in.Due != nil {
 			due = strings.TrimSpace(*in.Due)
 		}
+		var (
+			out InboxItem
+			err error
+		)
 		if externalAsked != "" && g.SourceOf == externalAsked {
-			return s.confirmTodo(ctx, it, text, due, g.Note)
+			out, err = s.confirmTodo(ctx, it, text, due, g.Note)
+		} else {
+			out, err = s.confirmTodo(ctx, it, text, due)
 		}
-		return s.confirmTodo(ctx, it, text, due)
+		if ownerPromise && err != nil {
+			b.mu.Lock()
+			if b.items[id] == it && it.open() && it.Suggestion == nil && it.SuggestSeq == g.Version {
+				// The same card can retry a failed task write. A new
+				// suggestion or any explicit filing has priority.
+				it.Suggestion = g
+			}
+			b.mu.Unlock()
+		}
+		return out, err
 	}
 	return s.confirmReply(ctx, it, g, text, edited, last, in.ClientID)
 }

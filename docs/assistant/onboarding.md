@@ -146,7 +146,7 @@ Implementation (#4045): generated values are **not written back to `.env`**. Com
 | Scenario | Source of the first code |
 | --- | --- |
 | Just ran `hub setup` | Terminal QR code; or open the printed `/admin#setup=…` in a phone browser, set a password, then "Pair phone" |
-| Already has a logged-in device | **Settings › Devices › Connect new device** on that device (already on web and iOS; Android added this round) |
+| Already has a logged-in device | **Connect a new device** in Settings. On Web, open **Advanced › Devices**. On Apple, open **Advanced › Devices & Pairing**. On Android, open **Devices**. |
 | Same LAN, hub has TLS enabled (P1) | "Find nearby hubs" on the app's first screen browses `_persona-hub._tcp` and lists "Home hub 'xxx'". **mDNS provides discovery, not trust**: broadcast `fp` cannot establish initial trust (`docs/operations/network.md:75`). A one-time code is still required after discovery; the benefit is telling the user "Hub is installed; here is where to get a code" |
 
 On the iPhone, a pairing link never pairs by itself (#9929): whether it comes from the camera, another app or the pairing page's scanner, the app first asks **Connect to <host>?**, naming the hub's address as the link gives it (and saying when that hub is already paired), and pairs only after Connect. Cancel leaves everything as it was; typing an address and token and tapping Connect is already the user's own step. The launch arguments `-pairURL` and `-openPairLink` (DEBUG automation) still pair directly.

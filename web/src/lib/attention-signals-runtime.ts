@@ -47,6 +47,8 @@ import {
   wants,
 } from "./notify";
 import { agentKey } from "./pins";
+import { confirmationEnabled } from "./approval-confirmation";
+import { approvalImpact } from "./approval-impact";
 import { needsFieldValues } from "./quick-answers";
 import { href, navigate, parse } from "./router";
 import { isMuted } from "./session-actions";
@@ -153,7 +155,7 @@ function notify(s: Session | undefined, kind: "needs" | "finished", card?: Inter
   const answerable = waiting.ix?.kind === "permission" && !supervisorHeld(waiting.ix) && !needsFieldValues(waiting.ix) && interactionCanAnswer(waiting.ix, s) ? waiting.ix : undefined;
   const ix = answerable?.id;
   // inside quiet hours a "Needs you" one comes without a sound (a finished one doesn't come at all: wants)
-  postNotification({ title, body, tag, url: href(route), icon, ix, created_at: answerable?.created_at, silent: inQuietHours(notifyPrefs()) }, () => navigate(route));
+  postNotification({ title, body, tag, url: href(route), icon, ix, created_at: answerable?.created_at, review: !!answerable && confirmationEnabled() && !!approvalImpact(answerable), silent: inQuietHours(notifyPrefs()) }, () => navigate(route));
   return { about: waiting.ix?.id };
 }
 
@@ -475,7 +477,7 @@ export function createAttentionRuntime(initial: AttentionSnapshot, opts: Attenti
     const answer = answerable?.id;
     const route = parse(n.path);
     const icon = currentIcon();
-    postNotification({ title: n.title, body: n.body, tag: n.tag, url: href(route), icon, ix: answer, created_at: answerable?.created_at, silent: hushed }, () => navigate(route));
+    postNotification({ title: n.title, body: n.body, tag: n.tag, url: href(route), icon, ix: answer, created_at: answerable?.created_at, review: !!answerable && confirmationEnabled() && !!approvalImpact(answerable), silent: hushed }, () => navigate(route));
     // taken back once its card is answered or withdrawn (answeredTags), as a card the page announced itself
     if (n.card && n.key) announced.set(n.key, n.card);
   };

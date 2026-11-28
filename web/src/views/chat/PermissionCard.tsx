@@ -2,6 +2,7 @@
 // as CommandScreenCard does. Its optional question editor is a further chunk loaded only when that action opens.
 import { Suspense, useRef, useState } from "react";
 import { t } from "../../i18n";
+import { ApprovalImpactLine, useApprovalReview } from "./ApprovalReview";
 import { alwaysScope, offersAlways } from "../../lib/always-scope";
 import { lazyPage } from "../../lib/lazy-page";
 import { ownerApprovalAttempt, replyOwnerApproval } from "../../lib/owner-approval";
@@ -14,6 +15,7 @@ import { isCommandInput, permissionDetail, permissionReason, summaryExtra } from
 import { DIFF_TOOLS, DiffBlocks, editDiffs } from "./ActionRow";
 import { useChatCardTapGuard } from "./card-tap-guard";
 import { CommandInputCard } from "./CommandInputCard";
+import { RowConfirm } from "../settings/SettingsParts";
 import { Card, CODE_BOX, permissionFrom, resolve, useCardKeys } from "./Interactions";
 import { usePermissionText } from "./permission-text";
 
@@ -29,8 +31,10 @@ function ToolPermissionCard({ ix }: { ix: Interaction }) {
   const [busy, setBusy] = useState(false);
   const [replyBusy, setReplyBusy] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
+  const review = useApprovalReview(ix);
+  const confirming = review.choice !== null;
   const replyAttempt = useRef<{ target: string; id: string } | null>(null);
-  const editable = usePermissionText(ix);
+  const editable = usePermissionText(ix, confirming);
   const go = async (body: Record<string, unknown>) => {
     setBusy(true);
     await resolve(ix, body);
@@ -47,14 +51,26 @@ function ToolPermissionCard({ ix }: { ix: Interaction }) {
     else replyAttempt.current = null;
     setReplyBusy(false);
   };
+  const approve = (asReply = false) => {
+    if (review.request(asReply ? "reply" : "allow")) return;
+    if (asReply) void reply();
+    else void go(editable.allow());
+  };
+  const confirm = () => {
+    if (!confirming || busy || replyBusy || !editable.canAllow) return;
+    review.cancel();
+    if (review.choice === "reply") void reply();
+    else void go(editable.allow());
+  };
   // Enter allows (the Allow button), except while the independent question
   // editor is open. Deny is never a key away.
   const keys = useCardKeys({
     enter: () => {
-      if (busy || replyBusy || questionOpen || editable.composing || !editable.canAllow) return false;
-      void go(editable.allow());
+      if (confirming || busy || replyBusy || questionOpen || editable.composing || !editable.canAllow) return false;
+      approve();
     },
   });
+  // Opening confirmation is deliberate. Keep the guard for the incoming request, so its first confirmation tap lands.
   const tapGuard = useChatCardTapGuard(ix);
   return (
     <Card
@@ -67,7 +83,7 @@ function ToolPermissionCard({ ix }: { ix: Interaction }) {
       footer={
         <>
           <span className="flex min-w-0 gap-1.5">
-            {ix.can_clarify && (
+            {!confirming && ix.can_clarify && (
               <Button tone="quiet" disabled={busy || replyBusy} aria-expanded={questionOpen} onClick={() => setQuestionOpen((v) => !v)}>
                 {t("chat-interactions.have_question")}
               </Button>
@@ -76,30 +92,32 @@ function ToolPermissionCard({ ix }: { ix: Interaction }) {
               {t("chat-interactions.deny")}
             </Button>
           </span>
-          <span className="flex gap-1.5">
+          <RowConfirm open={confirming} onCancel={review.cancel} onConfirm={confirm}
+            confirm={t("approval-impact.confirm")} busy={busy || replyBusy} trigger={<span className="flex flex-wrap gap-1.5">
             {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
-            {offersAlways(ix) && !editable.changed && (
-              <Button tone="secondary" disabled={busy || replyBusy} onClick={() => go({ allow: true, always: true })}>
+            {!review.impact && offersAlways(ix) && !editable.changed && (
+              <Button tone="secondary" disabled={busy || replyBusy} onClick={() => { if (!review.request("allow")) void go({ allow: true, always: true }); }}>
                 {t("chat-interactions.always_allow")}
               </Button>
             )}
             {replyPhrase && (
-              <Button tone="secondary" busy={replyBusy} disabled={busy || replyBusy} onClick={() => void reply()}>
+              <Button tone="secondary" busy={replyBusy} disabled={busy || replyBusy} onClick={() => approve(true)}>
                 {t("chat-interactions.owner_reply", { phrase: replyPhrase })}
               </Button>
             )}
-            <Button tone="primary" busy={busy} disabled={replyBusy || !editable.canAllow} onClick={() => go(editable.allow())}>
+            <Button tone="primary" busy={busy} disabled={replyBusy || !editable.canAllow} onClick={() => approve()}>
               {t("chat-interactions.allow")}
               {keys.focused && !questionOpen && <Kbd>Enter</Kbd>}
             </Button>
-          </span>
+          </span>} />
         </>
       }
     >
       <PermissionBody ix={ix} />
       {editable.editor}
       {questionOpen && <Suspense fallback={null}><ApprovalQuestion ix={ix} busy={busy} onClose={() => setQuestionOpen(false)} /></Suspense>}
-      {alwaysScope(ix) && <p className="mt-2 text-label leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
+      <ApprovalImpactLine impact={review.impact} />
+      {!review.impact && alwaysScope(ix) && <p className="mt-2 text-label leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
     </Card>
   );
 }

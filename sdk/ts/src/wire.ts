@@ -4338,6 +4338,12 @@ export interface ConnectorCallParams {
    * confirms a write stays the hub's decision.
    */
   categories?: string[];
+  /**
+   * The hub-authenticated paired device ID (for example dev_...) that originated the current user turn; absent when
+   * the turn did not come from a paired user device (scheduled task, channel, extension, or older hub). Set
+   * exclusively by the hub from verified credentials.
+   */
+  origin_device_id?: ConnectorOriginDeviceID;
 }
 
 /**
@@ -4435,6 +4441,12 @@ export interface ConnectorDoParams {
    * confirms a write stays the hub's decision.
    */
   categories?: string[];
+  /**
+   * The hub-authenticated paired device ID (for example dev_...) that originated the current user turn; absent when
+   * the turn did not come from a paired user device (scheduled task, channel, extension, or older hub). Set
+   * exclusively by the hub from verified credentials.
+   */
+  origin_device_id?: ConnectorOriginDeviceID;
 }
 
 /**
@@ -4803,6 +4815,15 @@ export type ConnectorMentionUserID = string & { readonly __brand: "ConnectorMent
 /** A ConnectorMentionUserID from its raw string. */
 export function connectorMentionUserID(raw: string): ConnectorMentionUserID {
   return raw as ConnectorMentionUserID;
+}
+
+/**
+ * Hub-authenticated paired device ID (for example dev_...) that originated the current user turn.
+ */
+export type ConnectorOriginDeviceID = string & { readonly __brand: "ConnectorOriginDeviceID" };
+/** A ConnectorOriginDeviceID from its raw string. */
+export function connectorOriginDeviceID(raw: string): ConnectorOriginDeviceID {
+  return raw as ConnectorOriginDeviceID;
 }
 
 export interface ConnectorStatusChange {
@@ -7949,8 +7970,10 @@ export interface MemoryEntriesResult {
   after?: string;
   /**
    * The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
-   * keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
-   * out or 0: 4096. Entries past it are left out, the most important kept.
+   * keeps this budget apart from its own memory ledger's and takes the largest any page states; it caps it at 8192,
+   * or at the owner's choice of 8192 or 16384 bytes when larger (assistant.memory_extension_standing_bytes: 4096 by
+   * default, 8192 or 16384); left out or 0: that choice, 4096 by default. Entries past it are left out, the most
+   * important kept.
    */
   standing_bytes?: number;
 }

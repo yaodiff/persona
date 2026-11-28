@@ -224,10 +224,20 @@ func TestScopedDeviceToken(t *testing.T) {
 func TestScopedDeviceAgentRouteScopes(t *testing.T) {
 	h := &Hub{apiMux: http.NewServeMux()}
 	h.extensionRoutesRelayed(h.apiMux)
+	// The triage's switches are the assistant's route, not a personal Agent's: an extension's agents.read reads them
+	// (#17851), a scoped device does not.
+	const triage = "GET /api/v1/agents/triage"
+	h.apiMux.HandleFunc(triage, func(http.ResponseWriter, *http.Request) {})
+	if extwire.RouteScopes[triage] != extwire.ScopeAgentsRead {
+		t.Fatalf("%s needs %q for an extension, want %s", triage, extwire.RouteScopes[triage], extwire.ScopeAgentsRead)
+	}
+	if got := h.scopedDeviceRoute(httptest.NewRequest(http.MethodGet, "/api/v1/agents/triage", nil)); got != "" {
+		t.Errorf("%s: a scoped device is let in with %q, want no scope", triage, got)
+	}
 	checked := 0
 	for pattern, want := range extwire.RouteScopes {
 		method, path, _ := strings.Cut(pattern, " ")
-		if path != "/api/v1/agents" && !strings.HasPrefix(path, "/api/v1/agents/") {
+		if pattern == triage || path != "/api/v1/agents" && !strings.HasPrefix(path, "/api/v1/agents/") {
 			continue
 		}
 		path = strings.ReplaceAll(path, "{id}", "src%3Ak1")

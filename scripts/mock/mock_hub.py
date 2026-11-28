@@ -2836,7 +2836,7 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out["integrations_v2"] = MANAGER_INTEGRATIONS_V2.get(MANAGERS["default"], False)
+        out["integrations_v2"] = MANAGER_INTEGRATIONS_V2.get(MANAGERS["default"], INTEGRATIONS_V2_DEFAULT)
         out.update(work_guide=MANAGER_WORK_GUIDES.get(MANAGERS["default"], False), agent_tasks=cfg["agent_tasks"], task_lessons=cfg["task_lessons"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
@@ -4879,15 +4879,17 @@ def assistant_for_manager(h):
                                                            "meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension", "meeting_transcription_ready")}
     if "work_guide" in st:
         st["work_guide"] = MANAGER_WORK_GUIDES.get(mid, False)
-        st["integrations_v2"] = MANAGER_INTEGRATIONS_V2.get(mid, False)
+        st["integrations_v2"] = MANAGER_INTEGRATIONS_V2.get(mid, INTEGRATIONS_V2_DEFAULT)
     return (dict(st, manager=mid, conversations=[], tasks=[], notes=notes, notes_effective=notes), 200)
 
 
 def update_labs(h, body):
     if os.environ.get("MOCK_LEGACY_HUB"):
         return None
-    labs = {key: state for key, state in (("work_guide", MANAGER_WORK_GUIDES), ("integrations_v2", MANAGER_INTEGRATIONS_V2))
-            if body.get(key) is not None}
+    labs = [(key, state, default) for key, state, default in (
+        ("work_guide", MANAGER_WORK_GUIDES, False),
+        ("integrations_v2", MANAGER_INTEGRATIONS_V2, INTEGRATIONS_V2_DEFAULT),
+    ) if body.get(key) is not None]
     if labs:
         header = h.headers.get("X-Persona-Manager")
         query = (parse_qs(urlparse(h.path).query).get("manager") or [None])[0]
@@ -4896,13 +4898,13 @@ def update_labs(h, body):
             return ({"code": "bad_request"}, 400)
         if is_read_only(h): return ({"code": "forbidden"}, 403)
         with MANAGER_LABS_LOCK:
-            for key, state in labs.items():
+            for key, state, default in labs:
                 expected = body.get("expected_" + key)
                 if type(body[key]) is not bool or (expected is not None and type(expected) is not bool):
                     return ({"code": "bad_request"}, 400)
-                if expected is not None and expected != state.get(mid, False):
+                if expected is not None and expected != state.get(mid, default):
                     return ({"code": "configuration_conflict"}, 409)
-            for key, state in labs.items():
+            for key, state, _ in labs:
                 state[mid] = body[key]
     return None
 
@@ -4922,6 +4924,7 @@ def other_manager(h):
 # Each other manager's own 说明 (设置 › 助手 with its X-Persona-Manager): a whole assistant has its own.
 MANAGER_WORK_GUIDES = {}
 MANAGER_INTEGRATIONS_V2 = {}
+INTEGRATIONS_V2_DEFAULT = True
 MANAGER_LABS_LOCK = threading.Lock()
 MANAGER_NOTES = {"m-3fa21c": "这是「工作」管理者：只管工作电脑上的事和工作邮箱。"}
 
@@ -30355,6 +30358,9 @@ class H(BaseHTTPRequestHandler):
         machine = next((m for m in MACHINES if m["id"] == mid), {})
         listed = listed or (port == 5900 and (machine.get("computer", {}).get("enabled") or machine.get("browser", {}).get("enabled")))  # cua or ego (#1507)
         # MOCK_PREVIEW: a preview's running port is the made-up app's page server (scripts/mock/mock_preview.py).
+        preview_err = mock_preview.forward_error(port) if preview_route and hasattr(mock_preview, "forward_error") else None
+        if preview_err is not None:
+            return self.send_json({"error": preview_err[1]}, preview_err[0])
         preview_to = mock_preview.forward(port) if preview_route else None
         listed = listed or preview_to is not None
         if not listed: return self.send_json({"error": "port %d is not an agent's and was not opened" % port}, 403)
@@ -30894,7 +30900,7 @@ def _channel_view(c, manager):
     if os.environ.get("MOCK_LEGACY_HUB") or c["source"] != "plugin" or not c["installed"] or c["kind"] not in ("im", "mention"):
         return c
     prefs = CHANNEL_ROUTING.get((manager, c["id"]), {})
-    inherit_topics = MANAGER_INTEGRATIONS_V2.get(manager) and c["capabilities"].get("threads")
+    inherit_topics = MANAGER_INTEGRATIONS_V2.get(manager, INTEGRATIONS_V2_DEFAULT) and c["capabilities"].get("threads")
     return dict(c, thread_mode=prefs.get("thread_mode", "per_topic" if inherit_topics else "channel_default"),
                 **({"thread_idle_hours": prefs["thread_idle_hours"]} if prefs.get("thread_idle_hours") else {}))
 
@@ -30902,7 +30908,7 @@ def _channel_view(c, manager):
 def _channel_detail(c, manager):
     d = dict(_channel_view(c, manager))
     override = {"per_topic": "topics", "per_group_and_topic": "groups_and_topics"}.get(d.get("thread_mode"))
-    if override and MANAGER_INTEGRATIONS_V2.get(manager):
+    if override and MANAGER_INTEGRATIONS_V2.get(manager, INTEGRATIONS_V2_DEFAULT):
         d["target_override"] = {"mode": override}
     d["waiting"] = {"answers": 1 if c["id"] == "wechat" else 0, "asks": 0}
     if c["id"] in ("wechat", "feishu"):

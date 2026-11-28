@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import {
   BASE,
   CAPABILITIES,
+  COMPACTION_REPORT_TIMEOUT_MS,
   PERMISSION_BODY_MOST,
   PERMISSION_GRACE_MS,
   PERMISSION_MAX_ERRORS,
@@ -12,6 +13,7 @@ import {
   POLL_WAIT_MS,
   SUBMIT_QUEUE_SETTLE_MS,
   applyStepOverride,
+  buildCompactionPayload,
   buildPermissionPayload,
   clearAgentPreTools,
   createClassicHookObservation,
@@ -33,6 +35,7 @@ import {
   toolCallKey,
   verdict,
   type ActiveTurn,
+  type CompactionTrigger,
   type InterruptRequest,
   type Message,
   type PermissionAnswer,
@@ -78,6 +81,9 @@ export const register: Register = on => {
   let classicHooks = createClassicHookObservation()
   let classicTurn = 0
   let wakePoll: (() => void) | undefined
+  let compacting = false
+  let compactTrigger: CompactionTrigger = 'manual'
+  let compactionReport = Promise.resolve()
   const preToolCache = createPreToolCache()
   const activePerms = new Map<string, ActivePerm>()
   let permSeq = 0
@@ -96,6 +102,10 @@ export const register: Register = on => {
       activeTurn = undefined
     }
     if (e.agentId === undefined) {
+      if (compacting) {
+        compacting = false
+        compactionReport = queueCompactionReport($, compactionReport, 'end', compactTrigger)
+      }
       classicTurn++
       const wasPassedOver = classicHooks.passedOver
       classicHooks = finishClassicTurn(classicHooks)
@@ -112,6 +122,19 @@ export const register: Register = on => {
       // Turn cleanup never blocks turn completion.
     }
     return next(e)
+  })
+
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    compacting = true
+    compactTrigger = e.trigger
+    compactionReport = queueCompactionReport($, compactionReport, 'start', compactTrigger)
+    try {
+      return await next(e)
+    } finally {
+      compacting = false
+      compactionReport = queueCompactionReport($, compactionReport, 'end', compactTrigger)
+    }
   })
 
   on('turn.step', async function* ($, e, next) {
@@ -599,6 +622,33 @@ async function notifyPermissionDone($: Engine, sock: string, body: Record<string
   }
 }
 
+async function reportCompaction($: Engine, phase: 'start' | 'end', trigger: CompactionTrigger): Promise<void> {
+  const sock = socketPath(
+    homeDir(await $.env.get('USERPROFILE'), await $.env.get('HOME')),
+    await $.env.get('PERSONA_HOME'),
+  )
+  const session = await $.session.id().catch(() => '')
+  if (sock === undefined || session === '') return
+  try {
+    await $.http.fetch(
+      `${BASE}/compact`,
+      post(sock, buildCompactionPayload(session, phase, trigger), COMPACTION_REPORT_TIMEOUT_MS),
+    )
+  } catch {
+    // The compaction itself neither waits for this report nor fails with it.
+  }
+}
+
+/** Orders start before end without making the compaction wait for either report. */
+function queueCompactionReport(
+  $: Engine,
+  previous: Promise<void>,
+  phase: 'start' | 'end',
+  trigger: CompactionTrigger,
+): Promise<void> {
+  return previous.then(() => reportCompaction($, phase, trigger)).catch(() => {})
+}
+
 async function applyInterrupt(
   $: Engine,
   sock: string,
@@ -711,12 +761,13 @@ function asRecord(v: unknown): Record<string, unknown> | undefined {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined
 }
 
-function post(socket: string, body: Record<string, unknown>) {
+function post(socket: string, body: Record<string, unknown>, timeoutMs?: number) {
   return {
     method: 'POST',
     socketPath: socket,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   }
 }
 

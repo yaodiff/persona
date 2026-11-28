@@ -2326,6 +2326,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			unsent := err != nil // model preparation has not sent the task's message
 			if err == nil {
 				s.noteRound(m.ID, t.SessionID, t.ID, t.runGrantBasis, time.Now()) // before it is sent: its turn may plan at once (schedule_grant.go)
+				s.clearConversationOriginDevice(t.SessionID)
 				if err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil); err != nil {
 					s.endRound(m.ID, t.SessionID, t.ID)
 				}
@@ -2471,6 +2472,7 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 	if err := s.validateTaskSelections(ctx, machine, sid, params, promptSelections); err != nil {
 		return err
 	}
+	s.clearConversationOriginDevice(sid)
 	err := s.call(ctx, machine, DeviceAssistantSend, params, nil)
 	if _, asked := params["config_dir"]; asked && (nodeOutdated(err) || profileRefused(err)) {
 		delete(params, "config_dir")

@@ -109,7 +109,13 @@ func (s *Service) finishTaskTerminal(ctx context.Context, t Todo, accepted bool)
 	if err != nil {
 		s.logf("task %s: load terminal cleanup: %v", t.ID, err)
 	}
-	if !task.CloseTabOnAccept || task.TerminalCleanup != "" {
+	if task.TerminalCleanup != "" {
+		return terminalCleanupStatus(task)
+	}
+	if !task.CloseTabOnAccept {
+		if accepted && s.closeEndedTerminals(ctx) {
+			return s.closeRuntimeTaskOnAccept(ctx, t, i)
+		}
 		return terminalCleanupStatus(task)
 	}
 	target := task.TerminalTarget
@@ -247,4 +253,97 @@ func (s *Service) taskTerminalOwned(id string, acceptedAt time.Time, target task
 		linked++
 	}
 	return linked == 1
+}
+
+// closeRuntimeTaskOnAccept releases one idle, exclusive runtime-backed task session through the owner's close-on-end
+// path. It uses closeEndedTerminal (session.retire with close_terminal), never the runtime's raw session.close.
+func (s *Service) closeRuntimeTaskOnAccept(ctx context.Context, t Todo, planIndex int) string {
+	cur, ok := s.todoNow(t.ID)
+	if !ok || cur.DoneAt == nil || cur.DoneBy != db.DoneByReview {
+		return devicewire.TaskTerminalSkipped
+	}
+	var machine, session string
+	var linked int
+	for _, a := range cur.Agents {
+		if a.ReleasedAt != nil || a.DismissedAt != nil {
+			continue
+		}
+		machine, session = a.MachineID, a.SessionID
+		linked++
+	}
+	if linked != 1 || machine == "" || session == "" {
+		return devicewire.TaskTerminalSkipped
+	}
+	target := taskTerminalTarget{Machine: machine, SessionID: session}
+	if !s.taskTerminalOwned(t.ID, *cur.DoneAt, target) || !s.runtimeTaskQuiet(ctx, machine, session) ||
+		s.sessionActivitySnapshotReason(machine, session, time.Now()) != "" {
+		return devicewire.TaskTerminalSkipped
+	}
+	if planIndex >= 0 && t.PlanID != "" {
+		claimed := false
+		status := devicewire.TaskTerminalSkipped
+		err := s.patchPlanTask(ctx, t.PlanID, planIndex, func(pt *PlanTask) {
+			if pt.TodoID != t.ID {
+				return
+			}
+			if pt.TerminalCleanup != "" {
+				status = terminalCleanupStatus(*pt)
+				return
+			}
+			if s.taskTerminalOwned(t.ID, *cur.DoneAt, target) {
+				claimed = true
+				status = devicewire.TaskTerminalPending
+				pt.TerminalCleanup = status
+			}
+		})
+		if err != nil {
+			s.logf("task %s: claim runtime cleanup: %v", t.ID, err)
+			return devicewire.TaskTerminalSkipped
+		}
+		if !claimed {
+			return status
+		}
+	}
+	closed, err := s.closeEndedTerminal(ctx, machine, session, proto.StopTaskCompleted)
+	status := devicewire.TaskTerminalSkipped
+	switch {
+	case err == nil && closed:
+		status = devicewire.TaskTerminalClosed
+	case err == nil:
+		status = devicewire.TaskTerminalSkipped
+	case sendUnknown(err):
+		status = devicewire.TaskTerminalPending
+	default:
+		s.logf("task %s: runtime session.retire %s/%s: %v", t.ID, machine, session, err)
+	}
+	if planIndex >= 0 && t.PlanID != "" && status != devicewire.TaskTerminalPending {
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		defer cancel()
+		if err := s.patchPlanTask(saveCtx, t.PlanID, planIndex, func(pt *PlanTask) {
+			if pt.TodoID == t.ID && pt.TerminalCleanup == devicewire.TaskTerminalPending {
+				pt.TerminalCleanup = status
+			}
+		}); err != nil {
+			s.logf("task %s: save runtime cleanup result: %v", t.ID, err)
+		}
+	}
+	return status
+}
+
+// runtimeTaskQuiet is the same close-on-end quiet check taskTerminalIdle makes, for a runtime row with no pane.
+func (s *Service) runtimeTaskQuiet(ctx context.Context, machine, session string) bool {
+	var row proto.Session
+	var ok bool
+	if s.fleetOn() {
+		row, ok = s.listedSession(machine, session)
+	} else {
+		row, ok = s.session(ctx, machine, session)
+	}
+	if !ok || !runtimeCanClose(row) || !row.StartedByPersona || row.Assistant || row.Archived ||
+		row.Starting || row.Attached || row.PendingSwitch != nil ||
+		(row.Undelivered != nil && len(*row.Undelivered) > 0) ||
+		time.Since(row.SeenAt) < time.Minute || agentCloseBusy(row) || taskAgentHasUnfinishedWork(row) {
+		return false
+	}
+	return row.Status == proto.StatusIdle || row.Status == proto.StatusDone
 }

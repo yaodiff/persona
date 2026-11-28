@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { INTEGRATIONS_SETTINGS_REGISTRATION, LEGACY_INTEGRATION_TABS } from "./integrations-registration";
-import { NAV_GROUPS, navGroups } from "./nav";
+import { ADVANCED_HUB_TABS, NAV_GROUPS, navGroups } from "./nav";
 
 describe("INTEGRATIONS_SETTINGS_REGISTRATION (#13395-ready host metadata)", () => {
   it("declares stable identity, assistant scope, legacy 4-tab mapping, and lazy loader", async () => {
@@ -34,10 +34,11 @@ describe("INTEGRATIONS_SETTINGS_REGISTRATION (#13395-ready host metadata)", () =
       expect(INTEGRATIONS_SETTINGS_REGISTRATION.isLegacyTabVisible(tab, { ...base, integrationsV2: true })).toBe(false);
     }
 
-    // Hard boundary (#13395 / #17716): hub group keeps managers and devices untouched; core top-level counts stay 18 off / 15 on.
-    expect(NAV_GROUPS.find((g) => g.key === "hub")?.tabs).toEqual(["hub", "managers", "avatar", "devices"]);
-    expect(navGroups(false).flatMap((g) => g.tabs)).toHaveLength(18);
-    expect(navGroups(true).flatMap((g) => g.tabs)).toHaveLength(15);
+    // Both integration modes leave the hub management pages under Advanced.
+    expect(ADVANCED_HUB_TABS).toEqual(["managers", "devices"]);
+    expect(NAV_GROUPS.find((g) => g.key === "hub")?.tabs).toEqual(["hub", "avatar"]);
+    expect(navGroups(false).flatMap((g) => g.tabs)).toHaveLength(16);
+    expect(navGroups(true).flatMap((g) => g.tabs)).toHaveLength(13);
   });
 
   it("resolves bookmarks, preserves ?set= prefill and assistant scope, and rolls back cleanly when Labs is off", () => {

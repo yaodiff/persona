@@ -1,9 +1,10 @@
+import { isCommandPrompt } from "./command-ask";
 import type { Interaction, Item } from "./types";
 
 export function blockedDecisionSkip(ix: Interaction): "terminal" | "terminal_chat" | "permission" | "plan" | undefined {
   if (ix.kind === "permission" || ix.kind === "plan") return ix.kind;
   if (ix.kind === "screen") {
-    if (ix.dialog?.command) return "permission";
+    if (isCommandPrompt(ix.dialog)) return "permission";
     return ix.dialog?.options?.some((option) => option.kind === "chat") ? "terminal_chat" : "terminal";
   }
   return undefined;

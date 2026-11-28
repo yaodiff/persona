@@ -175,6 +175,10 @@ func (n *Node) pumpLive(w *watch) {
 	}
 	pane := n.livePane(w.id)
 	if pane == "" {
+		if live := n.pluginCompactionLive(w.id, time.Now()); live != nil {
+			n.setLive(w, live)
+			return
+		}
 		lw.mu.Lock()
 		shown := lw.last != nil
 		lw.mu.Unlock()
@@ -194,6 +198,42 @@ func (n *Node) pumpLive(w *watch) {
 		}
 		n.setLive(w, l)
 	}()
+}
+
+// pluginCompactionLive is what Persona's plugin reported a pane-less outside Claude is compacting, refreshed every
+// few seconds so clients keep the line. The pump calls it only when no readable pane exists. A report whose process
+// exited, or whose end was lost past ccPluginCompactionTTL, is no live line.
+func (n *Node) pluginCompactionLive(id string, now time.Time) *proto.SessionLive {
+	c, ok := n.ccPlugins.compaction(id)
+	if !ok {
+		return nil
+	}
+	if now.Sub(c.started) >= ccPluginCompactionTTL || !processAlive(c.pid, c.procStart) {
+		n.ccPlugins.endCompaction(id, c.pid)
+		return nil
+	}
+	elapsed := int(now.Sub(c.started) / time.Second)
+	every := max(1, ccPluginCompactionEveryS)
+	if elapsed < every {
+		elapsed = 1
+	} else {
+		elapsed -= elapsed % every
+	}
+	return &proto.SessionLive{
+		Verb:     "Compacting conversation",
+		ElapsedS: elapsed,
+		At:       now.UTC().Format(time.RFC3339),
+	}
+}
+
+// wakeCompactionLive lets a compaction report update its watched session now, rather than at the next live tick.
+func (n *Node) wakeCompactionLive(id string) {
+	n.mu.Lock()
+	w := n.watches[id]
+	n.mu.Unlock()
+	if w != nil {
+		go n.pumpLive(w)
+	}
 }
 
 // setLive pushes l as the watch's status line, unless it is the one that went out last (At aside) or the watch ended.

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // MachineDetail co-located managers (#14964): shows hosted manager name, online/offline state, deploy mode, version,
-// pending_restart / version-lag hints, Redeploy co-located note, and quick link to Settings › Hub › Assistants.
+// pending_restart / version-lag hints, Redeploy co-located note, and quick link to Settings › Advanced › Assistants.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe("MachineDetail hosted managers (#14964)", () => {
-  it("displays hosted managers with deploy mode, version, pending_restart and version-lag hints, and links to Settings › Hub › Assistants", async () => {
+  it("displays hosted managers with deploy mode, version, pending_restart and version-lag hints, and links to Settings › Advanced › Assistants", async () => {
     setRoster({
       default: "m-1",
       managers: [
@@ -82,7 +82,7 @@ describe("MachineDetail hosted managers (#14964)", () => {
     // MachineDeploy strip includes co-located restart note
     expect(host.querySelector('[data-testid="deploy-co-located-note"]')?.textContent).toContain("主助手");
 
-    // Quick link navigates to Settings › Hub › Assistants
+    // Quick link navigates to Settings › Advanced › Assistants
     const link = section.querySelector<HTMLAnchorElement>('[data-testid="hosted-managers-settings-link"]')!;
     expect(link.getAttribute("href")).toBe("/settings?tab=managers");
     act(() => void link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));

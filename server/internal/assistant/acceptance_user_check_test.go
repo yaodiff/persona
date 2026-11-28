@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func acceptedForUserCheck(t *testing.T) (*Service, *fakeHub, Todo) {
@@ -345,6 +346,9 @@ func TestUserCheckReplacesAnEarlierDecision(t *testing.T) {
 	s, f, todo, _, _ := conclusionService(t, false)
 	waitsForReview(t, s, f, todo.ID, "The owner needs to choose a layout.")
 	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Choose the layout", "recommend": "Use the compact layout"})
+	// The result now permits personal verification, while the earlier decision
+	// still exists and must be retired when the verification request opens.
+	f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "I applied the compact layout and verified the task page."})
 	f.judge = `{"changed":"The layout is updated","link":"","how":"Inspect the task page"}`
 	reviewTask(t, s, todo.ID, map[string]any{
 		"verdict": "accepted", "user_check": true, "checks": completeReviewChecks(todoNow(s, todo.ID)),

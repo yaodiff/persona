@@ -278,6 +278,125 @@ describe("Settings category navigation", () => {
     }
   });
 
+  const managementItems = { devices: "Paired test browser", managers: "Test assistant" } as const;
+  const mockManagementPages = async () => {
+    const api = await import("../lib/api");
+    const fallback = api.api;
+    vi.spyOn(api, "api").mockImplementation((path, options) => {
+      if (path === "/auth/tokens") return Promise.resolve({ tokens: [{ id: "web-test", kind: "web", name: managementItems.devices }], current: "web-test" });
+      if (path === "/managers") return Promise.resolve({ managers: [{ id: "assistant", name: managementItems.managers, online: true }], default: "assistant" });
+      return fallback(path, options);
+    });
+  };
+  // Use the visible row labels: the phone row also contains a hint, and other categories mention assistants.
+  const entries = (scope: Element, label: string) => [...scope.querySelectorAll("button")].filter(button =>
+    [...button.querySelectorAll("span, div")].some(el => el.childElementCount === 0 && el.textContent === label));
+
+  it.each([false, true])("keeps Devices and Assistants under Advanced and goes back one level (phone: %s)", async phone => {
+    viewport.phone = phone;
+    await mockManagementPages();
+    await mount("/settings");
+    for (const key of ["devices", "managers"] as const) {
+      expect(entries(nav(), t(`settings-nav.tab_${key}`))).toHaveLength(0);
+    }
+    await act(async () => category(t("settings-nav.tab_advanced")).click());
+    for (const key of ["devices", "managers"] as const) {
+      const label = t(`settings-nav.tab_${key}`);
+      const advanced = host.querySelector<HTMLElement>('[role="region"]')!;
+      advanced.scrollTop = 450;
+      advanced.dispatchEvent(new Event("scroll"));
+      const rows = entries(advanced, label);
+      expect(rows).toHaveLength(1);
+      await act(async () => rows[0].click());
+      expect(location.search).toBe(`?tab=${key}`);
+      expect(host.querySelector('[role="region"]')?.textContent).toContain(managementItems[key]);
+      expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(label);
+      const back = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_advanced") })}"]`)!;
+      expect(back).not.toBeNull();
+      await popped(() => key === "devices" ? history.back() : back.click());
+      expect(location.search).toBe("?tab=advanced");
+      expect(advanced.scrollTop).toBe(450);
+    }
+    if (phone) {
+      await popped(() => host.querySelector<HTMLButtonElement>("header button")!.click());
+      expect(location.search).toBe("");
+      expect(nav()).not.toBeNull();
+    }
+  });
+
+  it("keeps previous and forward entries when the former Advanced page has been replaced", async () => {
+    await mount("/settings?tab=advanced");
+    const region = host.querySelector<HTMLElement>('[role="region"]')!;
+    region.scrollTop = 450;
+    region.dispatchEvent(new Event("scroll"));
+    await act(async () => entries(region, t("settings-nav.tab_devices"))[0].click());
+    history.pushState(null, "", "/inbox");
+    await popped(() => history.back());
+    await popped(() => history.back());
+    await act(async () => category(t("settings-nav.tab_notifications")).click());
+    await popped(() => history.forward());
+    expect(location.search).toBe("?tab=devices");
+    const back = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back_to", { name: t("settings-nav.tab_advanced") })}"]`)!;
+    await act(async () => {
+      const reached = new Promise<void>(resolve => {
+        const check = () => {
+          if (location.search !== "?tab=advanced") return;
+          removeEventListener("popstate", check);
+          resolve();
+        };
+        addEventListener("popstate", check);
+      });
+      back.click();
+      await reached;
+    });
+    expect(region.getAttribute("aria-label")).toBe(t("settings-nav.tab_advanced"));
+    expect(region.scrollTop).toBe(450);
+    await popped(() => history.forward());
+    expect(location.pathname).toBe("/inbox");
+    await popped(() => history.back());
+    await popped(() => history.back());
+    expect(location.search).toBe("?tab=notifications");
+  });
+
+  it("keeps the Advanced search result selected while showing a child", async () => {
+    await mount("/settings");
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, t("settings-nav.tab_advanced"));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const advanced = category(t("settings-nav.tab_advanced"));
+    await act(async () => advanced.click());
+    await act(async () => entries(host.querySelector('[role="region"]')!, t("settings-nav.tab_devices"))[0].click());
+    expect(advanced.getAttribute("aria-current")).toBe("page");
+  });
+
+  it.each(["devices", "managers"] as const)("opens the %s search result", async key => {
+    await mockManagementPages();
+    await mount("/settings");
+    const label = t(`settings-nav.tab_${key}`);
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, label);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const result = entries(nav(), label).find(button => button.textContent === label)!;
+    await act(async () => result.click());
+    expect(host.querySelector('[role="region"]')?.textContent).toContain(managementItems[key]);
+    expect(location.search).toBe(`?tab=${key}`);
+    expect(host.querySelector('[role="region"]')?.getAttribute("aria-label")).toBe(label);
+  });
+
+  it.each(["devices", "managers"] as const)("opens a bookmarked %s page and returns to Advanced", async key => {
+    viewport.phone = true;
+    await mockManagementPages();
+    await mount(`/settings?tab=${key}`);
+    expect(host.querySelector('[role="region"]')?.textContent).toContain(managementItems[key]);
+    expect(host.querySelector("h1")?.textContent).toBe(t(`settings-nav.tab_${key}`));
+    await act(async () => host.querySelector<HTMLButtonElement>("header button")!.click());
+    expect(location.search).toBe("?tab=advanced");
+  });
+
   // #13398: General keeps the default appearance; the opt-in looks moved to Advanced › Appearance with no storage change
   it("moves the non-default looks to Advanced and keeps an existing choice", async () => {
     await mount("/settings?tab=general");

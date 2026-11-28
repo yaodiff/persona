@@ -522,8 +522,12 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		// The counts a transcript gives are unknown here, and usage_unknown says so: the apps leave them out rather than
 		// show "0 tokens, 0 turns" (#8261). They stay zero for the apps older than that, which decode them as required
 		// numbers and read them as "none yet".
+		stopCause := n.effectiveStopCause(p.SessionID)
+		if cause, ok := h.stopCause(p.SessionID); ok {
+			stopCause = cause
+		}
 		info := map[string]any{"session_id": p.SessionID, "agent": h.agent(), "context_tokens": 0, "output_tokens": 0,
-			"compactions": 0, "turns": 0, "usage_unknown": true}
+			"compactions": 0, "turns": 0, "usage_unknown": true, "stop_cause": stopCause}
 		for _, s := range h.sessionsCopy() {
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt

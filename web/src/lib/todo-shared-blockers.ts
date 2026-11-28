@@ -1,15 +1,19 @@
-// Shared external blockers projection helpers for the Web To-dos view under todos_v2 (#14728).
-// Mirrors the wire format emitted by server/internal/assistant/todo/projection/shared_blockers.go.
+// Shared blockers projection helpers for the Web To-dos view under todos_v2 (#14728, #17938).
+// Mirrors the wire format emitted by server/internal/assistant/todo/projection/shared_blockers.go,
+// supporting external blockers (PR/issue/external target) and internal prerequisite to-dos with readable titles.
 
+import { t } from "../i18n";
 import type { Todo } from "./todos";
 
-export type SharedBlockerKind = "pull_request" | "issue" | "external_target";
+export type SharedBlockerKind = "pull_request" | "issue" | "todo" | "external_target";
 
 export interface SharedBlocker {
   key: string;
   kind: SharedBlockerKind;
   label: string;
   url?: string;
+  /** Internal prerequisite to-do ID when `kind === "todo"`, allowing direct navigation in the list. */
+  todo_id?: string;
   todo_ids: string[];
   count: number;
 }
@@ -17,8 +21,55 @@ export interface SharedBlocker {
 const VALID_KINDS: ReadonlySet<string> = new Set<SharedBlockerKind>([
   "pull_request",
   "issue",
+  "todo",
   "external_target",
 ]);
+
+const RAW_TODO_ID_RE = /^todo_[a-z0-9_-]{3,}$/i;
+
+/** Reports whether a string looks like a raw internal to-do identifier (e.g. `todo_e8acf635da201b7a`). */
+export function isRawTodoId(raw: string): boolean {
+  return RAW_TODO_ID_RE.test(raw.trim());
+}
+
+function lookupTodoById(
+  id: string,
+  todosById?: ReadonlyMap<string, Pick<Todo, "id" | "title">>,
+): Pick<Todo, "id" | "title"> | undefined {
+  if (!id || !todosById) return undefined;
+  const direct = todosById.get(id);
+  if (direct) return direct;
+  const lower = id.toLowerCase();
+  for (const [k, td] of todosById) {
+    if (k.toLowerCase() === lower) return td;
+  }
+  return undefined;
+}
+
+function detectBlockerTodoId(
+  rec: Record<string, unknown>,
+  key: string,
+  rawLabel: string,
+  todosById?: ReadonlyMap<string, Pick<Todo, "id" | "title">>,
+): string | undefined {
+  for (const field of [rec.todo_id, rec.target_id, rec.target_todo_id]) {
+    if (typeof field === "string" && field.trim()) return field.trim();
+  }
+  if (isRawTodoId(rawLabel)) return rawLabel;
+  if (key.startsWith("todo:")) {
+    const id = key.slice(5).trim();
+    if (id) return lookupTodoById(id, todosById)?.id ?? id;
+  }
+  if (key.startsWith("target:")) {
+    const target = key.slice(7).trim();
+    if (isRawTodoId(target)) return lookupTodoById(target, todosById)?.id ?? target;
+  }
+  if (rec.kind === "todo" && rawLabel) {
+    const matched = lookupTodoById(rawLabel, todosById);
+    if (matched) return matched.id;
+  }
+  return undefined;
+}
 
 /** Returns a trimmed http(s) URL string, or undefined for missing / unsafe URLs. */
 export function safeBlockerUrl(raw: unknown): string | undefined {
@@ -41,10 +92,13 @@ export function safeBlockerUrl(raw: unknown): string | undefined {
  * - When `visibleTodoIds` is supplied, scopes `todo_ids` to the currently visible
  *   assistant's to-dos and re-checks the `>= 2` threshold so cross-manager or deleted
  *   items never leave dead filter chips.
+ * - Resolves internal prerequisite `todo_...` blockers to human-readable titles (preferring
+ *   server-resolved readable labels, falling back to `todosById`, and never exposing raw `todo_...` IDs).
  */
 export function parseSharedBlockers(
   raw: unknown,
   visibleTodoIds?: ReadonlySet<string>,
+  todosById?: ReadonlyMap<string, Pick<Todo, "id" | "title">>,
 ): SharedBlocker[] {
   if (!Array.isArray(raw) || raw.length === 0) return [];
 
@@ -56,8 +110,19 @@ export function parseSharedBlockers(
     const rec = item as Record<string, unknown>;
 
     const key = typeof rec.key === "string" ? rec.key.trim() : "";
-    const label = typeof rec.label === "string" ? rec.label.trim() : "";
-    if (!key || !label || seenKeys.has(key)) continue;
+    const rawLabel = typeof rec.label === "string" ? rec.label.trim() : "";
+    if (!key || seenKeys.has(key)) continue;
+
+    const blockerTodoId = detectBlockerTodoId(rec, key, rawLabel, todosById);
+    let label = rawLabel;
+    if (!label || isRawTodoId(label)) {
+      if (blockerTodoId) {
+        const matched = lookupTodoById(blockerTodoId, todosById);
+        label = matched?.title?.trim() || t("todos.shared_blockers_unknown_todo");
+      } else {
+        continue;
+      }
+    }
 
     const rawCount = typeof rec.count === "number" && Number.isFinite(rec.count) ? Math.trunc(rec.count) : 0;
     if (rawCount < 2 || !Array.isArray(rec.todo_ids)) continue;
@@ -72,10 +137,13 @@ export function parseSharedBlockers(
     }
     if (idSet.size < 2) continue;
 
+    const rawKind = typeof rec.kind === "string" ? rec.kind : "";
     const kind: SharedBlockerKind =
-      typeof rec.kind === "string" && VALID_KINDS.has(rec.kind)
-        ? (rec.kind as SharedBlockerKind)
-        : "external_target";
+      rawKind === "todo" || blockerTodoId
+        ? "todo"
+        : VALID_KINDS.has(rawKind)
+          ? (rawKind as SharedBlockerKind)
+          : "external_target";
     const url = safeBlockerUrl(rec.url);
     const todoIds = [...idSet];
 
@@ -85,6 +153,7 @@ export function parseSharedBlockers(
       kind,
       label,
       ...(url ? { url } : {}),
+      ...(kind === "todo" && blockerTodoId ? { todo_id: blockerTodoId } : {}),
       todo_ids: todoIds,
       count: visibleTodoIds ? todoIds.length : Math.max(rawCount, todoIds.length),
     });

@@ -48,7 +48,8 @@ var (
 	ErrNodeTooOld  = githubwire.ErrNodeTooOld
 	ErrNoGh        = githubwire.ErrNoGh
 	ErrNotSignedIn = githubwire.ErrNotSignedIn
-	// errBadProxy: hub.json's github.proxy cannot be used; every request fails with it rather than going direct.
+	// errBadProxy: hub.json's github.proxy cannot be used; every request fails with it rather than following the
+	// environment or going direct.
 	errBadProxy = errors.New("github.proxy")
 )
 
@@ -60,7 +61,8 @@ type refuse struct{ err error }
 
 func (r refuse) RoundTrip(*http.Request) (*http.Response, error) { return nil, r.err }
 
-// httpClient is the connector's client: through github.proxy when set, direct when not.
+// httpClient is the connector's client: through github.proxy when set, else as the process's proxy environment says
+// (direct when it names no proxy).
 func httpClient(cfg Config) *http.Client {
 	const timeout = 30 * time.Second
 	cl, err := netproxy.Egress{Proxy: cfg.Proxy}.HTTPClient(timeout)

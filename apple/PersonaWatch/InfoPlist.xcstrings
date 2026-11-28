@@ -1,6 +1,52 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "NSHealthShareUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona lets you read health summaries on Apple Watch, for example steps, workouts and sleep. With rolling recording on, Persona checks heart rate, HRV, steps, workouts and moods to keep the minutes around them; the records stay in Apple Health on your paired iPhone."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personaでは、歩数、ワークアウト、睡眠などのヘルスケアの概要をApple Watchで確認できます。ローリング録音をオンにすると、心拍数、心拍変動（HRV）、歩数、ワークアウト、記録した気分を確認し、それぞれの前後数分の録音を残します。健康データはペアリングしたiPhoneの「ヘルスケア」に保存されたままです。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你可以在 Apple Watch 上用 Persona 查看健康摘要，例如步数、锻炼和睡眠。开启滚动录音后，Persona 会查看心率、心率变异性（HRV）、步数、锻炼和心境记录，以保留这些信号前后几分钟的录音。健康记录仍保留在已配对 iPhone 上的 Apple 健康中。"
+          }
+        }
+      }
+    },
+    "NSHealthUpdateUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona saves health samples you confirm on Apple Watch to Apple Health on your paired iPhone. When you turn on sync, water and protein records are written there too."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PersonaはApple Watchで確認した健康データを、ペアリングしたiPhoneの「ヘルスケア」に保存します。同期をオンにすると、水分とたんぱく質の記録も「ヘルスケア」に保存されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你在 Apple Watch 上确认的健康数据会由 Persona 保存到已配对 iPhone 的 Apple 健康。开启同步后，饮水和蛋白质记录也会写入 Apple 健康。"
+          }
+        }
+      }
+    },
     "NSMicrophoneUsageDescription": {
       "extractionState": "manual",
       "localizations": {

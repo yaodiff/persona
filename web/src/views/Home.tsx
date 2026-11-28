@@ -8,6 +8,8 @@ import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
 import { interactionKicker } from "../lib/row-line";
 import { answerLines, type Resolution } from "../lib/answered";
+import { approvalImpact } from "../lib/approval-impact";
+import { useApprovalConfirmation } from "../lib/approval-confirmation";
 import { quickAnswers, withHeld, type HeldRow, type QuickChoice } from "../lib/quick-answers";
 import { cardTapKey } from "../lib/card-tap-key";
 import { currentViewId, TapGuardSurface, useTapGuard, useTapGuardView } from "../lib/tap-guard";
@@ -65,6 +67,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // stamp the opened overview before its first rows are read: a row arriving later is judged against the open-grace
   useTapGuardView(overviewTapSurface, currentViewId());
   // with several assistants, the current one's computers, cards, agents and tasks (docs/assistant/managers.md "Clients")
+  const checkApprovals = useApprovalConfirmation();
   const machines = useScopedMachines();
   const scopedCards = useScopedInteractions();
   // the cards that are the user's: one a task's supervisor holds is its until it passes it up (lib/supervisor-held.ts),
@@ -121,6 +124,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // it folds away: the next row does not slide under the pointer and take a second click meant for this one.
   const [held, setHeld] = useState<HeldRow[]>([]);
   const answer = async (ix: Interaction, index: number, before: string | undefined, c: QuickChoice) => {
+    if (!quickAnswers(ix)?.some(choice => choice.key === c.key)) return navigate(requestRoute(ix));
     const phase = (p: HeldRow["phase"]) => setHeld((h) => h.map((x) => (x.ix.id === ix.id ? { ...x, phase: p } : x)));
     setHeld((h) => [...h.filter((x) => x.ix.id !== ix.id), { ix, index, before, phase: "sending", pick: c.key, body: c.body }]);
     if (!(await resolve(ix, c.body))) return setHeld((h) => h.filter((x) => x.ix.id !== ix.id)); // it said why (toast)
@@ -206,7 +210,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                   detail={(tool && ask && ask !== tool ? t("home.permission_detail", { tool, what: ask }) : ask) || undefined}
                   pill={!done && <Pill>{interactionKicker(ix)}</Pill>}
                   entry={cardState(ix.id)}
-                  actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
+                  actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} review={checkApprovals && !!approvalImpact(ix)} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
                 />
               </div>
             </Collapse>
@@ -618,12 +622,15 @@ export function resetOverviewTapGuardForTest(): void {
 /** A row's one-tap answers (lib/quick-answers.ts), under its words; the one being sent spins, the others wait. An answer
  *  on its way from anywhere (this row, the chat's card, a notification) holds them all too, also after leaving Overview
  *  and coming back, and the row says which one, as the chat's card does (#2793). */
-function QuickAnswers({ ix, choices, sending, onPick }: { ix: Interaction; choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
+function QuickAnswers({ ix, review, choices, sending, onPick }: { ix: Interaction; review: boolean; choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
   const { pending, line } = usePendingLine(ix);
   const { ref } = useTapGuard(overviewTapSurface, `${ix.id}${cardTapKey(ix)}`, currentViewId(), "button");
   return (
     <div ref={ref} className="flex flex-wrap gap-1.5 px-3 pb-2 pl-10.5">
       {line && <p data-row-pending role="status" className="basis-full truncate text-[12px] text-ink-2">{line}</p>}
+      {review && (
+        <Button tone="primary" disabled={sending !== undefined || pending} onClick={() => navigate(requestRoute(ix))}>{t("approval-impact.review")}</Button>
+      )}
       {choices.map((c) => {
         const shown = optionDisplay(c.label);
         return (

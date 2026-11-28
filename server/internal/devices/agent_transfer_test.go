@@ -318,6 +318,7 @@ func TestAgentTransferRefusals(t *testing.T) {
 		code  string
 		says  string
 		audit bool
+		kind  string
 	}{
 		{name: "unknown computer", t: AgentTransfer{From: "a", To: "nope", Path: "/x"}, code: "unknown_machine", says: "nope"},
 		{name: "offline target", setup: func(_ *agentSource, _ *agentTarget, _ *Devices, _, b *Machine, cutB func()) {
@@ -327,23 +328,26 @@ func TestAgentTransferRefusals(t *testing.T) {
 		{name: "work computer", trust: "work", code: "work", says: "Desktop is a work computer", audit: true},
 		{name: "old source", setup: func(src *agentSource, _ *agentTarget, _ *Devices, _, _ *Machine, _ func()) { src.old = true },
 			code: proto.CodeNodeOutdated, says: "Laptop", audit: true},
+		{name: "unknown pack kind", setup: func(src *agentSource, _ *agentTarget, _ *Devices, _, _ *Machine, _ func()) {
+			src.pack.Kind = "unknown"
+		}, code: "invalid", says: "form this manager does not know", audit: true},
 		{name: "old target", setup: func(_ *agentSource, dst *agentTarget, _ *Devices, _, _ *Machine, _ func()) { dst.noSHA = true },
-			code: proto.CodeNodeOutdated, says: "Desktop", audit: true},
+			code: proto.CodeNodeOutdated, says: "Desktop", audit: true, kind: proto.FilePackFile},
 		{name: "credential on the source", setup: func(src *agentSource, _ *agentTarget, _ *Devices, _, _ *Machine, _ func()) {
 			src.packErr = &rpc.Error{Code: proto.CodeTransferSecret, Message: "~/.env looks like a credential"}
 		}, code: proto.CodeTransferSecret, says: "Laptop: ~/.env looks like a credential", audit: true},
 		{name: "credential by name (an older guard)", setup: func(src *agentSource, _ *agentTarget, _ *Devices, _, _ *Machine, _ func()) {
 			src.pack.Name, src.pack.Path = "hub.json", "/home/me/backup/hub.json"
-		}, code: proto.CodeTransferSecret, audit: true},
+		}, code: proto.CodeTransferSecret, audit: true, kind: proto.FilePackFile},
 		{name: "too large", setup: func(src *agentSource, _ *agentTarget, _ *Devices, _, _ *Machine, _ func()) {
 			src.pack.Size = proto.MaxAgentTransferBytes + 1
-		}, code: proto.CodeTooLarge, audit: true},
+		}, code: proto.CodeTooLarge, audit: true, kind: proto.FilePackFile},
 		{name: "outside the target's home", setup: func(_ *agentSource, dst *agentTarget, _ *Devices, _, _ *Machine, _ func()) {
 			dst.refuse = &rpc.Error{Code: proto.CodeReadOnly, Message: "/etc is read-only from the phone (only folders in the home are writable)"}
-		}, code: proto.CodeReadOnly, says: "Desktop: /etc", audit: true},
+		}, code: proto.CodeReadOnly, says: "Desktop: /etc", audit: true, kind: proto.FilePackFile},
 		{name: "source bytes differ from its hash", setup: func(src *agentSource, _ *agentTarget, _ *Devices, _, _ *Machine, _ func()) {
 			src.pack.SHA256 = hexSHA([]byte("something else"))
-		}, code: proto.CodeChecksumMismatch, audit: true},
+		}, code: proto.CodeChecksumMismatch, audit: true, kind: proto.FilePackFile},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -373,6 +377,9 @@ func TestAgentTransferRefusals(t *testing.T) {
 			}
 			if len(rows) != 1 || rows[0].State != proto.TransferFailed || rows[0].Code != c.code || rows[0].Error == "" {
 				t.Fatalf("audit %+v", rows)
+			}
+			if rows[0].Kind != c.kind {
+				t.Fatalf("audit kind %q, want %q", rows[0].Kind, c.kind)
 			}
 		})
 	}

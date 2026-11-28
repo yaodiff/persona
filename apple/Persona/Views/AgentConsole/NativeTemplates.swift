@@ -19,18 +19,16 @@ nonisolated struct PersonaTemplate: Equatable, Sendable {
     var hasNavigation = false
     var hasExtensions = false
     var hasSettings = false
+    private let isBuiltIn: Bool
 
     var isDefault: Bool { id == "default" }
 
     static let `default` = PersonaTemplate(
         id: "default",
-        name: ["en": "Default", "zh-Hans": "默认", "ja": "デフォルト"],
-        description: [
-            "en": "Persona as it comes. Restores every native Agent console choice.",
-            "zh-Hans": "Persona 原本的样子，恢复所有原生 Agent 控制台选项。",
-            "ja": "Persona の標準の状態に戻し、Agent コンソールの選択をすべて解除します。",
-        ],
-        browser: Browser(phoneNav: "switch", mainChat: "full", agentsView: "full", settingsView: "full", sidebarView: "full")
+        name: [:],
+        description: [:],
+        browser: Browser(phoneNav: "switch", mainChat: "full", agentsView: "full", settingsView: "full", sidebarView: "full"),
+        isBuiltIn: true
     )
 
     func localized(_ values: [String: String], language: String = Locale.preferredLanguages.first ?? "en") -> String {
@@ -38,8 +36,13 @@ nonisolated struct PersonaTemplate: Equatable, Sendable {
         return values[lang] ?? values["en"] ?? values.values.first ?? ""
     }
 
-    var title: String { localized(name) }
-    var detail: String { localized(description) }
+    var title: String {
+        isBuiltIn ? String(localized: "Default") : localized(name)
+    }
+
+    var detail: String {
+        isBuiltIn ? String(localized: "Persona as it comes. Restores every native Agent console choice.") : localized(description)
+    }
 
     enum ParseError: Error, Equatable, LocalizedError {
         case empty, invalidJSON, invalidBase64, noTemplateParameter, notObject, version, id, name, unknownPart(String)
@@ -118,7 +121,8 @@ nonisolated struct PersonaTemplate: Equatable, Sendable {
         }
         return PersonaTemplate(
             id: id, name: name, description: try localized(raw["description"]) ?? [:], browser: browser,
-            hasNavigation: raw["navigation"] != nil, hasExtensions: raw["extensions"] != nil, hasSettings: raw["settings"] != nil
+            hasNavigation: raw["navigation"] != nil, hasExtensions: raw["extensions"] != nil, hasSettings: raw["settings"] != nil,
+            isBuiltIn: false
         )
     }
 
@@ -182,7 +186,7 @@ nonisolated struct NativeTemplateItem: Identifiable, Equatable, Sendable {
                             String(localized: "Main chat, Agents and Settings. Running and external conversations are together in Agents.")))
         }
         if b?.mainChat == "plain" {
-            out.append(item("chat", String(localized: "Main chat"), String(localized: "Everything"), String(localized: "Questions, replies and work needing you"), false))
+            out.append(item("chat", String(localized: "Main Chat"), String(localized: "Everything"), String(localized: "Questions, replies and work needing you"), false))
         }
         if b?.agentsView == "active" {
             out.append(item("agents", String(localized: "Agents"), String(localized: "Everything"), String(localized: "Running agents by computer"), false))

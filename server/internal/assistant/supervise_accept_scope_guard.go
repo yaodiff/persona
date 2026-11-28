@@ -193,7 +193,7 @@ func (s *Service) acceptGuardUncoveredScopes(ctx context.Context, t Todo, note, 
 	return uncovered
 }
 
-// acceptScopeGuardRefusal formats the refusal error naming the uncovered scope(s) and the three valid exits.
+// acceptScopeGuardRefusal formats the refusal error naming the uncovered scope(s) and the valid exits.
 func acceptScopeGuardRefusal(uncovered []string) string {
 	shown := uncovered
 	extra := 0
@@ -210,7 +210,6 @@ func acceptScopeGuardRefusal(uncovered []string) string {
 	}
 	return fmt.Sprintf("bare accepted refused: brief scope not covered (%s). "+
 		"Re-review with verdict needs_user (why_owner, reason, recommend, options, cost_of_waiting), "+
-		"or accepted with user_check: true (the owner verifies before it leaves Needs you), "+
 		"or hand out the uncovered scope as a linked follow-up to-do (part_of / after) and then accept. "+
 		"A question asked only in chat text never reaches Needs you.", list)
 }

@@ -61,10 +61,10 @@
   "todos_v2_fold_children_label": "Fold non-urgent child tasks under top-level goals",
   "todos_v2_fold_children_hint": "Keep routine subtasks tucked under their parent goal unless they need your attention.",
   "integrations_v2_title": "Unified Integrations & Extensions",
-  "integrations_v2_hint": "Try the unified experimental Integrations & Extensions experience as new capabilities roll out behind this switch (tracked in #14802).",
+  "integrations_v2_hint": "On by default. Manage connectors, channels, inbox sources, and extensions in one place.",
   "integrations_v2_scope": "This assistant, across your devices.",
   "integrations_v2_activation": "Takes effect immediately on the next view or request.",
-  "integrations_v2_rollback": "Turn this off at any time to restore the standard Connectors, Channels, Inbox Sources, and Extensions views and routing with zero data loss.",
+  "integrations_v2_rollback": "Turn this off anytime to restore the separate Connectors, Channels, Inbox Sources, and Extensions pages and the previous channel routing. Your data is kept.",
   "integrations_v2_saved": "Saved. Changes take effect immediately on the next view or request.",
   "integrations_v2_unsupported": "Update this assistant to change this setting."
 }

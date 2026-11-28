@@ -40,6 +40,7 @@ func TestChannelDetailTargetOverride(t *testing.T) {
 			}, nil
 		})
 		s := newTestService(t, f)
+		setIntegrationsV2(t, s, false)
 		body := getDetailJSON(t, s, "topicchat")
 		ov, _ := body["target_override"].(map[string]any)
 		if ov == nil || ov["mode"] != channel.TargetOverrideTopics {
@@ -63,6 +64,7 @@ func TestChannelDetailTargetOverride(t *testing.T) {
 			}, nil
 		})
 		s := newTestService(t, f)
+		setIntegrationsV2(t, s, false)
 		body := getDetailJSON(t, s, "topicchat")
 		if _, exists := body["target_override"]; exists {
 			t.Fatalf("expected target_override to be omitted when inactive, got %#v", body["target_override"])
@@ -88,6 +90,7 @@ func TestChannelDetailTargetOverride(t *testing.T) {
 			}, nil
 		})
 		s := newTestService(t, f)
+		setIntegrationsV2(t, s, false)
 
 		threaded := getDetailJSON(t, s, "threadchat")
 		ov, _ := threaded["target_override"].(map[string]any)

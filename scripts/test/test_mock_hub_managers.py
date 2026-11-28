@@ -101,13 +101,16 @@ class MockHubManagersTests(unittest.TestCase):
         def put(path, **fields):
             return self.call("PUT", path, json.dumps(fields).encode(), manager=manager)
 
-        self.assertIs(self.call("GET", profile, manager=manager)[1]["integrations_v2"], False)
+        self.assertIs(self.call("GET", profile, manager=manager)[1]["integrations_v2"], True)
+        self.assertEqual(put(profile, integrations_v2=False, expected_integrations_v2=False)[0], 409)
         with ThreadPoolExecutor(max_workers=2) as pool:
-            writers = [pool.submit(put, profile, integrations_v2=True, expected_integrations_v2=False) for _ in range(2)]
+            writers = [pool.submit(put, profile, integrations_v2=False, expected_integrations_v2=True) for _ in range(2)]
         replies = dict(writer.result() for writer in writers)
-        self.assertIs(replies[200]["integrations_v2"], True)
+        self.assertIs(replies[200]["integrations_v2"], False)
         self.assertEqual(replies[409]["code"], "configuration_conflict")
-        self.assertIs(self.call("GET", profile, manager=other)[1]["integrations_v2"], False)
+        self.assertIs(self.call("GET", profile, manager=other)[1]["integrations_v2"], True)
+        self.assertIs(put(profile, timezone="UTC")[1]["integrations_v2"], False)
+        self.assertEqual(put(profile, integrations_v2=True, expected_integrations_v2=False)[0], 200)
 
         status, detail = put(channel, thread_mode="per_group_and_topic", thread_idle_hours=24)
         self.assertEqual(status, 200)

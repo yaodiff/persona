@@ -205,8 +205,9 @@ func (n *Node) ensureRepoMirror(ctx context.Context, req repository.MirrorEnsure
 		if m.flights == nil {
 			m.flights = map[string]*repoMirrorFlight{}
 		}
-		// The flight checks the mirror under its file lock before choosing the fetch budget.
-		flightCtx, cancel := context.WithTimeout(context.Background(), m.timeout(true))
+		// Bound the whole shared flight, including time queued for network Git.
+		// Individual commands get their cold or warm budgets after admission.
+		flightCtx, cancel := context.WithTimeout(context.Background(), repository.MirrorColdFetchTimeout)
 		f := &repoMirrorFlight{
 			done:    make(chan struct{}),
 			cancel:  cancel,
@@ -302,28 +303,24 @@ func (n *Node) runRepoMirrorEnsure(ctx context.Context, req repository.MirrorEns
 		}, nil
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, n.repoMirrors.timeout(!exists))
-	defer cancel()
-	if hook := n.repoMirrors.beforeFetch; hook != nil {
-		if err := hook(fetchCtx, req.RepoID); err != nil {
-			return repository.MirrorInfo{}, err
-		}
-	}
-
+	timeout := n.repoMirrors.timeout(!exists)
 	if !exists {
 		if err := os.RemoveAll(mirrorDir); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return repository.MirrorInfo{}, err
 		}
-		if err := n.initRepoMirror(fetchCtx, root, mirrorDir, hooksDir, req.CloneURL); err != nil {
+		if err := n.initRepoMirror(ctx, req, timeout, root, mirrorDir, hooksDir); err != nil {
 			return repository.MirrorInfo{}, err
 		}
 	} else {
-		if err := n.fetchRepoMirror(fetchCtx, mirrorDir, hooksDir, req.CloneURL); err != nil {
+		if err := n.fetchRepoMirror(ctx, req, timeout, mirrorDir, hooksDir); err != nil {
 			return repository.MirrorInfo{}, err
 		}
 	}
 
 	defaultRef, headCommit := inspectRepoMirrorHead(ctx, mirrorDir)
+	if err := ctx.Err(); err != nil {
+		return repository.MirrorInfo{}, err
+	}
 	syncedAt := n.repoMirrors.clock()
 	nextMeta := repoMirrorMeta{
 		SchemaVersion: 1,
@@ -351,7 +348,7 @@ func (n *Node) runRepoMirrorEnsure(ctx context.Context, req repository.MirrorEns
 	}, nil
 }
 
-func (n *Node) initRepoMirror(ctx context.Context, root, mirrorDir, hooksDir, cloneURL string) error {
+func (n *Node) initRepoMirror(ctx context.Context, req repository.MirrorEnsureRequest, timeout time.Duration, root, mirrorDir, hooksDir string) error {
 	var rnd [8]byte
 	_, _ = rand.Read(rnd[:])
 	staging := filepath.Join(root, ".staging-"+hex.EncodeToString(rnd[:])+".git")
@@ -365,7 +362,7 @@ func (n *Node) initRepoMirror(ctx context.Context, root, mirrorDir, hooksDir, cl
 		}
 	}()
 
-	defaultRef, advertised, err := lsRemoteDefaultHead(ctx, staging, hooksDir, cloneURL)
+	defaultRef, advertised, err := n.lsRemoteDefaultHead(ctx, req, timeout, staging, hooksDir)
 	if err != nil {
 		return fmt.Errorf("mirror source unavailable: %w", err)
 	}
@@ -373,20 +370,23 @@ func (n *Node) initRepoMirror(ctx context.Context, root, mirrorDir, hooksDir, cl
 	if len(advertised) == 64 {
 		objectFormat = "sha256"
 	}
-	if _, err := runMirrorGit(ctx, staging, hooksDir, "init", "--bare", "--object-format="+objectFormat, "."); err != nil {
+	if _, err := runLocalMirrorGit(ctx, staging, hooksDir, "init", "--bare", "--object-format="+objectFormat, "."); err != nil {
 		return errors.New("mirror init failed")
 	}
-	if _, err := runMirrorGit(ctx, staging, hooksDir, "config", "remote.origin.url", cloneURL); err != nil {
+	if _, err := runLocalMirrorGit(ctx, staging, hooksDir, "config", "remote.origin.url", req.CloneURL); err != nil {
 		return errors.New("mirror config failed")
 	}
-	if _, err := runMirrorGit(ctx, staging, hooksDir, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"); err != nil {
+	if _, err := runLocalMirrorGit(ctx, staging, hooksDir, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"); err != nil {
 		return errors.New("mirror config failed")
 	}
-	if _, err := runMirrorGit(ctx, staging, hooksDir, "fetch", "--prune", "--tags", "--no-recurse-submodules", "origin"); err != nil {
-		return errors.New("mirror fetch failed")
+	if _, err := n.runMirrorSourceGit(ctx, req, timeout, staging, hooksDir, "fetch", "--prune", "--tags", "--no-recurse-submodules", "origin"); err != nil {
+		return err
 	}
 	if defaultRef != "" {
-		_, _ = runMirrorGit(ctx, staging, hooksDir, "symbolic-ref", "HEAD", defaultRef)
+		_, _ = runLocalMirrorGit(ctx, staging, hooksDir, "symbolic-ref", "HEAD", defaultRef)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := os.Rename(staging, mirrorDir); err != nil {
 		return err
@@ -396,35 +396,39 @@ func (n *Node) initRepoMirror(ctx context.Context, root, mirrorDir, hooksDir, cl
 	return nil
 }
 
-func (n *Node) fetchRepoMirror(ctx context.Context, mirrorDir, hooksDir, cloneURL string) error {
+func (n *Node) fetchRepoMirror(ctx context.Context, req repository.MirrorEnsureRequest, timeout time.Duration, mirrorDir, hooksDir string) error {
 	for _, sub := range []string{filepath.Join(mirrorDir, "config"), filepath.Join(mirrorDir, "objects"), filepath.Join(mirrorDir, "refs")} {
 		if workspaceNoLinks(sub) != nil {
 			return errors.New("mirror layout invalid")
 		}
 	}
-	if _, err := runMirrorGit(ctx, mirrorDir, hooksDir, "config", "remote.origin.url", cloneURL); err != nil {
+	if _, err := runLocalMirrorGit(ctx, mirrorDir, hooksDir, "config", "remote.origin.url", req.CloneURL); err != nil {
 		return errors.New("mirror config failed")
 	}
-	if _, err := runMirrorGit(ctx, mirrorDir, hooksDir, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"); err != nil {
+	if _, err := runLocalMirrorGit(ctx, mirrorDir, hooksDir, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"); err != nil {
 		return errors.New("mirror config failed")
 	}
-	if _, err := runMirrorGit(ctx, mirrorDir, hooksDir, "fetch", "--prune", "--tags", "--no-recurse-submodules", "origin"); err != nil {
-		return errors.New("mirror fetch failed")
+	if _, err := n.runMirrorSourceGit(ctx, req, timeout, mirrorDir, hooksDir, "fetch", "--prune", "--tags", "--no-recurse-submodules", "origin"); err != nil {
+		return err
 	}
 	// If HEAD no longer resolves to a valid commit (for example the upstream default branch changed),
 	// re-discover HEAD from the remote.
 	if _, err := workspaceReadGit(ctx, mirrorDir, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
-		if defaultRef, _, lsErr := lsRemoteDefaultHead(ctx, mirrorDir, hooksDir, cloneURL); lsErr == nil && defaultRef != "" {
-			_, _ = runMirrorGit(ctx, mirrorDir, hooksDir, "symbolic-ref", "HEAD", defaultRef)
+		defaultRef, _, lsErr := n.lsRemoteDefaultHead(ctx, req, timeout, mirrorDir, hooksDir)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if lsErr == nil && defaultRef != "" {
+			_, _ = runLocalMirrorGit(ctx, mirrorDir, hooksDir, "symbolic-ref", "HEAD", defaultRef)
 		}
 	}
 	return nil
 }
 
-func lsRemoteDefaultHead(ctx context.Context, dir, hooksDir, cloneURL string) (defaultRef, advertised string, err error) {
-	listing, err := runMirrorGit(ctx, dir, hooksDir, "ls-remote", "--symref", "--", cloneURL, "HEAD")
+func (n *Node) lsRemoteDefaultHead(ctx context.Context, req repository.MirrorEnsureRequest, timeout time.Duration, dir, hooksDir string) (defaultRef, advertised string, err error) {
+	listing, err := n.runMirrorSourceGit(ctx, req, timeout, dir, hooksDir, "ls-remote", "--symref", "--", req.CloneURL, "HEAD")
 	if err != nil {
-		return "", "", errors.New("ls-remote failed")
+		return "", "", err
 	}
 	for _, line := range strings.Split(listing, "\n") {
 		fields := strings.Fields(line)
@@ -438,11 +442,38 @@ func lsRemoteDefaultHead(ctx context.Context, dir, hooksDir, cloneURL string) (d
 	return defaultRef, advertised, nil
 }
 
+func (n *Node) runMirrorSourceGit(ctx context.Context, req repository.MirrorEnsureRequest, timeout time.Duration, dir, hooksDir, verb string, args ...string) (string, error) {
+	return n.remoteFetches.run(ctx, req.CloneURL, func(ctx context.Context) (string, error) {
+		cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if hook := n.repoMirrors.beforeFetch; hook != nil && verb == "fetch" {
+			if err := hook(cmdCtx, req.RepoID); err != nil {
+				return "", err
+			}
+		}
+		out, err := runMirrorGit(cmdCtx, dir, hooksDir, append([]string{verb}, args...)...)
+		if err != nil {
+			if ctxErr := cmdCtx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+			return "", fmt.Errorf("mirror %s failed", verb)
+		}
+		return out, nil
+	})
+}
+
+func runLocalMirrorGit(ctx context.Context, dir, hooksDir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, taskworkspace.GitTimeout)
+	defer cancel()
+	return runMirrorGit(ctx, dir, hooksDir, args...)
+}
+
 func runMirrorGit(ctx context.Context, dir, hooksDir string, args ...string) (string, error) {
 	base := []string{"-C", dir, "--no-pager", "-c", "core.hooksPath=" + hooksDir, "-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "gc.auto=0"}
 	cmd := exec.CommandContext(ctx, "git", append(base, args...)...)
 	cmd.Env = taskworkspace.GitEnv(os.Environ())
 	cmd.WaitDelay = time.Second
+	stopGitTransportOnCancel(cmd, args)
 	var out workspaceOutput
 	cmd.Stdout = &out
 	cmd.Stderr = io.Discard

@@ -96,6 +96,18 @@ const { LOCAL_SHORTCUTS, SHORTCUTS } = await import("../../lib/shortcuts");
 const { TERMINAL_LABS_ID } = await import("../../lib/labs-terminal");
 
 describe("the settings search's index", () => {
+  it.each(languages)("finds both Advanced pages by name and task in $lang", ({ lang, t, searchSettings }) => {
+    const tasks = { en: ["pairing", "manage assistants"], "zh-Hans": ["设备配对", "助手管理"], ja: ["ペアリング", "アシスタントの管理"] };
+    const [pairing, assistants] = tasks[lang as keyof typeof tasks];
+    expect(searchSettings(t("settings-nav.search_advanced_appearance")).tabs).toContain("advanced");
+    if (lang === "en") expect(searchSettings("online").tabs).toContain("managers");
+    for (const [tab, task] of [["devices", pairing], ["managers", assistants]]) {
+      for (const query of [t(`settings-nav.tab_${tab}`), task]) {
+        expect(searchSettings(query).tabs).toContain(tab);
+      }
+    }
+  });
+
   it("reads the pages' row labels (the scan finds what it should)", () => {
     expect(labels).toEqual(expect.arrayContaining([
       "settings-assistantsettings.timezone", "settings-triagesettings.auto_continue", "settings-notifications.quiet",

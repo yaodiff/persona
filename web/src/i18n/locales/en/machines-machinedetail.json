@@ -112,7 +112,7 @@
   "machine_switch_link_why_unavailable": "This computer can't switch to Persona Link right now.",
   "hosted_assistants_one": "Hosted assistant",
   "hosted_assistants_other": "Hosted assistants",
-  "hosted_assistants_settings": "Settings › Hub › Assistants",
+  "hosted_assistants_settings": "Settings › Advanced › Assistants",
   "manager_pending_restart_hint": "Binary updated with Redeploy. This assistant will restart automatically once idle.",
   "manager_older_version": "Older version",
   "manager_version_lag_hint": "This assistant is still running an older version than this computer's node. Restart its manager service to apply.",

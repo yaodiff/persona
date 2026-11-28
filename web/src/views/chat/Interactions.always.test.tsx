@@ -50,10 +50,10 @@ describe("Always allow on a permission card", () => {
   });
 
   it("is offered where the manager keeps it, and as before where it does not say", () => {
-    show({ ...card, always_honored: true });
+    show({ ...card, tool_name: "Read", tool_input: { file_path: "/project/notes.txt" }, always_honored: true });
     expect(labels()).toContain(t("chat-interactions.always_allow"));
     act(() => root.render(null));
-    show({ ...card, tool_name: "Bash", tool_input: { command: "npm test" } });
+    show({ ...card, tool_name: "Bash", tool_input: { command: "git status" } });
     expect(labels()).toContain(t("chat-interactions.always_allow"));
     expect(host.textContent).toContain(t("chat-interactions.permission_title", { tool: "Bash" }));
   });

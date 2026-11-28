@@ -112,6 +112,8 @@ export interface TodoActiveBlocker {
   id: string;
   kind: string;
   target_ref: string;
+  /** Optional server-resolved human-readable title for internal todo blockers. */
+  target_title?: string;
   state: string;
   attempts?: number;
 }

@@ -3,9 +3,9 @@
 A connector is Persona's standard way to connect a data source: GitHub, Messages (iMessage), Telegram, Lark and mail each have one. The hub's pipelines
 (assistant tools, write gates, Inbox, knowledge base, status in Settings › Connectors, live events) attach automatically according to what the connector provides; adding a source does not require changing those pipelines.
 
-In web Settings, enabling `integrations_v2` under Labs groups a connector’s account, channel and Inbox controls
-on one **Integrations & Extensions** detail page. Turning it off returns to the separate pages using the same saved
-connection. See [web Labs](../web/web.md#labs) and [channel settings](channels.md#7-ui).
+By default, web Settings groups a connector’s account, channel and Inbox controls on one **Integrations & Extensions**
+detail page. Turn off **Unified Integrations & Extensions** in Labs to go back to the separate pages with the same
+saved connection. See [web Labs](../web/web.md#labs) and [channel settings](channels.md#7-ui).
 
 This document has three parts:
 
@@ -243,8 +243,8 @@ with who did it (#5281); never a credential or a typed value. The actions and th
 3. Writes must be `Actions`; the `Describe` card must say who will see the result.
 4. `Status` answers only from memory (queried on every tool listing); errors get a one-sentence `Error`, and self-service fixes get a `Guide`.
 5. No body text, phone numbers or tokens in logs/errors.
-6. For external services, embed `netproxy.Egress` (`netproxy/egress.go`, also named `connector.Egress`) in config to get a `proxy` key (`http://[username:password@]host:port`, empty means direct).
-   Build every HTTP client with `Egress.HTTPClient`: use the proxy when configured, direct otherwise; invalid config errors rather than silently connecting directly. This is how `github.proxy` works (#1106);
+6. For external services, embed `netproxy.Egress` (`netproxy/egress.go`, also named `connector.Egress`) in config to get a `proxy` key (`http://[username:password@]host:port`; empty follows the process's proxy environment, direct when it names no proxy).
+   Build every HTTP client with `Egress.HTTPClient`: use the proxy when configured, the process's `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` otherwise; invalid config errors rather than silently using the environment or connecting directly. This is how `github.proxy` works (#1106);
    proxy-address parsing lives in `netproxy`, also used by `google.proxy`. Not yet wired: Telegram (MTProto, not HTTP), subprocess / third-party connectors (proxy must be passed to the program), see #1106.
 
 > **Process-extension connectors live outside the hub**: for example, a personal WeChat connector is a client for an external API service, delivered as an extension package (`.tar.gz` plus sha256) and installed from the extension marketplace.

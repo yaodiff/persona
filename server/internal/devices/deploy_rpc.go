@@ -12,6 +12,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
@@ -552,13 +553,12 @@ func (m *Machine) transferAndCommitNodeUpdate(ctx context.Context, bin string, r
 	if peer == nil {
 		return nodeCommitOutcome{}, errOffline
 	}
-	var begin struct {
-		ID     string `json:"id"`
-		Offset int64  `json:"offset"`
-	}
-	if err := peer.Call(ctx, "node.update.begin", map[string]any{
-		"size": stat.Size(), "sha256": hex.EncodeToString(hash.Sum(nil)), "version": record.Target,
-	}, &begin); err != nil {
+	begin, err := buswire.Call(ctx, peer, devicewire.NodeUpdateBeginMethod, proto.NodeUpdateBeginParams{
+		Size:    stat.Size(),
+		SHA256:  hex.EncodeToString(hash.Sum(nil)),
+		Version: record.Target,
+	})
+	if err != nil {
 		return nodeCommitOutcome{}, explain(i18n.Err("devices-deploy.prepare_failed", i18n.Args{"err": err.Error()}), err)
 	}
 	if begin.ID == "" {
@@ -569,7 +569,7 @@ func (m *Machine) transferAndCommitNodeUpdate(ctx context.Context, bin string, r
 		if !committed {
 			abort, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
-			_ = peer.Call(abort, "node.update.abort", map[string]any{"id": begin.ID}, nil)
+			_, _ = buswire.Call(abort, peer, devicewire.NodeUpdateAbortMethod, proto.NodeUpdateAbortParams{ID: begin.ID})
 		}
 	}()
 	if begin.Offset < 0 || begin.Offset > stat.Size() {
@@ -590,11 +590,11 @@ func (m *Machine) transferAndCommitNodeUpdate(ctx context.Context, bin string, r
 		if err != nil {
 			return nodeCommitOutcome{}, explain(i18n.Err("devices-deploy.read_package_failed", i18n.Args{"err": err.Error()}), err)
 		}
-		var chunk struct {
-			Offset int64 `json:"offset"`
-		}
 		began := time.Now()
-		if err := peer.Call(ctx, "node.update.chunk", map[string]any{"id": begin.ID, "offset": offset, "data": buf[:n]}, &chunk); err != nil {
+		chunk, err := buswire.Call(ctx, peer, devicewire.NodeUpdateChunkMethod, proto.NodeUpdateChunkParams{
+			ID: begin.ID, Offset: offset, Data: buf[:n],
+		})
+		if err != nil {
 			return nodeCommitOutcome{}, explain(i18n.Err("devices-deploy.transfer_failed", i18n.Args{"err": err.Error()}), err)
 		}
 		offset += int64(n)
@@ -620,7 +620,10 @@ func (m *Machine) transferAndCommitNodeUpdate(ctx context.Context, bin string, r
 	watch := newNodeDeployWatch(begin.ID, record.Target)
 	clearWatch := m.setDeployWatch(watch)
 	commit, cancelCommit := context.WithTimeout(ctx, deployCommitWait())
-	err = peer.Call(commit, "node.update.commit", map[string]any{"id": begin.ID, "handoff_grace_seconds": handoffGraceSeconds}, nil)
+	// An explicit zero grace keeps the resident waiting for natural idle.
+	_, err = buswire.Call(commit, peer, devicewire.NodeUpdateCommitMethod, proto.NodeUpdateCommitParams{
+		ID: begin.ID, HandoffGraceSeconds: &handoffGraceSeconds,
+	})
 	cancelCommit()
 	commitLost := false
 	if err != nil {
@@ -737,7 +740,8 @@ func (m *Machine) waitNodeDrain(ctx context.Context, record *nodeDeployRecord, w
 func confirmNodeUpdate(ctx context.Context, peer *rpc.Peer, version string) error {
 	confirm, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return peer.Call(confirm, "node.update.confirm", map[string]any{"version": version}, nil)
+	_, err := buswire.Call(confirm, peer, devicewire.NodeUpdateConfirmMethod, proto.NodeUpdateConfirmParams{Version: version})
+	return err
 }
 
 func (m *Machine) confirmNodeDeployment(ctx context.Context, record *nodeDeployRecord, watch *nodeDeployWatch, allowDrainFallback bool) error {

@@ -84,11 +84,11 @@ describe("the overview", () => {
     const a = agent(1, 0, "needs_you");
     const html = render([a], [
       { id: "q", kind: "question", machine_id: "mac", session_id: a.session_id, summary: "先做 A 还是 B？" } as Interaction,
-      { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test" } } as Interaction,
+      { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "git status" } } as Interaction,
       { id: "l", kind: "plan", machine_id: "mac", session_id: a.session_id, plan: "# 计划" } as Interaction,
     ]);
     expect(html).toContain("先做 A 还是 B？");
-    expect(html).toContain("swift test");
+    expect(html).toContain("git status");
     expect(html).toContain("计划已就绪，等待你的批准");
   });
 
@@ -96,12 +96,12 @@ describe("the overview", () => {
     const a = agent(1, 0, "needs_you");
     const buttons = (html: string) => [...html.matchAll(/<button [^>]*>(?:<[^>]+>)*([^<]+)/g)].map((m) => m[1]);
     const html = render([a], [
-      { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test", description: "运行测试" } } as Interaction,
+      { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "git status", description: "运行测试" } } as Interaction,
       { id: "q", kind: "question", machine_id: "mac", session_id: a.session_id, questions: [{ question: "哪种格式？", options: [{ label: "JPEG" }, { label: "PNG" }] }] } as Interaction,
     ]);
     expect(buttons(html)).toEqual(expect.arrayContaining(["允许", "拒绝", "JPEG", "PNG"]));
     // what "Allow" allows, by tool and command, not the agent's description of it
-    expect(html).toContain("Bash：swift test");
+    expect(html).toContain("Bash：git status");
     const plan = render([a], [{ id: "l", kind: "plan", machine_id: "mac", session_id: a.session_id, plan: "# 计划" } as Interaction]);
     expect(buttons(plan)).not.toContain("允许");
     expect(plan).toContain("计划已就绪，等待你的批准");
@@ -579,9 +579,9 @@ describe("a card the task's supervisor holds (lib/supervisor-held.ts)", () => {
 
   it("leaves the agent's other card in Needs you, counted once", () => {
     const a = agent(1, 0, "needs_you");
-    const html = render([a], [screen(a.session_id, { delegating: true }), { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test" } } as Interaction]);
+    const html = render([a], [screen(a.session_id, { delegating: true }), { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "git status" } } as Interaction]);
     expect(needsCount(html)).toBe("1");
-    expect(html).toContain("swift test");
+    expect(html).toContain("git status");
     expect(html).not.toContain("rmdir build");
   });
 
@@ -594,15 +594,16 @@ describe("a card the task's supervisor holds (lib/supervisor-held.ts)", () => {
   });
 });
 
-it("opens an explicitly sessionless request and offers its quick answers", () => {
+it("opens an explicitly sessionless request for review and offers a one-tap denial", () => {
   const html = render([], [{ id: "script-request", machine_id: "mac", session_id: "", kind: "permission", tool_name: "personad_ask", summary: "Publish the draft?" }]);
   expect(html).toContain('href="/requests/script-request"');
-  expect(buttonLabels(html)).toContain("允许");
+  expect(buttonLabels(html)).toEqual(expect.arrayContaining([t("approval-impact.review"), t("chat-interactions.deny")]));
+  expect(buttonLabels(html)).not.toContain(t("chat-interactions.allow"));
   expect(html).not.toContain('href="/s/mac/"');
 });
 
 it("holds a row's answers while an answer to its card is on its way, given here or in its chat, and says which (#2793)", async () => {
-  const card: Interaction = { id: "held-request", machine_id: "mac", session_id: "", kind: "permission", tool_name: "Bash", tool_input: { command: "swift test" } };
+  const card: Interaction = { id: "held-request", machine_id: "mac", session_id: "", kind: "permission", tool_name: "Bash", tool_input: { command: "git status" } };
   // Allow and Deny, each as disabled or not
   const held = (html: string) => (html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? []).filter((b) => ["允许", "拒绝"].includes(b.replace(/<[^>]*>/g, ""))).map((b) => /\sdisabled=""/.test(b));
   // Allow given in the chat (or on this row before Overview was left) while the hub is away: this row is drawn afresh
@@ -617,7 +618,7 @@ it("holds a row's answers while an answer to its card is on its way, given here 
 
 it("lets a card's kicker yield to its title on a phone, its words whole in its tooltip (#11442)", () => {
   const a = agent(1, 0, "needs_you");
-  const html = render([a], [{ id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test" } } as Interaction]);
+  const html = render([a], [{ id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "git status" } } as Interaction]);
   const words = t("todos.kicker_permission");
   const m = new RegExp(`<span title="${words}" class="([^"]*)"><span class="truncate">${words}</span></span>`).exec(html);
   expect(m, "the kicker pill").toBeTruthy();

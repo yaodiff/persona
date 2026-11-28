@@ -62,6 +62,8 @@ type persistedInboxState struct {
 	Seen         []string                            `json:"seen,omitempty"`
 	TopicsSeeded bool                                `json:"topics_seeded,omitempty"`
 	Things       map[string]connectorwire.InboxThing `json:"things,omitempty"`
+	PromiseOwner string                              `json:"promise_owner,omitempty"`
+	PromiseSince map[string]time.Time                `json:"promise_since,omitempty"`
 }
 
 type inboxGroup struct {
@@ -175,13 +177,15 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	}
 	c.inboxMu.Unlock()
 
+	promisesMoved, promiseErr := c.pollOwnerPromises(ctx, auth, c.currentTime())
+
 	visibilityEnabled := c.replyVisibilityEnabled()
 	if !seeded && !visibilityEnabled {
 		// Seed the topic set from the user's own history. Search is bounded just
 		// like the live round; later rounds extend it whenever a user message or
 		// mention is observed.
 		if err := c.seedTopics(ctx, auth.OpenID, start, pageLimit); err != nil {
-			return false, err
+			return promisesMoved, errors.Join(err, promiseErr)
 		}
 		c.inboxMu.Lock()
 		c.inboxState.TopicsSeeded = true
@@ -204,7 +208,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 			Start: start, PageToken: pageToken, Limit: 50,
 		})
 		if err != nil {
-			return false, err
+			return promisesMoved, errors.Join(err, promiseErr)
 		}
 		for _, message := range page.Messages {
 			if t := messageTime(message); !t.IsZero() && t.After(newest) {
@@ -257,7 +261,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 
 	newMessages := c.dedupMessages(found)
 	groups := c.groupMessages(newMessages, auth, topicsBefore)
-	changed := false
+	changed := promisesMoved
 	for _, group := range groups {
 		thing := c.thingForGroup(ctx, group, auth)
 		if thing.Thread == "" {
@@ -295,7 +299,7 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 		return changed, err
 	}
 	c.inboxMu.Unlock()
-	return changed, directErr
+	return changed, errors.Join(directErr, promiseErr)
 }
 
 // sweepDirectChats rotates through recent direct chats' history, back to inboxDirectLookback.
@@ -416,6 +420,12 @@ func (c *Connector) Collect(context.Context) ([]connectorwire.InboxThing, error)
 	out := make([]connectorwire.InboxThing, 0, len(c.inboxThings))
 	if c.inboxCollecting {
 		for _, thing := range c.inboxThings {
+			if thing.OwnerPromise != nil {
+				thing = c.ownerPromiseThingLocked(thing, c.currentTime())
+				if thing.Thread == "" {
+					continue
+				}
+			}
 			if !c.replyThingExcludedLocked(thing) {
 				out = append(out, thing)
 			}
@@ -554,7 +564,8 @@ func (c *Connector) saveInboxStateLocked(ctx context.Context) error {
 		return nil
 	}
 	state := persistedInboxState{Cursor: c.inboxState.Cursor, PageToken: c.inboxState.PageToken, TopicsSeeded: c.inboxState.TopicsSeeded,
-		Things: make(map[string]connectorwire.InboxThing, len(c.inboxThings))}
+		Things:       make(map[string]connectorwire.InboxThing, len(c.inboxThings)),
+		PromiseOwner: c.inboxState.PromiseOwner, PromiseSince: c.inboxState.PromiseSince}
 	for thread, thing := range c.inboxThings {
 		state.Things[thread] = thing
 	}

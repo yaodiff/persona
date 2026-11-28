@@ -1,6 +1,7 @@
 package repositorywire
 
 import (
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"strings"
 	"time"
 )
@@ -13,10 +14,10 @@ const (
 )
 
 // MirrorColdFetchTimeout is the Node's cold build budget.
-const MirrorColdFetchTimeout = 10 * time.Minute
+const MirrorColdFetchTimeout = nodeproto.RepoMirrorColdFetchSeconds * time.Second
 
 // MirrorEnsureTimeout leaves time beyond the cold fetch for the Node to return its result.
-const MirrorEnsureTimeout = MirrorColdFetchTimeout + time.Minute
+const MirrorEnsureTimeout = nodeproto.RepoMirrorEnsureSeconds * time.Second
 
 // Bounds and defaults for mirror TTL fetches and low-frequency periodic auto-sync.
 const (

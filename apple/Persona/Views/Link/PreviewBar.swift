@@ -2,9 +2,9 @@ import SwiftUI
 import UIKit
 import WebKit
 
-// The link card's tools for a machine's dev server (#150, docs/web/preview.md "iPhone"): under a forwarded page, back /
-// forward, where the page is on that computer, a screenshot for the message and picking an element to comment on. The
-// page itself is the pool's web view, as for any link (LinkSheet.swift).
+// The link card's tools for a machine's dev server (#150, docs/web/preview.md "iPhone"): defaults to local loopback port
+// forwarding in a WKWebView (with back/forward, address, screenshot, and element picking) and can switch manually or
+// automatically to the computer's headless browser stream (`PreviewStreamView`) when direct loading cannot show the page.
 
 /// What the page's web view says about where it is (KVO), for the bar.
 @MainActor @Observable
@@ -235,15 +235,21 @@ enum PageShot {
     }
 }
 
-/// A forwarded page in the link card with its bar: the pool's web view, the bar under it, and while an element is picked,
-/// the line to write about it instead of the bar.
+/// A forwarded page in the link card with its bar: defaults to local loopback WKWebView and can switch manually or
+/// automatically to `PreviewStreamView` (headless browser on the computer).
 struct PreviewPage: View {
     @Environment(AppModel.self) private var model
     var url: URL
     var key: SessionKey
     @Binding var title: String
     var forwardedLabel: String? = nil
+    var modeState: PreviewCardModeState
+    var hubHasPreview: Bool = false
+    var streamReloadToken: Int = 0
+    @Binding var streamCopyURL: String?
+    var onSyncDirectURL: ((URL) -> Void)? = nil
     var onRetry: (() -> Void)? = nil
+    var onRetryAfterReprobe: (() -> Void)? = nil
     var onOpenExternal: ((URL) -> Void)? = nil
     var onReprobePort: ((PortForwarder.Key) async -> PortPresence.ReprobeOutcome)? = nil
     var onSelect: (String, String) -> Void
@@ -257,6 +263,9 @@ struct PreviewPage: View {
     @State private var note = ""
     @State private var shooting = false
     @FocusState private var writing: Bool
+    @State private var streamModel: PreviewStreamModel?
+    @State private var streamKeyboardActive = false
+    @State private var checkedStreamCapability = false
 
     /// DEBUG `-showPreviewPicking YES`: the card opens with picking on (screenshots).
     static var startsPicking: Bool {
@@ -267,24 +276,61 @@ struct PreviewPage: View {
         #endif
     }
 
+    private var forwardedKey: PortForwarder.Key? { PortForwarder.shared.key(for: nav.url ?? url) ?? PortForwarder.shared.key(for: url) }
     /// The computer's port the page is forwarded from.
-    private var machinePort: Int? { PortForwarder.shared.key(for: nav.url ?? url)?.port }
+    private var machinePort: Int? { forwardedKey?.port }
+    private var machineName: String { model.machine(key.machineRef)?.title ?? key.machineID }
+    private var isStreaming: Bool { modeState.mode == .stream }
+    private var isStreamOpen: Bool { streamModel?.connection == .open }
 
     var body: some View {
         VStack(spacing: Theme.Space.flush) {
-            WebPageView(
-                url: url,
-                forwardedLabel: forwardedLabel,
-                title: $title,
-                nav: nav,
-                onRetry: onRetry ?? { WebViewPool.shared.reload(url) },
-                onOpenExternal: onOpenExternal ?? { _ in },
-                onReprobePort: onReprobePort,
-                onPick: onSelect
-            )
+            if isStreaming, let stream = streamModel {
+                PreviewStreamView(
+                    stream: stream,
+                    machineName: machineName,
+                    showAutoFallbackNotice: modeState.showedAutoFallbackNotice,
+                    onDismissFallbackNotice: { modeState.dismissFallbackNotice() },
+                    onSwitchToDirect: { modeState.switchToDirectManually() },
+                    keyboardActive: $streamKeyboardActive
+                )
                 .overlay(alignment: .top) {
-                    if picking && picked == nil { banner.transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .top).combined(with: .opacity)) }
+                    if picking && picked == nil {
+                        banner.transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .top).combined(with: .opacity))
+                    }
                 }
+            } else {
+                WebPageView(
+                    url: url,
+                    forwardedLabel: forwardedLabel,
+                    title: $title,
+                    nav: nav,
+                    canFallbackToStream: { error in
+                        PreviewFallbackPolicy.decide(
+                            failure: error.kind,
+                            consecutiveFailures: modeState.consecutiveDirectFailures,
+                            hubHasPreview: hubHasPreview,
+                            streamUnavailable: modeState.streamUnavailable,
+                            userPinnedDirect: modeState.userPinnedDirect
+                        ).canOfferStream
+                    },
+                    onSwitchToStream: { _ = modeState.switchToStreamManually(hubHasPreview: hubHasPreview) },
+                    onDirectFailure: { error in
+                        _ = modeState.handleDirectFailure(error.kind, hubHasPreview: hubHasPreview)
+                    },
+                    onDirectCommitted: { modeState.noteDirectSuccess() },
+                    onRetry: onRetry ?? { WebViewPool.shared.reload(url) },
+                    onRetryAfterReprobe: onRetryAfterReprobe ?? { WebViewPool.shared.reload(url, clearReprobe: false) },
+                    onOpenExternal: onOpenExternal ?? { _ in },
+                    onReprobePort: onReprobePort,
+                    onPick: onSelect
+                )
+                .overlay(alignment: .top) {
+                    if picking && picked == nil {
+                        banner.transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+            }
             Divider()
             if let picked { notePanel(picked) } else { bar }
         }
@@ -292,6 +338,7 @@ struct PreviewPage: View {
         .animation(reduceMotion ? nil : Theme.Motion.state, value: picked)
         // A new document drops the page's listeners: picking ends with it.
         .onChange(of: nav.isLoading) { _, loading in
+            guard !isStreaming else { return }
             if loading {
                 if picking { stopPicking() }
             } else if pickWhenLoaded {
@@ -299,9 +346,123 @@ struct PreviewPage: View {
                 startPicking()
             }
         }
+        .onChange(of: modeState.mode) { _, next in
+            stopPicking()
+            if next == .stream {
+                prepareStreamModel()
+            } else {
+                teardownStreamModel()
+            }
+        }
+        .onChange(of: streamReloadToken) { _, _ in
+            if isStreaming { streamModel?.reload() }
+        }
+        .onChange(of: streamModel?.pageTitle) { _, next in
+            if isStreaming, let next, !next.isEmpty { title = next }
+        }
+        .onChange(of: streamModel?.pageURL) { _, next in
+            if isStreaming {
+                streamCopyURL = (next?.isEmpty == false) ? next : machinePort.map { "http://localhost:\($0)\(streamModel?.currentPath ?? "/")" }
+                let path = streamModel?.currentPath ?? "/"
+                if let synced = Self.directURL(base: url, path: path) {
+                    onSyncDirectURL?(synced)
+                }
+            }
+        }
+        .onChange(of: streamModel?.isPicking) { _, next in
+            if isStreaming, let next { picking = next }
+        }
+        .onChange(of: streamModel?.isShooting) { _, next in
+            if isStreaming, let next { shooting = next }
+        }
         // The pick script is read off the main actor now, so it is there when Pick is tapped.
-        .task { _ = await ElementPicker.pickFunction.value }
-        .onDisappear { picker.stop() }
+        .task {
+            _ = await ElementPicker.pickFunction.value
+            await probeStreamCapabilityIfNeeded()
+        }
+        .onDisappear {
+            picker.stop()
+            teardownStreamModel()
+        }
+    }
+
+    // MARK: Stream lifecycle
+
+    private func prepareStreamModel() {
+        let port = machinePort ?? url.port ?? 0
+        guard port > 0 else { return }
+        let directAddr = PreviewLogic.address(nav.url ?? url, localPort: url.port)
+        let startPath = directAddr.hasPrefix("/") ? directAddr : (url.path.isEmpty ? "/" : url.path)
+        let m = PreviewStreamModel(
+            machine: key.machineID,
+            port: port,
+            path: startPath,
+            deps: .live(group: key.group)
+        )
+        m.onOpenExternal = { extURL in onOpenExternal?(extURL) }
+        m.onPicked = { el in
+            picking = false
+            picked = el
+            writing = true
+        }
+        m.onPickFailed = {
+            picking = false
+            Haptics.error()
+            model.toast = Toast(String(localized: "Couldn't pick that element. Try again."), style: .error)
+        }
+        m.onShot = { image in
+            attach(image)
+        }
+        m.onShotFailed = { _ in
+            shotFailed()
+        }
+        m.onUnavailable = { reason in
+            modeState.noteStreamUnavailable(reason)
+        }
+        streamModel = m
+        streamCopyURL = "http://localhost:\(port)\(startPath)"
+        if let synced = Self.directURL(base: url, path: startPath) {
+            onSyncDirectURL?(synced)
+        }
+    }
+
+    /// Combines the local loopback forward origin (`scheme://host:port`) with a streamed path/query so switching back
+    /// to direct mode preserves the user's current page instead of resetting to `/`.
+    static func directURL(base: URL, path: String) -> URL? {
+        guard var baseParts = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return nil }
+        let normalized = path.hasPrefix("/") ? path : "/" + path
+        guard let targetParts = URLComponents(string: "http://localhost" + normalized) else { return nil }
+        baseParts.percentEncodedPath = targetParts.percentEncodedPath.isEmpty ? "/" : targetParts.percentEncodedPath
+        baseParts.percentEncodedQuery = targetParts.percentEncodedQuery
+        baseParts.percentEncodedFragment = targetParts.percentEncodedFragment
+        return baseParts.url
+    }
+
+    private func teardownStreamModel() {
+        streamKeyboardActive = false
+        streamModel?.stop()
+        streamModel = nil
+        streamCopyURL = nil
+        shooting = false
+    }
+
+    private func probeStreamCapabilityIfNeeded() async {
+        guard hubHasPreview, !checkedStreamCapability, modeState.streamUnavailable == nil else { return }
+        guard let cwd = model.session(key)?.cwd, !cwd.isEmpty,
+              let api = model.api(key.group), !api.config.isDemo else { return }
+        checkedStreamCapability = true
+        do {
+            let res = try await api.previewServers(machine: key.machineID, cwd: cwd)
+            if let browser = res.browser, !browser.isEmpty { return }
+            // Only mark unavailable when the server explicitly returned a payload with no browser installed.
+            if res.browser == nil {
+                modeState.noteStreamUnavailable(.noBrowser)
+            }
+        } catch let e as APIError where e.code == "node_outdated" {
+            modeState.noteStreamUnavailable(.nodeOutdated)
+        } catch {
+            // Network/transient errors do not permanently mark streaming unavailable.
+        }
     }
 
     // MARK: The bar
@@ -320,12 +481,29 @@ struct PreviewPage: View {
 
     /// Back and Forward.
     @ViewBuilder private var moveButtons: some View {
-        barButton(Theme.Icon.back, String(localized: "Back"), id: "preview-back", enabled: nav.canGoBack) { nav.view?.goBack() }
-        barButton(Theme.Icon.forward, String(localized: "Forward"), id: "preview-forward", enabled: nav.canGoForward) { nav.view?.goForward() }
+        let canBack = isStreaming ? (isStreamOpen && (streamModel?.canGoBack ?? false)) : nav.canGoBack
+        let canForward = isStreaming ? (isStreamOpen && (streamModel?.canGoForward ?? false)) : nav.canGoForward
+        barButton(Theme.Icon.back, String(localized: "Back"), id: "preview-back", enabled: canBack) {
+            if isStreaming { streamModel?.goBack() } else { nav.view?.goBack() }
+        }
+        barButton(Theme.Icon.forward, String(localized: "Forward"), id: "preview-forward", enabled: canForward) {
+            if isStreaming { streamModel?.goForward() } else { nav.view?.goForward() }
+        }
     }
 
-    /// Screenshot and Pick.
+    /// Keyboard (in stream mode), Screenshot, and Pick.
     @ViewBuilder private var pageButtons: some View {
+        if isStreaming {
+            barButton(
+                streamKeyboardActive ? Theme.Icon.dismissKeyboard : Theme.Icon.keyboard,
+                streamKeyboardActive ? String(localized: "Hide Keyboard") : String(localized: "Show Keyboard"),
+                id: "preview-stream-keyboard",
+                enabled: isStreamOpen
+            ) {
+                streamKeyboardActive.toggle()
+            }
+        }
+        let controlsReady = isStreaming ? isStreamOpen : nav.attached
         Menu {
             Section("Adds a picture to your message") {
                 Button { shoot(whole: false) } label: { Label("Visible Area", systemImage: Theme.Icon.pageScreenshot) }
@@ -337,10 +515,10 @@ struct PreviewPage: View {
             }
             .tapTargetFrame()
         }
-        .disabled(shooting || !nav.attached)
+        .disabled(shooting || !controlsReady)
         .accessibilityLabel("Screenshot")
         .accessibilityIdentifier("preview-shot")
-        barButton(Theme.Icon.pickElement, String(localized: "Pick an element to comment on"), id: "preview-pick", enabled: nav.attached) {
+        barButton(Theme.Icon.pickElement, String(localized: "Pick an element to comment on"), id: "preview-pick", enabled: controlsReady) {
             startPicking()
         }
     }
@@ -354,7 +532,15 @@ struct PreviewPage: View {
 
     /// `:5173/settings`: the page's path on the computer's port.
     private var address: some View {
-        let path = PreviewLogic.address(nav.url ?? url, localPort: url.port)
+        let path: String = {
+            if isStreaming, let stream = streamModel {
+                if !stream.pageURL.isEmpty, let u = URL(string: stream.pageURL) {
+                    return PreviewLogic.address(u, localPort: machinePort)
+                }
+                return stream.currentPath
+            }
+            return PreviewLogic.address(nav.url ?? url, localPort: url.port)
+        }()
         return HStack(spacing: Theme.Space.flush) {
             if let machinePort { Text(verbatim: ":\(machinePort)").foregroundStyle(.secondary) }
             Text(path).foregroundStyle(Color.primary)
@@ -371,13 +557,23 @@ struct PreviewPage: View {
         .accessibilityIdentifier("preview-address")
         .contextMenu {
             Button {
-                UIPasteboard.general.string = PreviewLogic.machinePage((nav.url ?? url).absoluteString, machinePort: machinePort)
+                let copyText: String
+                if isStreaming, let stream = streamModel, !stream.pageURL.isEmpty {
+                    copyText = stream.pageURL
+                } else {
+                    copyText = PreviewLogic.machinePage((nav.url ?? url).absoluteString, machinePort: machinePort)
+                }
+                UIPasteboard.general.string = copyText
                 Haptics.success()
             } label: { Label("Copy Link", systemImage: Theme.Icon.link) }
         }
     }
 
     private func shoot(whole: Bool) {
+        if isStreaming {
+            streamModel?.requestShot(full: whole)
+            return
+        }
         guard let v = nav.view else { return }
         shooting = true
         Task {
@@ -420,11 +616,19 @@ struct PreviewPage: View {
         .padding(.vertical, Theme.Space.m)
         row.surface(in: .capsule)
             .padding(.horizontal, Theme.Space.m)
-        .padding(.top, Theme.Space.s)
-        .accessibilityIdentifier("preview-pick-banner")
+            .padding(.top, Theme.Space.s)
+            .accessibilityIdentifier("preview-pick-banner")
     }
 
     private func startPicking() {
+        if isStreaming {
+            streamKeyboardActive = false
+            picked = nil
+            note = ""
+            picking = true
+            streamModel?.setPicking(true)
+            return
+        }
         guard let v = nav.view else { return }
         picked = nil
         note = ""
@@ -439,7 +643,11 @@ struct PreviewPage: View {
     }
 
     private func stopPicking() {
-        picker.stop()
+        if isStreaming {
+            streamModel?.setPicking(false)
+        } else {
+            picker.stop()
+        }
         picking = false
         picked = nil
         note = ""
@@ -449,8 +657,8 @@ struct PreviewPage: View {
     /// The element picked: what it is, where its code is, and the line to write about it.
     private func notePanel(_ el: PickedElement) -> some View {
         noteForm(el)
-        .background(Theme.pageBackground)
-        .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .bottom).combined(with: .opacity))
+            .background(Theme.pageBackground)
+            .transition(reduceMotion ? AnyTransition.opacity : AnyTransition.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func noteForm(_ el: PickedElement) -> some View {

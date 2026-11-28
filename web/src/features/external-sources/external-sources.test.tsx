@@ -12,7 +12,7 @@ import { InboxDetail } from "../../views/inbox/InboxDetail";
 import { ChannelPage } from "../../views/settings/Channels";
 import { IntegrationDetail } from "../../views/settings/IntegrationDetail";
 import { SourcesUI } from "../../views/subscriptions/SourcesUI";
-import type { BindingInput, ExternalBinding, ExternalPolicy, ExternalRef } from "./api";
+import { normalizeExternalBindingSummary, type BindingInput, type BindingMatch, type ExternalBinding, type ExternalPolicy, type ExternalRef } from "./api";
 import { ExternalSourceSettings } from "./ExternalSourceSettings";
 
 const assistant = "assistant";
@@ -317,5 +317,229 @@ describe("external sources in Settings", () => {
     expect(host.textContent).toContain("Default handling for this connector.");
     expect(host.textContent).not.toContain("Where its updates go");
     expect(host.textContent).not.toContain("Connected work");
+  });
+
+  it("prioritizes target_title over store and generic fallbacks", async () => {
+    const issue = (n: string): ExternalRef => ({ ...repositoryRef, item: { kind: "issue", id: n } });
+    vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+      const path = new URL(address, "https://app.example.test").pathname.replace(/^\/api\/v1/, "");
+      if (path === "/assistant/external-source-bindings/summary") {
+        return ok({
+          bindings: [
+            { external_ref: issue("101"), target_kind: "todo", target_id: todo.id, source: "repository_link", repository_role: "delivery", target_title: "  Ship release notes  " },
+            { external_ref: issue("102"), target_kind: "todo", target_id: todo.id, source: "repository_link", repository_role: "reference", target_title: "   " },
+            { external_ref: issue("103"), target_kind: "todo", target_id: "unloaded-todo", source: "repository_link", repository_role: "delivery" },
+          ],
+          total_count: 3,
+        });
+      }
+      return ok({});
+    }));
+    await render(<ExternalSourceSettings manager={assistant} provider="github" />);
+    await wait(() => expect(host.textContent).toContain("Ship release notes"));
+    const rows = [...host.querySelectorAll<HTMLAnchorElement>("[data-external-source-settings] ul a")];
+    expect(rows).toHaveLength(3);
+    expect(rows[0].querySelector("span")?.textContent).toBe("Ship release notes");
+    expect(rows[1].querySelector("span")?.textContent).toBe(todo.title);
+    expect(rows[2].querySelector("span")?.textContent).toBe("To-do");
+    expect(host.querySelector("[data-connected-work-count]")?.textContent).toBe("3 active");
+  });
+
+  it("caps older-hub summaries to 5 rows, expands incrementally, and collapses back cleanly", async () => {
+    const legacyBindings: BindingMatch[] = Array.from({ length: 18 }, (_, i) => ({
+      external_ref: { ...repositoryRef, item: { kind: "issue", id: String(1000 + i) } },
+      target_kind: "todo",
+      target_id: `legacy-todo-${i}`,
+      source: "repository_link",
+      repository_role: "delivery",
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+      const path = new URL(address, "https://app.example.test").pathname.replace(/^\/api\/v1/, "");
+      if (path === "/assistant/external-source-bindings/summary") return ok({ bindings: legacyBindings });
+      return ok({});
+    }));
+    await render(<ExternalSourceSettings manager={assistant} provider="github" />);
+    await wait(() => expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(5));
+    expect(host.querySelector("[data-connected-work-count]")?.textContent).toBe("18 items");
+    expect(button("Show 10 more", host)).toBeTruthy();
+    expect(button("Show fewer", host)).toBeUndefined();
+    expect(host.textContent).not.toContain("Show completed");
+
+    await click("Show 10 more", host);
+    expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(15);
+    expect(button("Show 3 more", host)).toBeTruthy();
+    expect(button("Show fewer", host)).toBeTruthy();
+
+    await click("Show 3 more", host);
+    expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(18);
+    expect(button("Show 3 more", host)).toBeUndefined();
+    expect(button("Show fewer", host)).toBeTruthy();
+
+    await click("Show fewer", host);
+    expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(5);
+    expect(button("Show 10 more", host)).toBeTruthy();
+    expect(button("Show fewer", host)).toBeUndefined();
+  });
+
+  it("deduplicates same-todo repository links preferring delivery while preserving distinct todos and explicit links", async () => {
+    const shared: ExternalRef = { ...repositoryRef, item: { kind: "issue", id: "11825" } };
+    const normalized = normalizeExternalBindingSummary({
+      bindings: [
+        { external_ref: shared, target_kind: "todo", target_id: "todo-a", source: "repository_link", repository_role: "reference", target_title: "Fix Settings list" },
+        { external_ref: shared, target_kind: "todo", target_id: "todo-a", source: "repository_link", repository_role: "delivery" },
+        { external_ref: shared, target_kind: "todo", target_id: "todo-a", source: "explicit", binding_id: "exp-1", target_title: "Fix Settings list" },
+        { external_ref: shared, target_kind: "todo", target_id: "todo-b", source: "repository_link", repository_role: "reference", target_title: "Follow up on docs" },
+      ],
+    });
+    expect(normalized.bindings).toEqual([
+      { external_ref: shared, target_kind: "todo", target_id: "todo-a", source: "repository_link", repository_role: "delivery", target_title: "Fix Settings list" },
+      { external_ref: shared, target_kind: "todo", target_id: "todo-a", source: "explicit", binding_id: "exp-1", target_title: "Fix Settings list" },
+      { external_ref: shared, target_kind: "todo", target_id: "todo-b", source: "repository_link", repository_role: "reference", target_title: "Follow up on docs" },
+    ]);
+    expect(normalized.totalCount).toBe(3);
+
+    vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+      const path = new URL(address, "https://app.example.test").pathname.replace(/^\/api\/v1/, "");
+      if (path === "/assistant/external-source-bindings/summary") {
+        return ok({
+          bindings: [
+            { external_ref: shared, target_kind: "todo", target_id: "todo-a", source: "repository_link", repository_role: "reference", target_title: "Fix Settings list" },
+            { external_ref: shared, target_kind: "todo", target_id: "todo-a", source: "repository_link", repository_role: "delivery", target_title: "Fix Settings list" },
+            { external_ref: shared, target_kind: "todo", target_id: "todo-b", source: "repository_link", repository_role: "reference", target_title: "Follow up on docs" },
+          ],
+        });
+      }
+      return ok({});
+    }));
+    await render(<ExternalSourceSettings manager={assistant} provider="github" />);
+    await wait(() => expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(2));
+    expect(host.textContent).toContain("Fix Settings list");
+    expect(host.textContent).toContain("Follow up on docs");
+    expect(host.querySelector("[data-connected-work-count]")?.textContent).toBe("2 items");
+  });
+
+  it("toggles completed to-dos on demand, renders Completed pill, and handles 0-open empty state", async () => {
+    const issue = (n: string): ExternalRef => ({ ...repositoryRef, item: { kind: "issue", id: n } });
+    const summaryCalls: URLSearchParams[] = [];
+    const openRows: BindingMatch[] = [
+      { external_ref: issue("201"), target_kind: "todo", target_id: "open-1", source: "repository_link", repository_role: "delivery", target_title: "Polish Connected work UI" },
+      { external_ref: issue("202"), target_kind: "todo", target_id: "open-2", source: "repository_link", repository_role: "reference", target_title: "Audit mobile layout" },
+    ];
+    const doneRows: BindingMatch[] = [
+      { external_ref: issue("101"), target_kind: "todo", target_id: "done-1", source: "repository_link", repository_role: "delivery", target_title: "Ship server summary API", target_done: true },
+      { external_ref: issue("102"), target_kind: "todo", target_id: "done-2", source: "repository_link", repository_role: "reference", target_title: "Add wire schema tests", target_done: true },
+      { external_ref: issue("103"), target_kind: "todo", target_id: "done-3", source: "explicit", binding_id: "exp-done", target_title: "Review issue #103", target_done: true },
+    ];
+    let onlyDone = false;
+    vi.stubGlobal("fetch", vi.fn(async (address: string) => {
+      const url = new URL(address, "https://app.example.test");
+      const path = url.pathname.replace(/^\/api\/v1/, "");
+      if (path === "/assistant/external-source-bindings/summary") {
+        summaryCalls.push(url.searchParams);
+        const includeDone = url.searchParams.get("include_done") === "true";
+        const active = onlyDone ? [] : openRows;
+        if (includeDone) {
+          const all = [...active, ...doneRows];
+          return ok({ bindings: all, total_count: all.length });
+        }
+        return ok({ bindings: active, omitted_done_count: doneRows.length, total_count: active.length });
+      }
+      return ok({});
+    }));
+
+    await render(<ExternalSourceSettings manager={assistant} provider="github" />);
+    await wait(() => expect(host.textContent).toContain("Polish Connected work UI"));
+    expect(summaryCalls[0].has("include_done")).toBe(false);
+    expect(host.querySelector("[data-connected-work-count]")?.textContent).toBe("2 active");
+    expect(host.textContent).not.toContain("Ship server summary API");
+    expect(button("Show completed (3)", host)).toBeTruthy();
+
+    await click("Show completed (3)", host);
+    await wait(() => expect(host.textContent).toContain("Ship server summary API"));
+    expect(summaryCalls[1].get("include_done")).toBe("true");
+    expect(host.querySelector("[data-connected-work-count]")?.textContent).toBe("5 items");
+    expect(host.querySelectorAll("[data-external-source-settings] li[data-completed='true']")).toHaveLength(3);
+    expect(host.textContent).toContain("Completed");
+    expect(button("Hide completed", host)).toBeTruthy();
+
+    await click("Hide completed", host);
+    await wait(() => expect(host.textContent).not.toContain("Ship server summary API"));
+    expect(summaryCalls[2].has("include_done")).toBe(false);
+    expect(host.querySelector("[data-connected-work-count]")?.textContent).toBe("2 active");
+
+    // 0 active items + N omitted completed items (even with hideEmptyFlows: true)
+    onlyDone = true;
+    await render(<ExternalSourceSettings manager={assistant} provider="lark" copy={{ hideEmptyFlows: true }} />);
+    await wait(() => expect(host.querySelector("[data-connected-work-empty-active]")).toBeTruthy());
+    expect(host.textContent).toContain("No active connected work.");
+    expect(button("Show completed (3)", host)).toBeTruthy();
+    await click("Show completed (3)", host);
+    await wait(() => expect(host.textContent).toContain("Ship server summary API"));
+    expect(host.querySelectorAll("[data-external-source-settings] li[data-completed='true']")).toHaveLength(3);
+  });
+
+  it("resets expansion and include_done state when switching manager or provider", async () => {
+    const summaryRequests: { manager: string | null; provider: string | null; includeDone: string | null }[] = [];
+    const makeRows = (prefix: string, count: number, done = false): BindingMatch[] => Array.from({ length: count }, (_, i) => ({
+      external_ref: { ...repositoryRef, provider: prefix, item: { kind: "issue", id: String(i + 1) } },
+      target_kind: "todo",
+      target_id: `${prefix}-${done ? "done" : "open"}-${i}`,
+      source: "repository_link",
+      repository_role: "delivery",
+      target_title: `${prefix} ${done ? "done" : "open"} task ${i + 1}`,
+      target_done: done || undefined,
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (address: string, options: RequestInit) => {
+      const url = new URL(address, "https://app.example.test");
+      const path = url.pathname.replace(/^\/api\/v1/, "");
+      if (path === "/assistant/external-source-bindings/summary") {
+        const manager = new Headers(options.headers).get("X-Persona-Manager");
+        const provider = url.searchParams.get("provider");
+        const includeDone = url.searchParams.get("include_done");
+        summaryRequests.push({ manager, provider, includeDone });
+        const prefix = `${manager ?? assistant}:${provider ?? "all"}`;
+        const open = makeRows(prefix, 7, false);
+        if (includeDone === "true") {
+          const all = [...open, ...makeRows(prefix, 2, true)];
+          return ok({ bindings: all, total_count: all.length });
+        }
+        return ok({ bindings: open, omitted_done_count: 2, total_count: open.length });
+      }
+      return ok({});
+    }));
+
+    await render(<ExternalSourceSettings manager={assistant} provider="github" />);
+    await wait(() => expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(5));
+    await click("Show 2 more", host);
+    expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(7);
+    await click("Show completed (2)", host);
+    await wait(() => expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(9));
+    expect(summaryRequests.at(-1)).toEqual({ manager: null, provider: "github", includeDone: "true" });
+
+    // Switching provider resets both expansion and include_done immediately without issuing an include_done=true fetch.
+    await render(<ExternalSourceSettings manager={assistant} provider="lark" />);
+    await wait(() => expect(host.textContent).toContain(`${assistant}:lark open task 1`));
+    expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(5);
+    expect(summaryRequests.filter((req) => req.provider === "lark")).toEqual([
+      { manager: null, provider: "lark", includeDone: null },
+    ]);
+
+    // Expand again, then switch manager and verify reset + manager-scoped links.
+    await click("Show 2 more", host);
+    await click("Show completed (2)", host);
+    await wait(() => expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(9));
+
+    await render(<ExternalSourceSettings manager="other-assistant" provider="lark" />);
+    await wait(() => expect(host.textContent).toContain("other-assistant:lark open task 1"));
+    expect(host.querySelectorAll("[data-external-source-settings] ul li")).toHaveLength(5);
+    expect(summaryRequests.filter((req) => req.manager === "other-assistant")).toEqual([
+      { manager: "other-assistant", provider: "lark", includeDone: null },
+    ]);
+    const firstLink = host.querySelector<HTMLAnchorElement>("[data-external-source-settings] ul a")!;
+    expect(parse("/todos", new URL(firstLink.href).search)).toEqual({
+      name: "todos",
+      id: "other-assistant:lark-open-0",
+      manager: "other-assistant",
+    });
   });
 });

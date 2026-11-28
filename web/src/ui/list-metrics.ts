@@ -5,7 +5,7 @@
 // The complete list's long groups (views/WindowedRows.tsx): windowHead rows always drawn, about a phone's screen of
 // them, then parts of windowPart rows drawn near the view.
 export const SESSION_LIST_METRICS = { estimate: 44, overscan: 6, searchDelay: 250, groupOptions: 50, avatar: 22, icon: 12, accountMark: 14, pickMenuMin: 208,
-  groupsOpen: 3, groupPreview: 6, groupsRefresh: 1500, windowHead: 30, windowPart: 20 } as const;
+  groupsOpen: 3, groupPreview: 6, groupsRefresh: 2000, windowHead: 30, windowPart: 20 } as const;
 export const SESSION_LIST_STYLE = {
   foldButton: "touch-hit relative z-10 flex size-6 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover hover:text-ink-2 [@media(pointer:coarse)]:size-11",
   // the paged Agents list's title row: the sidebar's top-level heading box (#10637), as the complete list's

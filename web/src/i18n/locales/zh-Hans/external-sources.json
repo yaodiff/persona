@@ -95,6 +95,14 @@
   "defaults_saved": "已保存渠道默认策略",
   "flows": "已关联的工作",
   "no_flows": "尚未关联任何方向或待办。",
+  "no_active_flows": "当前没有进行中的关联工作。",
+  "completed": "已完成",
+  "show_more": "再显示 {count} 项",
+  "show_fewer": "收起",
+  "show_completed": "显示已完成（{count}）",
+  "hide_completed": "隐藏已完成",
+  "flows_count_active": "{count} 项进行中",
+  "flows_count_total_other": "{count} 项",
   "repository_link": "仓库关联",
   "source_details": "来源详情"
 }

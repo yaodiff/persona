@@ -606,6 +606,17 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(s.settings(ctx).todosV2DigestWindowMinutes()), nil
 			},
 			set: s.setTodosV2DigestWindowMinutes},
+		{Setting: Setting{Key: memoryExtensionStandingSettingKey, Title: i18n.T(i18n.Default, "assistant-settings_tool.title_memory_extension_standing_bytes"), Actions: getSet,
+			About: "how many bytes of the memory extension's standing (always-in-context) entries each conversation's standing context carries: " +
+				"4096 (4 KB, the default), 8192 (8 KB) or 16384 (16 KB), in bytes of entry text; no other value is accepted. " +
+				"It is the budget when the extension states none, and the most it may state when above 8192 (an extension's own " +
+				"stated budget up to 8192 holds as before). Past it the most important entries are kept and the rest left out whole. " +
+				"Applies from the next message, no restart; a larger choice adds up to that many bytes to every main-conversation snapshot",
+			Value: "4096, 8192 or 16384 (bytes)"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).memoryExtensionStandingBytes()), nil
+			},
+			set: s.setMemoryExtensionStandingBytes},
 		s.trustSetting(),
 		s.urgentRulesSetting(), // urgent_call_rules.go
 	}
@@ -917,6 +928,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded",
 	"assistant.fold_routine_relay_replies": "title_fold_routine_relay_replies",
 	"assistant.main_compact_window":        "title_main_compact_window",
+	memoryExtensionStandingSettingKey:      "title_memory_extension_standing_bytes",
 	"assistant.recent_task_chats":          "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust",
 	dashboardsSettingKey: "title_dashboards"}
 
@@ -931,7 +943,12 @@ const (
 	todosV2FoldChildrenSettingKey        = "assistant.todos_v2_fold_children"
 	todosV2QuietHoursSettingKey          = "assistant.todos_v2_quiet_hours"
 	todosV2DigestWindowMinutesSettingKey = "assistant.todos_v2_digest_window_minutes"
+	memoryExtensionStandingSettingKey    = "assistant.memory_extension_standing_bytes"
 )
+
+// memoryExtensionStandingBytesInvalid is the refusal of a standing budget that is not one of
+// memoryExtensionStandingOptions, from PUT /api/v1/assistant and persona_settings alike.
+const memoryExtensionStandingBytesInvalid = "memory_extension_standing_bytes must be 4096, 8192 or 16384 (bytes: 4 KB, 8 KB or 16 KB)"
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -1712,6 +1729,35 @@ func (s *Service) setTodosV2CanWaitSLAHours(ctx context.Context, v json.RawMessa
 			s.settingsChanged(ctx)
 			s.todosChanged(ctx)
 			return fmt.Sprintf("%s is %d (applies when todos_v2 is enabled).", todosV2CanWaitSLASettingKey, next), nil
+		},
+	}, nil
+}
+
+// setMemoryExtensionStandingBytes is persona_settings' set of assistant.memory_extension_standing_bytes: one of
+// memoryExtensionStandingOptions, a JSON number; anything else is refused, never rounded or capped.
+func (s *Service) setMemoryExtensionStandingBytes(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var bytes *int
+	if err := json.Unmarshal(v, &bytes); err != nil || bytes == nil || !slices.Contains(memoryExtensionStandingOptions, *bytes) {
+		return nil, errors.New(memoryExtensionStandingBytesInvalid)
+	}
+	next := *bytes
+	before := s.settings(ctx).memoryExtensionStandingBytes()
+	if next == before {
+		return &ownChange{summary: memoryExtensionStandingSettingKey + " is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return i18n.T(l, "assistant-settings_tool.change_memory_extension_standing_bytes", i18n.Args{"before": before / 1024, "after": next / 1024})
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MemoryExtensionStandingBytes = &next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("%s is %d (bytes; applies from the next message).", memoryExtensionStandingSettingKey, next), nil
 		},
 	}, nil
 }

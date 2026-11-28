@@ -111,7 +111,7 @@
   "machine_switch_link_why_unknown": "問題が発生しました。",
   "machine_switch_link_why_unavailable": "このコンピューターは今はPersona Linkに切り替えられません。",
   "hosted_assistants_other": "このコンピューターのアシスタント",
-  "hosted_assistants_settings": "設定 › ハブ › アシスタント",
+  "hosted_assistants_settings": "設定 › 詳細 › アシスタント",
   "manager_pending_restart_hint": "再デプロイでバイナリが更新されました。アイドル状態になり次第、自動で再起動して反映されます。",
   "manager_older_version": "旧バージョン",
   "manager_version_lag_hint": "このアシスタントはこのコンピューターの node より古いバージョンで動作しています。適用するにはアシスタントサービスを再起動してください。",

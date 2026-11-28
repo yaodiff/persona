@@ -132,6 +132,7 @@ describe("an assistant-owned approval question", () => {
     expect(area()).toBeNull();
     expect(getState().interactions.some((i) => i.id === prepared.id)).toBe(true);
     act(() => button(t("chat-interactions.allow"))!.click());
+    act(() => button(t("approval-impact.confirm"))!.click());
     await flush();
     const allows = fetcher.mock.calls.filter(([url]) => String(url).endsWith(`/interactions/${prepared.id}/resolve`));
     expect(allows.length).toBe(1);
@@ -266,6 +267,7 @@ describe("a Persona conversation's own approval card (#4883)", () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
     await flush();
     act(() => button(t("chat-interactions.allow"))!.click());
+    act(() => button(t("approval-impact.confirm"))!.click());
     await flush();
     expect(nextOwn()?.textContent).toBe(`${t("assistant-tasks.next_unanswered")}1`);
 
@@ -293,6 +295,7 @@ describe("a Persona conversation's own approval card (#4883)", () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
     await flush();
     act(() => button(t("chat-interactions.allow"))!.click());
+    act(() => button(t("approval-impact.confirm"))!.click());
     await flush();
     expect(resolves().length).toBe(1);
     expect(JSON.parse(String((resolves()[0][1] as RequestInit).body))).toMatchObject({ allow: true });

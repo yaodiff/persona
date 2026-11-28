@@ -125,7 +125,10 @@ func TestIntegrationsV2DualTopicRollback(t *testing.T) {
 				waitAdmissionDrained(t, s)
 			}
 
-			setIntegrationsV2ViaHTTP(t, s, startOn, false)
+			if !startOn {
+				setIntegrationsV2(t, s, false)
+			}
+			assertIntegrationsV2Flag(t, s, startOn)
 			rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full", `{"thread_mode":"per_topic","thread_idle_hours":2}`)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("seed routing mode: %d %s", rec.Code, rec.Body.String())
@@ -257,6 +260,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 
 	// --- Step 1: Legacy baseline (integrations_v2=false) ---
 	t.Run("step1_legacy_baseline_off", func(t *testing.T) {
+		setIntegrationsV2(t, s, false)
 		assertIntegrationsV2Flag(t, s, false)
 
 		byID := getChannelListByID(t, s)
@@ -550,6 +554,10 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 	t.Run("step3_rollback_off_reload_and_preserve_config", func(t *testing.T) {
 		setIntegrationsV2ViaHTTP(t, s, false, true)
 		assertIntegrationsV2Flag(t, s, false)
+		w, patched := permissionSettingsRequest(t, s, http.MethodPut, "/api/v1/assistant", s.managerIdentity(), "full", `{"timezone":"UTC"}`)
+		if w.Code != http.StatusOK || patched.IntegrationsV2 {
+			t.Fatalf("sparse PUT after rollback: %d %s", w.Code, w.Body.String())
+		}
 
 		// Immediate rollback of target_override while preserving stored thread_mode and thread_idle_hours.
 		if d := getChannelDetail(t, s, "examplechat"); d.ThreadMode != channel.ThreadModePerGroupAndTopic || d.ThreadIdleHours != 2 ||
@@ -755,8 +763,6 @@ func TestIntegrationsV2LegacyClientPartialChannelUpdatePreservesRoutingConfig(t 
 		v.MachineID = "server"
 		v.Main = "m1"
 	})
-	setIntegrationsV2ViaHTTP(t, s, true, false)
-
 	// Save v2 routing configuration and seed an active thread binding.
 	rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full",
 		`{"thread_mode":"per_group_and_topic","thread_idle_hours":18}`)

@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 )
 
 // A name in ordinary network permissions is resolved and checked before an upstream sees it. A forbidden answer
@@ -64,7 +66,7 @@ func TestDialOutValidatesBeforeUpstream(t *testing.T) {
 	}
 }
 
-// The direct path already refuses cloud metadata in dialResolved; moving upstream selection must not weaken it.
+// The direct path also refuses hostnames that resolve to cloud metadata.
 func TestDialOutStillRefusesMetadataDirectly(t *testing.T) {
 	for _, raw := range metadataIPs {
 		p := &Proxy{
@@ -78,5 +80,52 @@ func TestDialOutStillRefusesMetadataDirectly(t *testing.T) {
 		if _, err := p.dialOut(context.Background(), "metadata.example.com", "80", Rule{}); !errors.Is(err, errInternal) {
 			t.Fatalf("%s: %v, want errInternal", raw, err)
 		}
+	}
+}
+
+type connectDeadlineRecorder struct {
+	net.Conn
+	deadline time.Time
+}
+
+func (c *connectDeadlineRecorder) SetDeadline(deadline time.Time) error {
+	c.deadline = deadline
+	return c.Conn.SetDeadline(deadline)
+}
+
+func TestConnectViaCapsHandshakeDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		caller  time.Duration
+		timeout time.Duration
+	}{
+		{"caller deadline", 200 * time.Millisecond, 200 * time.Millisecond},
+		{"handshake limit", time.Minute, 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				near, peer := net.Pipe()
+				defer near.Close()
+				defer peer.Close()
+				go func() { _, _ = io.Copy(io.Discard, peer) }()
+				conn := &connectDeadlineRecorder{Conn: near}
+				p := &Proxy{Dial: func(context.Context, string, string) (net.Conn, error) { return conn, nil }}
+				up := &url.URL{Scheme: "http", Host: "proxy.example.com"}
+				start := time.Now()
+				ctx, cancel := context.WithDeadline(context.Background(), start.Add(tc.caller))
+				defer cancel()
+
+				if c, err := p.connectVia(ctx, up, "192.0.2.1:443"); err == nil {
+					_ = c.Close()
+					t.Fatal("CONNECT succeeded without an upstream response")
+				}
+				if got, want := conn.deadline, start.Add(tc.timeout); !got.Equal(want) {
+					t.Fatalf("socket deadline %s, want %s", got.Sub(start), tc.timeout)
+				}
+				if elapsed := time.Since(start); elapsed != tc.timeout {
+					t.Fatalf("CONNECT took %s, want %s", elapsed, tc.timeout)
+				}
+			})
+		})
 	}
 }

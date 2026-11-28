@@ -470,6 +470,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"DELETE /api/v1/push/grading/layer":                "manager", // deletes only the calling extension's own layer on its manager (pushGradingLayerRoutes)
 		"POST /api/v1/push/grading/preview":                "manager", // read-only preview bounded to the calling extension's manager (pushGradingLayerRoutes)
 		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (pushGradingRoutes, TestPushDailyStatsHeldToManager)
+		"GET /api/v1/agents/triage":                        "manager", // the token's manager's switches (byRequest; TestVoiceProgramOnAnExtensionsToken)
 		"GET /api/v1/assistant":                            "manager",
 		"GET /api/v1/assistant/capabilities":               "manager",
 		"GET /api/v1/assistant/entries":                    "manager", // TestAssistantEntriesStayOnTokenManager

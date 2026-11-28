@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/assistant/externalbinding/externalbindingadapt"
 	"github.com/nwverse/persona/server/internal/assistant/externalsourcestore"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
@@ -284,12 +285,230 @@ func TestExternalLookupProjectsExistingRepositoryLinksAndLiveEdits(t *testing.T)
 	if matches := lookup(t, d.Store, pr).Matches; len(matches) != 2 || matches[0].Source != "explicit" || matches[1].TargetID != "direction_repo" {
 		t.Fatalf("removed links stayed in projection: %+v", matches)
 	}
-	summary, err := d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("")))
+	summary, err := d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("")), false)
 	if err != nil || len(summary.Bindings) != 3 {
 		t.Fatalf("summary for the public GitHub channel: %+v, %v", summary, err)
 	}
-	summary, err = d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("https://git.example.com")))
+	summary, err = d.ExternalSourceSummary(ctx, "github", new(assistantwire.ExternalChannelID("https://git.example.com")), false)
 	if err != nil || len(summary.Bindings) != 1 || summary.Bindings[0].TargetID != enterprise {
 		t.Fatalf("summary for the enterprise GitHub channel: %+v, %v", summary, err)
+	}
+}
+
+func TestExternalSourceSummaryFiltersAndOrdersToDos(t *testing.T) {
+	dsn := os.Getenv(dbtest.Env)
+	if dsn == "" {
+		t.Skip(dbtest.Env + " not set")
+	}
+	ctx := t.Context()
+	// Use a separate database so the orphan fixture can bypass its foreign key.
+	dsn, err := dbtest.Template(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := db.Open(ctx, dsn, db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	d := repositorystore.New(database)
+
+	created := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for _, fixture := range []struct {
+		id, title string
+		age       time.Duration
+		done      bool
+	}{
+		{"open_recent", "Prepare release", 4 * time.Hour, false},
+		{"open_explicit", "Review the proposal", 3 * time.Hour, false},
+		{"open_tied", "Check examples", 2 * time.Hour, false},
+		{"open_linked", "Write notes", 2 * time.Hour, false},
+		{"done_recent", "Check the draft", 5 * time.Hour, true},
+		{"done_older", "Write the draft", time.Hour, true},
+	} {
+		todo := db.TodoRow{ID: fixture.id, Title: fixture.title, CreatedAt: created, UpdatedAt: created.Add(fixture.age)}
+		if fixture.done {
+			todo.DoneAt = &todo.UpdatedAt
+		}
+		if err := d.CreateTodo(ctx, todo); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := ref{Provider: "github", Container: node{Kind: "repository", ID: "example/web"}}
+	issue := func(number string) ref {
+		r := repo
+		r.Item = node{Kind: "issue", ID: assistantwire.ExternalRefID(number)}
+		return r
+	}
+	bind := func(r ref, kind assistantwire.ExternalTargetKind, id assistantwire.ExternalTargetID) assistantwire.ExternalBindingID {
+		return createBinding(t, d.Store, assistantwire.ExternalBindingInput{ExternalRef: r, TargetKind: kind, TargetID: id}).ID
+	}
+	shared := issue("17")
+	// A direction can have the same ID as a completed to-do and still carries no to-do metadata.
+	direction := bind(repo, "direction", "done_recent")
+	explicitOpen := bind(issue("1"), "todo", "open_explicit")
+	explicitDone := bind(shared, "todo", "done_recent")
+
+	link := func(number, role string) repository.TaskLink {
+		return repository.TaskLink{Kind: "issue", Number: number, CanonicalURL: "https://github.com/example/web/issues/" + number, Role: role}
+	}
+	seedLinks := func(tx pgx.Tx, id string, links ...repository.TaskLink) error {
+		repos := []repository.TaskRepository{{
+			SourceSnapshot: repository.SourceSnapshot{
+				Identity: repository.Identity{Provider: "github", InstanceURL: "https://github.com", Path: "example/web"},
+			},
+			Links: links,
+		}}
+		_, err := tx.Exec(ctx, `INSERT INTO todo_repository_sets(todo_id, revision, repositories) VALUES ($1, 1, $2::jsonb)`, id, repos)
+		return err
+	}
+	if err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `ALTER TABLE todo_repository_sets DROP CONSTRAINT todo_repository_sets_todo_id_fkey`); err != nil {
+			return err
+		}
+		for _, fixture := range []struct {
+			id    string
+			links []repository.TaskLink
+		}{
+			{"open_recent", []repository.TaskLink{link("17", "reference"), link("17", "delivery")}},
+			{"open_tied", []repository.TaskLink{link("5", "delivery")}},
+			{"open_linked", []repository.TaskLink{link("17", "reference")}},
+			{"done_recent", []repository.TaskLink{link("17", "reference"), link("17", "")}},
+			{"done_older", []repository.TaskLink{link("3", "reference")}},
+			{"missing_todo", []repository.TaskLink{link("3", "delivery")}},
+		} {
+			if err := seedLinks(tx, fixture.id, fixture.links...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	open := []assistantwire.ExternalBindingMatch{
+		{ExternalRef: repo, TargetKind: "direction", TargetID: "done_recent", Source: "explicit", BindingID: direction},
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "open_recent", Source: "repository_link", RepositoryRole: "delivery", TargetTitle: "Prepare release"},
+		{ExternalRef: issue("1"), TargetKind: "todo", TargetID: "open_explicit", Source: "explicit", BindingID: explicitOpen, TargetTitle: "Review the proposal"},
+		{ExternalRef: issue("5"), TargetKind: "todo", TargetID: "open_tied", Source: "repository_link", RepositoryRole: "delivery", TargetTitle: "Check examples"},
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "open_linked", Source: "repository_link", RepositoryRole: "reference", TargetTitle: "Write notes"},
+	}
+	all := append(slices.Clone(open),
+		assistantwire.ExternalBindingMatch{ExternalRef: shared, TargetKind: "todo", TargetID: "done_recent", Source: "explicit", BindingID: explicitDone, TargetTitle: "Check the draft", TargetDone: true},
+		assistantwire.ExternalBindingMatch{ExternalRef: shared, TargetKind: "todo", TargetID: "done_recent", Source: "repository_link", RepositoryRole: "delivery", TargetTitle: "Check the draft", TargetDone: true},
+		assistantwire.ExternalBindingMatch{ExternalRef: issue("3"), TargetKind: "todo", TargetID: "done_older", Source: "repository_link", RepositoryRole: "reference", TargetTitle: "Write the draft", TargetDone: true},
+	)
+	for _, tc := range []struct {
+		name        string
+		provider    assistantwire.ExternalProvider
+		includeDone bool
+		want        []assistantwire.ExternalBindingMatch
+		omitted     int
+	}{
+		{"default", "", false, open, 3},
+		{"include done", "github", true, all, 0},
+		{"another provider", "lark", false, []assistantwire.ExternalBindingMatch{}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := d.ExternalSourceSummary(t.Context(), tc.provider, nil, tc.includeDone)
+			if err != nil || !reflect.DeepEqual(got.Bindings, tc.want) || got.TotalCount != len(tc.want) || got.OmittedDoneCount != tc.omitted {
+				t.Fatalf("summary: %+v, %v\nwant bindings %+v, total %d, omitted %d", got, err, tc.want, len(tc.want), tc.omitted)
+			}
+		})
+	}
+
+	wantLookup := []assistantwire.ExternalBindingMatch{
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "done_recent", Source: "explicit", BindingID: explicitDone},
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "done_recent", Source: "repository_link", RepositoryRole: "delivery"},
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "done_recent", Source: "repository_link", RepositoryRole: "reference"},
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "open_linked", Source: "repository_link", RepositoryRole: "reference"},
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "open_recent", Source: "repository_link", RepositoryRole: "delivery"},
+		{ExternalRef: shared, TargetKind: "todo", TargetID: "open_recent", Source: "repository_link", RepositoryRole: "reference"},
+		{ExternalRef: repo, TargetKind: "direction", TargetID: "done_recent", Source: "explicit", BindingID: direction},
+	}
+	if got := lookup(t, d.Store, shared); !reflect.DeepEqual(got.Matches, wantLookup) {
+		t.Fatalf("lookup: %+v, want matches %+v", got, wantLookup)
+	}
+}
+
+func TestExternalSourceSummaryUsesClosedForGood(t *testing.T) {
+	d := open(t)
+	ctx := t.Context()
+	const instance = "https://git.example.org"
+	const title = "Run the release check"
+	item := ref{
+		Provider: "github", Channel: instance,
+		Container: node{Kind: "repository", ID: "example/web"},
+		Item:      node{Kind: "issue", ID: "23"},
+	}
+	var openMatches, closedMatches []assistantwire.ExternalBindingMatch
+	at := time.Date(2025, time.January, 1, 1, 0, 0, 0, time.UTC)
+	for i, fixture := range []struct {
+		id        assistantwire.ExternalTargetID
+		doneBy    string
+		ledger    string
+		cancelled bool
+	}{
+		{id: "failed_cancelled", doneBy: db.DoneByCancelled, cancelled: true},
+		{id: "failed_legacy_cancelled", doneBy: db.DoneByReview, ledger: "cancelled", cancelled: true},
+		{id: "failed_awaiting_retry"},
+		{id: "failed_with_stale_cancellation", ledger: "cancelled"},
+	} {
+		failedAt := at.Add(-time.Duration(i) * time.Minute)
+		todo := db.TodoRow{ID: string(fixture.id), Title: title, DoneBy: fixture.doneBy,
+			CreatedAt: at.Add(-time.Hour), UpdatedAt: failedAt}
+		if fixture.cancelled {
+			todo.DoneAt = &failedAt
+		}
+		if err := d.CreateTodo(ctx, todo); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.FailTodo(ctx, todo.ID, "The agent did not start", failedAt); err != nil {
+			t.Fatal(err)
+		}
+		if fixture.ledger != "" {
+			if err := d.PutTodoSupervision(ctx, db.TodoSupervisionRow{
+				TodoID: todo.ID, Supervisor: "fixture", State: fixture.ledger, UpdatedAt: failedAt,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		binding := createBinding(t, d.Store, assistantwire.ExternalBindingInput{
+			ExternalRef: item, TargetKind: "todo", TargetID: fixture.id,
+		})
+		if _, _, err := d.ImportTodoRepositoryLinks(ctx, todo.ID, []string{instance + "/example/web/issues/23"}, "explicit"); err != nil {
+			t.Fatal(err)
+		}
+
+		explicit := assistantwire.ExternalBindingMatch{
+			ExternalRef: item, Source: "explicit", BindingID: binding.ID, TargetKind: "todo",
+			TargetID: fixture.id, TargetTitle: title, TargetDone: fixture.cancelled,
+		}
+		projected := explicit
+		projected.Source, projected.BindingID, projected.RepositoryRole = "repository_link", "", "delivery"
+		if fixture.cancelled {
+			closedMatches = append(closedMatches, explicit, projected)
+		} else {
+			openMatches = append(openMatches, explicit, projected)
+		}
+	}
+
+	for _, tc := range []struct {
+		name        string
+		includeDone bool
+		bindings    []assistantwire.ExternalBindingMatch
+		omitted     int
+	}{
+		{"open only", false, openMatches, 4},
+		{"include done", true, append(slices.Clone(openMatches), closedMatches...), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := d.ExternalSourceSummary(t.Context(), "github", new(assistantwire.ExternalChannelID(instance)), tc.includeDone)
+			if err != nil || !reflect.DeepEqual(got.Bindings, tc.bindings) ||
+				got.TotalCount != len(tc.bindings) || got.OmittedDoneCount != tc.omitted {
+				t.Fatalf("summary: %+v, %v\nwant bindings %+v, total %d, omitted %d", got, err, tc.bindings, len(tc.bindings), tc.omitted)
+			}
+		})
 	}
 }

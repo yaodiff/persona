@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"net/url"
 	"slices"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 // Task associations describe work. They never authorize or prepare disk resources.
 const CatalogKey = "assistant.repositories"
-const MaxTaskRepositories = 20
+const MaxTaskRepositories = nodeproto.TaskWorkspaceMaxRepositories
 const MaxRepositoryLinks = 50
 const MaxRevision int64 = 9007199254740991
 

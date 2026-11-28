@@ -149,10 +149,10 @@ type Proxy struct {
 	active        map[string]map[*ioLease]struct{}
 	runtimeActive map[string]int
 	runtimeTotal  int
-	runtimeSlots  chan struct{}     // shared by every runtimeListener (runtimeSlotsPerProxy)
-	lastGood      map[string]string // CONNECT host:port → responding address; bounded by connectCacheMost
-	connectWait   time.Duration     // tests may shorten the client first-flight wait
-	connectBudget time.Duration     // tests may shorten the per-address response budget
+	runtimeSlots  chan struct{}         // shared by every runtimeListener (runtimeSlotsPerProxy)
+	lastGood      map[connectKey]string // CONNECT destination and route → responding address, bounded by connectCacheMost
+	connectWait   time.Duration         // tests may shorten the client first-flight wait
+	connectBudget time.Duration         // tests may shorten the per-address response budget
 }
 
 // Start listens on loopback (an unused port).

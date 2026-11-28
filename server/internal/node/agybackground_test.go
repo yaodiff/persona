@@ -550,6 +550,7 @@ func TestAgyBackgroundTimerCondition(t *testing.T) {
 	}{
 		{"any sender task finish", `{"DurationSeconds":180,"TimerCondition":"any"}`, "Timer: 3m", sender, fmt.Sprintf(`Task id "%s" finished with result: ok`, sender), received, true},
 		{"any sender JSON-encoded args", `{"DurationSeconds":"180","TimerCondition":"\"any\""}`, "Timer: 3m", sender, "Done", received, true},
+		{"any sender report", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", "subagent", "Ready", received, true},
 		{"any sender subagent", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", subagent, "Ready", received, true},
 		{"specific subagent idle system notice", fmt.Sprintf(`{"DurationSeconds":60,"TimerCondition":%q}`, subagent), "Timer: 60s", "system", fmt.Sprintf("Subagent %s has gone idle. This was the subagent's most recent response: Done", subagent), received, true},
 		{"specific full sender", fmt.Sprintf(`{"DurationSeconds":60,"TimerCondition":%q}`, sender), "Timer: 60s", sender, "Ready", received, true},
@@ -562,7 +563,13 @@ func TestAgyBackgroundTimerCondition(t *testing.T) {
 		{"own heartbeat", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", id, "Task is still running", received, false},
 		{"other task heartbeat", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", sender, `[Notice] Task id "task-2" is still running`, received, false},
 		{"watched heartbeat", `{"DurationSeconds":60,"TimerCondition":"task-2"}`, "Timer: 60s", sender, "Task is STILL RUNNING", received, false},
+		{"empty message", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", sender, "", received, false},
+		{"system update", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", "system", "Reminder: Background tasks are still running", received, false},
+		{"watched task notice", `{"DurationSeconds":60,"TimerCondition":"task-2"}`, "Timer: 60s", sender, "[Notice] Task started", received, false},
+		{"cron iteration", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", sender, "Poll (iteration 1)", received, false},
 		{"cron ignores condition", `{"CronExpression":"*/5 * * * *","TimerCondition":"any"}`, "Cron: */5 * * * *", sender, "Ready", received, false},
+		{"cron expression takes precedence over duration", `{"CronExpression":"*/5 * * * *","DurationSeconds":60,"TimerCondition":"any"}`, "Timer: 60s", sender, "Ready", received, false},
+		{"cron description takes precedence over duration", `{"DurationSeconds":60,"TimerCondition":"any"}`, "Cron: */5 * * * *", sender, "Ready", received, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			planner := fmt.Sprintf(`{"step_index":0,"type":"PLANNER_RESPONSE","created_at":%q,"tool_calls":[{"name":"schedule","args":%s}]}`+"\n", started, tc.args)
@@ -608,6 +615,31 @@ func TestAgyBackgroundTimerCondition(t *testing.T) {
 			t.Fatalf("expected late-exported timer to be canceled: %+v", tasks)
 		}
 	})
+}
+
+func TestAgyBackgroundRestartAndTimerConditionOrdering(t *testing.T) {
+	const started = "2026-06-01T10:00:00Z"
+	const beforeRestart = "2026-06-01T10:01:00Z"
+	const restartTime = "2026-06-01T10:02:00Z"
+	const afterRestart = "2026-06-01T10:03:00Z"
+	planner := `{"step_index":0,"type":"PLANNER_RESPONSE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":600,"TimerCondition":"early"}},{"name":"schedule","args":{"DurationSeconds":600,"TimerCondition":"late"}}]}` + "\n"
+	message := func(index int, at, sender, content string) string {
+		body := fmt.Sprintf("<SYSTEM_MESSAGE>\n[Message] timestamp=%s sender=%s priority=MESSAGE_PRIORITY_HIGH content=%s\n</SYSTEM_MESSAGE>", at, sender, content)
+		return fmt.Sprintf(`{"step_index":%d,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", index, at, body)
+	}
+	transcript := planner + agyBackgroundStep(1, "RUNNING", started, 1, "Timer: 600s", "") +
+		agyBackgroundStep(2, "RUNNING", started, 2, "Timer: 600s", "") +
+		message(3, beforeRestart, "early", "Ready") +
+		message(4, restartTime, "system", "[Notice] All your subagents and background tasks have been stopped due to server restart.") +
+		message(5, afterRestart, "late", "Ready")
+	steps, _ := parseAgySteps([]byte(transcript), agyTestID)
+	now, _ := time.Parse(time.RFC3339, afterRestart)
+	tasks := agyBackgroundAt(steps, agyTestID, "", nil, now)
+	if len(tasks.running) != 0 || len(tasks.ended) != 2 ||
+		tasks.ended[0].ID != agyTestID+"/task-1" || tasks.ended[0].Status != proto.WorkflowKilled || tasks.ended[0].EndedAt.Format(time.RFC3339) != beforeRestart ||
+		tasks.ended[1].ID != agyTestID+"/task-2" || tasks.ended[1].Status != proto.WorkflowKilled || tasks.ended[1].EndedAt.Format(time.RFC3339) != restartTime {
+		t.Fatalf("unexpected timer outcomes: %+v", tasks)
+	}
 }
 
 func TestAgyBackgroundTaskListJSONArray(t *testing.T) {
@@ -683,22 +715,26 @@ func TestAgyBackgroundMaxIterations(t *testing.T) {
 	const started = "2026-06-01T10:00:00Z"
 	const t1 = "2026-06-01T10:05:00Z"
 	const t2 = "2026-06-01T10:10:00Z"
-	planner := fmt.Sprintf(`{"step_index":0,"type":"PLANNER_RESPONSE","created_at":%q,"tool_calls":[{"name":"schedule","args":{"CronExpression":"*/5 * * * *","MaxIterations":2}},{"name":"schedule","args":{"CronExpression":"*/5 * * * *"}}]}`+"\n", started)
+	planner := fmt.Sprintf(`{"step_index":0,"type":"PLANNER_RESPONSE","created_at":%q,"tool_calls":[{"name":"schedule","args":{"CronExpression":"*/5 * * * *","MaxIterations":2}},{"name":"schedule","args":{"CronExpression":"*/5 * * * *"}},{"name":"schedule","args":{"DurationSeconds":900,"TimerCondition":"task-1"}}]}`+"\n", started)
 	iter := func(stepIdx, taskNum int, at string, n int) string {
 		msg := fmt.Sprintf("<SYSTEM_MESSAGE>\n[Message] timestamp=%s sender=%s/task-%d priority=MESSAGE_PRIORITY_HIGH content=Poll (iteration %d)\n</SYSTEM_MESSAGE>", at, agyTestID, taskNum, n)
 		return fmt.Sprintf(`{"step_index":%d,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", stepIdx, at, msg)
 	}
 	base := planner + agyBackgroundStep(1, "RUNNING", started, 1, "Cron: */5 * * * *", "") +
 		agyBackgroundStep(2, "RUNNING", started, 2, "Cron: */5 * * * *", "") +
-		iter(3, 1, t1, 1) + iter(4, 2, t1, 1)
+		agyBackgroundStep(3, "RUNNING", started, 3, "Timer: 15m", "") +
+		iter(4, 1, t1, 1) + iter(5, 2, t1, 1)
 	steps1, _ := parseAgySteps([]byte(base), agyTestID)
-	if tasks := agyBackground(steps1, agyTestID, "", nil); len(tasks.running) != 2 || len(tasks.ended) != 0 {
-		t.Fatalf("expected both crons running after iteration 1: %+v", tasks)
+	if tasks := agyBackground(steps1, agyTestID, "", nil); len(tasks.running) != 3 || len(tasks.ended) != 0 {
+		t.Fatalf("expected both crons and the timer running after iteration 1: %+v", tasks)
 	}
-	steps2, _ := parseAgySteps([]byte(base+iter(5, 1, t2, 2)+iter(6, 2, t2, 2)), agyTestID)
+	steps2, _ := parseAgySteps([]byte(base+iter(6, 1, t2, 2)+iter(7, 2, t2, 2)), agyTestID)
 	tasks := agyBackground(steps2, agyTestID, "", nil)
-	if len(tasks.running) != 1 || tasks.running[0].ID != agyTestID+"/task-2" || len(tasks.ended) != 1 || tasks.ended[0].ID != agyTestID+"/task-1" || tasks.ended[0].Status != proto.WorkflowCompleted {
+	if len(tasks.running) != 1 || tasks.running[0].ID != agyTestID+"/task-2" || len(tasks.ended) != 2 || tasks.ended[0].ID != agyTestID+"/task-1" || tasks.ended[0].Status != proto.WorkflowCompleted {
 		t.Fatalf("expected bounded cron to finish on iteration 2: %+v", tasks)
+	}
+	if timer := tasks.ended[1]; timer.ID != agyTestID+"/task-3" || timer.Status != proto.WorkflowKilled || timer.EndedAt.Format(time.RFC3339) != t2 {
+		t.Fatalf("expected bounded cron completion to cancel the timer: %+v", timer)
 	}
 }
 
@@ -751,7 +787,9 @@ func TestAgyBackgroundTimerExpiryWithoutTranscriptUpdate(t *testing.T) {
 	start := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	started := start.Format(time.RFC3339)
 	deadline := start.Add(time.Minute)
-	expiry := deadline.Add(time.Minute)
+	expiry := deadline.Add(agyTimerExpiryGrace)
+	fallbackDeadline := start.Add(90 * time.Second)
+	fallbackExpiry := fallbackDeadline.Add(agyTimerExpiryGrace)
 	planner := `{"step_index":0,"type":"PLANNER_RESPONSE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":60}},{"name":"schedule","args":{"DurationSeconds":60,"CronExpression":"0 * * * *"}}]}` + "\n"
 	path := agyTestFile(t, n.agyDataRoot(), agyTestID, planner+
 		agyBackgroundStep(1, "RUNNING", started, 1, "Timer: 60s", "")+
@@ -761,15 +799,16 @@ func TestAgyBackgroundTimerExpiryWithoutTranscriptUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta, ok := n.agyTranscriptMetaAt(agyTestID, expiry.Add(-time.Nanosecond))
-	if tasks := meta.background; !ok || len(tasks.running) != 3 || len(tasks.ended) != 0 {
+	if tasks := meta.background; !ok || len(tasks.running) != 3 || len(tasks.ended) != 0 || !tasks.nextExpiry.Equal(expiry) {
 		t.Fatalf("unexpected state during grace period: %+v", tasks)
 	}
 	meta, ok = n.agyTranscriptMetaAt(agyTestID, expiry)
-	if tasks := meta.background; !ok || len(tasks.running) != 2 || len(tasks.ended) != 1 || tasks.ended[0].ID != agyTestID+"/task-1" || !tasks.ended[0].EndedAt.Equal(deadline) {
+	if tasks := meta.background; !ok || len(tasks.running) != 2 || len(tasks.ended) != 1 || !tasks.nextExpiry.Equal(fallbackExpiry) ||
+		tasks.ended[0].ID != agyTestID+"/task-1" || tasks.ended[0].Status != proto.WorkflowCompleted || !tasks.ended[0].EndedAt.Equal(deadline) {
 		t.Fatalf("expected first timer expired at grace boundary: %+v", tasks)
 	}
-	meta, ok = n.agyTranscriptMetaAt(agyTestID, start.Add(150*time.Second))
-	if tasks := meta.background; !ok || len(tasks.running) != 1 || tasks.running[0].ID != agyTestID+"/task-2" || len(tasks.ended) != 2 {
+	meta, ok = n.agyTranscriptMetaAt(agyTestID, fallbackExpiry)
+	if tasks := meta.background; !ok || len(tasks.running) != 1 || tasks.running[0].ID != agyTestID+"/task-2" || len(tasks.ended) != 2 || !tasks.nextExpiry.IsZero() {
 		t.Fatalf("expected only cron to stay running after both timers expire: %+v", tasks)
 	}
 }

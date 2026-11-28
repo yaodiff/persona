@@ -212,5 +212,7 @@
   "change_machine_fallback_minutes": "触发备用电脑切换的离线时长：{before} → {after} 分钟",
   "bad_machine_fallback_minutes": "请输入 1 至 1440 的整数分钟。",
   "machine_fallback_minutes_unchanged": "离线切换阈值没有变化。",
-  "machine_fallback_minutes_saved": "离线切换阈值已保存为 {value} 分钟。"
+  "machine_fallback_minutes_saved": "离线切换阈值已保存为 {value} 分钟。",
+  "title_memory_extension_standing_bytes": "记忆扩展常驻记忆容量",
+  "change_memory_extension_standing_bytes": "记忆扩展常驻记忆容量：{before} KB → {after} KB。从下一条消息起生效；容量越大，主对话每条消息最多多带这么多文字。"
 }

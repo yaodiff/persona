@@ -129,12 +129,18 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   /** Hours an idle Agent Persona started runs before Persona stops it (#4754, docs/integrations/engines.md "Agents run
    *  in a terminal"); its terminal stays. 0 is never, at most 8760; unset from a hub before it. */
   idle_close_hours?: number;
+  /** How many bytes of a memory extension's always-in-context entries every chat carries (docs/assistant/health.md
+   *  "Budgets"): 4096 (4 KB, the default), 8192 (8 KB) or 16384 (16 KB); unset from a hub before it. */
+  memory_extension_standing_bytes?: number;
 }
 
 /** `archive_closed_days`' upper bound, the hub's (assistant/profile_write.go). */
 const MAX_ARCHIVE_DAYS = 3650;
 /** `idle_close_hours`' upper bound, the hub's (assistant/tasks_idle.go). */
 const MAX_IDLE_HOURS = 8760;
+
+/** `memory_extension_standing_bytes`' values (bytes), in the picker's order; the hub refuses any other. */
+const STANDING_MEMORY_BYTES = [4096, 8192, 16384] as const;
 
 /** `meeting_attendance_default`'s values, in the picker's order. */
 const MEETING_ROLES = ["off", "listener", "participant"] as const;
@@ -273,6 +279,19 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } catch (e) {
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setMeetingBusy(false); }
+  };
+
+  const [standingBusy, setStandingBusy] = useState(false);
+  // Confirmed by the echo, like the meeting role: the picker shows the hub's value until it answers.
+  const setStandingBytes = async (bytes: number) => {
+    setStandingBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { memory_extension_standing_bytes: bytes } });
+      if (r.manager !== manager || r.memory_extension_standing_bytes !== bytes) throw new Error(t("settings-assistantsettings.standing_memory_unconfirmed"));
+      setInfo((i) => i ? { ...i, memory_extension_standing_bytes: r.memory_extension_standing_bytes } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setStandingBusy(false); }
   };
 
   const [retentionBusy, setRetentionBusy] = useState(false);
@@ -852,6 +871,21 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           </button>
         )}
       </Group>
+
+      {/* The memory extension's always-included memory (docs/assistant/health.md "Budgets"): only from a hub that has the choice. */}
+      {typeof info?.memory_extension_standing_bytes === "number" && (
+        <Group anchor="standing-memory" footer={t("settings-assistantsettings.standing_memory_footer")}>
+          <Row label={t("settings-assistantsettings.standing_memory")} hint={t("settings-assistantsettings.standing_memory_hint")} wrapHint>
+            <select aria-label={t("settings-assistantsettings.standing_memory")} value={String(info.memory_extension_standing_bytes)} disabled={info.manager !== manager || standingBusy}
+              className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-meta text-ink shadow-inset-field"
+              onChange={(e) => void setStandingBytes(Number(e.target.value))}>
+              {/* A value this page does not know stays shown as it is, not as the first option. */}
+              {!(STANDING_MEMORY_BYTES as readonly number[]).includes(info.memory_extension_standing_bytes) && <option value={String(info.memory_extension_standing_bytes)} disabled>{info.memory_extension_standing_bytes}</option>}
+              {STANDING_MEMORY_BYTES.map((bytes) => <option key={bytes} value={String(bytes)}>{t(`settings-assistantsettings.standing_memory_${bytes / 1024}kb`)}</option>)}
+            </select>
+          </Row>
+        </Group>
+      )}
 
       <DirectionNotes deps={directionNotes} onOpenPermissions={() => {
         const select = document.querySelector<HTMLSelectElement>('[data-settings-row="default-permissions"] select');

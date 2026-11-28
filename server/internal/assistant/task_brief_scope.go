@@ -498,6 +498,9 @@ func (s *Service) estimateDueSignal(ctx context.Context, t Todo, now time.Time) 
 	if t.Supervision == nil || t.DoneAt != nil {
 		return
 	}
+	if st := t.Supervision.state(t); st == reviewUserCheck {
+		return // accepted by the supervisor and with the owner for their own check: no estimate review cue
+	}
 	brief, ok := s.briefOfTodo(t.ID)
 	if !ok || now.Before(brief.EstimateDueAt) {
 		return
@@ -571,7 +574,7 @@ func (s *Service) briefClock(ctx context.Context, t Todo, now time.Time) {
 	if v == nil || t.DoneAt != nil {
 		return
 	}
-	if st := v.state(t); st == reviewNeedsUser || st == reviewPending || st == reviewParked || st == reviewTimedOut || st == reviewClosing {
+	if st := v.state(t); st == reviewNeedsUser || st == reviewPending || st == reviewParked || st == reviewTimedOut || st == reviewClosing || st == reviewUserCheck {
 		return
 	}
 	brief, ok := s.briefOfTodo(t.ID)

@@ -85,9 +85,13 @@ export type NavGroup = "assistant" | "device" | "hub" | "labs";
 export const NAV_GROUPS: { key: NavGroup; tabs: CoreTab[] }[] = [
   { key: "assistant", tabs: ["models", "persona", "prompts", "integrations", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
   { key: "device", tabs: ["general", "notifications", "shortcuts", "advanced"] },
-  { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
+  { key: "hub", tabs: ["hub", "avatar"] },
   { key: "labs", tabs: ["labs"] },
 ];
+
+/** Hub-wide pages reached from Advanced, with their original category URLs and search entries. */
+export const ADVANCED_HUB_TABS: readonly CoreTab[] = ["managers", "devices"];
+export const isAdvancedHubTab = (tab: Tab) => ADVANCED_HUB_TABS.some(k => k === tab);
 
 export const isCoreTab = (k: string): k is CoreTab => (TABS as string[]).includes(k);
 

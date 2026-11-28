@@ -192,7 +192,7 @@ describe("Settings › Labs", () => {
     }
   });
 
-  it("mounts the assistant-scoped Unified Integrations & Extensions toggle for the chosen manager", async () => {
+  it("shows Unified Integrations & Extensions on by default and saves an opt-out for the chosen manager", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.endsWith("/api/v1/assistant")) {
@@ -203,7 +203,7 @@ describe("Settings › Labs", () => {
             headers: { "Content-Type": "application/json" },
           });
         }
-        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false, integrations_v2: false }), {
+        return new Response(JSON.stringify({ manager: "example", work_guide: false, todos_v2: false, integrations_v2: true }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -224,13 +224,13 @@ describe("Settings › Labs", () => {
         t("settings-labs.rollback"),
       ]);
       const toggle = row.querySelector<HTMLButtonElement>('[role="switch"]')!;
-      expect(toggle.getAttribute("aria-checked")).toBe("false");
-      await click(toggle);
       expect(toggle.getAttribute("aria-checked")).toBe("true");
+      await click(toggle);
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
       const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
       expect(putCall).toBeDefined();
       expect(new Headers(putCall?.[1]?.headers).get(MANAGER_HEADER)).toBe("example");
-      expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ integrations_v2: true, expected_integrations_v2: false });
+      expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ integrations_v2: false, expected_integrations_v2: true });
     } finally {
       act(() => chooseManager(null));
     }
@@ -256,6 +256,7 @@ describe("Settings › Labs", () => {
       expect(row.textContent).toContain(t("settings-labs.integrations_v2_unsupported"));
       const toggle = row.querySelector<HTMLButtonElement>('[role="switch"]')!;
       expect(toggle.disabled).toBe(true);
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
     } finally {
       act(() => chooseManager(null));
     }

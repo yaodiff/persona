@@ -65,6 +65,7 @@ var (
 // such a turn again; an end that is told for it is handled as any first one.
 const (
 	turnDone        = "done"
+	turnLoopNoop    = "loop_noop"
 	turnInterrupted = "interrupted"
 	turnBefore      = "before"
 )
@@ -139,16 +140,17 @@ func turnEndForSession(row proto.Session, items []proto.Item) (turnClose, bool) 
 // signals name it), the judgment written for it and the signal it raised. Receipt: a turn with no Key has its done
 // receipt in the feed (a named one's receipt is found there by its id).
 type taskTurn struct {
-	Machine string    `json:"machine"`
-	Session string    `json:"session"`
-	Key     string    `json:"key,omitempty"`
-	Open    string    `json:"open,omitempty"`
-	Rev     int64     `json:"rev,omitempty"`
-	Seen    time.Time `json:"seen,omitzero"`
-	State   string    `json:"state"`
-	Work    time.Time `json:"work"`
-	At      time.Time `json:"at"`
-	Receipt bool      `json:"receipt,omitempty"`
+	LoopNoop *nativeLoopNoopStreak `json:"loop_noop,omitempty"`
+	Machine  string                `json:"machine"`
+	Session  string                `json:"session"`
+	Key      string                `json:"key,omitempty"`
+	Open     string                `json:"open,omitempty"`
+	Rev      int64                 `json:"rev,omitempty"`
+	Seen     time.Time             `json:"seen,omitzero"`
+	State    string                `json:"state"`
+	Work     time.Time             `json:"work"`
+	At       time.Time             `json:"at"`
+	Receipt  bool                  `json:"receipt,omitempty"`
 	// JudgeFailures counts failed judgment passes while Judged is still nil; JudgeError keeps the latest service or
 	// parse failure for diagnostics. Both survive a manager restart and reset when a new stretch of work starts.
 	JudgeFailures int         `json:"judge_failures,omitempty"`
@@ -430,8 +432,9 @@ func (s *Service) afterJudgment(todo string, f func()) bool {
 // startRow is the row of a session that showed its turn starting: its transcript's size and its time (Rev and
 // UpdatedAt of proto.Session). Zero: not known (the hub's own turn start).
 type startRow struct {
-	Rev int64
-	At  time.Time
+	Rev        int64
+	At         time.Time
+	NativeLoop bool
 }
 
 // startBeforeTakenTurn: the start row of session machine/session is older than the row the ledger took todo's turn up
@@ -628,13 +631,13 @@ func (s *Service) turnOf(ctx context.Context, todo string) (taskTurn, bool) {
 // no end yet and this is that turn (sameUnnamed: it gets its name now); or when no end is known now either and
 // nothing was written to the transcript since (sameRow).
 func (s *Service) takeTurn(ctx context.Context, t Todo, last proto.Session, items []proto.Item, end turnClose, named bool, since time.Time, state string) (e taskTurn, again bool) {
-	return s.takeTurnAs(ctx, t, last, items, end, named, since, state, "")
+	return s.takeTurnAs(ctx, t, last, items, end, named, since, state, "", "")
 }
 
 // takeTurnAs is takeTurn for an interrupted turn with no output (silent: its kind, silent_turns.go), kept on the ledger
 // in the same write that takes the turn up: a manager that stops between the two never has the turn without it. A
 // turn taken before without it (an older manager) gets it now.
-func (s *Service) takeTurnAs(ctx context.Context, t Todo, last proto.Session, items []proto.Item, end turnClose, named bool, since time.Time, state, silent string) (e taskTurn, again bool) {
+func (s *Service) takeTurnAs(ctx context.Context, t Todo, last proto.Session, items []proto.Item, end turnClose, named bool, since time.Time, state, silent, loopEvidence string) (e taskTurn, again bool) {
 	if !named {
 		end = turnClose{}
 	}
@@ -672,6 +675,9 @@ func (s *Service) takeTurnAs(ctx context.Context, t Todo, last proto.Session, it
 	}
 	if named {
 		s.projectReviewTurn(ctx, t, last, end, state)
+	}
+	if state == turnLoopNoop {
+		fresh.LoopNoop = nextNativeLoopNoop(t, b.doc.Turns[t.ID], last, nativeLoopStart(items), end.At, loopEvidence)
 	}
 	b.doc.Turns[t.ID] = fresh
 	delete(b.tries, t.ID)
@@ -1455,13 +1461,13 @@ func (s *Service) resumeTurn(ctx context.Context, t Todo, e taskTurn) (looked bo
 // taskStartMissed is taskWorking for a start nobody heard, found by its turn's end (recoverTurn): the open task is
 // taken to work from now. It never reopens a closed task: a turn found in a transcript is no word that someone asked
 // for more. False when the task is closed or gone.
-func (s *Service) taskStartMissed(ctx context.Context, id string) bool {
+func (s *Service) taskStartMissed(ctx context.Context, id string, nativeLoop bool) bool {
 	s.tasks.completionMu.Lock()
 	defer s.tasks.completionMu.Unlock()
 	t, ok := s.todoNow(id)
 	if !ok || t.DoneAt != nil {
 		return false
 	}
-	s.taskWorks(ctx, t)
+	s.taskWorks(ctx, t, nativeLoop)
 	return true
 }

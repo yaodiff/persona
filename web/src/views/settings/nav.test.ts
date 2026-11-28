@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { searchSettings } from "./search";
-import { ASSISTANT_TABS, categoryState, FROM_LIST, itemState, NAV_GROUPS, navGroups, openedFromList, redirectLegacySettings, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
+import { ADVANCED_HUB_TABS, ASSISTANT_TABS, categoryState, FROM_LIST, itemState, NAV_GROUPS, navGroups, openedFromList, redirectLegacySettings, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
 
 describe("settings location", () => {
   it("names no category on plain /settings: the phone's list (通用 on a wide screen)", () => {
@@ -27,9 +27,9 @@ describe("settings location", () => {
   it("round-trips every category through its URL", () => {
     for (const t of TABS) expect(settingsAt(settingsHref(t, null, true).split("?")[1] ?? "").tab).toBe(t);
   });
-  it("lists each category once on the phone's first page", () => {
+  it("lists each category once across Settings home and Advanced", () => {
     const listed = NAV_GROUPS.flatMap((g) => g.tabs);
-    expect([...listed].sort()).toEqual([...TABS].sort());
+    expect([...listed, ...ADVANCED_HUB_TABS].sort()).toEqual([...TABS].sort());
   });
   it("knows a category was opened from the list (Back goes to it)", () => {
     expect(openedFromList({ [FROM_LIST]: true, personaOverlay: "o1" })).toBe(true);
@@ -85,17 +85,17 @@ describe("settings location", () => {
 });
 
 describe("settings sidebar groups", () => {
-  it("has the current assistant's, this device's, the hub's and Labs on its own, in that order, every category in one of them", () => {
+  it("has the current assistant's, this device's, the hub's and Labs on its own, in that order", () => {
     expect(NAV_GROUPS.map((g) => g.key)).toEqual(["assistant", "device", "hub", "labs"]);
     expect(NAV_GROUPS.map((g) => g.tabs)).toEqual([
       ["models", "persona", "prompts", "integrations", "channels", "connectors", "sources", "extensions", "knowledge", "agents"],
       ["general", "notifications", "shortcuts", "advanced"],
-      ["hub", "managers", "avatar", "devices"],
+      ["hub", "avatar"],
       ["labs"],
     ]);
-    expect(NAV_GROUPS.flatMap((g) => g.tabs).sort()).toEqual([...TABS].sort());
+    expect(ADVANCED_HUB_TABS).toEqual(["managers", "devices"]);
     expect([...ASSISTANT_TABS]).toEqual(NAV_GROUPS[0].tabs);
-    // When integrations_v2 is off (default), legacy tabs stay 100% identical and integrations is hidden.
+    // An explicit opt-out restores the legacy tabs and hides Integrations.
     expect(navGroups(false)[0]!.tabs).toEqual([
       "models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents",
     ]);

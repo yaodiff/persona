@@ -9,7 +9,7 @@ import "strings"
 func inboxTaskLinkEligible(it *InboxItem) bool {
 	// An owner's bot request takes the main-conversation handoff route, not
 	// the task-update route for messages from other people.
-	if it.Source == "larkcli" && it.Kind == "bot_handoff" {
+	if it.Source == "larkcli" && (it.Kind == "bot_handoff" || it.Connector != nil && it.Connector.OwnerPromise != nil) {
 		return false
 	}
 	if it.Kind != KindBot {

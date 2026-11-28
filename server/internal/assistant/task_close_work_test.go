@@ -200,17 +200,6 @@ func TestTaskCloseOwnerAppConfirmation(t *testing.T) {
 	}
 }
 
-func TestTaskCloseWaitingReport(t *testing.T) {
-	if got, _ := acceptGuardBlock("- Status: done\n- Waiting: merge of the change"); got != "closeout_waiting" {
-		t.Fatalf("Waiting was not recognized: %q", got)
-	}
-	for _, text := range []string{"- Waiting:\n- Verified: done", "- Waiting: none", "Waiting for the tests finished."} {
-		if got, _ := acceptGuardBlock(text); got != "" {
-			t.Fatalf("no waiting should be inferred from %q: %q", text, got)
-		}
-	}
-}
-
 func TestTaskCloseWorkRefusesWithdrawal(t *testing.T) {
 	ft, todo, row := closeTestTodo(t)
 	s, ctx := ft.s, t.Context()

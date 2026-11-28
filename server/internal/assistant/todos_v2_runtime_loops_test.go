@@ -161,10 +161,22 @@ func TestTodosV2RuntimeLoopsBootEpochStartupSweepOnceAndCap(t *testing.T) {
 	}
 }
 
+// holdTodoBlockerSweep keeps superviseWatch from queuing its background blocker sweep (queueTodoBlockerSweep, #17767)
+// for the rest of t, as if one were already running. A test of the targeted reconciliation a close runs must not race a
+// full sweep that resolves the same blocker first and wakes the dependent from its own goroutine (#17942).
+func holdTodoBlockerSweep(t *testing.T, s *Service) {
+	t.Helper()
+	if !s.blockerReconcile.sweep.CompareAndSwap(false, true) {
+		t.Fatal("a blocker sweep is already running")
+	}
+	t.Cleanup(func() { s.blockerReconcile.sweep.Store(false) })
+}
+
 func TestTodosV2RuntimeLoopsActiveCheckpointAndResetOnCompletion(t *testing.T) {
 	st := newMemBlockerStore()
 	s, f := newQuietServiceOn(t, st)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	holdTodoBlockerSweep(t, s) // step 1's superviseWatch would otherwise sweep the blockers step 2 reconciles
 	ctx := context.Background()
 	setRestartRecoveryTodosV2(t, s, true, false)
 

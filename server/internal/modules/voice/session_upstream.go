@@ -63,11 +63,11 @@ func (c *conversation) connect(woken bool) error {
 		return err
 	}
 	c.mu.Lock()
-	snap, waiting := c.snap, c.waiting()
+	snap, waiting, hasTTS := c.snap, c.waiting(), c.tts != nil
 	c.mu.Unlock()
 	in := prompts.VoiceInstructions{
 		Lang: string(c.language()), Owner: c.pl.cfg.Owner, Notes: c.pl.cfg.Notes, History: clipHistory(history),
-		Target: snap, Waiting: waiting, Paused: woken,
+		Target: snap, Waiting: waiting, Paused: woken, TTS: hasTTS,
 	}
 	tools := c.toolSet()
 	var rate int
@@ -115,8 +115,12 @@ func (c *conversation) connect(woken bool) error {
 		c.snapWords = words
 	}
 	if first {
-		c.started, c.outRate = true, rate
-		ready := map[string]any{"type": "ready", "input_rate": p.inputRate(), "output_rate": rate, "model": c.modelID, "voice": nilIfEmpty(voice)}
+		outRate := rate
+		if c.tts != nil {
+			outRate = c.ttsOutRate
+		}
+		c.started, c.outRate = true, outRate
+		ready := map[string]any{"type": "ready", "input_rate": p.inputRate(), "output_rate": outRate, "model": c.modelID, "voice": nilIfEmpty(voice)}
 		if c.dictation {
 			ready["protocol"], ready["features"], ready["voice"] = infoProtocol, features, nil
 		} else if c.version >= 2 {
@@ -127,7 +131,7 @@ func (c *conversation) connect(woken bool) error {
 			c.failCode(codeMachineOffline, "这台电脑离线，说的话要等它上线才发得出去", false)
 		}
 	} else {
-		if rate != c.outRate {
+		if c.tts == nil && rate != c.outRate {
 			c.logf("reconnected session speaks at %d Hz, the app plays %d", rate, c.outRate)
 		}
 		if c.version >= 2 {
@@ -569,6 +573,9 @@ func (c *conversation) handle(gen int, e event) {
 	}
 	switch e.kind {
 	case evAudio:
+		if c.tts != nil {
+			return // streaming TTS replaces upstream audio (including text-only refusal fallback)
+		}
 		now := time.Now()
 		c.replyVoiced = true
 		if c.dropAudio && (now.Sub(c.lastAudio) > 1500*time.Millisecond || c.replyAfterCut(now)) {
@@ -591,6 +598,9 @@ func (c *conversation) handle(gen int, e event) {
 		}
 	case evUser:
 		c.dropAudio, c.cutAt = false, time.Time{}
+		if c.tts != nil && !c.turnsEnd {
+			c.ttsDropText = false
+		}
 		spoke := c.spokeAt(time.Now()) // by the user's words before these
 		if strings.TrimSpace(e.text) != "" {
 			c.gate.user = time.Now()
@@ -598,15 +608,31 @@ func (c *conversation) handle(gen int, e event) {
 		}
 		c.userLineDone(c.userText(e.text, e.replace, e.final, spoke)) // a line the service ends itself (codex)
 	case evAssistant:
-		if strings.TrimSpace(e.text) != "" {
+		if strings.TrimSpace(e.text) != "" && !(c.tts != nil && c.ttsDropText) {
 			c.modelActed(time.Now())
 		}
 		c.asstText(e.text, e.replace, e.final, e.name)
+		if c.tts != nil {
+			c.feedTTSLocked(e)
+		}
 	case evReply:
 		c.signals, c.turnsEnd = true, true
 		c.reply, c.replyVoiced = e.id, false
 		c.replying = true
-		c.openReply(time.Now())
+		if c.tts != nil {
+			if c.ttsCurGen != 0 {
+				c.endTTSTextLocked()
+			}
+			c.ttsDropText = false
+			c.ttsCutReply = ""
+			c.ttsCutAt = time.Time{}
+			c.ttsReplyHadTurn = false
+			c.ttsCurReply = e.id
+			c.ttsCurStart = time.Now()
+			c.ttsFedText = ""
+		} else {
+			c.openReply(time.Now())
+		}
 	case evTurnEnd:
 		c.dropAudio, c.cutAt = false, time.Time{}
 		c.turnsEnd = true
@@ -620,13 +646,23 @@ func (c *conversation) handle(gen int, e event) {
 			if c.replied = append(c.replied, e.id); len(c.replied) > repliedMost {
 				c.replied = c.replied[1:]
 			}
-			if e.id == c.reply && !c.replyVoiced {
-				if c.silent = append(c.silent, e.id); len(c.silent) > repliedMost {
-					c.silent = c.silent[1:]
-				}
-			}
 		}
-		c.closeReply(false)
+		if c.tts != nil {
+			wasCut := c.ttsDropText || (e.id != "" && e.id == c.ttsCutReply)
+			hadTurn := c.ttsReplyHadTurn || c.ttsCurGen != 0
+			c.endTTSTextLocked()
+			c.ttsReplyHadTurn = false
+			c.ttsDropText = false
+			c.ttsCutReply = ""
+			if !hadTurn && !wasCut && e.id != "" && e.id == c.reply && !c.replyVoiced {
+				c.markSilentLocked(e.id)
+			}
+		} else {
+			if e.id != "" && e.id == c.reply && !c.replyVoiced {
+				c.markSilentLocked(e.id)
+			}
+			c.closeReply(false)
+		}
 		c.closeAsst()
 	case evInterrupted:
 		if e.id != "" {
@@ -636,6 +672,22 @@ func (c *conversation) handle(gen int, e event) {
 			// A reply that was over already, superseded by the next one (a tool's result, a say): nothing of it is left
 			// to drop, and a clear would cut the end of it the app still plays (docs/lessons/voice.md"Other behavior"). On
 			// either protocol (#4719): protocol 1's apps play behind the upstream the same way.
+			return
+		}
+		if c.tts != nil {
+			now := time.Now()
+			if c.ttsAlreadyCutLocked(now, e.id) {
+				// Already cancelled and cleared by app interrupt or energy cut-in: drop remaining text without double-clearing.
+				if c.replying || c.ttsCurGen != 0 {
+					c.ttsDropText = true
+				}
+				c.closeAsst()
+				return
+			}
+			c.ttsCutLocked(now, true)
+			c.pace.playEnd = now // the app drops what it had not played
+			c.barge = barge{}
+			c.closeAsst()
 			return
 		}
 		c.sendApp(map[string]any{"type": "clear"})
@@ -752,6 +804,12 @@ func (c *conversation) lost(gen int, why error) {
 		c.reconnects = 0 // it held: a drop now is not one of a run of them (docs/assistant/voice.md "Reconnect and resume")
 	}
 	if c.reconnects >= maxReconnects {
+		if c.tts != nil {
+			c.ttsDropText = false
+			c.ttsCutReply = ""
+			c.ttsCutAt = time.Time{}
+			c.cancelTTSLocked(false)
+		}
 		c.closeReply(true)
 		down, text := c.down.session == sessionNo(gen), c.down.text
 		c.mu.Unlock()
@@ -778,6 +836,11 @@ func (c *conversation) lost(gen int, why error) {
 	}
 	clear(c.unacked) // that session's: an ack or refusal of it never comes
 	c.pace.playEnd = time.Now()
+	if c.tts != nil {
+		c.ttsDropText = false
+		c.ttsCutReply = ""
+		c.cancelTTSLocked(false)
+	}
 	c.sendApp(map[string]any{"type": "clear"})
 	c.closeReply(true)
 	c.closeAsst()

@@ -445,6 +445,27 @@ newest revision asked for, and the list is published again when its result chang
 loops are tested: hold every call to the node, check that the event is still taken, then release it and wait for the
 result (`server/internal/assistant/conversation_attention_readloop_test.go`).
 
+## state.put wrote the Store on the node's only RPC read loop (2026-11-28, #17251)
+
+`(*Machine).onEvent` handled `state.put` by calling `PutNodeSession` directly on the goroutine `rpc.Peer.Serve` uses
+for its single read loop (`Peer.OnEvent` runs in place). `storeCtx` bounded each call to `nodeStoreWait` (10 s), but
+not a run of calls: while the Store was stalled, consecutive `state.put` events each spent their budget in series, so
+for about a minute the loop read neither the node's replies nor its next requests, and that one connection's `ping`
+and `assistant.send` calls timed out together while another machine's ping on the same host stayed in milliseconds. A
+per-call timeout only caps one event; it does not decouple reply dispatch from Store latency.
+
+Keep event admission to parse, validate, log and enqueue, and give each Machine one state writer
+(`server/internal/devices/machine_state_writer.go`): a FIFO of distinct sessions, newest complete state wins per
+session, carrying a pending `CreationID` / `Incarnation` forward when the replacement omits it, bounded backoff that
+retains the newest pending value, and a bounded drain when the Machine context ends. Do not spawn one write goroutine
+per event: it loses cross-session order and bounds nothing. Store I/O takes neither `m.mu` nor `eventRetire`. A bare
+`Machine` without a run context (focused unit tests calling `onEvent` directly) keeps the old bounded inline write and
+its synchronous outcome semantics; every serving production Machine has its context installed before its connection
+serves. Prove the decoupling with a real `net.Pipe` + `rpc.Peer.Serve` test that blocks the first `PutNodeSession` on a
+gate and checks the following reply is dispatched while the gate is still held
+(`server/internal/devices/stateput_readloop_test.go`); the old synchronous code fails that assertion deterministically
+at the reply deadline, not by a wall-clock margin.
+
 ## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
 
 `client_hello` and `register_phone` also waited in the app connection's read loop: `hub.client_apps` did a settings

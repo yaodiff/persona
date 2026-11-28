@@ -405,6 +405,11 @@ func taskStuck(t Todo, tr todoTriage, reached bool, now time.Time) bool {
 	if notStarted(t) && tr.Section != triageWaiting {
 		return false
 	}
+	if t.Supervision != nil && t.Supervision.state(t) == reviewUserCheck {
+		// The supervisor accepted and handed the final check to the owner: this wait is the owner's, not stalled work
+		// a leader report or sigLeaderStuck should nag about.
+		return false
+	}
 	return reached && t.DoneAt == nil && !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderTaskStuckAfter(t) &&
 		slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
 }

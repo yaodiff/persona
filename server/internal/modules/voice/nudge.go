@@ -112,6 +112,8 @@ func (c *conversation) nudgeDue(now time.Time) bool {
 		return false // no session to nudge (reconnecting, paused, waking), the call is on hold, or it is over
 	case c.gate.echoes || c.askCur != "" || len(c.queue) > 0:
 		return false
+	case c.tts != nil && c.tts.Active():
+		return false
 	case !o.result && c.worked():
 		return false
 	}

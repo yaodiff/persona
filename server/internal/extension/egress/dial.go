@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -45,45 +48,29 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 		}
 		return p.dial(ctx, "tcp", target) // named as it is in its permissions (Matches)
 	}
-	resolve := p.Resolve
-	if resolve == nil {
-		resolve = func(ctx context.Context, host string) ([]net.IP, error) {
-			addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			ips := make([]net.IP, 0, len(addrs))
-			for _, a := range addrs {
-				ips = append(ips, a.IP)
-			}
-			return ips, err
-		}
-	}
-	ips, err := resolve(ctx, host)
+	ips, err := p.resolveAll(ctx, host)
 	if err != nil {
 		return nil, err
 	}
 	var last error = fmt.Errorf("%s: no address", host)
-	var ok []net.IP
+	var checked []net.IP
 	for _, ip := range ips {
 		if Unreachable(ip) {
 			last = fmt.Errorf("%s %w", host, errInternal)
 			continue
 		}
-		ok = append(ok, ip)
+		checked = append(checked, ip)
 	}
-	if len(ok) == 0 {
+	if len(checked) == 0 {
 		return nil, last
 	}
 	up, err := upstream(&url.URL{Scheme: "https", Host: target})
 	if err != nil {
 		return nil, err
 	}
-	if up != nil {
-		// Only a checked answer reaches the upstream, and only as a numeric address: the proxy never sees
-		// the name and cannot resolve it again to somewhere forbidden (#4353).
-		return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) {
-			return p.connectVia(ctx, up, target)
-		})
-	}
-	return p.dialResolved(ctx, host, port, ok)
+	// Each attempt uses a checked numeric address, including through the upstream proxy (#4353).
+	key := connectKey{host: host, port: port, upstream: upstreamEndpoint(up)}
+	return p.dialResolved(ctx, key, checked, p.dialAttemptFor(up))
 }
 
 // fromEnvironment is the hub's own proxy for u, from its environment.
@@ -91,13 +78,40 @@ func fromEnvironment(u *url.URL) (*url.URL, error) {
 	return http.ProxyFromEnvironment(&http.Request{URL: u})
 }
 
+func (p *Proxy) dialAttemptFor(up *url.URL) dialAttempt {
+	if up != nil {
+		return func(ctx context.Context, target string) (net.Conn, error) {
+			return p.connectVia(ctx, up, target)
+		}
+	}
+	return func(ctx context.Context, target string) (net.Conn, error) {
+		return p.dial(ctx, "tcp", target)
+	}
+}
+
+// upstreamEndpoint identifies the proxy by its TCP address. Preserve DNS root
+// dots and IPv6 zones because they can affect which endpoint the dial reaches.
+func upstreamEndpoint(up *url.URL) string {
+	if up == nil {
+		return ""
+	}
+	host, port := up.Hostname(), up.Port()
+	if ip, err := netip.ParseAddr(host); err == nil {
+		host = ip.String()
+	} else {
+		host = strings.ToLower(host)
+	}
+	if port == "" {
+		port = "80"
+	} else if n, err := strconv.ParseUint(port, 10, 16); err == nil {
+		port = strconv.FormatUint(n, 10)
+	}
+	return net.JoinHostPort(host, port)
+}
+
 // connectVia opens a tunnel to target through the upstream proxy up.
 func (p *Proxy) connectVia(ctx context.Context, up *url.URL, target string) (net.Conn, error) {
-	addr := up.Host
-	if up.Port() == "" {
-		addr = net.JoinHostPort(up.Hostname(), "80")
-	}
-	c, err := p.dial(ctx, "tcp", addr)
+	c, err := p.dial(ctx, "tcp", upstreamEndpoint(up))
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +124,11 @@ func (p *Proxy) connectVia(ctx context.Context, up *url.URL, target string) (net
 		pass, _ := up.User.Password()
 		req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(up.User.Username()+":"+pass)))
 	}
-	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	deadline := time.Now().Add(30 * time.Second)
+	if caller, ok := ctx.Deadline(); ok && caller.Before(deadline) {
+		deadline = caller
+	}
+	_ = c.SetDeadline(deadline)
 	if err := req.Write(c); err != nil {
 		c.Close()
 		return nil, err

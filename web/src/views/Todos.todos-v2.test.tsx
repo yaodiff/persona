@@ -1061,34 +1061,42 @@ describe("TodoDetail dual template, default-expanded sections & status summary u
       conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
     });
 
-    // Single consolidated top overview strip holds status, work-goal badge, agent count, direction, parent link, subtle priority, and primary CTA
+    // Single streamlined hierarchy/ownership strip holds Direction › Parent Goal breadcrumbs and quick CTA,
+    // without duplicate status dot, work-goal label, or priority badge (#17938)
     const ownership = host.querySelector<HTMLElement>("[data-testid=todo-detail-ownership]")!;
     expect(ownership).toBeTruthy();
     expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
     expect(ownership.className).toContain("bg-inset");
     expect(ownership.className).toContain("border-line");
     expect(ownership.className).toContain("rounded-control");
-    expect(ownership.querySelector("[data-testid=todo-detail-summary-status]")?.textContent).toBeTruthy();
-    expect(ownership.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
+    expect(ownership.querySelector("[data-testid=todo-detail-summary-status]")).toBeNull();
+    expect(ownership.querySelector("[data-testid=todo-detail-template-badge]")).toBeNull();
+    expect(ownership.querySelector("[data-testid=todo-detail-priority-subtle]")).toBeNull();
     expect(ownership.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Platform Direction");
     const parentLink = ownership.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-link]")!;
     expect(parentLink.textContent).toContain("Ship Todos V2");
-    const subtlePriority = ownership.querySelector<HTMLElement>("[data-testid=todo-detail-priority-subtle]")!;
-    expect(subtlePriority).toBeTruthy();
-    expect(subtlePriority.textContent).toContain(t("todos.priority_high"));
-    expect(subtlePriority.className).toContain("text-ink-3");
     const summaryOpenAgentBtn = ownership.querySelector<HTMLButtonElement>("[data-testid=todo-summary-open-active-agent]")!;
     expect(summaryOpenAgentBtn.textContent).toBe(t("todos.detail_open_active_agent"));
 
-    // Meta row beneath title does not repeat status badge or agent count for work goals
+    // Meta row beneath title is the single home for status badge & active agent count
     const metaRow = host.querySelector<HTMLElement>("[data-testid=todo-detail-meta]")!;
     expect(metaRow).toBeTruthy();
-    expect(metaRow.querySelector("[data-testid=todo-detail-status]")).toBeNull();
-    expect(metaRow.textContent).not.toContain(t("todos.agent_count", { count: 1 }));
+    expect(metaRow.querySelector("[data-testid=todo-detail-status]")?.textContent).toBeTruthy();
+    expect(metaRow.textContent).toContain(t("todos.agent_count", { count: 1 }));
+
+    // Right detail pane relaxes max-w to 880px and elevates Notes directly before plan metadata (#17938)
+    const detailPane = host.querySelector<HTMLElement>("[data-testid=todo-detail]")!;
+    expect(detailPane.className).toContain("max-w-[880px]");
+    const notesEl = host.querySelector<HTMLElement>("[data-testid=todo-detail-notes]")!;
+    const planEl = host.querySelector<HTMLElement>("[data-testid=todo-plan]")!;
+    expect(notesEl).toBeTruthy();
+    expect(planEl).toBeTruthy();
+    expect(notesEl.compareDocumentPosition(planEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-plan-project]")?.className).toContain("max-w-md");
+    expect(host.querySelector("[data-testid=todo-plan-project]")?.className).not.toContain("max-w-56");
 
     // Primary workspace (plan fields with muted priority, notes, active agents) stays expanded by default
     expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
-    expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
     expect(host.querySelector("[data-testid=todo-plan-priority]")?.className).toContain("text-ink-3");
     expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
     expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(longNotes);
@@ -1350,25 +1358,31 @@ describe("TodosView slim header & left pane under todos_v2 (#14830)", () => {
     expect(toolbar.querySelector("[data-testid=todos-filter]")).toBeTruthy();
     expect(toolbar.querySelector("[data-testid=todos-reorganize-toggle]")).toBeTruthy();
 
-    // 3. Task rows: max 2 lines, no redundant status line, PR anchor, direction meta, subtle priority & pending decision preserved
+    // 3. Task rows: max 2 lines, no redundant status line, PR anchor, direction meta, icon-only subtle priority & pending decision preserved
     const workingRow = host.querySelector<HTMLElement>('[data-todo="task_pr_working"]')!;
     expect(workingRow.dataset.todoRowLayout).toBe("task-slim");
     expect(workingRow.querySelector("[data-testid=todo-status-line]")).toBeNull();
     expect(workingRow.querySelector("[data-testid=todo-slim-pr]")?.textContent).toBe("PR #14830");
     expect(workingRow.querySelector("[data-testid=todo-direction-tag]")?.textContent).toBe("Platform");
-    expect(workingRow.querySelector("[data-testid=todo-priority-subtle]")?.textContent).toContain(t("todos.priority_option_high"));
+    const workingPrio = workingRow.querySelector("[data-testid=todo-priority-subtle]")!;
+    expect(workingPrio.getAttribute("aria-label")).toBe(t("todos.priority_high"));
+    expect(workingPrio.textContent?.trim()).toBe("");
 
     const decisionRow = host.querySelector<HTMLElement>('[data-todo="task_decision"]')!;
     expect(decisionRow.dataset.todoRowLayout).toBe("task-slim");
     expect(decisionRow.querySelector("[data-testid=todo-ask]")?.textContent).toContain("Proceed with blue-green swap?");
-    expect(decisionRow.querySelector("[data-testid=todo-priority-subtle]")?.textContent).toContain(t("todos.priority_option_high"));
+    const decisionPrio = decisionRow.querySelector("[data-testid=todo-priority-subtle]")!;
+    expect(decisionPrio.getAttribute("aria-label")).toBe(t("todos.priority_high"));
+    expect(decisionPrio.textContent?.trim()).toBe("");
 
-    // 4. Personal to-do: minimal single-line layout with due date & subtle priority
+    // 4. Personal to-do: minimal single-line layout with due date & icon-only subtle priority
     const personalRow = host.querySelector<HTMLElement>('[data-todo="personal_due"]')!;
     expect(personalRow.dataset.todoRowLayout).toBe("personal-slim");
     expect(personalRow.querySelector("[data-testid=todo-slim-line2]")).toBeNull();
     expect(personalRow.querySelector("[data-testid=todo-due-compact]")?.textContent).toBeTruthy();
-    expect(personalRow.querySelector("[data-testid=todo-priority-subtle]")?.textContent).toContain(t("todos.priority_option_high"));
+    const personalPrio = personalRow.querySelector("[data-testid=todo-priority-subtle]")!;
+    expect(personalPrio.getAttribute("aria-label")).toBe(t("todos.priority_high"));
+    expect(personalPrio.textContent?.trim()).toBe("");
 
     // 5. Parked & Done sections start compactly folded with counts and external wait hint
     const parkedSec = host.querySelector<HTMLElement>('[data-testid="todo-section"][data-section="parked"]')!;
@@ -1996,7 +2010,7 @@ describe("TodosView detail parent picker, item_type filter & toggle, and undo au
     );
     expect(api).toHaveBeenCalledWith("/todos", expect.anything());
     expect(host.querySelector('[data-testid=todo-detail-item-type] [data-item-type="task"]')?.getAttribute("aria-checked")).toBe("true");
-    expect(host.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
+    expect(host.querySelector("[data-testid=todo-detail-template-badge]")).toBeNull();
   });
 
   it("exposes Mark unread button on seen/auto-seen todos under todos_v2 and calls DELETE /todos/{id}/seen", async () => {
@@ -2130,11 +2144,14 @@ describe("TodosView detail active_blockers strip under todos_v2 (#16138)", () =>
       t("todos.active_blocker_attempts", { count: 2 }),
     );
 
-    // 3. todo_done -> plain target without retry badge
+    // 3. todo_done with unknown ID -> clickable button with safe localized label (never exposes raw todo_... ID)
     expect(items[2].querySelector("[data-testid=todo-active-blocker-kind]")?.textContent).toBe(
       t("todos.active_blocker_kind_todo_done"),
     );
-    expect(items[2].querySelector("[data-testid=todo-active-blocker-target]")?.textContent).toBe("todo_prereq_1");
+    const todoLink = items[2].querySelector<HTMLButtonElement>("[data-testid=todo-active-blocker-todo-link]")!;
+    expect(todoLink).toBeTruthy();
+    expect(todoLink.textContent).toBe(t("todos.active_blocker_linked_todo"));
+    expect(items[2].textContent).not.toContain("todo_prereq_1");
     expect(items[2].querySelector("[data-testid=todo-active-blocker-attempts]")).toBeNull();
 
     // Turning todos_v2 off hides the strip immediately
@@ -2286,5 +2303,464 @@ describe("TodosView detail active_blockers strip under todos_v2 (#16138)", () =>
     await flush();
     expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+  });
+});
+
+describe("TodosView right-pane hierarchy reorder, compact chrome, blocker title resolution & deduplication (#17938)", () => {
+  it("resolves readable clickable todo titles for todo_done/todo_stage blockers, deduplicates matching wait state, and relaxes secondary chip width", async () => {
+    const prereqLocal: Todo = {
+      id: "todo_prereq_local",
+      title: "Govern Steam extension pipeline",
+      origin: "conv-main",
+      created_at: iso(6 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    };
+    const prereqServerTitled: Todo = {
+      id: "todo_prereq_stage",
+      title: "Local fallback stage title",
+      origin: "conv-main",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    };
+    const blockedByPrereq: Todo = {
+      id: "todo_blocked_dedup",
+      title: "Roll out Steam extension updates",
+      origin: "conv-main",
+      notes: "Tracking issue #1282: wait for prerequisite pipeline governance.",
+      supervision: { supervisor: "main", state: "parked", done_when: [] },
+      wait: { kind: "external_event", waiting_on: "Govern Steam extension pipeline" },
+      active_blockers: [
+        { id: "blk_local", kind: "todo_done", target_ref: "todo_prereq_local", state: "active" },
+        {
+          id: "blk_stage",
+          kind: "todo_stage",
+          target_ref: "todo_prereq_stage",
+          target_title: "Authoritative server stage title",
+          state: "active",
+        },
+      ],
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("parked", "external_wait", "parked", 0),
+    };
+
+    await render({
+      todos: [blockedByPrereq, prereqLocal, prereqServerTitled],
+      todosV2: true,
+      selectedId: "todo_blocked_dedup",
+    });
+
+    // Duplicate prerequisite wait is merged into active blockers: single entry, no folded wait chip or toggle
+    const focus = host.querySelector<HTMLElement>("[data-testid=todo-detail-focus-banner]")!;
+    expect(focus).toBeTruthy();
+    expect(focus.getAttribute("data-focus-count")).toBe("1");
+    expect(focus.querySelector("[data-testid=todo-detail-focus-chip-wait]")).toBeNull();
+    expect(focus.querySelector("[data-testid=todo-detail-focus-more]")).toBeNull();
+
+    // Zero raw todo_... IDs exposed; server target_title preferred, local allTodosById fallback used
+    expect(focus.textContent).not.toContain("todo_prereq_local");
+    expect(focus.textContent).not.toContain("todo_prereq_stage");
+    const links = [...focus.querySelectorAll<HTMLButtonElement>("[data-testid=todo-active-blocker-todo-link]")];
+    expect(links).toHaveLength(2);
+    expect(links[0].textContent).toBe("Govern Steam extension pipeline");
+    expect(links[1].textContent).toBe("Authoritative server stage title");
+
+    // Unstarted task with no linked agents omits TaskCompletionCheck and collapses empty ReviewChecklist inline
+    expect(host.querySelector("[data-testid=task-completion-check]")).toBeNull();
+    const review = host.querySelector<HTMLElement>("[data-testid=review-checklist]")!;
+    expect(review).toBeTruthy();
+    expect(review.getAttribute("data-compact-empty")).toBe("true");
+    expect(review.className).not.toContain("bg-inset");
+
+    // Notes sits directly below focus banner and before plan metadata & review checklist
+    const notesEl = host.querySelector<HTMLElement>("[data-testid=todo-detail-notes]")!;
+    const planEl = host.querySelector<HTMLElement>("[data-testid=todo-plan]")!;
+    expect(focus.compareDocumentPosition(notesEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notesEl.compareDocumentPosition(planEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(planEl.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Clicking prerequisite blocker button navigates to that prerequisite todo
+    await act(async () => links[0].click());
+    await flush();
+    expect(host.querySelector<HTMLInputElement>("[data-testid=todos-detail-column] input[type=text]")?.value).toBe(
+      "Govern Steam extension pipeline",
+    );
+  });
+
+  it("keeps distinct wait unmerged with relaxed chip width, keeps criteria-populated ReviewChecklist expanded, and renders compact TaskCompletionCheck when agents exist", async () => {
+    const startedWithCriteria: Todo = {
+      id: "todo_started_criteria",
+      title: "Verify release checklist",
+      origin: "conv-main",
+      notes: "Important verification context",
+      agents: [{ machine_id: "m1", session_id: "s-past", linked_at: iso(3 * HOUR), released_at: iso(1 * HOUR), title: "Past worker" }],
+      supervision: { supervisor: "main", state: "", done_when: ["All integration tests green"] },
+      wait: { kind: "person_reply", waiting_on: "Release owner approval on staging rollout", wake_condition: "Owner replies" },
+      active_blockers: [{ id: "blk_pr", kind: "external_pr", target_ref: "https://github.com/nwverse/persona/pull/17938", state: "active" }],
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("parked", "external_wait", "parked", 0),
+    };
+
+    await render({ todos: [startedWithCriteria], todosV2: true, selectedId: "todo_started_criteria" });
+
+    // Distinct person_reply wait stays as secondary chip with relaxed max-w-md (not max-w-52)
+    const waitChip = host.querySelector<HTMLElement>("[data-testid=todo-detail-focus-chip-wait]")!;
+    expect(waitChip).toBeTruthy();
+    expect(waitChip.className).toContain("max-w-md");
+    expect(waitChip.className).not.toContain("max-w-52");
+
+    // ReviewChecklist stays expanded when acceptance criteria exist
+    const review = host.querySelector<HTMLElement>("[data-testid=review-checklist]")!;
+    expect(review.getAttribute("data-compact-empty")).toBeNull();
+    expect(review.textContent).toContain("All integration tests green");
+
+    // TaskCompletionCheck renders in compact single-row mode with explanation tucked behind InfoTip
+    const check = host.querySelector<HTMLElement>("[data-testid=task-completion-check]")!;
+    expect(check).toBeTruthy();
+    expect(check.getAttribute("data-compact")).toBe("true");
+    expect(check.textContent).not.toContain(t("todos.check_explanation"));
+    const infoBtn = check.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-atoms.about", { name: t("todos.check_section") })}"]`)!;
+    expect(infoBtn).toBeTruthy();
+    await act(async () => infoBtn.click());
+    for (let i = 0; i < 40 && !document.querySelector('[role="tooltip"]'); i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+    }
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(t("todos.check_explanation"));
+
+    // Turning todos_v2 off restores legacy expanded completion check, legacy max-w-[760px] detail width, and max-w-56 project select
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector<HTMLElement>("[data-testid=task-completion-check]")?.getAttribute("data-compact")).toBeNull();
+    expect(host.querySelector<HTMLElement>("[data-testid=task-completion-check]")?.textContent).toContain(t("todos.check_explanation"));
+    expect(host.querySelector<HTMLElement>("[data-testid=todo-detail]")?.className).toContain("max-w-[760px]");
+    expect(host.querySelector<HTMLElement>("[data-testid=todo-plan-project]")?.className).toContain("max-w-56");
+  });
+
+  it("uses wait.waiting_on as readable title fallback when a single internal todo blocker is not loaded locally", async () => {
+    const blockedUnloaded: Todo = {
+      id: "todo_blocked_unloaded",
+      title: "Downstream task",
+      wait: { kind: "external_event", waiting_on: "Archived prerequisite title" },
+      active_blockers: [{ id: "blk_archived", kind: "todo_done", target_ref: "todo_archived_999", state: "active" }],
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("parked", "external_wait", "parked", 0),
+    };
+
+    await render({ todos: [blockedUnloaded], todosV2: true, selectedId: "todo_blocked_unloaded" });
+
+    const focus = host.querySelector<HTMLElement>("[data-testid=todo-detail-focus-banner]")!;
+    expect(focus.getAttribute("data-focus-count")).toBe("1");
+    expect(focus.textContent).toContain("Archived prerequisite title");
+    expect(focus.textContent).not.toContain("todo_archived_999");
+  });
+});
+
+describe("TodosView left-list density, direction header & readable shared blockers under todos_v2 (#17938 Sub-PR 1)", () => {
+  const densityTodos: Todo[] = [
+    {
+      id: "todo_e8acf635da201b7a",
+      title: "Stabilize Steam extension pipeline",
+      direction_id: "dir-steam",
+      effective_direction_id: "dir-steam",
+      effective_direction_name: "Steam Extension",
+      priority: "high",
+      agents: [{ machine_id: "m1", session_id: "s-steam", linked_at: iso(2 * HOUR) }],
+      created_at: iso(8 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "todo_child_direct",
+      title: "Unstarted placeholder child",
+      part_of: "todo_e8acf635da201b7a",
+      direction_id: "dir-steam",
+      effective_direction_id: "dir-steam",
+      effective_direction_name: "Steam Extension",
+      origin: "conv-main",
+      repo_gate: {
+        state: "missing_pr",
+        target_count: 1,
+        ready_count: 0,
+        reference_count: 0,
+        blocking_repo: "nwverse/persona",
+        reason: "missing_pr",
+      },
+      created_at: iso(7 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "rest", "working", 1),
+    },
+    {
+      id: "todo_grandchild",
+      title: "Grandchild waiting on prerequisite",
+      part_of: "todo_child_direct",
+      direction_id: "dir-steam",
+      effective_direction_id: "dir-steam",
+      effective_direction_name: "Steam Extension",
+      wait: { kind: "external_event", waiting_on: "todo_e8acf635da201b7a" },
+      created_at: iso(6 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("waiting", "external_wait", "waiting", 2),
+    },
+    {
+      id: "todo_pr_dup",
+      title: "Land PR #1446 without duplicate line-2 PR number",
+      direction_id: "dir-steam",
+      effective_direction_id: "dir-steam",
+      effective_direction_name: "Steam Extension",
+      pr_url: "https://github.com/nwverse/persona/pull/1446",
+      wait: { kind: "external_event", waiting_on: "PR #1446 (nwverse/persona)" },
+      repo_gate: {
+        state: "awaiting_review",
+        target_count: 1,
+        ready_count: 0,
+        reference_count: 0,
+        blocking_repo: "nwverse/persona",
+        reason: "review_required",
+      },
+      created_at: iso(5 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("waiting", "pr_merge", "waiting", 3),
+    },
+    {
+      id: "todo_delivered_ready",
+      title: "Delivered task awaiting owner verification",
+      direction_id: "dir-steam",
+      effective_direction_id: "dir-steam",
+      effective_direction_name: "Steam Extension",
+      ask: { verdict: "Done: please verify results", asked_at: iso(1 * HOUR), outcome: "done" },
+      repo_gate: {
+        state: "ready",
+        target_count: 1,
+        ready_count: 1,
+        reference_count: 0,
+        reason: "all_targets_ready",
+      },
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("just_finished", "finished_unseen", "ready", 0),
+    },
+    {
+      id: "todo_steam_done",
+      title: "Shipped earlier Steam fix",
+      direction_id: "dir-steam",
+      effective_direction_id: "dir-steam",
+      effective_direction_name: "Steam Extension",
+      done_at: iso(3 * HOUR),
+      created_at: iso(9 * HOUR),
+      updated_at: iso(3 * HOUR),
+      view: view("done", "closed", "done", 0),
+    },
+  ];
+
+  const densityBoard: TodoBoardProjection = {
+    status_groups: [
+      {
+        key: "in_progress",
+        total_count: 2,
+        visible_count: 2,
+        entries: [
+          {
+            todo_id: "todo_e8acf635da201b7a",
+            folded_child_ids: ["todo_child_direct", "todo_grandchild"],
+            folded_count: 2,
+          },
+          { todo_id: "todo_pr_dup" },
+        ],
+      },
+      {
+        key: "pending_review",
+        total_count: 1,
+        visible_count: 1,
+        entries: [{ todo_id: "todo_delivered_ready" }],
+      },
+      {
+        key: "done",
+        total_count: 1,
+        visible_count: 1,
+        entries: [{ todo_id: "todo_steam_done" }],
+      },
+    ],
+    direction_groups: [
+      {
+        direction_id: "dir-steam",
+        label: "Steam Extension",
+        counts: { needs_you: 0, in_progress: 3, pending_review: 1, waiting: 1, done: 1, total: 6 },
+        todo_ids: [
+          "todo_e8acf635da201b7a",
+          "todo_child_direct",
+          "todo_grandchild",
+          "todo_pr_dup",
+          "todo_delivered_ready",
+          "todo_steam_done",
+        ],
+      },
+    ],
+    sidebar_tree: [],
+    counts: {
+      needs_you: 0,
+      in_progress: 3,
+      pending_review: 1,
+      waiting: 1,
+      someday: 0,
+      done: 1,
+      open_total: 5,
+    },
+  };
+
+  it("deduplicates direction & nested parent badges, tones down repo_gate & wait cues, prevents clipped direction arcs, and resolves raw todo_... shared blockers", async () => {
+    const rawTodoSharedBlocker = [
+      {
+        key: "target:todo_e8acf635da201b7a",
+        kind: "external_target",
+        label: "todo_e8acf635da201b7a",
+        todo_ids: ["todo_child_direct", "todo_grandchild"],
+        count: 2,
+      },
+    ];
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/mergetrain") {
+        return {
+          repos: [],
+          by_todo: {
+            todo_pr_dup: { repo_key: "nwverse/persona", position: 3, state: "queued" },
+          },
+        };
+      }
+      return {};
+    });
+
+    await render({
+      todos: densityTodos,
+      todoBoard: densityBoard,
+      sharedBlockers: rawTodoSharedBlocker,
+      sessions: {
+        m1: [
+          {
+            id: "s-steam",
+            machine_id: "m1",
+            session_id: "s-steam",
+            agent: "claude",
+            title: "Steam worker",
+            cwd: "/repo",
+            state: "working",
+            updated_at: iso(1 * 60_000),
+          },
+        ],
+      },
+      todosV2: true,
+      grouping: "direction",
+      leaders: ["dir-steam"],
+      conversations: [{ machine_id: "m1", session_id: "dir-steam", title: "Steam Extension" }],
+      selectedId: "todo_pr_dup",
+    });
+
+    // 1. SharedBlockersStrip resolves raw todo_... ID to readable title and never leaks raw todo_... ID
+    const strip = host.querySelector<HTMLElement>("[data-testid=todos-shared-blockers]")!;
+    expect(strip).toBeTruthy();
+    expect(strip.textContent).toContain("Stabilize Steam extension pipeline");
+    expect(strip.textContent).not.toContain("todo_e8acf635da201b7a");
+    const openBlockerBtn = strip.querySelector<HTMLButtonElement>("[data-testid=shared-blocker-open-todo]")!;
+    expect(openBlockerBtn).toBeTruthy();
+
+    // 2. Direction grouping suppresses redundant inline direction badges on every row
+    const dirGroup = host.querySelector<HTMLElement>('[data-testid="todo-group"][data-group="direction:dir-steam"]')!;
+    expect(dirGroup).toBeTruthy();
+    expect(dirGroup.querySelectorAll("[data-testid=todo-direction-tag]")).toHaveLength(0);
+
+    // 3. Nested children inside TodoHierarchyRow omit redundant parent goal tags
+    const nestedBox = dirGroup.querySelector<HTMLElement>('[data-testid="todo-goal-children"][data-parent="todo_e8acf635da201b7a"]')!;
+    expect(nestedBox).toBeTruthy();
+    expect(nestedBox.querySelectorAll("[data-testid=todo-parent-goal]")).toHaveLength(0);
+
+    // 4. Expanded direction header omits stray running arc next to "✓ Done 1" and protects overflow cleanly
+    const headerRow = dirGroup.firstElementChild as HTMLElement;
+    expect(headerRow.className).toContain("overflow-hidden");
+    expect(headerRow.querySelector("button[aria-expanded]")?.className).toContain("overflow-hidden");
+    expect(dirGroup.querySelector("[data-direction-counts] [data-shape='arc']")).toBeNull();
+    expect(dirGroup.querySelector("[data-testid=todo-direction-review-done]")).toBeTruthy();
+
+    // Folding the direction header shows the working arc inside a non-clipping wrapper since s-steam is working
+    await act(async () => headerRow.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+    await flush();
+    expect(dirGroup.querySelector("[data-direction-counts] [data-shape='arc']")).toBeTruthy();
+    await act(async () => headerRow.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+    await flush();
+
+    // 5. Unstarted placeholder task omits missing_pr repo_gate alarm
+    expect(dirGroup.querySelector('[data-todo="todo_child_direct"] [data-testid="todo-row-repo-gate"]')).toBeNull();
+
+    // 6. Grandchild wait cue resolves raw todo_... ID with concise prerequisite prefix
+    const grandchildCue = dirGroup.querySelector('[data-todo="todo_grandchild"] [data-testid="todo-slim-cue"]')?.textContent ?? "";
+    expect(grandchildCue).toContain("Stabilize Steam extension pipeline");
+    expect(grandchildCue).not.toContain("todo_e8acf635da201b7a");
+
+    // 7. Single-repo PR row keeps PR #1446 on line 1, omits duplicate PR #1446 on line 2, omits redundant repo_gate, and shows concise queued merge-train
+    const prRow = dirGroup.querySelector<HTMLElement>('[data-todo="todo_pr_dup"]')!;
+    expect(prRow.querySelector("[data-testid=todo-slim-pr]")?.textContent).toBe("PR #1446");
+    expect(prRow.querySelector("[data-testid=todo-row-repo-gate]")).toBeNull();
+    const prCue = prRow.querySelector("[data-testid=todo-slim-cue]")?.textContent ?? "";
+    expect(prCue).not.toContain("1446");
+    expect(prRow.querySelector("[data-testid=todo-mergetrain-badge]")?.textContent).toBe(t("todos.slim_mergetrain_queued", { position: 3 }));
+
+    // 8. Delivered / awaiting-review task omits green ready repo_gate badge so the ask cue owns line 2
+    const deliveredRow = dirGroup.querySelector<HTMLElement>('[data-todo="todo_delivered_ready"]')!;
+    expect(deliveredRow.querySelector("[data-testid=todo-row-repo-gate]")).toBeNull();
+    expect(deliveredRow.querySelector("[data-testid=todo-ask]")?.textContent).toBe("Done: please verify results");
+
+    // 9. Clicking the open-todo button in SharedBlockersStrip selects the prerequisite todo
+    await act(async () => openBlockerBtn.click());
+    await flush();
+    expect(host.querySelector<HTMLInputElement>("[data-testid=todos-detail-column] input[type=text]")?.value).toBe(
+      "Stabilize Steam extension pipeline",
+    );
+  });
+
+  it("maintains full en/zh-Hans/ja parity for all #17938 Sub-PR 1 localization keys", async () => {
+    const [enTodos, zhTodos, jaTodos] = await Promise.all([
+      import("../i18n/locales/en/todos.json"),
+      import("../i18n/locales/zh-Hans/todos.json"),
+      import("../i18n/locales/ja/todos.json"),
+    ]);
+    const keys = [
+      "shared_blockers_region",
+      "shared_blockers_title",
+      "shared_blockers_unknown_todo",
+      "repo_gate_row_ready",
+      "repo_gate_row_blocked",
+      "repo_gate_row_pending",
+      "slim_wait_prereq",
+      "slim_wait_prereq_target",
+      "slim_wait_target",
+      "slim_wait_external",
+      "slim_wait_reply",
+      "slim_wait_reply_target",
+      "slim_wait_merge_review",
+      "slim_wait_merge_review_target",
+      "slim_wait_pr_merge",
+      "slim_wait_pr_merge_target",
+      "slim_wait_date",
+      "slim_wait_date_target",
+      "slim_wait_agent_target",
+      "slim_pr_ci_failed",
+      "slim_pr_conflicts",
+      "slim_pr_changes",
+      "slim_pr_checks_pending",
+      "slim_mergetrain_queued",
+    ] as const;
+    for (const key of keys) {
+      expect(enTodos.default[key], `en.${key}`).toBeTruthy();
+      expect(zhTodos.default[key], `zh-Hans.${key}`).toBeTruthy();
+      expect(jaTodos.default[key], `ja.${key}`).toBeTruthy();
+    }
+    expect(zhTodos.default.shared_blockers_title).toBe("公共卡点 · {count}");
+    expect(zhTodos.default.shared_blockers_region).toBe("公共卡点");
+    expect(jaTodos.default.shared_blockers_title).toBe("共通ブロッカー · {count}");
   });
 });

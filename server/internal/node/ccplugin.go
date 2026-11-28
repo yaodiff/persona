@@ -86,6 +86,12 @@ var (
 	// ccPluginConfirmWait is how long the node looks for the prompt in the transcript, past ccPluginSubmitWait: only a
 	// message the plugin can no longer submit goes through the inbox instead.
 	ccPluginConfirmWait = 10 * time.Second
+
+	// ccPluginCompactionTTL is the defensive end for a compaction report whose matching end never arrived.
+	ccPluginCompactionTTL = 15 * time.Minute
+	// ccPluginCompactionEveryS is how often a running compaction's live line is refreshed. Clients drop an
+	// ordinary live line after 15 seconds.
+	ccPluginCompactionEveryS = 3
 )
 
 // What session.send says about how a message for the owner went in (delivered_as), and why it went through the inbox
@@ -175,15 +181,56 @@ type ccPluginSession struct {
 	acks map[string]chan ccPluginAck // messages, interrupts or settings handed over and not settled, by id
 }
 
+// ccPluginCompaction is a main-loop compaction Persona's plugin reported for a pane-less outside Claude.
+type ccPluginCompaction struct {
+	pid       int
+	procStart string
+	trigger   string
+	started   time.Time
+}
+
 // ccPluginRegistry is every session whose plugin polled this node since it started; its zero value is ready.
 type ccPluginRegistry struct {
 	mu             sync.Mutex
 	sessions       map[string]*ccPluginSession
 	queued         map[string]ccPluginQueuedSettings
+	compactions    map[string]ccPluginCompaction
 	personaHooks   map[string]ccPluginPersonaHook
 	perms          map[ccPluginPermID]*ccPluginPerm
 	completedReqs  map[ccPluginPermID]time.Time
 	completedTools map[string]time.Time
+}
+
+// beginCompaction records the start for id, replacing an older report of that session and expiring abandoned ones.
+func (r *ccPluginRegistry) beginCompaction(id string, c ccPluginCompaction, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.compactions == nil {
+		r.compactions = map[string]ccPluginCompaction{}
+	}
+	for other, old := range r.compactions {
+		if now.Sub(old.started) >= ccPluginCompactionTTL {
+			delete(r.compactions, other)
+		}
+	}
+	r.compactions[id] = c
+}
+
+// endCompaction ends id's report when it belongs to pid; an older process cannot end a newer session's report.
+func (r *ccPluginRegistry) endCompaction(id string, pid int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, ok := r.compactions[id]; ok && c.pid == pid {
+		delete(r.compactions, id)
+	}
+}
+
+// compaction is id's report, if any. The caller checks whether its process still lives.
+func (r *ccPluginRegistry) compaction(id string) (ccPluginCompaction, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.compactions[id]
+	return c, ok
 }
 
 // polled records a poll from session id's claude pid and makes it the session's waiting poll; the poll it replaces
@@ -671,7 +718,7 @@ func (n *Node) serveCCPluginHTTP(ctx context.Context, c net.Conn, first []byte, 
 // ccPluginRequest is one of the plugin's requests, answered with a status and a JSON body.
 func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path string, body []byte) (int, any) {
 	what, ok := strings.CutPrefix(path, ccPluginPrefix)
-	if !ok || method != http.MethodPost || (what != "poll" && what != "ack" && what != "permission" && what != "permission-done") {
+	if !ok || method != http.MethodPost || (what != "poll" && what != "ack" && what != "compact" && what != "permission" && what != "permission-done") {
 		return http.StatusNotFound, map[string]any{"error": "unknown"}
 	}
 	var in struct {
@@ -685,6 +732,8 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		ID                string         `json:"id"`
 		Submitted         bool           `json:"submitted"`
 		Reason            string         `json:"reason"`
+		Phase             string         `json:"phase"`
+		Trigger           string         `json:"trigger"`
 	}
 	if json.Unmarshal(body, &in) != nil || !validID(in.SessionID) {
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
@@ -702,6 +751,8 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 	case "ack":
 		n.ccPlugins.acked(in.SessionID, pid, in.ID, ccPluginAck{Submitted: in.Submitted, Reason: clipReason(in.Reason)})
 		return http.StatusOK, map[string]any{"ok": true}
+	case "compact":
+		return n.ccPluginReportCompaction(pid, claude, in.Phase, in.Trigger)
 	case "permission":
 		return n.ccPluginPermission(ctx, pid, claude, body)
 	case "permission-done":
@@ -761,6 +812,31 @@ func (n *Node) ccPluginRequest(ctx context.Context, c net.Conn, method, path str
 		}
 	}
 	return http.StatusOK, ccPluginDelivery{Messages: []ccPluginMessage{}, Permissions: n.ccPlugins.permissionsAuthorized(in.SessionID, pid)}
+}
+
+// ccPluginReportCompaction records a main-loop compaction for a pane-less claude outside Persona's terminals. The
+// plugin's report only drives the live line when the session is watched: it changes nothing in the session or transcript.
+func (n *Node) ccPluginReportCompaction(pid int, c claudeProc, phase, trigger string) (int, any) {
+	if phase != "start" && phase != "end" {
+		return http.StatusBadRequest, map[string]any{"error": "invalid"}
+	}
+	if trigger != "manual" && trigger != "auto" && trigger != "plugin" && trigger != "precompute" {
+		return http.StatusBadRequest, map[string]any{"error": "invalid"}
+	}
+	if !ccPluginServes(n, c) || outsidePane(c) != "" || n.livePane(c.SessionID) != "" {
+		return http.StatusOK, map[string]any{"ok": false}
+	}
+	switch phase {
+	case "start":
+		now := time.Now()
+		n.ccPlugins.beginCompaction(c.SessionID, ccPluginCompaction{
+			pid: pid, procStart: claudeFileStart(c.ProcStart), trigger: trigger, started: now,
+		}, now)
+	case "end":
+		n.ccPlugins.endCompaction(c.SessionID, pid)
+	}
+	n.wakeCompactionLive(c.SessionID)
+	return http.StatusOK, map[string]any{"ok": true}
 }
 
 // clipReason keeps a short word from the plugin (a version, a reason) short.

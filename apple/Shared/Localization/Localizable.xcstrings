@@ -11087,6 +11087,41 @@
       },
       "extractionState": "manual"
     },
+    "%lld item is already set.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld item is already set."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%1$lld items are already set."
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld件はすでにテンプレートどおりに設定されています。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已有 %1$lld 项符合模板设置。"
+          }
+        }
+      }
+    },
     "%lld items": {
       "extractionState": "manual",
       "localizations": {
@@ -19399,6 +19434,52 @@
         }
       }
     },
+    "A template changes this iPhone only after you preview and apply it. External conversations are included in Agents, not a separate tab.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A template changes this iPhone only after you preview and apply it. External conversations are included in Agents, not a separate tab."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プレビューしてから適用すると、テンプレートの変更がこのiPhoneの設定に反映されます。外部の会話もAgentsタブに表示されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "预览并应用后，模板才会更改这台 iPhone 的设置。外部对话也集中在 Agents 标签页。"
+          }
+        }
+      }
+    },
+    "A template must be a JSON object.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A template must be a JSON object."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレートはJSONオブジェクトで指定してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模板必须是一个 JSON 对象。"
+          }
+        }
+      }
+    },
     "A terminal needs you": {
       "localizations": {
         "en": {
@@ -23963,6 +24044,29 @@
       },
       "extractionState": "manual"
     },
+    "Agent console": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent console"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agentコンソール"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 控制台"
+          }
+        }
+      }
+    },
     "Agent status changes and completion notifications": {
       "localizations": {
         "en": {
@@ -25891,6 +25995,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "All other categories remain available here and through Settings search.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All other categories remain available here and through Settings search."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかのカテゴリはすべて、ここから開くか、設定の検索で見つけられます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你也可以在这里浏览其他所有类别，或通过设置中的搜索查找。"
+          }
+        }
+      }
     },
     "All projects on %@": {
       "localizations": {
@@ -30586,6 +30713,29 @@
         }
       }
     },
+    "Apply extension changes from web or Settings › Extensions on this iPhone.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apply extension changes from web or Settings › Extensions on this iPhone."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拡張機能の変更を適用するには、Web版またはこのiPhoneの「設定 › 拡張機能」を使ってください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请在网页版或这台 iPhone 的「设置 › 扩展」中应用扩展更改。"
+          }
+        }
+      }
+    },
     "Apply to All Online Machines": {
       "localizations": {
         "en": {
@@ -32833,6 +32983,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "助手说"
+          }
+        }
+      }
+    },
+    "Assistant settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistant settings"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタント設定"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手设置"
           }
         }
       }
@@ -50571,6 +50744,29 @@
         }
       }
     },
+    "Common categories and More settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Common categories and More settings"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "よく使うカテゴリと「その他の設定」"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常用类别和「更多设置」"
+          }
+        }
+      }
+    },
     "Compact Context /compact": {
       "localizations": {
         "en": {
@@ -50681,6 +50877,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "压缩于 %1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Compacting context…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacting context…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンテキストを圧縮中…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在压缩上下文…"
           }
         }
       },
@@ -77478,6 +77697,29 @@
         }
       }
     },
+    "Every category": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every category"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのカテゴリ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所有类别"
+          }
+        }
+      }
+    },
     "Every computer you have, the same herdr session": {
       "localizations": {
         "en": {
@@ -90133,6 +90375,29 @@
         }
       }
     },
+    "Hub navigation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hub navigation"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブのナビゲーション"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 导航"
+          }
+        }
+      }
+    },
     "Hub only": {
       "extractionState": "manual",
       "localizations": {
@@ -91202,6 +91467,29 @@
       },
       "extractionState": "manual"
     },
+    "Import a shared template, preview its changes and apply the native Agent console. Default restores Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import a shared template, preview its changes and apply the native Agent console. Default restores Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "共有テンプレートを読み込み、変更をプレビューしてから、iPhoneのAgentコンソールを適用できます。「標準」を選ぶとPersonaの元の表示に戻ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入共享模板，预览更改并应用原生 Agent 控制台。选择「默认」可恢复 Persona 的原始界面。"
+          }
+        }
+      }
+    },
     "Import from ~/.zshrc": {
       "localizations": {
         "en": {
@@ -92172,6 +92460,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "在这台 Mac 上刚弹出的窗口里选「打开系统设置」，再打开 Persona Input（隐私与安全性 › 辅助功能）。在那之前，照样可以滚动。"
+          }
+        }
+      }
+    },
+    "In use": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In use"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前使用"
           }
         }
       }
@@ -94483,6 +94794,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Invalid browser setting: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid browser setting: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブラウザー設定が無効です（%1$@）。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浏览器设置无效：%1$@"
+          }
+        }
+      }
     },
     "Invalid conversation": {
       "comment": "An Agent conversation that cannot be resumed.",
@@ -102215,6 +102549,29 @@
         }
       }
     },
+    "Link or JSON": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link or JSON"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リンクまたはJSON"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "链接或 JSON"
+          }
+        }
+      }
+    },
     "Link removed": {
       "extractionState": "manual",
       "localizations": {
@@ -106282,6 +106639,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "主对话"
+          }
+        }
+      }
+    },
+    "Main chat, Agents and Settings. Running and external conversations are together in Agents.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Main chat, Agents and Settings. Running and external conversations are together in Agents."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メインチャット、Agents、設定の3つのタブを表示します。実行中の会話も外部の会話もAgentsにまとまります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示主对话、Agents 和设置三个标签页。运行中的对话和外部对话都在 Agents 中。"
           }
         }
       }
@@ -124384,6 +124764,29 @@
         }
       }
     },
+    "Not applied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not applied"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "適用対象外"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不会应用"
+          }
+        }
+      }
+    },
     "Not asked yet": {
       "localizations": {
         "en": {
@@ -139736,6 +140139,29 @@
         }
       }
     },
+    "Paste a template link or its JSON.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste a template link or its JSON."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレートのリンクかJSONを貼り付けてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请粘贴模板链接或 JSON。"
+          }
+        }
+      }
+    },
     "Paste from This Mac": {
       "localizations": {
         "en": {
@@ -141265,6 +141691,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Persona 只用会议相关的内容回答：以前的会议纪要、项目进展、待办归谁。不会提私人聊天、邮件或健康。"
+          }
+        }
+      }
+    },
+    "Persona as it comes. Restores every native Agent console choice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona as it comes. Restores every native Agent console choice."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agentコンソールのすべての設定をリセットし、Personaの標準の表示に戻します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将所有原生 Agent 控制台设置恢复为默认值，回到 Persona 原本的界面。"
           }
         }
       }
@@ -149575,6 +150024,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Questions, replies and work needing you": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questions, replies and work needing you"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "質問、返信、対応が必要な作業"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提问、回复和待你处理的工作"
+          }
+        }
+      }
     },
     "Queued for the AI [Inbox Now]": {
       "extractionState": "manual",
@@ -162479,6 +162951,29 @@
       },
       "extractionState": "manual"
     },
+    "Running agents by computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running agents by computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピューター別に実行中のエージェントを表示"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按电脑显示运行中的 Agent"
+          }
+        }
+      }
+    },
     "Running for %@ [Child Session]": {
       "extractionState": "manual",
       "localizations": {
@@ -170014,6 +170509,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Server settings are not changed by this iPhone preview.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server settings are not changed by this iPhone preview."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneでプレビューしても、サーバー設定は変わりません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台 iPhone 上预览模板不会更改服务器设置。"
+          }
+        }
+      }
     },
     "Servers (Optional, Auto-Detected)": {
       "localizations": {
@@ -187916,6 +188434,52 @@
         }
       }
     },
+    "Template applied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Template applied"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレートを適用しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已应用模板"
+          }
+        }
+      }
+    },
+    "Templates": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Templates"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレート"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模板"
+          }
+        }
+      }
+    },
     "Temporary": {
       "localizations": {
         "en": {
@@ -195346,6 +195910,29 @@
       },
       "extractionState": "manual"
     },
+    "The link does not contain a readable template.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The link does not contain a readable template."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リンクからテンプレートを読み取れません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法从此链接读取模板。"
+          }
+        }
+      }
+    },
     "The link is still there. The hub may need an update.": {
       "extractionState": "manual",
       "localizations": {
@@ -198846,6 +199433,98 @@
         }
       },
       "extractionState": "manual"
+    },
+    "The template id must use lowercase letters, digits and dashes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The template id must use lowercase letters, digits and dashes."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレートIDに使えるのは、英小文字、数字、ハイフンだけです。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模板 ID 只能包含小写字母、数字和连字符。"
+          }
+        }
+      }
+    },
+    "The template is not valid JSON.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The template is not valid JSON."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレートのJSON形式が正しくありません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模板的 JSON 格式无效。"
+          }
+        }
+      }
+    },
+    "The template is too large.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The template is too large."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレートのサイズが上限を超えています。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模板过大。"
+          }
+        }
+      }
+    },
+    "The template needs a name.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The template needs a name."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレート名を指定してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请为模板提供名称。"
+          }
+        }
+      }
     },
     "The template replaces your current draft. It isn't saved to the hub automatically.": {
       "localizations": {
@@ -205393,6 +206072,29 @@
         }
       }
     },
+    "This iPhone can apply the Agent console template with plain main chat, active Agents and short Settings. Use Default to restore Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This iPhone can apply the Agent console template with plain main chat, active Agents and short Settings. Use Default to restore Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneでは、シンプルなメインチャット、実行中のエージェントの一覧、簡略化した設定画面を組み合わせたAgentコンソールテンプレートを適用できます。「標準」を選ぶとPersonaの元の表示に戻ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 iPhone 可以应用包含简洁主对话、运行中的 Agent 列表和精简设置的 Agent 控制台模板。选择「默认」可恢复 Persona 的原始界面。"
+          }
+        }
+      }
+    },
     "This iPhone can take urgent calls.": {
       "localizations": {
         "en": {
@@ -208123,6 +208825,75 @@
         }
       },
       "extractionState": "manual"
+    },
+    "This template came from an import. Review every change before applying it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This template came from an import. Review every change before applying it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み込んだテンプレートです。適用前にすべての変更内容を確認してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这是导入的模板。应用前请确认每项更改。"
+          }
+        }
+      }
+    },
+    "This template changes nothing here.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This template changes nothing here."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このテンプレートを適用しても、このiPhoneの設定は変わりません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此模板不会更改这台 iPhone 的设置。"
+          }
+        }
+      }
+    },
+    "This template version is not supported.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This template version is not supported."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このバージョンのテンプレートには対応していません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不支持此模板版本。"
+          }
+        }
+      }
     },
     "This text is too long. Send a shorter message to Health.": {
       "localizations": {
@@ -216644,6 +217415,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Unknown template part: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown template part: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テンプレートに不明な項目があります（%1$@）。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法识别的模板部分：%1$@"
+          }
+        }
+      }
     },
     "Unknown value": {
       "localizations": {
@@ -229618,6 +230412,29 @@
         }
       }
     },
+    "Will change": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Will change"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "変更予定"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将更改"
+          }
+        }
+      }
+    },
     "Window Size": {
       "localizations": {
         "en": {
@@ -236706,6 +237523,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "手机跟不上"
+          }
+        }
+      }
+    },
+    "iPhone does not apply the hub sidebar arrangement. The three native tabs are applied instead.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iPhone does not apply the hub sidebar arrangement. The three native tabs are applied instead."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneでは、標準の3つのタブが使われます。ハブのサイドバーの配置は適用されません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 iPhone 会使用三个原生标签页。hub 的侧边栏布局不适用于此设备。"
           }
         }
       }
@@ -245269,6 +246109,443 @@
           "stringUnit": {
             "state": "translated",
             "value": "与 hub 的连接需要重新登录，请重连后再试。"
+          }
+        }
+      }
+    },
+    "View through the computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View through the computer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通过电脑查看"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ経由で表示"
+          }
+        }
+      }
+    },
+    "View directly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View directly"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直接查看"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直接表示"
+          }
+        }
+      }
+    },
+    "Couldn't show the page directly, so it's shown through the computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't show the page directly, so it's shown through the computer."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法直接显示这个页面，已改为通过电脑显示。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このページを直接表示できなかったため、コンピュータ経由で表示しています。"
+          }
+        }
+      }
+    },
+    "Choose an Option": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an Option"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择一项"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "項目を選択"
+          }
+        }
+      }
+    },
+    "No options available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No options available."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有可选项。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択できる項目がありません。"
+          }
+        }
+      }
+    },
+    "Opening the page on %@…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening the page on %@…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在 %@ 上打开页面…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ でページを開いています…"
+          }
+        }
+      }
+    },
+    "Leave this page? Changes you made may not be saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave this page? Changes you made may not be saved."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要离开此页面吗？你所做的更改可能不会保存。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このページから移動しますか？変更内容が保存されない可能性があります。"
+          }
+        }
+      }
+    },
+    "Couldn't load the page: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load the page: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载页面：%@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ページを読み込めませんでした：%@"
+          }
+        }
+      }
+    },
+    "The page stopped unexpectedly.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The page stopped unexpectedly."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "页面意外停止了。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ページが予期せず停止しました。"
+          }
+        }
+      }
+    },
+    "This page asked to choose a file, which isn't supported when viewing through the computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This page asked to choose a file, which isn't supported when viewing through the computer."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此页面请求选择文件，通过电脑查看时暂不支持。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このページはファイルの選択を求めましたが、コンピュータ経由で表示している間は対応していません。"
+          }
+        }
+      }
+    },
+    "Preview Closed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview Closed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "预览已关闭"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プレビューが閉じられました"
+          }
+        }
+      }
+    },
+    "The browser tab on your computer was closed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The browser tab on your computer was closed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电脑上的浏览器标签页已关闭。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ上のブラウザタブが閉じられました。"
+          }
+        }
+      }
+    },
+    "No Browser on This Computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Browser on This Computer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑上没有浏览器"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータにブラウザがありません"
+          }
+        }
+      }
+    },
+    "Install Chrome, Chromium, Edge, or Brave on %@ to view pages through the computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install Chrome, Chromium, Edge, or Brave on %@ to view pages through the computer."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 %@ 上安装 Chrome、Chromium、Edge 或 Brave 后，即可通过电脑查看页面。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ経由でページを表示するには、%@ に Chrome、Chromium、Edge、または Brave をインストールしてください。"
+          }
+        }
+      }
+    },
+    "Persona on %@ is too old to view pages through the computer. Update it and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona on %@ is too old to view pages through the computer. Update it and try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 上的 Persona 版本过旧，无法通过电脑查看页面。请更新后重试。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ の Persona が古いため、コンピュータ経由でページを表示できません。アップデートしてもう一度お試しください。"
+          }
+        }
+      }
+    },
+    "Show Keyboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Keyboard"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示键盘"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キーボードを表示"
+          }
+        }
+      }
+    },
+    "Couldn't pick that element. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't pick that element. Try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法选取该元素，请重试。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その要素を選択できませんでした。もう一度お試しください。"
+          }
+        }
+      }
+    },
+    "View through the computer unavailable: no browser on %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View through the computer unavailable: no browser on %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法通过电脑查看：%@ 上没有浏览器"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ経由で表示できません：%@ にブラウザがありません"
+          }
+        }
+      }
+    },
+    "View through the computer unavailable: update Persona on %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View through the computer unavailable: update Persona on %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法通过电脑查看：请更新 %@ 上的 Persona"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ経由で表示できません：%@ の Persona をアップデートしてください"
           }
         }
       }

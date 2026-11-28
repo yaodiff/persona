@@ -223,13 +223,10 @@ func (p *Proxy) runtimeDial(ctx context.Context, host, port string, configured b
 	if err != nil {
 		return nil, err
 	}
-	// Each attempt dials one checked address. Through the upstream proxy each attempt is its own CONNECT to
-	// that address (the proxy never sees the name), so an address the proxy cannot reach is raced the same way.
-	attempt := func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) }
-	if up != nil {
-		attempt = func(ctx context.Context, target string) (net.Conn, error) { return p.connectVia(ctx, up, target) }
-	}
-	c, err := dialRace(ctx, ips, port, attempt)
+	// The fetch transport handles both HTTP and HTTPS. Its address race uses the
+	// resolver's preference: a CONNECT hint can come from a TLS alert, and the
+	// transport has no tunnel failover if that address fails its handshake.
+	c, err := dialRace(ctx, ips, port, p.dialAttemptFor(up))
 	if err != nil {
 		return nil, fmt.Errorf("egress dial failed: %w", err)
 	}

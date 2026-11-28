@@ -111,14 +111,19 @@ function createFullCache(owner: string) {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let trailing: ReturnType<typeof setTimeout> | undefined;
   let expiry: ReturnType<typeof setTimeout> | undefined;
+  const hidden = () => document.visibilityState === "hidden";
   const valid = () => !stopped && credentialOwner() === owner && getState().features.includes(SESSIONS_LIST_FEATURE);
   const read = async (immediate = false) => {
     if (!valid()) return;
-    if (!consumers || pending) { dirty = true; urgent ||= immediate; return; }
+    if (!consumers || pending || (!immediate && hidden())) { dirty = true; urgent ||= immediate; return; }
     const delay = nextReadAt - Date.now();
     if (!immediate && delay > 0) {
       // Hints share one fixed trailing deadline, even across consumer handoffs.
-      trailing ??= setTimeout(() => { trailing = undefined; void read(); }, delay);
+      trailing ??= setTimeout(() => {
+        trailing = undefined;
+        if (hidden()) { dirty = true; return; }
+        void read();
+      }, delay);
       return;
     }
     clearTimeout(trailing);
@@ -163,6 +168,10 @@ function createFullCache(owner: string) {
     if (event === "sessions_list" && complete.holds(msg?.revision)) return;
     void read(event === "hello");
   }));
+  const onVis = () => {
+    if (!hidden() && valid() && consumers && dirty && !pending && retry === undefined) void read(urgent);
+  };
+  document.addEventListener("visibilitychange", onVis);
   const dispose = () => {
     if (stopped) return;
     stopped = true;
@@ -170,6 +179,7 @@ function createFullCache(owner: string) {
     clearTimeout(retry);
     clearTimeout(trailing);
     clearTimeout(expiry);
+    document.removeEventListener("visibilitychange", onVis);
     off.forEach((unsubscribe) => unsubscribe());
     fullCache = undefined;
     fullSnapshot = { ...EMPTY_FULL_LIST, epoch: fullSnapshot.epoch + 1 };

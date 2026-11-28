@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { On, SessionCompactResult } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import {
   applyStepOverride,
@@ -29,6 +29,7 @@ const SESSION = '11111111-2222-3333-4444-555555555555'
 
 type Answer = { status: number; body: unknown } | { fail: true }
 type PermResponder = (body: Record<string, unknown>, call: number) => Answer | Promise<Answer>
+type CompactResponder = (body: Record<string, unknown>, call: number) => SessionCompactResult | Promise<SessionCompactResult>
 type StepToolUse = { tool_use_id: string; tool: string; input: Record<string, unknown> }
 
 // The engine beneath the plugin: a session, its manifest, and a node that answers polls in the order given (then
@@ -41,12 +42,15 @@ function world(
     onPermission?: PermResponder
     corePermission?: (e: Record<string, unknown>) => unknown | Promise<unknown>
     stepToolUses?: StepToolUse[]
+    onCompact?: CompactResponder
+    compactionUnavailable?: boolean
   } = {},
 ) {
   const requests: { url: string; socketPath?: string; body: Record<string, unknown> }[] = []
   const submitted: { text: string; origin: unknown }[] = []
   const aborted: string[] = []
   const steps: { model: string; effort?: string | number; agentId?: string }[] = []
+  const compactions: { trigger: string; agentId?: string }[] = []
   let holdSubmit = false
   let settleSubmit: ((outcome: 'reject' | 'drop') => void) | undefined
   let abortError: string | undefined
@@ -59,10 +63,15 @@ function world(
   on('session.id', () => ({ value: sessionId }))
   on('session.model', () => ({ value: sessionModel }))
   on('session.version', () => ({ value: { version: '2.1.330', base: '2.1.330' } }))
-  on('fs.read', () => ({ value: '{"name":"persona","version":"0.3.2"}' }))
+  on('fs.read', () => ({ value: '{"name":"persona","version":"0.3.3"}' }))
   on('ui.log', () => ({ value: undefined }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: 'done' }))
+  on('session.compact', async (_$, e) => {
+    compactions.push({ trigger: e.trigger, ...(e.agentId !== undefined ? { agentId: e.agentId } : {}) })
+    if (opts.onCompact !== undefined) return opts.onCompact(e as unknown as Record<string, unknown>, compactions.length)
+    return { messages: e.messages }
+  })
   on('turn.abort', (_$, e) => {
     if (abortError !== undefined) throw new Error(abortError)
     aborted.push(e.turnId)
@@ -106,6 +115,10 @@ function world(
     if (e.url.endsWith('/ack') || e.url.endsWith('/permission-done')) {
       return { value: { status: 200, ok: true, headers: {}, text: '{"ok":true}' } }
     }
+    if (e.url.endsWith('/compact')) {
+      if (opts.compactionUnavailable === true) throw new Error('connection refused')
+      return { value: { status: 200, ok: true, headers: {}, text: '{"ok":true}' } }
+    }
     if (e.url.endsWith('/permission')) {
       const next = opts.onPermission !== undefined ? await opts.onPermission(parsed, ++permCalls) : { fail: true as const }
       if ('fail' in next) throw new Error('connection refused')
@@ -120,6 +133,7 @@ function world(
     submitted,
     aborted,
     steps,
+    compactions,
     clock,
     setHoldSubmit(v: boolean) {
       holdSubmit = v
@@ -142,6 +156,10 @@ function world(
 }
 
 const start = { cwd: '/work', surface: 'desktop', isInteractive: true } as const
+const compactInput = {
+  trigger: 'plugin',
+  messages: [{ role: 'user', text: 'keep this', toolUses: [] }],
+} as const
 
 function permEvent(overrides: Record<string, unknown> = {}) {
   return {
@@ -162,6 +180,92 @@ describe('persona plugin', () => {
     expect(typeof register).toBe('function')
   })
 
+  test('reports a main-loop compaction before and after the engine compacts', async ($, on) => {
+    const w = world(on, [])
+    const compact = $.session.compact as unknown as (input: Record<string, unknown>) => Promise<unknown>
+    const result = await compact(compactInput)
+    await w.clock.settle()
+
+    expect(w.compactions).toEqual([{ trigger: 'plugin' }])
+    expect(result).toEqual({ messages: compactInput.messages })
+    expect(w.requests.filter(r => r.url.endsWith('/compact')).map(r => r.body)).toEqual([
+      { session_id: SESSION, phase: 'start', trigger: 'plugin' },
+      { session_id: SESSION, phase: 'end', trigger: 'plugin' },
+    ])
+  })
+
+  test('always reports the end when compaction rejects', async ($, on) => {
+    const w = world(on, [], undefined, {
+      onCompact: () => {
+        throw new Error('compaction failed')
+      },
+    })
+    let failed = false
+    const compact = $.session.compact as unknown as (input: Record<string, unknown>) => Promise<unknown>
+    try {
+      await compact(compactInput)
+    } catch {
+      failed = true
+    }
+    await w.clock.settle()
+
+    expect(failed).toBe(true)
+    expect(w.requests.filter(r => r.url.endsWith('/compact')).map(r => r.body)).toEqual([
+      { session_id: SESSION, phase: 'start', trigger: 'plugin' },
+      { session_id: SESSION, phase: 'end', trigger: 'plugin' },
+    ])
+  })
+
+  test('reports the end on turn.complete while compaction is still running', async ($, on) => {
+    let release!: () => void
+    const held = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const w = world(on, [], undefined, {
+      onCompact: async () => {
+        await held
+        return { messages: compactInput.messages }
+      },
+    })
+    const compact = $.session.compact as unknown as (input: Record<string, unknown>) => Promise<unknown>
+    const running = compact(compactInput)
+    await w.clock.settle()
+    expect(w.requests.filter(r => r.url.endsWith('/compact')).map(r => r.body)).toEqual([
+      { session_id: SESSION, phase: 'start', trigger: 'plugin' },
+    ])
+
+    await $.turn.complete({ turnId: 'turn-compacting', answer: 'done' } as never)
+    await w.clock.settle()
+    expect(w.requests.filter(r => r.url.endsWith('/compact')).map(r => r.body)).toEqual([
+      { session_id: SESSION, phase: 'start', trigger: 'plugin' },
+      { session_id: SESSION, phase: 'end', trigger: 'plugin' },
+    ])
+
+    release()
+    await running
+    await w.clock.settle()
+  })
+
+  test('keeps compaction unchanged and quiet without a node', async ($, on) => {
+    const w = world(on, [], undefined, { compactionUnavailable: true })
+    const compact = $.session.compact as unknown as (input: Record<string, unknown>) => Promise<unknown>
+    await compact(compactInput)
+    await w.clock.settle()
+
+    expect(w.compactions).toEqual([{ trigger: 'plugin' }])
+    expect(w.requests.filter(r => r.url.endsWith('/compact'))).toHaveLength(2)
+  })
+
+  test('does not report a subagent compaction', async ($, on) => {
+    const w = world(on, [])
+    const compact = $.session.compact as unknown as (input: Record<string, unknown>) => Promise<unknown>
+    await compact({ ...compactInput, agentId: 'sub-1' })
+    await w.clock.settle()
+
+    expect(w.compactions).toEqual([{ trigger: 'plugin', agentId: 'sub-1' }])
+    expect(w.requests.filter(r => r.url.endsWith('/compact'))).toEqual([])
+  })
+
   test('submits the node’s message as the person’s words and says so', async ($, on) => {
     const w = world(on, [{ status: 200, body: { messages: [{ id: 'm1', text: 'go ahead and merge', deadline_ms: 9_000 }] } }])
     await $.session.start(start)
@@ -173,7 +277,7 @@ describe('persona plugin', () => {
     expect(poll?.socketPath).toBe('/home/me/.persona/node.sock')
     expect(poll?.body).toEqual({
       session_id: SESSION,
-      plugin_version: '0.3.2',
+      plugin_version: '0.3.3',
       observed_effort: { at_ms: 1000, reset: true },
       engine_version: '2.1.330',
       capabilities: ['busy_input', 'interrupt', 'settings', 'permissions'],

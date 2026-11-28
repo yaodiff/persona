@@ -3,12 +3,14 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	repository "github.com/nwverse/persona/server/internal/repositorywire"
@@ -338,6 +340,66 @@ func TestRepoMirrorFetchDeadlines(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRepoMirrorCommandBudgetStartsAfterAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const upstream = "https://example.com/team/repo.git"
+		const timeout = repoMirrorFetchTimeout
+		ctx, cancel := context.WithTimeout(t.Context(), 4*timeout)
+		defer cancel()
+		release := make(chan struct{})
+		holder := make(chan error, 1)
+		commandBudget := make(chan time.Duration, 1)
+		n := &Node{repoMirrors: repoMirrorManager{
+			beforeFetch: func(ctx context.Context, _ string) error {
+				deadline, _ := ctx.Deadline()
+				commandBudget <- time.Until(deadline)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}}
+		go func() {
+			_, err := n.remoteFetches.run(ctx, upstream, func(ctx context.Context) (string, error) {
+				select {
+				case <-release:
+					return "", nil
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			})
+			holder <- err
+		}()
+		synctest.Wait()
+
+		done := make(chan error, 1)
+		req := repository.MirrorEnsureRequest{RepoID: "repo", CloneURL: upstream}
+		go func() {
+			_, err := n.runMirrorSourceGit(ctx, req, timeout, "", "", "fetch", "origin")
+			done <- err
+		}()
+		<-time.After(2 * timeout)
+		synctest.Wait()
+		if len(commandBudget) != 0 || len(done) != 0 {
+			t.Fatal("mirror command started or reached its command deadline while queued")
+		}
+		close(release)
+		if err := <-holder; err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-commandBudget:
+			if got != timeout {
+				t.Fatalf("mirror command budget after admission = %v, want %v", got, timeout)
+			}
+		case err := <-done:
+			t.Fatalf("mirror exited before running the admitted command: %v", err)
+		}
+		if err := <-done; !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			t.Fatalf("mirror command error = %v with outer context error %v", err, ctx.Err())
+		}
+		assertRemoteFetchIdle(t, &n.remoteFetches)
+	})
 }
 
 func TestRepoMirrorValidationRejectsTraversalAndSymlinks(t *testing.T) {

@@ -98,7 +98,7 @@ func (c *Connector) replyThingExcludedLocked(thing connectorwire.InboxThing) boo
 	switch thing.Kind {
 	case "dm", "bot":
 		kind = "p2p"
-	case "group", "mention":
+	case "group", "mention", connectorwire.OwnerPromiseKind:
 		kind = "group"
 	}
 	return c.replyChatExcludedLocked(chatID, kind, "")

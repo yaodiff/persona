@@ -3,6 +3,7 @@
   "investigation_handoff_open": "このフォローアップを終了する前に、調査項目を完了するか引き継ぎ先を変更してください。{finding}",
   "investigation_parent_handoff_open": "この調査タスクを削除する前に、引き継いだフォローアップを完了してください。{finding}",
   "investigation_review_required": "この作業を保留または終了する前に、今回の調査結果を確認してください。",
+  "native_loop_noop": "3 時間以上にわたり、定期確認が 6 回以上続けて変化なしと報告しました。Agent が何を待っているかを確認し、確認を続けるか、変更するか、終了するかを決めてください。",
   "investigation_findings_open": "次の調査項目には、フォローアップ、確認できる利用者の判断、または完了の証拠が必要です。{findings}",
   "handoff_wait": "「{task}」から「{check}」の確認結果を待っています",
   "decision_review_changed": "この判断は更新されたか、対応済みです。更新してから再試行してください。",

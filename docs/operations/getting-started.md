@@ -98,9 +98,9 @@ For now it's only guaranteed to work on the same network at home. To connect bac
 
 A phone that's already connected can let other devices in, without going back to the hub machine:
 
-- **Another phone or tablet**: in the connected App open **Settings › Devices › Connect New Device**, and scan the code on screen with the new device.
+- **Another phone or tablet**: in the connected App open **Connect a new device** in device settings, and scan the code on screen with the new device.
 - **A browser on a computer**: open the hub's address in the browser. That's the part before `/admin` in the admin page address the hub installer printed, like `http://<LAN address>:18660`.
-  The sign-in page walks you through it: on the connected phone open **Settings › Devices › Connect New Device**, choose **Browser**, then scan the code on the web page with the phone camera, or send the sign-in link to this computer and open it there.
+  The sign-in page walks you through it: on the connected phone open **Connect a new device** in device settings, choose **Browser**, then scan the code on the web page with the phone camera, or send the sign-in link to this computer and open it there.
 
 ## Pair again
 
@@ -115,7 +115,7 @@ It prints a new QR code and a pairing link, just like the end of the install. If
 | What happened | What to do |
 | --- | --- |
 | The QR code expired before you scanned it | Get a new code and scan it |
-| A new or reset phone, or the App was deleted and installed again | If another phone or tablet is still connected, let the new one in from there with **Settings › Devices › Connect New Device** (previous section). Otherwise get a new code on the hub machine and scan it from the App's first screen |
+| A new or reset phone, or the App was deleted and installed again | If another phone or tablet is still connected, let the new one in from there with **Connect a new device** in device settings (previous section). Otherwise get a new code on the hub machine and scan it from the App's first screen |
 | A browser on a computer was signed out | Sign it in again from a connected phone, as in the previous section |
 | The hub was installed again, or moved to another machine | Get a new code on the machine the hub runs on now, and scan it in the App with **Settings › Pair Again**. If the App still lists the old hub too, remove it in **Settings › hub** |
 | A computer was removed from the machine list | Add it again on the web as in "Connect a computer" below: **Machines › Add computer** |
@@ -206,6 +206,6 @@ For people comfortable with the command line. The commands and files behind each
 
 ### Sign in to a browser with your phone
 
-On the browser's sign-in page, open **Scan a code with Persona on your phone**. In Persona on your iPhone or Android phone, go to **Settings › Devices › Scan browser sign-in code** and scan the code. The phone shows the browser's name, which network the request came from, and that the browser gets full access. Tap **Allow sign-in** only if you are signing in to that browser yourself, right now. The phone then shows a two-digit number: type it in the browser, and the browser signs in with its own credential, which you can revoke any time in **Settings › Devices**.
+On the browser's sign-in page, open **Scan a code with Persona on your phone**. In Persona on your iPhone or Android phone, open device settings and choose **Scan browser sign-in code** and scan the code. The phone shows the browser's name, which network the request came from, and that the browser gets full access. Tap **Allow sign-in** only if you are signing in to that browser yourself, right now. The phone then shows a two-digit number: type it in the browser, and the browser signs in with its own credential, which you can revoke any time on Web in **Settings › Advanced › Devices**.
 
 Never tell anyone that number. A wrong number cancels the sign-in; refresh the code to start again. A code lasts five minutes. The browser's name is whatever the browser called itself, so a request from the internet gets a warning on the phone. It needs a recent Persona app: an older iPhone app has no such item, and an older Android app asks you to update it. Pairing links and password sign-in still work as before. The protocol is in [protocol.md](../protocol/protocol.md) ("Browser QR sign-in").

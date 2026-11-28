@@ -323,6 +323,12 @@ if (typeof addEventListener !== "undefined") {
   });
 }
 
+/** Redirect the entry just reached by Back or Forward, keeping scroll restoration on its final URL. */
+export function replaceReturnedEntry(url: string, state: unknown) {
+  history.replaceState(state, "", url);
+  returnedTo = location.pathname + location.search;
+}
+
 /** Whether the page now at the address was reached by Back / Forward (once: the next call says no). */
 export function takeReturn(): boolean {
   const back = returnedTo !== "" && returnedTo === location.pathname + location.search;

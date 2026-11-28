@@ -39,7 +39,8 @@
       "role": "system",
       "kind": "notice",
       "text": "/loop 到点，开始新一轮：check the build again",
-      "wake": true
+      "wake": true,
+      "native_loop_id": "9bcfbd9f"
     },
     {
       "id": "00000000-0000-4000-8000-000000000006#0",

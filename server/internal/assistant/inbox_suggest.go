@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -688,9 +688,9 @@ func currentSuggestion(it *InboxItem) *InboxSuggestion {
 }
 
 var (
-	mentionFenceOpenRe  = regexp.MustCompile("^```[a-zA-Z0-9_+#-]*\\s*$")
-	mentionFenceCloseRe = regexp.MustCompile("^```\\s*$")
-	mentionCodeOrLinkRe = regexp.MustCompile("`[^`\\n]+`|\\[[^\\]\\n]+\\]\\(https?://[^\\s<>()]+\\)")
+	mentionFenceOpenRe  = lazyre.New("^```[a-zA-Z0-9_+#-]*\\s*$")
+	mentionFenceCloseRe = lazyre.New("^```\\s*$")
+	mentionCodeOrLinkRe = lazyre.New("`[^`\\n]+`|\\[[^\\]\\n]+\\]\\(https?://[^\\s<>()]+\\)")
 )
 
 func isMentionBoundary(rest string) bool {

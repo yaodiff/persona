@@ -61,10 +61,10 @@
   "todos_v2_fold_children_label": "顶层目标自动折叠非紧急子任务",
   "todos_v2_fold_children_hint": "常规子任务默认折叠在所属顶层目标下，需要你关注时会自动展开。",
   "integrations_v2_title": "统一集成与扩展",
-  "integrations_v2_hint": "开启统一的集成与扩展实验体验，后续相关实验能力将统一接入此开关（跟踪议题 #14802）。",
+  "integrations_v2_hint": "默认开启。连接器、渠道、收件箱来源和扩展可在同一页面管理。",
   "integrations_v2_scope": "适用于所有设备上的当前助手。",
   "integrations_v2_activation": "立即生效，在下一次视图刷新或请求时应用。",
-  "integrations_v2_rollback": "随时关闭即可恢复原有的连接器、渠道、收件箱来源与扩展页面及路由行为，不会丢失任何数据。",
+  "integrations_v2_rollback": "随时关闭即可恢复独立的连接器、渠道、收件箱来源和扩展页面，以及原有的渠道路由。数据会完整保留。",
   "integrations_v2_saved": "已保存。更改将在下一次视图刷新或请求时立即生效。",
   "integrations_v2_unsupported": "请更新当前助手以使用此设置。"
 }

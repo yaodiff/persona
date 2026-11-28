@@ -253,10 +253,14 @@ func streamRefusal(err error) error {
 func (d *Devices) auditAgentTransfer(t AgentTransfer, from, to *Machine, res AgentTransferResult, err error) {
 	row := db.FileTransferAudit{ID: res.ID, At: time.Now(), CallerMachine: t.CallerMachine, CallerSession: t.CallerSession,
 		CallerKind: "agent", Direction: t.Direction, FromMachine: from.cfg.ID, FromPath: t.Path, ToMachine: to.cfg.ID,
-		ToPath: strings.TrimSpace(t.Dest), ResultPath: res.ResultPath, Kind: res.Kind, Bytes: res.Size, Files: res.Files,
+		ToPath: strings.TrimSpace(t.Dest), ResultPath: res.ResultPath, Bytes: res.Size, Files: res.Files,
 		Skipped: res.Skipped, SHA256: res.SHA256, State: proto.TransferDone, ElapsedMS: res.Elapsed.Milliseconds()}
 	if t.Assistant {
 		row.CallerKind = "assistant"
+	}
+	// A refused pack can report an unrecognized kind. Keep its audit with an empty kind.
+	if res.Kind == proto.FilePackFile || res.Kind == proto.FilePackDir {
+		row.Kind = res.Kind
 	}
 	if err != nil {
 		row.State, row.Error = proto.TransferFailed, err.Error()

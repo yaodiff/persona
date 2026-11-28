@@ -112,6 +112,19 @@ func personSent(ctx context.Context) bool {
 	return p.Role == roleFull && p.ID != ""
 }
 
+// originDeviceID returns the hub-authenticated paired user device ID for ctx, or "" when the caller is not a
+// paired user device (master token, extension, pairing code, machine link, peer, or read-only session).
+func originDeviceID(ctx context.Context) string {
+	p := principalOf(ctx)
+	if p.ID == "" || p.PairHash != "" {
+		return ""
+	}
+	if p.Role != roleFull && p.Role != roleAnswer {
+		return ""
+	}
+	return p.ID
+}
+
 // legacyAppOwner checks the direct HTTP request's authenticated owner. principalOf also returns a full role for
 // calls without a principal. The legacy credential can vouch for reply recovery only.
 func legacyAppOwner(ctx context.Context) bool {

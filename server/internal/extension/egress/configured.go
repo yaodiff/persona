@@ -25,14 +25,12 @@ func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn
 	if err != nil {
 		return nil, err
 	}
-	var ok []net.IP
 	for _, ip := range ips {
 		if !p.forSettings(ip, port) {
 			return nil, fmt.Errorf("%s (%s) %w", host, ip, errNotForSettings) // one bad answer refuses the name
 		}
-		ok = append(ok, ip)
 	}
-	if len(ok) == 0 {
+	if len(ips) == 0 {
 		return nil, fmt.Errorf("%s: no address", host)
 	}
 	target := net.JoinHostPort(host, port)
@@ -44,10 +42,8 @@ func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn
 	if err != nil {
 		return nil, err
 	}
-	if up != nil {
-		return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.connectVia(ctx, up, target) })
-	}
-	return p.dialResolved(ctx, host, port, ok)
+	key := connectKey{host: host, port: port, upstream: upstreamEndpoint(up)}
+	return p.dialResolved(ctx, key, ips, p.dialAttemptFor(up))
 }
 
 // resolveAll is host's addresses (itself, for an IP).
@@ -67,9 +63,10 @@ func (p *Proxy) resolveAll(ctx context.Context, host string) ([]net.IP, error) {
 }
 
 // Unreachable says whether ip is one no extension is let reach by an address its settings name or its owner allowed:
-// loopback, link-local, unspecified/0.0.0.0/8, multicast, limited broadcast or a metadata service. Private LAN addresses are reachable.
+// invalid IP, loopback, link-local, unspecified/0.0.0.0/8, multicast, limited broadcast or a metadata service.
+// Private LAN addresses are reachable.
 func Unreachable(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() || ip.Equal(net.IPv4bcast) {
+	if ip.To16() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() || ip.Equal(net.IPv4bcast) {
 		return true
 	}
 	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {

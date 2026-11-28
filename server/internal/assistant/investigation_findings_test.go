@@ -447,6 +447,51 @@ func staleFindingsWithLiveWorker(t *testing.T) (*Service, Todo, *investigationFi
 	return s, todo, report
 }
 
+func TestInvestigationAcceptanceRequiresFindingDecisionDestination(t *testing.T) {
+	s, todo := findingTask(t, nil)
+	finding := investigateLogs
+	r := reportFindings(t, s, todo, []investigationFinding{finding})
+	accept := func() error {
+		_, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewAccepted, "user_check": true})
+		return err
+	}
+	if err := accept(); err == nil {
+		t.Fatal("unreviewed investigation accepted for verification")
+	}
+	decision := createRequestAndPiece(t, s, "conv1", "Decide investigation follow-up", "", todo.ID, nil)
+	disposition := findingDisposition{ID: finding.ID, NeedsUser: decision.ID}
+	if _, err := confirmTestFindings(s, todo.ID, r.Version, disposition); err == nil {
+		t.Fatal("recorded a destination without a decision card")
+	}
+	if err := accept(); err == nil {
+		t.Fatal("a to-do without an owner decision card satisfied the disposition")
+	}
+	if _, err := reviewErr(s, decision.ID, map[string]any{
+		"verdict": "needs_user", "why_owner": "irreversible", "reason": finding.Next, "recommend": "Proceed",
+		"options":         []DecisionOption{{Label: "Proceed", LeadsTo: "Start the follow-up"}, {Label: "Drop", LeadsTo: "Leave it as is"}},
+		"cost_of_waiting": "The follow-up remains open",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := confirmTestFindings(s, todo.ID, r.Version, disposition); err != nil {
+		t.Fatal(err)
+	}
+	if err := accept(); err != nil {
+		t.Fatalf("valid owner decision did not satisfy finding: %v", err)
+	}
+	ask := askOf(s, todo.ID)
+	if ask == nil {
+		t.Fatal("no verification request")
+	}
+	if got, err := s.acceptTry(t.Context(), todo.ID, ask.MessageID); err != nil || !got.taken {
+		t.Fatalf("owner could not verify investigation: %+v %v", got, err)
+	}
+	child := todoNow(s, decision.ID)
+	if ask, ok := s.askCopy(decision.ID); !ok || !decisionOpen(&ask, child) {
+		t.Fatal("accepting the investigation retired the separate decision")
+	}
+}
+
 func TestInvestigationFindingsResumedOwnerPassStillChecksFindings(t *testing.T) {
 	ctx := context.Background()
 

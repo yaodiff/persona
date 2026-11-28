@@ -262,7 +262,8 @@ describe("TodosView Decision Queue & repo_gate under todos_v2 (#15757)", () => {
     expect(blockedGate).toBeTruthy();
     expect(blockedGate.getAttribute("data-gate-state")).toBe("blocked_ci");
     expect(blockedGate.textContent).toContain("2/3");
-    expect(blockedGate.textContent).toContain("acme/api");
+    expect(blockedGate.textContent).toContain("api");
+    expect(blockedGate.getAttribute("title")).toContain("acme/api");
 
     // Ready row: compact green ready badge inside line 2.
     const readyGate = host.querySelector('[data-todo="todo_ready"] [data-testid="todo-slim-line2"] [data-testid="todo-row-repo-gate"]')!;

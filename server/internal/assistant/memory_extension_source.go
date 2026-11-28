@@ -233,7 +233,7 @@ func (s *Service) assembleExtension(ctx context.Context, f assembleFor, b memory
 	if len(all) == 0 {
 		return assembled{}
 	}
-	f.ExtensionStanding = b.standingBudget()
+	f.ExtensionStanding = b.standingBudget(s.memoryExtensionStandingBytes(ctx))
 	return assembleEntries(all, f, info)
 }
 

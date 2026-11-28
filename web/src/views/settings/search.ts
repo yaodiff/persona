@@ -74,6 +74,7 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.disconnect_browser"), hint: t("disconnect.sign_out"), anchor: "disconnect" },
   { tab: "general", group: t("settings.source_code"), hint: t("settings.about_persona"), anchor: "about-persona" },
   // Advanced › Appearance (#13398): the non-default looks. General keeps the default appearance and text size.
+  { tab: "advanced", group: t("approval-impact.setting"), hint: t("approval-impact.hint"), anchor: "outward-confirmation" },
   { tab: "advanced", group: t("settings.appearance"), anchor: "appearance" },
   { tab: "advanced", group: t("ui-look.surface_style"), hint: words(t("ui-look.surface_default"), t("ui-look.surface_liquid_glass"), t("ui-look.glass_translucency")), anchor: "surface-style" },
   { tab: "advanced", group: t("ui-look.accent"), anchor: "theme-color" },
@@ -121,6 +122,7 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-assistantsettings.meeting_attendance"), hint: t("settings-assistantsettings.meetings_title"), anchor: "meetings" },
   { tab: "persona", group: t("settings-assistantsettings.recordings_title"), hint: words(t("settings-assistantsettings.recording_days"), t("settings-assistantsettings.recording_audio_days"), t("settings-assistantsettings.recording_text_days"), t("settings-assistantsettings.minutes_days")), anchor: "recordings" },
   { tab: "persona", group: t("settings-assistantsettings.knows_title"), hint: words(t("settings-assistantsettings.about_me"), t("settings-assistantsettings.memory")), anchor: "knows" },
+  { tab: "persona", group: t("settings-assistantsettings.standing_memory"), hint: t("settings-assistantsettings.standing_memory_hint"), anchor: "standing-memory" },
   { tab: "persona", group: t("settings-directionnotes.title"), anchor: "direction-notes" },
   { tab: "persona", group: t("settings-assistantsettings.task_lessons"), hint: t("settings-assistantsettings.task_lessons_hint"), anchor: "task-lessons" },
   { tab: "persona", group: t("settings-repositories.title"), anchor: "repositories" },
@@ -241,6 +243,7 @@ export function searchSettings(query: string, integrationsV2 = false, hasInboxSo
   const tabMatches = (k: Tab) => {
     const info = tabInfo(k);
     if (has(info.label, info.hint)) return true;
+    if (k === "advanced" && has(t("settings-nav.search_advanced_appearance"))) return true;
     // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions", "Inbox Sources") still finds Integrations.
     if (unifiedVisible && k === INTEGRATIONS_SETTINGS_REGISTRATION.id) {
       return has(...INTEGRATIONS_SETTINGS_REGISTRATION.searchKeywords());

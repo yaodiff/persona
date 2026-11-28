@@ -85,6 +85,7 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 	}
 	n.mu.Unlock()
 	type outcome struct {
+		traex  traexHostEvidence
 		kind   string
 		seq    uint64
 		agents []host.Agent
@@ -97,8 +98,9 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 		wg.Add(1)
 		go func(i int, h host.Host, seq uint64) {
 			defer wg.Done()
-			agents, full, err := n.lookAtSnapshot(ctx, h, epoch, seq, strict, "")
-			outs[i] = outcome{kind: h.Kind(), seq: seq, agents: agents, full: full, err: err}
+			o := &outs[i]
+			o.kind, o.seq = h.Kind(), seq
+			o.agents, o.full, o.err = n.lookAtSnapshot(ctx, h, epoch, seq, strict, "", &o.traex)
 		}(i, h, seqs[i])
 	}
 	wg.Wait()
@@ -161,6 +163,7 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 		}
 		n.hostAgentsSeq[o.kind] = o.seq
 		n.hostAgents[o.kind] = o.agents
+		n.saveTraexHostEvidence(o.kind, o.traex)
 	}
 	if !answered {
 		n.mu.Unlock()
@@ -172,10 +175,7 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 	// hostAgents as they are now, so of the newer snapshots, never of this refresh's older ones.
 	n.agentsGen++
 	gen := n.agentsGen
-	union := make([]host.Agent, 0)
-	for _, agents := range n.hostAgents { // hosts not in this partial refresh keep what they gave last
-		union = append(union, agents...)
-	}
+	union := n.mergedHostAgents()
 	n.mu.Unlock()
 
 	committed, epochChanged := n.setAgentsAtGen(union, epoch, gen, heard)
@@ -213,7 +213,8 @@ func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID
 	epoch := n.engEpoch
 	seq := n.nextHostSnapSeqLocked(h.Kind())
 	n.mu.Unlock()
-	agents, full, err := n.lookAtSnapshot(ctx, h, epoch, seq, true, paneID)
+	var proof traexHostEvidence
+	agents, full, err := n.lookAtSnapshot(ctx, h, epoch, seq, true, paneID, &proof)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -242,13 +243,11 @@ func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID
 	if seq >= n.hostAgentsSeq[h.Kind()] {
 		n.hostAgentsSeq[h.Kind()] = seq
 		n.hostAgents[h.Kind()] = agents
+		n.saveTraexHostEvidence(h.Kind(), proof)
 	}
 	n.agentsGen++
 	gen := n.agentsGen
-	union := make([]host.Agent, 0)
-	for _, list := range n.hostAgents {
-		union = append(union, list...)
-	}
+	union := n.mergedHostAgents()
 	n.mu.Unlock()
 	committed, epochChanged := n.setAgentsAtGen(union, epoch, gen, map[string]bool{h.Kind(): true})
 	if epochChanged {
@@ -262,13 +261,24 @@ func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID
 	return nil
 }
 
+// mergedHostAgents reconciles the same pane and writer snapshots, including
+// hosts retained across partial refreshes. Caller holds n.mu.
+func (n *Node) mergedHostAgents() []host.Agent {
+	var union []host.Agent
+	for _, agents := range n.hostAgents {
+		union = append(union, agents...)
+	}
+	traexDropConflictingFresh(union, n.traexEvidence)
+	return union
+}
+
 // lookAt is one host's agents: from a snapshot (full), which also gives the space / slot names; a host that cannot
 // snapshot (older herdr without `api snapshot`) gives its agent list instead.
 func (n *Node) lookAt(ctx context.Context, h host.Host, epoch uint64) (agents []host.Agent, full bool, err error) {
-	return n.lookAtSnapshot(ctx, h, epoch, 0, false, "")
+	return n.lookAtSnapshot(ctx, h, epoch, 0, false, "", &traexHostEvidence{})
 }
 
-func (n *Node) lookAtSnapshot(ctx context.Context, h host.Host, epoch, seq uint64, strict bool, targetPane string) (agents []host.Agent, full bool, err error) {
+func (n *Node) lookAtSnapshot(ctx context.Context, h host.Host, epoch, seq uint64, strict bool, targetPane string, evidence *traexHostEvidence) (agents []host.Agent, full bool, err error) {
 	var (
 		snap *host.Layout
 		serr error
@@ -325,7 +335,7 @@ func (n *Node) lookAtSnapshot(ctx context.Context, h host.Host, epoch, seq uint6
 	}
 	n.mu.Unlock()
 	// Panes running an agent the host does not detect (a compatible CLI) become agents of our own.
-	agents = append(snap.Agents, n.traexAgents(ctx, snap.Panes, snap.Agents)...)
+	agents = append(snap.Agents, n.traexSnapshotAgents(ctx, snap.Panes, snap.Agents, evidence)...)
 	n.enrichAgyPresence(ctx, h, agents)
 	// Retain active Claude agents when Herdr temporarily drops agent detection during tool or subshell execution (#1641).
 	return append(agents, n.claudeGraceAgents(snap.Panes, agents)...), true, nil
@@ -458,6 +468,7 @@ func (n *Node) setAgents(agents []host.Agent) {
 	n.mu.Lock()
 	epoch := n.engEpoch
 	n.mu.Unlock()
+	traexDropConflictingFresh(agents, nil)
 	n.setAgentsAt(agents, epoch, nil)
 }
 

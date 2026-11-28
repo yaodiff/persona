@@ -21,7 +21,7 @@ const { failedTagsOver, NOTE_MESSAGE, onWorkerMessage, planClick } = await impor
 const worker = await import("./sw-click");
 const { allowBody, denyBody } = await import("./quick-answers");
 
-const perm: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", tool_input: { command: "go test ./..." } };
+const perm: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", tool_input: { command: "git status" } };
 const ask: Interaction = { id: "q1", machine_id: "m", session_id: "a", kind: "question" };
 const note = (action: string, ix = "p1", over: Record<string, unknown> = {}) => ({ type: "persona.notification", action, ix, url: "/s/m/a", until: Date.now() + 400, ...over });
 const deliver = (data: unknown) => {
@@ -116,12 +116,12 @@ describe("页面收到 worker 的消息", () => {
     expect(toasts).toEqual([]);
   });
 
-  it("answers a sessionless notification and keeps a failed answer linked to its request", async () => {
+  it("denies a sessionless notification and keeps a failed answer linked to its request", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const script = { ...perm, id: "script-request", session_id: "", tool_name: "personad_ask" };
     interactions = [script];
-    expect(deliver(note("allow", script.id)).postMessage).toHaveBeenCalledWith(true);
-    expect(answerCard).toHaveBeenCalledWith(script, { allow: true });
+    expect(deliver(note("deny", script.id)).postMessage).toHaveBeenCalledWith(true);
+    expect(answerCard).toHaveBeenCalledWith(script, denyBody());
     answers[0]!({ ok: false, error: "Example connection failure" });
     await settle();
     expect(posted).toEqual([expect.objectContaining({ url: "/requests/script-request" })]);
@@ -170,4 +170,10 @@ describe("页面收到 worker 的消息", () => {
     expect(port.postMessage).toHaveBeenCalledWith(true);
     expect(navigate).toHaveBeenCalledWith("/s/m/a");
   });
+});
+
+it("opens a push for review even from an older Allow notification, and still accepts Deny", () => {
+  const push = { ...perm, tool_input: { command: "git push" } };
+  expect(planClick(note("allow"), [push], Date.now())).toBeUndefined();
+  expect(planClick(note("deny"), [push], Date.now())).toEqual({ ix: push, allow: false, body: denyBody() });
 });

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // checkValues is the list a migration's CHECK (column IN (...)) constraint named name allows, read from the embedded
@@ -60,6 +62,12 @@ func TestStorageChecksMatchTheCode(t *testing.T) {
 	for _, set := range []string{"hub", "manager"} {
 		assertCheck(t, set, "sent_messages_state_check", SendStateSending, SendStateDelivered, SendStateUnknown, SendStateLater)
 	}
+	assertCheck(t, "manager", "todo_pr_followups_state_check", "", repository.ReviewOpen, repository.ReviewClosed, repository.ReviewMerged)
+	assertCheck(t, "manager", "todo_pr_followups_watch_status_check", "", repository.PRFollowupWatchActive, repository.PRFollowupWatchHostNotConnected)
+	assertCheck(t, "manager", "file_transfer_audit_caller_kind_check", "", "agent", "assistant")
+	assertCheck(t, "manager", "file_transfer_audit_kind_check", "", proto.FilePackFile, proto.FilePackDir)
+	assertCheck(t, "manager", "file_transfer_audit_state_check", proto.TransferDone, proto.TransferFailed)
+	assertCheck(t, "manager", "held_operations_kind_check", HeldKindMessage, HeldKindStart)
 	assertCheck(t, "manager", "todos_kind_check", "", KindConcern)
 	assertCheck(t, "manager", "project_review_deliveries_outcome_check", "", "self_source",
 		"review_receipt_triage_only", "review_receipt_facts_recorded", "review_receipt_no_change",

@@ -16,6 +16,10 @@ type CallContext struct {
 	// Categories are the conversation's information categories (none is general); nil when they are not known, which
 	// a connector takes for sensitive.
 	Categories []string
+	// OriginDeviceID is the hub-authenticated paired device ID (for example "dev_...") that originated the current
+	// user turn, or "" when the turn was not initiated by a paired user device (scheduled task, channel, extension,
+	// or legacy master token). Set exclusively by the hub/manager from verified credentials; never client-supplied.
+	OriginDeviceID string
 }
 
 type callContextKey struct{}

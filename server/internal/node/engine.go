@@ -257,6 +257,7 @@ func (n *Node) useEngineChoice(ctx context.Context, c proto.EngineChoice) error 
 	n.mu.Lock()
 	n.engEpoch++
 	epoch := n.engEpoch
+	n.traexEvidence = nil
 	n.agentsGen++
 	n.hostAgents, n.hostLayoutSeq, n.hostAgentsSeq, n.layouts, n.agents, n.panePIDs, n.codexPanePIDs, n.lastList = nil, nil, nil, nil, map[string]host.Agent{}, map[string]panePID{}, nil, ""
 	n.lastPanes, n.onAgentsList, n.agyBound, n.agyReports = nil, nil, nil, nil

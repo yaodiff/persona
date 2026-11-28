@@ -15,6 +15,7 @@ assert.ok(base.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(base.host
 const health = await fetch(new URL("/api/v1/health", base), { signal: AbortSignal.timeout(5000), redirect: "error" });
 assert.equal((await health.json()).version, "mock");
 if (shots) await mkdir(shots, { recursive: true });
+const integrationsField = '[data-configuration-field="integrations_v2"]';
 
 async function noOverflow(page) {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
@@ -46,7 +47,7 @@ async function save(page, path, action) {
 
 async function labs(page, enabled) {
   await page.goto("/settings?tab=labs");
-  const field = page.locator('[data-configuration-field="integrations_v2"]');
+  const field = page.locator(integrationsField);
   const toggle = field.getByRole("switch", { checked: !enabled });
   const response = await save(page, "assistant", () => toggle.click());
   assert.deepEqual(response.request().postDataJSON(), { integrations_v2: enabled, expected_integrations_v2: !enabled });
@@ -85,11 +86,12 @@ async function scenario(browser, width, theme) {
       localStorage.setItem("persona.language", "en");
       localStorage.setItem("persona.theme", theme);
     }, theme);
-    // Unrelated read-only panels have no board, linked work or daily bot sync in this fixture.
+    // Unrelated settings use the default fonts and empty board, linked work and bot sync states.
     await context.route("**/*", route => {
       const url = new URL(route.request().url());
       if (url.origin !== base.origin) return route.abort();
       if (route.request().method() === "GET") {
+        if (url.pathname === "/api/v1/settings/web-fonts") return route.fulfill({ json: { sans: { preset: "default" }, mono: { preset: "default" } } });
         if (url.pathname === "/api/v1/bots/feishu/sync") return route.fulfill({ json: { available: false } });
         if (url.pathname === "/api/v1/workspace-board/settings") return route.fulfill({ json: { enabled: false } });
         if (url.pathname === "/api/v1/assistant/external-source-bindings/summary") return route.fulfill({ json: { bindings: [] } });
@@ -101,10 +103,12 @@ async function scenario(browser, width, theme) {
     page.on("pageerror", e => errors.push(e.message));
     page.on("console", m => { if (m.type() === "error") errors.push(m.text() + " " + m.location().url); });
     const profile = await context.request.get("/api/v1/assistant");
-    assert.equal((await profile.json()).integrations_v2, false);
-    await legacyPages(page);
+    assert.equal((await profile.json()).integrations_v2, true);
+    await page.goto("/settings?tab=labs");
+    const field = page.locator(integrationsField);
+    await field.getByRole("switch", { checked: true }).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains("dark")), theme === "dark");
-    await labs(page, true);
+    if (shots && width === 1440) await field.screenshot({ path: join(shots, `labs-on-${theme}.png`) });
     const openNav = async () => {
       if (width === 390) await page.getByRole("button", { name: "Back to Settings", exact: true }).click();
     };
@@ -150,6 +154,7 @@ async function scenario(browser, width, theme) {
     await noOverflow(page);
 
     await labs(page, false);
+    if (shots && width === 1440) await field.screenshot({ path: join(shots, `labs-off-${theme}.png`) });
     await openNav();
     await page.getByRole("button", { name: /^Connectors\b/ }).click();
     await page.locator('[data-settings-group="mail"]').waitFor();
@@ -159,8 +164,14 @@ async function scenario(browser, width, theme) {
     const saved = await (await context.request.get("/api/v1/channels/wechat")).json();
     assert.equal(saved.thread_mode, mode);
     assert.equal(saved.thread_idle_hours, idle);
+
+    await labs(page, true);
+    await page.goto(url);
+    await hours.waitFor();
+    assert.equal(await hours.inputValue(), String(idle));
+    assert.equal(await radio.getAttribute("aria-checked"), "true");
     assert.deepEqual(errors, []);
-    console.log(`PASS ${width}px ${theme}: legacy tabs, Labs, reload, routing, layout and rollback`);
+    console.log(`PASS ${width}px ${theme}: default-on, legacy rollback, reload, routing and re-enable`);
   } catch (error) {
     console.error(`FAIL ${width}px ${theme}`, errors);
     throw error;

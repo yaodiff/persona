@@ -86,7 +86,8 @@ func TestMemoryExtensionStandingOverBudget(t *testing.T) {
 	}
 }
 
-// The budget an extension states holds, capped at 8192 bytes; none or 0 is the default.
+// The budget an extension states holds, capped at 8192 bytes; none or 0 is the default (the owner's default choice,
+// 4096: the budgets from before the choice existed).
 func TestMemoryExtensionStandingBudgetStated(t *testing.T) {
 	ext := budgetEntries(memoryExtensionIDPrefix+"qa-", 20, 500) // 10000 bytes
 	for _, c := range []struct {
@@ -100,14 +101,14 @@ func TestMemoryExtensionStandingBudgetStated(t *testing.T) {
 	} {
 		b := memoryExtensionBatch{StandingBytes: c.stated}
 		f := standingMain
-		f.ExtensionStanding = b.standingBudget()
+		f.ExtensionStanding = b.standingBudget(memoryExtensionStandingDefault)
 		a := assembleEntries(ext, f, knownGeneral)
 		if got, want := entryIDList(a.Entries), budgetIDs(memoryExtensionIDPrefix+"qa-", 20-c.kept, 20); !slices.Equal(got, want) {
 			t.Errorf("stated %d: %v, want %v", c.stated, got, want)
 		}
 	}
 	for stated, want := range map[int]int{-1: 4096, 0: 4096, 800: 800, 4096: 4096, 8192: 8192, 8193: 8192} {
-		if got := (memoryExtensionBatch{StandingBytes: stated}).standingBudget(); got != want {
+		if got := (memoryExtensionBatch{StandingBytes: stated}).standingBudget(memoryExtensionStandingDefault); got != want {
 			t.Errorf("standingBudget(%d) = %d, want %d", stated, got, want)
 		}
 	}

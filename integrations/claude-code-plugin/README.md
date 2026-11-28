@@ -5,8 +5,8 @@ messages as typed input. The peer inbox identifies them as coming from another s
 `docs/integrations/claude-integration.md`, "Owner input through the Persona plugin".
 
 The plugin polls the local node for messages, Stop, session model and effort choices, and authorized permission,
-plan and question cards. It reports the main loop's effort for Desktop sessions. It reads only its manifest and
-stays quiet when the node is unavailable.
+plan and question cards. It reports the main loop's effort for Desktop sessions and its compaction for pane-less
+sessions. It reads only its manifest and stays quiet when the node is unavailable.
 
 ## Packaging
 
@@ -46,7 +46,7 @@ another session, gets `403`.
 `POST /claude-plugin/v1/poll`
 
 ```json
-{"session_id": "<uuid>", "plugin_version": "0.3.2", "engine_version": "2.1.331", "capabilities": ["busy_input", "interrupt", "settings", "permissions"], "classic_passed_over": true, "wait_ms": 25000}
+{"session_id": "<uuid>", "plugin_version": "0.3.3", "engine_version": "2.1.331", "capabilities": ["busy_input", "interrupt", "settings", "permissions"], "classic_passed_over": true, "wait_ms": 25000}
 ```
 
 - Held until work comes or `wait_ms` passes (at most 25 s; Claude Code's fetch gives up at 30 s), then asked
@@ -70,6 +70,21 @@ another session, gets `403`.
   active plugin card and leaves `clq_` question cards alone. Approve on the computer or start a session in a Persona terminal. The field is omitted while classic hooks reach the plugin.
 - `403 {"error": "not_this_session"}`: the caller is not the claude that has this session open. `404`, or an answer
   that is not HTTP: a node without this protocol. The plugin backs off (up to a minute) and tries again.
+
+`POST /claude-plugin/v1/compact`
+
+```json
+{"session_id": "<uuid>", "phase": "start", "trigger": "auto"}
+```
+
+- Sent from the main loop's `session.compact` hook only (never a subagent's), once with `phase: "start"` and once with
+  `"end"` from `finally`; `trigger` is the engine's `manual`, `auto`, `plugin` or `precompute`. The plugin queues the
+  reports without waiting for the compaction or for the node, gives each request a 1 s timeout, and never changes,
+  delays or fails the compaction. A missing or older node is quiet.
+- The node accepts it from the claude process that has that session open, as `/poll` does. It uses it only for a
+  watched, pane-less Claude outside Persona's terminals: `session.live` says `verb: "Compacting conversation"` with
+  `elapsed_s` and `at`, refreshed every few seconds, then `live: null` at the end. The compaction result and transcript
+  remain Claude Code's.
 
 `POST /claude-plugin/v1/permission`
 

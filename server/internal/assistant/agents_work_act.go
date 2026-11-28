@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -225,6 +227,141 @@ func markWorkCardDefers(ix proto.Interaction) proto.Interaction {
 	return ix
 }
 
+var errModelRouteUnavailable = &rpc.Error{
+	Code:    "model_route_unavailable",
+	Message: "this session's model is unavailable and cannot process a reply; dismiss this card and switch the model or start a new session",
+}
+
+// parseWorkResolution collects non-empty answers paired with ix's questions and their canonical keys.
+func parseWorkResolution(ix proto.Interaction, r proto.Resolution) ([]agentAnswerItem, map[string]bool) {
+	var items []agentAnswerItem
+	only := map[string]bool{}
+	for _, q := range ix.Questions {
+		a := strings.TrimSpace(r.Answers[q.Question])
+		if a == "" {
+			continue
+		}
+		items = append(items, agentAnswerItem{q.Question, a})
+		if deferredWorkOption(q, a) {
+			only[answerSkip] = true
+		} else {
+			only[canonicalAnswer(a)] = true
+		}
+	}
+	return items, only
+}
+
+// isWorkContinueOnly reports whether only resolves strictly to one of the explicit retry/handled actions.
+func isWorkContinueOnly(items []agentAnswerItem, only map[string]bool) bool {
+	return len(items) > 0 && len(only) == 1 && (only[answerRetry] || only[answerHandled] || only[answerAuthed])
+}
+
+// workResolutionIsContinue reports whether r picks an offered retry/handled option rather than free-text input.
+func workResolutionIsContinue(ix proto.Interaction, r proto.Resolution) bool {
+	if r.Cancel || r.Dismiss {
+		return false
+	}
+	items, only := parseWorkResolution(ix, r)
+	if !isWorkContinueOnly(items, only) {
+		return false
+	}
+	for _, q := range ix.Questions {
+		a := strings.TrimSpace(r.Answers[q.Question])
+		if a == "" {
+			continue
+		}
+		offered := false
+		for _, opt := range q.Options {
+			if opt.Label == a || canonicalAnswer(opt.Label) == canonicalAnswer(a) {
+				offered = true
+				break
+			}
+		}
+		if !offered {
+			return false
+		}
+	}
+	return true
+}
+
+// brokenModelSession reads the raw node session first so a pending NeedsYou card
+// does not mask TurnError, and reports whether the session failed on an unavailable
+// model route or refusal fallback.
+func (s *Service) brokenModelSession(machine, sid string) (proto.Session, string, bool) {
+	sess, ok := s.nodeSession(machine, sid)
+	if !ok {
+		sess, ok = s.decoratedSession(machine, sid)
+	}
+	if !ok {
+		return proto.Session{}, "", false
+	}
+	errText, _ := latestTurnError(sess)
+	if errText == "" {
+		return sess, "", false
+	}
+	sess.TurnError = errText
+	code := sessionTurnErrorCode(sess)
+	return sess, code, code == proto.TurnErrorModelRoute || code == proto.TurnErrorModelFallbackUnavailable
+}
+
+// canHandoffBrokenModel reports whether ix's session has a broken model route whose
+// open Todo has active supervision able to accept a handoff signal.
+func (s *Service) canHandoffBrokenModel(ctx context.Context, ix proto.Interaction) (Todo, proto.Session, bool, bool) {
+	sess, _, broken := s.brokenModelSession(ix.MachineID, ix.SessionID)
+	if !broken {
+		return Todo{}, proto.Session{}, false, false
+	}
+	t, open := s.openTodoOfAgent(ix.MachineID, ix.SessionID)
+	if !open || t.Supervision == nil {
+		return Todo{}, sess, false, true
+	}
+	probe := superviseSignal{Todo: t.ID, Kind: sigIdle, Handoff: true}
+	if !s.supervisionAllowed(ctx, probe) || s.reporterStopped(ctx, t.Origin) {
+		return Todo{}, sess, false, true
+	}
+	return t, sess, true, true
+}
+
+// handoffBrokenModelAnswer intercepts custom replies aimed at a session whose model route failed:
+// supervised Todo workers hand the user's replacement instruction off to the Todo's supervisor so it
+// can launch a working replacement model/session instead of feeding an infinite 404 popup loop.
+func (s *Service) handoffBrokenModelAnswer(ctx context.Context, ix proto.Interaction, summary string) (handedOff bool, broken bool) {
+	t, sess, canHandoff, isBroken := s.canHandoffBrokenModel(ctx, ix)
+	if !isBroken {
+		return false, false
+	}
+	if !canHandoff {
+		return false, true
+	}
+	sum := sha256.Sum256([]byte(summary))
+	key := "model_route_answer|" + ix.ID + "|" + hex.EncodeToString(sum[:6])
+	detail := fmt.Sprintf("用户在模型不可用卡片回复了替换指示（未发给失效会话 %s/%s，原错误：%s）：%s。请由你切换可用模型或新建替换会话继续处理。", ix.MachineID, short(ix.SessionID), clip(oneLine(sess.TurnError), 160), clip(oneLine(summary), 300)) // i18n-ignore: supervisor prompt
+	sig := superviseSignal{
+		Todo:    t.ID,
+		Kind:    sigIdle,
+		Key:     key,
+		Handoff: true,
+		Machine: ix.MachineID,
+		Session: ix.SessionID,
+		Detail:  detail,
+		At:      time.Now(),
+	}
+	if !s.signalReplacing(nil, sig) {
+		return false, true
+	}
+	return true, true
+}
+
+func joinWorkAnswerSummary(items []agentAnswerItem) string {
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		if a := strings.TrimSpace(it.answer); a != "" {
+			parts = append(parts, a)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
 // workResolutionSends reports whether this answer reaches sendToSession. Dismiss, defer and an external wait finish
 // in the manager; continue, retry and custom answers need a running agent. resolveAnswer uses this before claiming a
 // card, so a stopped agent refuses only the answers that would send it a message.
@@ -232,21 +369,8 @@ func workResolutionSends(ix proto.Interaction, r proto.Resolution) bool {
 	if r.Cancel || r.Dismiss {
 		return false
 	}
-	items := 0
-	only := map[string]bool{}
-	for _, q := range ix.Questions {
-		a := strings.TrimSpace(r.Answers[q.Question])
-		if a == "" {
-			continue
-		}
-		items++
-		if deferredWorkOption(q, a) {
-			only[answerSkip] = true
-		} else {
-			only[canonicalAnswer(a)] = true
-		}
-	}
-	if items == 0 {
+	items, only := parseWorkResolution(ix, r)
+	if len(items) == 0 {
 		return false
 	}
 	if len(only) == 1 {
@@ -349,31 +473,13 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 		s.workEvent(ix.MachineID, ix.SessionID, "answered", map[string]any{"after": after, "dismissed": true})
 		return true, nil
 	}
-	type item struct{ question, answer string }
-	var items []item
-	only := map[string]bool{}
-	for _, q := range ix.Questions {
-		a := strings.TrimSpace(r.Answers[q.Question])
-		if a == "" {
-			continue
-		}
-		items = append(items, item{q.Question, a})
-		if deferredWorkOption(q, a) {
-			only[answerSkip] = true
-		} else {
-			only[canonicalAnswer(a)] = true
-		}
-	}
+	items, only := parseWorkResolution(ix, r)
 	s.workEvent(ix.MachineID, ix.SessionID, "answered", map[string]any{"after": after, "answers": len(items)})
 	render := func() string {
-		var out []agentAnswerItem
-		for _, it := range items {
-			out = append(out, agentAnswerItem{it.question, it.answer})
-		}
 		if r.AnsweredBy == proto.AnsweredByAssistant {
-			return renderDelegatedAnswer(out, r.Reason, answerLanguage(s.hello(ctx).Locale))
+			return renderDelegatedAnswer(items, r.Reason, answerLanguage(s.hello(ctx).Locale))
 		}
-		return renderAnswer(out, answerLanguage(s.hello(ctx).Locale))
+		return renderAnswer(items, answerLanguage(s.hello(ctx).Locale))
 	}
 	if !only[answerGo] {
 		s.work.mu.Lock()
@@ -382,6 +488,8 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 	}
 	var text string
 	var sent func(e *db.SessionWork)
+	_, modelCode, modelBroken := s.brokenModelSession(ix.MachineID, ix.SessionID)
+	allowBrokenContinue := modelCode == proto.TurnErrorModelRoute && workResolutionIsContinue(ix, r)
 	switch {
 	case len(items) == 0:
 		done(nil)
@@ -401,16 +509,32 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 			e.Work.Line = clip(oneLine(workT(l, "waiting_on", i18n.Args{"wait": e.Work.Wait})), 60)
 		})
 		return true, nil
-	case len(only) == 1 && (only[answerRetry] || only[answerHandled] || only[answerAuthed]):
+	case isWorkContinueOnly(items, only) && (!modelBroken || allowBrokenContinue):
 		text, sent = continueText, func(e *db.SessionWork) { e.Retries = 0 }
-	case only[answerGo]:
-		if e, ok := s.workEntry(key); ok {
-			s.work.mu.Lock()
-			s.work.approved[key] = approval{wait: e.Work.Wait, then: e.Work.Then}
-			s.work.mu.Unlock()
-		}
-		text = render()
 	default:
+		if modelBroken {
+			if handedOff, _ := s.handoffBrokenModelAnswer(ctx, ix, joinWorkAnswerSummary(items)); !handedOff {
+				s.work.mu.Lock()
+				if e := s.work.entries[key]; e != nil && e.InteractionID == id {
+					s.work.cards[id] = ix
+				}
+				s.work.mu.Unlock()
+				return true, errModelRouteUnavailable
+			}
+			line := workT(s.lang(ctx), "you_skipped")
+			if err := s.deferWorkCard(ctx, ix, line); err != nil {
+				return true, err
+			}
+			s.logf("work %s/%s: routed custom answer on broken-model session to supervisor", ix.MachineID, short(ix.SessionID))
+			return true, nil
+		}
+		if only[answerGo] {
+			if e, ok := s.workEntry(key); ok {
+				s.work.mu.Lock()
+				s.work.approved[key] = approval{wait: e.Work.Wait, then: e.Work.Then}
+				s.work.mu.Unlock()
+			}
+		}
 		text = render()
 	}
 	if err := s.sendToSession(ctx, ix.MachineID, ix.SessionID, text); err != nil {

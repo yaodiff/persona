@@ -49,6 +49,7 @@ type Connector interface {
 	SetStateStore(store cliwire.StateStore)
 	SetInboxSource(prefer string, gatewayAvailable func(context.Context) bool)
 	SetManagedInboxVisibility(chats []string, direct bool) error
+	ObserveTopic(ctx context.Context, watch connectorwire.LarkTopicWatch) (connectorwire.LarkTopicObservation, error)
 	ObserveReply(ctx context.Context, watch connectorwire.LarkReplyWatch) (connectorwire.LarkReplyObservation, error)
 }
 

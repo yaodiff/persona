@@ -79,7 +79,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			s.suggestDrop(machine, sess.SessionID) // a new turn: the last one's suggestion goes, a call on its way is cancelled
 			s.turnsBook().working(key, now)
 			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
-			ref, row := SessionRef{MachineID: machine, SessionID: sess.SessionID}, startRow{Rev: sess.Rev, At: sess.UpdatedAt}
+			ref, row := SessionRef{MachineID: machine, SessionID: sess.SessionID}, startRow{Rev: sess.Rev, At: sess.UpdatedAt, NativeLoop: sess.Loop != nil || was.NativeLoop}
 			// Every non-working -> working edge except unblocking an interactive blocked turn (StatusBlocked)
 			// or recovering from a transient Unknown blip during the same turn (wasWorking) starts a new
 			// clarification answer turn, including reaped/stopped/reopened StatusOffline sessions.
@@ -204,6 +204,7 @@ func (s *Service) reconnectedTurnEnd(machine string, sess proto.Session) {
 // turnPrev is what setSessions reads of a session's previous row: the turn's starts and ends are against it. Only
 // these fields, not the whole row: a session is about 1.5 KB, and the manager would keep a copy of every list.
 type turnPrev struct {
+	NativeLoop bool
 	A2AIdle    bool
 	Status     string
 	WokeByTask bool
@@ -247,7 +248,7 @@ func (s *Service) fleetKeep(machine string, list []proto.Session, conn time.Time
 	next := make(map[string]turnPrev, len(list))
 	for i := range list { // by index: a range value copies every (large) session it passes
 		sess := &list[i]
-		p := turnPrev{Status: sess.Status, WokeByTask: sess.WokeByTask, Rev: sess.Rev,
+		p := turnPrev{Status: sess.Status, NativeLoop: sess.Loop != nil, WokeByTask: sess.WokeByTask, Rev: sess.Rev,
 			LastText: sess.LastText, UpdatedAt: sess.UpdatedAt, Launcher: sess.Launcher, A2AIdle: a2aIdle(*sess)}
 		if sess.Status == proto.StatusUnknown {
 			if was := before[sess.SessionID]; was.Status == proto.StatusWorking || was.WorkingBeforeUnknown {

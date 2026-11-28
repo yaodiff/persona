@@ -164,7 +164,6 @@ func TestThreadBindingFollowsDeliveryAfterRefreshFailure(t *testing.T) {
 
 func TestThreadBindingQueuedNewKeepsAdmittedRoute(t *testing.T) {
 	s, _, hub := admissionChannelService(t, true, nil)
-	setIntegrationsV2ViaHTTP(t, s, true, false)
 	var release sync.Once
 	defer release.Do(func() { close(hub.release) })
 	ctx := context.Background()

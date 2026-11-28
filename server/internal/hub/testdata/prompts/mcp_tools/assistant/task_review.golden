@@ -1,6 +1,6 @@
 {
   "name": "task_review",
-  "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps task/Agent open until owner Pass and routes feedback there. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total); accept with a note over low-ROI edge/style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits; needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.\n\nIf an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel duplicates/unwanted tasks. Viewing alone permits untouched cancellation.",
+  "description": "accepted closes after delivery_gate (default merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass; the acceptance guards still apply. If opted in at Start, accepted done cleans the idle tab unless user_check; report closed/skipped/pending, never close tabs yourself. Rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new: 10 total). Replace stopped Agents via agent_start. Park external waits with evidence.\n\nFor accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence); put extra work in also_done. Outcome=cannot, cancelled and criteria-free tasks keep prior rules. For uncovered scope or outstanding Closeout Missing/Waiting, use needs_user, or record the outstanding text in deferred_scope with an open linked follow_up_todo_id. For findings, confirm each disposition with verdict=findings before acceptance, including user_check.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel duplicates/unwanted tasks. Viewing alone permits untouched cancellation.",
   "input_schema": {
     "type": "object",
     "required": [
@@ -47,7 +47,11 @@
                 },
                 "follow_up_todo_id": {
                   "type": "string",
-                  "description": "Independent supervised to-do with the finding’s exact next action in done_when."
+                  "description": "Supervised to-do with the exact next action in done_when."
+                },
+                "needs_user_todo_id": {
+                  "type": "string",
+                  "description": "Child to-do with a needs_user card whose reason is the exact next action."
                 },
                 "wait_target": {
                   "type": "string",
@@ -206,11 +210,11 @@
       "deferred_scope": {
         "type": "string",
         "maxLength": 600,
-        "description": "accepted: describe in the owner's language which work in the original brief is deferred or requires separate approval. The personal verification card shows the first 120 characters"
+        "description": "accepted: quote outstanding Closeout text or describe deferred scope in the owner's language"
       },
       "follow_up_todo_id": {
         "type": "string",
-        "description": "With deferred_scope and without user_check, identify the open to-do that owns the remaining work. Its part_of must name this to-do, or its after must name this piece of the same request"
+        "description": "Open follow-up for deferred_scope, linked through part_of or after"
       },
       "reversible": {
         "type": "boolean",

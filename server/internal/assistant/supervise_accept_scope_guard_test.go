@@ -171,9 +171,9 @@ func TestAcceptScopeGuardRefusesSilentOmissionAndChineseHandoff(t *testing.T) {
 	})
 }
 
-// All three valid exits succeed for a multi-scope brief with leftover work:
+// A multi-scope brief with leftover work needs a decision or a handoff.
 // 1. needs_user keeps the task open with an owner decision ask;
-// 2. accepted + user_check keeps the task open with an owner verification ask;
+// 2. accepted + user_check still requires coverage;
 // 3. a linked follow-up to-do (or a linked piece carrying an open needs_user ask) allows bare accepted to close it.
 func TestAcceptScopeGuardAllowsValidExits(t *testing.T) {
 	ctx := context.Background()
@@ -206,7 +206,7 @@ func TestAcceptScopeGuardAllowsValidExits(t *testing.T) {
 		}
 	})
 
-	t.Run("user_check exit", func(t *testing.T) {
+	t.Run("user_check requires covered scope", func(t *testing.T) {
 		s, _, todo := multiScopeReviewTask(t, "Webhook incident", multiScopeEnglishBrief, doneWhen, nil, "PR #901 merged.")
 		raw := reviewRaw(t, todo.ID, map[string]any{
 			"verdict":    "accepted",
@@ -215,18 +215,9 @@ func TestAcceptScopeGuardAllowsValidExits(t *testing.T) {
 			"reason":     reason,
 			"checks":     checks,
 		})
-		res, err := s.runTool(ctx, "server", "conv1", "task_review", raw)
-		if err != nil {
-			t.Fatalf("accepted with user_check refused: %v", err)
-		}
-		if !strings.Contains(res, "user_check") {
-			t.Fatalf("unexpected user_check result: %s", res)
-		}
-		if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision.State != reviewUserCheck {
-			t.Fatalf("user_check did not keep task open: done=%v sup=%+v", cur.DoneAt, cur.Supervision)
-		}
-		if ask, ok := s.askCopy(todo.ID); !ok || !ask.AcceptedAt.IsZero() {
-			t.Fatalf("expected open owner ask after user_check, ok=%v ask=%+v", ok, ask)
+		if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err == nil ||
+			!strings.Contains(err.Error(), "brief scope not covered") {
+			t.Fatalf("user_check accepted uncovered scope: %v", err)
 		}
 	})
 

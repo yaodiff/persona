@@ -2,14 +2,17 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -79,6 +82,9 @@ func todoFromItem(it *InboxItem, title string) (string, string) {
 	if notes == "" {
 		notes = strings.TrimSpace(it.Preview)
 	}
+	if it.Connector != nil && it.Connector.OwnerPromise != nil && it.Connector.OpenURL != "" {
+		notes += "\n\n" + it.Connector.OpenURL
+	}
 	return clipRunesTo(title, inboxTodoTitleMax), notes
 }
 
@@ -86,6 +92,7 @@ func todoFromItem(it *InboxItem, title string) (string, string) {
 // (gone, filed already, new messages since the list) gets no to-do: the to-do made for it is deleted again.
 func (s *Service) addInboxTodos(ctx context.Context, targets []inboxTodoTarget, plan db.TodoEdit, now time.Time) (inboxTodoReply, error) {
 	made := map[string]Todo{}
+	created := map[string]Todo{}
 	var bulk []inboxBulkTarget
 	todoOf := map[string]string{}
 	b := &s.inbox
@@ -93,20 +100,28 @@ func (s *Service) addInboxTodos(ctx context.Context, targets []inboxTodoTarget, 
 		b.mu.Lock()
 		it, ok := b.items[t.ID]
 		var title, notes string
+		var promise *connectorwire.OwnerPromise
+		var message string
 		if ok && it.open() {
 			title, notes = todoFromItem(it, t.Title)
+			if it.Connector != nil {
+				promise, message = it.Connector.OwnerPromise, it.Last
+			}
 		}
 		b.mu.Unlock()
 		if title == "" {
 			bulk = append(bulk, inboxBulkTarget{ID: t.ID, Version: t.Version}) // reported as missing / unchanged by the filing
 			continue
 		}
-		td, err := s.createTodoFrom(ctx, title, notes, t.ID, plan)
+		td, newTodo, err := s.createTodoForInbox(ctx, t.ID, title, notes, plan, promise, message)
 		if err != nil {
-			s.rollbackTodos(ctx, made)
+			s.rollbackTodos(ctx, created)
 			return inboxTodoReply{}, err
 		}
 		made[t.ID] = td
+		if newTodo && promise == nil {
+			created[t.ID] = td
+		}
 		todoOf[t.ID] = td.ID
 		bulk = append(bulk, inboxBulkTarget{ID: t.ID, Version: t.Version})
 	}
@@ -121,7 +136,7 @@ func (s *Service) addInboxTodos(ctx context.Context, targets []inboxTodoTarget, 
 		if kept[id] {
 			out.Todos = append(out.Todos, inboxTodoMade{Item: inboxTodoRow{ID: id}, Todo: td})
 			out.Undo = &inboxTodoUndo{Items: append(undoItems(out.Undo), inboxTodoUndoItem{ID: id, Todo: td.ID})}
-		} else {
+		} else if _, createdHere := created[id]; createdHere {
 			drop[id] = td
 		}
 	}
@@ -280,23 +295,61 @@ func (s *Service) confirmTodo(ctx context.Context, it *InboxItem, text, due stri
 	}
 	b := &s.inbox
 	var notes string
+	b.mu.Lock()
 	if len(sourceNote) > 0 {
 		notes = sourceNote[0]
 	} else {
-		b.mu.Lock()
 		_, notes = todoFromItem(it, "")
-		b.mu.Unlock()
 	}
-	td, err := s.createTodoFrom(ctx, title, notes, it.ID, planOfDue(due))
+	var promise *connectorwire.OwnerPromise
+	message := it.Last
+	if it.Connector != nil {
+		promise = it.Connector.OwnerPromise
+	}
+	b.mu.Unlock()
+	td, newTodo, err := s.createTodoForInbox(ctx, it.ID, title, notes, planOfDue(due), promise, message)
 	if err != nil {
 		return InboxItem{}, err
 	}
 	res := s.setInboxBulkTodos(ctx, bulkTodo, []inboxBulkTarget{{ID: it.ID}}, nil, time.Time{}, time.Now(), map[string]string{it.ID: td.ID})
 	if len(res.Changed) == 0 {
-		s.rollbackTodos(ctx, map[string]Todo{it.ID: td})
+		if newTodo && promise == nil {
+			s.rollbackTodos(ctx, map[string]Todo{it.ID: td})
+		}
 		return InboxItem{}, errInboxNotPersisted
 	}
 	return res.Changed[0], nil
+}
+
+// A promise's stable task id makes a repeated tap or a restart after task
+// creation retry the filing without creating a second to-do.
+func (s *Service) createTodoForInbox(ctx context.Context, inboxID, title, notes string, plan db.TodoEdit,
+	promise *connectorwire.OwnerPromise, message string) (Todo, bool, error) {
+	if promise == nil {
+		td, err := s.createTodoFrom(ctx, title, notes, inboxID, plan)
+		return td, err == nil, err
+	}
+	digest := sha256.Sum256([]byte("owner-promise-todo\n" + inboxID))
+	id := fmt.Sprintf("todo_%x", digest[:8])
+	s.todos.writing.Lock()
+	if existing, ok := s.todoNow(id); ok && existing.InboxItem == inboxID {
+		s.todos.writing.Unlock()
+		return existing, false, nil
+	}
+	if s.ownerPromiseCovered(promise, message, inboxID) {
+		s.todos.writing.Unlock()
+		return Todo{}, false, i18n.Err("assistant-owner_promise.covered")
+	}
+	now := time.Now().UTC()
+	row := db.TodoRow{ID: id, Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxID}
+	plan.Title, plan.Notes, plan.Done = nil, nil, nil
+	plan.Apply(&row, now)
+	td, err := s.putNewTodo(ctx, row)
+	s.todos.writing.Unlock()
+	if err == nil {
+		s.todosChanged(ctx)
+	}
+	return td, err == nil, err
 }
 
 var errTodoSuggestion = i18n.ErrEnglish("inbox-errors.todo_suggestion")

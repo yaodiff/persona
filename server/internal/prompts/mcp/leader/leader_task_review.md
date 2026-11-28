@@ -30,7 +30,8 @@ Close, send back or hand up one of the worker tasks you handed out with task_pla
             "required":["id"],
             "properties": {
               "id":{"type":"string"},
-              "follow_up_todo_id":{"type":"string","description":"Independent supervised to-do with the finding’s exact next action in done_when."},
+              "follow_up_todo_id":{"type":"string","description":"Supervised to-do with the exact next action in done_when."},
+              "needs_user_todo_id":{"type":"string","description":"Child to-do with a needs_user card whose reason is the exact next action."},
               "wait_target":{"type":"string","description":"A single finding may match the park evidence's target."},
               "done_evidence":{"type":"string","description":"Evidence that this finding was resolved."},
               "owner_drop_decision_id":{"type":"string","description":"Owner's manual decision, question 'Drop investigation finding <id>?', choice 'Drop', with reason."}

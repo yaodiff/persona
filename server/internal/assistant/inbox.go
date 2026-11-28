@@ -309,6 +309,11 @@ func (it *InboxItem) listed() InboxItem {
 	c.RejectedReplyDrafts = nil
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
+	if c.Connector != nil && c.Connector.OwnerPromise != nil {
+		connector := *c.Connector
+		connector.OwnerPromise = nil // scoped source receipt for server actions, not a client target
+		c.Connector = &connector
+	}
 	c.ExternalPath = slices.Clone(it.ExternalPath)
 	c.ExternalAsked, c.ExternalRouteOf, c.externalMoves, c.externalChecking = "", "", nil, false
 	c.ChainSeq, c.SuggestSeq = 0, 0

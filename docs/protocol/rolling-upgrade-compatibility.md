@@ -55,7 +55,7 @@
 
 | Field | Mixed-version behavior |
 | --- | --- |
-| `integrations_v2`, `expected_integrations_v2` | A missing boolean in the selected assistant’s profile keeps legacy Settings and a read-only Labs row. Older clients omit both fields on sparse updates. A supporting manager defaults the flag off and rejects a stale expected value with 409. |
+| `integrations_v2`, `expected_integrations_v2` | A missing boolean in the selected assistant’s profile keeps legacy Settings and a read-only Labs row. A supporting manager returns `true` when the preference is unset and preserves an explicit `false` across sparse updates. It rejects an expectation that differs from the effective value with 409. |
 | `thread_mode`, `thread_idle_hours` | The web offers editing on installed extension channels reporting a supported mode. Older clients preserve both values on partial writes. Switching off uses legacy message threads and 30 days of inactivity. Switching back on reuses saved preferences. In split modes older plugins can still supply the opaque `thread` key. |
 | `target_override` | Optional detail metadata. Clients can display the reported `topics`, `groups_and_topics`, or `threads` precedence hint. An absent hint needs no placeholder. Older clients ignore it and can still edit the default target. |
 | `configuration.*.section` | A manifest property can group a field under `connection`, `channel`, `inbox`, or `advanced`. Omitted or empty keeps the existing form valid. Older clients ignore the returned form hint. Extensions declaring the hint need a matching minimum hub version in `engines.persona` for install-time validation. |

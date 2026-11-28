@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { setToken } from "../lib/api";
 import { clearAssistantSnapshot, readAssistantSnapshot, writeAssistantSnapshot } from "../lib/assistant-snapshot";
 import { loadPages } from "../lib/lazy-page";
-import { chooseManager, resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
+import { chooseManager, MANAGER_HEADER, resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
 import { acceptLabsSeen, getState, patchAssistant, refresh, refreshAssistant, reset } from "../lib/store";
 import { Settings } from "./Settings";
 import type { IntegrationsRoute } from "./settings/integrations-route";
@@ -25,10 +25,10 @@ vi.mock("./settings/Integrations", async () => {
 vi.mock("./settings/Extensions", () => ({ Extensions: () => null }));
 
 const detail = "?tab=integrations&integration=builtin%3Amail";
-const profile = (manager: string | undefined, enabled: boolean) => Response.json({
+const profile = (manager: string | undefined, enabled: boolean | undefined) => Response.json({
   machine_id: "example", manager, conversations: [], integrations_v2: enabled, labs_seen: [],
 });
-let read: () => Promise<Response>;
+let read: (manager: string | null) => Promise<Response>;
 let root: Root;
 let host: HTMLDivElement;
 const mount = async (query: string) => {
@@ -44,8 +44,8 @@ beforeEach(() => {
   setToken("example-browser");
   setRosterDefault("home");
   read = async () => profile("home", false);
-  vi.stubGlobal("fetch", async (url: string) => {
-    if (url.endsWith("/api/v1/assistant")) return read();
+  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/api/v1/assistant")) return read(new Headers(init?.headers).get(MANAGER_HEADER));
     return Response.json(url.endsWith("/managers") ? { default: "home", managers: [] } : {});
   });
   host = document.createElement("div");
@@ -136,4 +136,12 @@ it("keeps the legacy route while an enabled snapshot belongs to a different defa
   });
   expect(getState().assistant?.manager).toBe("home");
   expect(location.search).toBe("?tab=extensions");
+});
+
+it.each(["home", "work"])("keeps legacy Settings when the linked assistant (%s) omits the flag", async (manager) => {
+  read = async (target) => target === "work" ? profile("work", undefined) : profile("home", manager === "work" ? true : undefined);
+  await refreshAssistant();
+  await mount(`?tab=integrations&manager=${manager}&integration=ext%3Aexample%40${manager}`);
+  await vi.waitFor(() => expect(location.search).toBe(`?tab=extensions&manager=${manager}&extension=example%40${manager}`));
+  expect(host.querySelector("[data-integration]")).toBeNull();
 });

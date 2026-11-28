@@ -33,11 +33,13 @@ type Connector struct {
 	now     func() time.Time
 	profile string
 
-	inboxMu       sync.Mutex
-	inboxThings   map[string]connectorwire.InboxThing
-	inboxSeen     map[string]struct{}
-	inboxTopics   map[string]struct{}
-	inboxAllChats map[string]struct{}
+	inboxMu            sync.Mutex
+	inboxThings        map[string]connectorwire.InboxThing
+	inboxSeen          map[string]struct{}
+	inboxTopics        map[string]struct{}
+	inboxAllChats      map[string]struct{}
+	ownerPromiseGroups map[string]struct{}
+	ownerPromiseModel  bool
 	// Private-chat visibility controls are opt-in and apply to collection, model tools and retained source things.
 	inboxExcludeChats       map[string]struct{}
 	inboxExcludeDirectChats bool
@@ -115,7 +117,7 @@ func (c *Connector) Profile() string {
 }
 
 func (c *Connector) Manifest() connectorwire.Manifest {
-	return connectorwire.Manifest{Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapEvents, connectorwire.CapInbox, connectorwire.CapOptions, connectorwire.CapLogin, connectorwire.CapThreads, connectorwire.CapInboxVisibility}, Kinds: []string{"dm", "bot", "mention", "group", "doc", "bot_handoff"}}
+	return connectorwire.Manifest{Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapEvents, connectorwire.CapInbox, connectorwire.CapOptions, connectorwire.CapLogin, connectorwire.CapThreads, connectorwire.CapInboxVisibility}, Kinds: []string{"dm", "bot", "mention", "group", "doc", "bot_handoff", connectorwire.OwnerPromiseKind}}
 }
 
 func (c *Connector) Tools() []proto.Tool {

@@ -28,7 +28,7 @@ await loadPages();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const permission = { id: "p_1", machine_id: "m", session_id: "s", kind: "permission", tool_name: "Bash", tool_input: { command: "npm test" }, summary: "Run the tests" } as Interaction;
+const permission = { id: "p_1", machine_id: "m", session_id: "s", kind: "permission", tool_name: "Bash", tool_input: { command: "git status" }, summary: "git status" } as Interaction;
 const opener = { ...permission, id: "p_open" };
 const twoQuestions = {
   id: "q_2", machine_id: "m", session_id: "s", kind: "question", tool_name: "AskUserQuestion",
@@ -87,6 +87,19 @@ describe("a card appearing after the chat opened", () => {
     await flush();
     expect(calls).toHaveLength(1);
     expect(calls[0].body).toMatchObject({ allow: false });
+  });
+
+  it("takes the first deliberate confirmation tap after opening a code push for review", async () => {
+    await settleChat();
+    const push = { ...permission, tool_input: { command: "git push" } };
+    await act(async () => root.render(<InteractionCard ix={push} />));
+    act(() => vi.advanceTimersByTime(450));
+    await tap(findButton("允许"));
+    expect(calls).toEqual([]);
+    const confirm = findButton("确认允许");
+    await tap(confirm);
+    await flush();
+    expect(calls).toEqual([{ path: "/interactions/p_1/resolve", body: { allow: true } }]);
   });
 
   it("still answers from the keyboard (Enter) while the pointer guard is running", async () => {

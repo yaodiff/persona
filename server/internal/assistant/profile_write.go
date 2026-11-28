@@ -75,7 +75,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		in.TodosV2AutoSeen != "" || in.TodosV2PendingReviewSLAHours != nil ||
 		in.TodosV2CanWaitSLAHours != nil || in.TodosV2FoldChildren != nil ||
 		in.TodosV2QuietHoursPatch != nil || in.TodosV2DigestWindowMinutes != nil ||
-		in.IntegrationsV2 != nil) && !s.explicitSettingsTarget(w, r) {
+		in.IntegrationsV2 != nil || in.MemoryExtensionStandingBytes != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
 	if in.Readonly != nil {
@@ -222,6 +222,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if h := in.TodosV2CanWaitSLAHours; h != nil && !slices.Contains(todosV2CanWaitSLAOptions, *h) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_can_wait_sla_hours must be 0, 24, 48 or 72"))
+		return
+	}
+	if b := in.MemoryExtensionStandingBytes; b != nil && !slices.Contains(memoryExtensionStandingOptions, *b) {
+		apierr.Write(w, http.StatusBadRequest, errors.New(memoryExtensionStandingBytesInvalid))
 		return
 	}
 	var todosV2QuietHours string
@@ -465,6 +469,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.IntegrationsV2 != nil {
 			v.IntegrationsV2 = in.IntegrationsV2
+		}
+		if in.MemoryExtensionStandingBytes != nil {
+			v.MemoryExtensionStandingBytes = in.MemoryExtensionStandingBytes
 		}
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats

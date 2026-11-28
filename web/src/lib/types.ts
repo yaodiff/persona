@@ -992,6 +992,8 @@ export interface Interaction {
   /** The permission mode a plan-mode session goes on in once this plan is approved (#3784). */
   plan_then?: string;
   tool_input?: Record<string, unknown>;
+  /** A trusted connector gate marked this as an outward write on behalf of the owner. */
+  outward_write?: boolean;
   /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
   editable_text?: string;
   /** Script asks opt into Markdown for their summary or question; absent and unknown values stay plain (#10857). */

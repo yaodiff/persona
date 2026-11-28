@@ -121,13 +121,26 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   let raceAfterStat = false
   let raceVersion = false
   const originalReadFileSync = fs.readFileSync
+  const originalReadFileAsync = fs.promises.readFile
   const originalExistsSync = fs.existsSync
   const originalStatSync = fs.statSync
+  const originalStatAsync = fs.promises.stat
   fs.readFileSync = function (path, ...args) {
     if (String(path) === join(brain, IDS[2], '.system_generated', 'logs', 'transcript_full.jsonl')) {
       throw new Error('injected full transcript read failure')
     }
     const result = originalReadFileSync.call(this, path, ...args)
+    if (String(path).endsWith('/transcript_full.jsonl')) {
+      transcriptReads++
+      transcriptBytes += result?.length || 0
+    }
+    return result
+  }
+  fs.promises.readFile = async function (path, ...args) {
+    if (String(path) === join(brain, IDS[2], '.system_generated', 'logs', 'transcript_full.jsonl')) {
+      throw new Error('injected full transcript read failure')
+    }
+    const result = await originalReadFileAsync.call(this, path, ...args)
     if (String(path).endsWith('/transcript_full.jsonl')) {
       transcriptReads++
       transcriptBytes += result?.length || 0
@@ -149,11 +162,22 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     }
     return result
   }
+  fs.promises.stat = async function (path, ...args) {
+    if (raceVersion && String(path) === raceFile) {
+      raceVersion = false
+      const err = new Error('ENOENT')
+      err.code = 'ENOENT'
+      throw err
+    }
+    return originalStatAsync.call(this, path, ...args)
+  }
   syncBuiltinESMExports()
   t.after(() => {
     fs.readFileSync = originalReadFileSync
+    fs.promises.readFile = originalReadFileAsync
     fs.existsSync = originalExistsSync
     fs.statSync = originalStatSync
+    fs.promises.stat = originalStatAsync
     syncBuiltinESMExports()
   })
   const { createAgyRuntime } = await import('../lib/runtime.js')
@@ -347,14 +371,21 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 
   let transcriptReads = 0
   const originalReadFileSync = fs.readFileSync
+  const originalReadFileAsync = fs.promises.readFile
   fs.readFileSync = function (path, ...args) {
     const result = originalReadFileSync.call(this, path, ...args)
+    if (String(path).endsWith('/transcript_full.jsonl')) transcriptReads++
+    return result
+  }
+  fs.promises.readFile = async function (path, ...args) {
+    const result = await originalReadFileAsync.call(this, path, ...args)
     if (String(path).endsWith('/transcript_full.jsonl')) transcriptReads++
     return result
   }
   syncBuiltinESMExports()
   t.after(() => {
     fs.readFileSync = originalReadFileSync
+    fs.promises.readFile = originalReadFileAsync
     syncBuiltinESMExports()
   })
   const { createAgyRuntime } = await import('../lib/runtime.js')
@@ -451,13 +482,19 @@ async function setupBehindListCache(t) {
 
   const counts = { fullReadFile: 0 }
   const originalReadFileSync = fs.readFileSync
+  const originalReadFileAsync = fs.promises.readFile
   fs.readFileSync = function (path, ...args) {
     if (String(path) === fullFile) counts.fullReadFile += 1
     return originalReadFileSync.call(this, path, ...args)
   }
+  fs.promises.readFile = async function (path, ...args) {
+    if (String(path) === fullFile) counts.fullReadFile += 1
+    return originalReadFileAsync.call(this, path, ...args)
+  }
   syncBuiltinESMExports()
   t.after(() => {
     fs.readFileSync = originalReadFileSync
+    fs.promises.readFile = originalReadFileAsync
     syncBuiltinESMExports()
   })
 

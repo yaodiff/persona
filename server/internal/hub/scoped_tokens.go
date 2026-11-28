@@ -39,6 +39,10 @@ func (h *Hub) scopedDeviceRoute(r *http.Request) string {
 	case "GET /api/v1/interactions/history", "POST /api/v1/interactions/{id}/reanswer":
 		// Stored answers have no pending card to prove their visibility or kind here.
 		return ""
+	case "GET /api/v1/agents/triage":
+		// An extension's agents.read reads the triage's switches (extwire/agents_scopes.go, #17851); a scoped device
+		// follows chats and has no use for the owner's settings.
+		return ""
 	case "GET /api/v1/ws",
 		"GET /api/v1/machines/{mid}/launchers",
 		"GET /api/v1/machines/{mid}/launchers/{name}/models":

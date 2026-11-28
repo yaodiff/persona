@@ -67,4 +67,5 @@ export const runtimeSessions = new SessionList<Session>("/sessions", runtimeIden
 export const runtimeAgents = new SessionList<Session>(RUNTIME_AGENTS_PATH, runtimeIdentity, runtimeOrder, undefined, runtimeRemoval, {
   onRefresh: () => { void refreshAgentsDisplay(); },
   pageCounts: () => pageCounts,
+  pauseWhenHidden: true,
 });

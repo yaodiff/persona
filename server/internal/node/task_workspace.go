@@ -152,16 +152,7 @@ func (e *workspaceExecutor) gitWithTimeout(ctx context.Context, timeout time.Dur
 		cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=")
 	}
 	cmd.WaitDelay = time.Second
-	if len(args) > 0 && args[0] == "fetch" {
-		// Stop the remote helper and pack writer along with Git when a fetch expires.
-		cmd.SysProcAttr = osproc.GroupAttr()
-		cmd.Cancel = func() error {
-			if err := osproc.StopGroup(cmd.Process.Pid, true); err != nil {
-				return cmd.Process.Kill()
-			}
-			return nil
-		}
-	}
+	stopGitTransportOnCancel(cmd, args)
 	workspaceInheritLocks(cmd, e.locks)
 	var out workspaceOutput
 	stderr := keptOutput{tailMost: workspaceGitStderrTail}
@@ -185,6 +176,20 @@ func (e *workspaceExecutor) gitWithTimeout(ctx context.Context, timeout time.Dur
 		return "", err
 	}
 	return strings.TrimSpace(out.String()), err
+}
+
+func stopGitTransportOnCancel(cmd *exec.Cmd, args []string) {
+	if len(args) == 0 || args[0] != "fetch" && args[0] != "ls-remote" {
+		return
+	}
+	// Stop the transport helper and pack writer before returning the slot.
+	cmd.SysProcAttr = osproc.GroupAttr()
+	cmd.Cancel = func() error {
+		if err := osproc.StopGroup(cmd.Process.Pid, true); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
 }
 
 type workspaceOutput struct {
@@ -270,12 +275,14 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 	if problem := n.workspacePlanPathProblem(preview.Plan); problem != nil {
 		return taskworkspace.Record{Error: taskworkspace.Failure(problem.Code, "validation", req.OperationID, problem.RepoID, req.Plan.RootPath)}, nil
 	}
+	remoteRepos := 0
 	for _, source := range req.Plan.Source.Repositories.Repositories {
 		// An existing receipt must remain inspectable and cleanable if the source
 		// checkout disappears. The local store is attested before any Git use.
 		if source.Local != nil {
 			continue
 		}
+		remoteRepos++
 		if !n.workspaceSourceAllowed(source) {
 			return taskworkspace.Record{Error: taskworkspace.Failure("source_invalid", "validation", req.OperationID, source.RepoID, "")}, nil
 		}
@@ -419,7 +426,11 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 		if j.Cleanup != nil {
 			return e.fail("resource_conflict", "prepare", "", j.Plan.RootPath), nil
 		}
-		result := e.prepare(ctx)
+		// The Node RPC context may have no deadline. Bound preparation,
+		// including time queued for network Git, with the shared RPC budget.
+		prepareCtx, cancel := context.WithTimeout(ctx, taskworkspace.PrepareTimeout(remoteRepos))
+		defer cancel()
+		result := e.prepare(prepareCtx)
 		if err = e.save(); err != nil {
 			return nil, err
 		}

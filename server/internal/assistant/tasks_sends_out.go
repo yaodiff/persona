@@ -296,7 +296,7 @@ func (s *Service) sendsSettle(ctx context.Context, key [2]string, id string, don
 	if take {
 		if t, ok := s.taskOf(ctx, mid, sid); ok && t.ID == id {
 			s.logf("task %s: the turn its agent %s/%s started while more for it was being sent is the task's: followed", id, mid, short(sid))
-			s.taskWorks(ctx, t)
+			s.taskWorks(ctx, t, false)
 			followed = true
 		} else {
 			s.logf("task %s: the turn its agent %s/%s started while more for it was being sent is other work: left closed", id, mid, short(sid))

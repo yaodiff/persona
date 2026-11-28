@@ -154,7 +154,7 @@ agents.read          GET /api/v1/agents/sessions
 agents.read          GET /api/v1/agents/sessions/{id}
 agents.read          GET /api/v1/agents/sessions/{id}/avatar
 agents.read          GET /api/v1/agents/sessions/{id}/messages
--                    GET /api/v1/agents/triage
+agents.read          GET /api/v1/agents/triage
 -                    GET /api/v1/agents/work/stats
 -                    GET /api/v1/app/android/apk
 -                    GET /api/v1/app/android/latest

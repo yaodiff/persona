@@ -756,6 +756,15 @@ installs and updates it.
   Polls from a claude the node does not deliver to this way (an engine pane's, the assistant's own, an SDK's) are told
   to come back in 5 minutes. `{"kind":"claude-plugin.status"}` on the same socket lists the sessions whose plugin polls
   (for Persona Link's installer and diagnostics).
+- **Compaction progress**: the plugin wraps Claude Code's main-loop `session.compact` function hook and posts
+  `/claude-plugin/v1/compact` with `phase: "start"` and `trigger`, then with `phase: "end"` from `finally`. It queues the
+  short-timeout reports without awaiting them, so compaction itself is never changed, delayed or failed; a missing or
+  older node is quiet. The endpoint has the same peer-pid session check as `/poll`. For a watched pane-less Claude
+  outside Persona's terminals, the node turns this into the second source of `session.live`: the first push says
+  `verb: "Compacting conversation"` with `elapsed_s` and `at`, a refresh follows every few seconds, and `live: null`
+  ends it. An end on turn completion, process exit or the 15-minute defensive timeout also clears it. The web and Apple
+  work lines say "Compacting context…"; subagent compactions and sessions whose screen the node can read are not
+  reported this way.
 - **Which messages**: only the owner's own. The hub marks a message typed in the owner's app (`captureHumanSubmission`:
   a full-role device token, not a link or answer-only token, not the master token, not a member hub), and the devices
   manager turns that mark into `owner_input: true` on `session.send` (`ownerInputParams`), dropping any `owner_input`

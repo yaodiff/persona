@@ -3,6 +3,7 @@ import { t } from "../i18n";
 import { setSidebarCollapsed, toggleMaximized } from "../lib/layout";
 import { appleG2Contour, appleG2ContourAt } from "../lib/mac-chrome";
 import { jumpHint, useBindings } from "../lib/shortcuts";
+import type { MacContourDriver } from "../lib/sidebar-transition";
 import { cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { CollapseButton, SIDEBAR_CONTROL } from "./SidebarRail";
@@ -43,10 +44,6 @@ export function MacBayTools({ bay, onSearch }: { bay: "expanded" | "rail" | "hid
 function applyMainClip(el: HTMLElement, value: string): void {
   el.style.clipPath = value;
   el.style.setProperty("-webkit-clip-path", value);
-}
-
-export interface MacContourDriver {
-  draw: (bx: number) => void;
 }
 
 /** Clips `<main>` with the 44 px Apple G2 continuous-curvature path and strokes its crisp 1 px border + top specular rim. */

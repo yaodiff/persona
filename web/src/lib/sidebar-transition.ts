@@ -4,9 +4,14 @@ import { bezier } from "../ui/motion";
 import { prefersReducedMotion } from "../ui/stream/motion";
 import { PANEL_GAP, SIDEBAR_DEFAULT } from "./layout";
 import { macHeaderInset, sidebarBayCutout } from "./mac-chrome";
-import type { MacContourDriver } from "../views/MacChrome";
 
 export type SidebarMode = "expanded" | "rail" | "hidden";
+
+/** Imperative handle from `MacMainContour` for redrawing `<main>`'s G2 bay contour at cutout x `bx` on each windowed macOS transition frame. */
+export interface MacContourDriver {
+  draw: (bx: number) => void;
+}
+
 export const SIDEBAR_RAIL_WIDTH = 56;
 export const SIDEBAR_EXPAND_MS = 280;
 export const SIDEBAR_COLLAPSE_MS = 240;

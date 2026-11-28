@@ -2,6 +2,8 @@
 // hands the click to an open page of the app (lib/sw-click.ts clickNotification), which answers the card as the card's
 // own buttons do (lib/card-answer.ts), with its own token, and stays where it is. The worker never sees the token.
 import { t } from "../i18n";
+import { approvalImpact } from "./approval-impact";
+import { confirmationEnabled } from "./approval-confirmation";
 import { requestRoute } from "./card-focus";
 import { toast } from "../ui/atoms";
 import { stripBase } from "./base";
@@ -53,6 +55,7 @@ export function planClick(m: unknown, interactions: readonly Interaction[], now:
   const ix = interactions.find((x) => x.id === m.ix && (m.created_at === undefined || x.created_at === m.created_at));
   if (ix?.kind !== "permission" || needsFieldValues(ix) || answering.has(ix.id)) return undefined;
   const allow = m.action === "allow";
+  if (allow && confirmationEnabled() && approvalImpact(ix)) return undefined; // the worker opens the request
   return { ix, allow, body: allow ? allowBody() : denyBody() };
 }
 

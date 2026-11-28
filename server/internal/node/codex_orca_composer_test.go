@@ -276,7 +276,7 @@ func TestRefreshHostsSupersededSnapshotListsTheNewerOne(t *testing.T) {
 	n.mu.Lock()
 	epoch, seq := n.engEpoch, n.nextHostSnapSeqLocked(host.Orca)
 	n.mu.Unlock()
-	agents, _, err := n.lookAtSnapshot(ctx, h, epoch, seq, false, "")
+	agents, _, err := n.lookAtSnapshot(ctx, h, epoch, seq, false, "", &traexHostEvidence{})
 	if err != nil || len(agents) == 0 {
 		t.Fatalf("newer snapshot: %v, %d agents", err, len(agents))
 	}

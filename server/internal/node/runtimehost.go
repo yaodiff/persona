@@ -922,6 +922,14 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		if n == nil {
 			return
 		}
+		if !h.isDaemon() {
+			for _, s := range list {
+				if (s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked) && !s.Assistant && !n.runtimeAssistant(s.SessionID) {
+					h.clearStopCause(s.SessionID)
+					n.observedRunning(s.SessionID)
+				}
+			}
+		}
 		n.observeAgySessions(h, list)
 		for _, id := range moved {
 			n.transcriptMoved(h, id)

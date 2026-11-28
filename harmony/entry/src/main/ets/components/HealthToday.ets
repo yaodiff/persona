@@ -44,7 +44,10 @@ export struct HealthToday {
   private dismiss(): void {
     this.detail=false;this.detailClient=undefined;this.dialogEpoch++;this.amount='';this.amountOwner='';
     const id=this.amountDialog;this.amountDialog=-1;
-    if (id>=0) this.getUIContext().getPromptAction().closeCustomDialog(id);
+    if (id>=0) {
+      try { this.getUIContext().getPromptAction().closeCustomDialog(id); }
+      catch (_) {}
+    }
   }
   private metric(regular:number,large:number): number { return PhoneStyle.formSize(regular,large,this.env.fontScale); }
   private get systemLocale(): string { return clientLocale(i18n.System.getSystemLanguage()); }
@@ -98,12 +101,17 @@ export struct HealthToday {
     if (!client || (!demo && this.intake.busy) || this.amountDialog!==-1) return;
     Haptics.tap();
     this.kind=kind;this.amount='';this.amountOwner=demo ? 'demo' : this.intake.ownerKey;this.amountDialog=-2;
-    const version=++this.dialogEpoch,prompt=this.getUIContext().getPromptAction();
+    const version=++this.dialogEpoch;
     try {
+      const prompt=this.getUIContext().getPromptAction();
       const id=await prompt.openCustomDialog({builder:() => {this.amountEditor();},alignment:DialogAlignment.Center,
         autoCancel:true,onDidDisappear:() => {if (version===this.dialogEpoch) {this.amountDialog=-1;this.amount='';this.amountOwner='';}}});
       const stillCurrent = demo ? this.model.demo && client===this.model : client===this.intake.currentClient();
-      if (!this.mounted || version!==this.dialogEpoch || !stillCurrent) { prompt.closeCustomDialog(id);return; }
+      if (!this.mounted || version!==this.dialogEpoch || !stillCurrent) {
+        if (version===this.dialogEpoch) this.amountDialog=-1;
+        try { prompt.closeCustomDialog(id); } catch (_) {}
+        return;
+      }
       this.amountDialog=id;
     } catch (_) { if (version===this.dialogEpoch) this.amountDialog=-1; }
   }
@@ -184,7 +192,7 @@ export struct HealthToday {
           Haptics.success();
           if (this.model.demo) this.demoWaterMl+=250;
           else this.intake.record('water');
-        } else this.ask(kind);
+        } else this.ask(kind).catch(() => {});
       }).id('health.intake.log.'+id)
   }
   @Builder water() {

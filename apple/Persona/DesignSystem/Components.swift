@@ -499,12 +499,20 @@ struct EmptyStateView: View {
     /// keeps its own quiet mark.
     var tint: Color? = nil
     var actionLook = ActionLook.prominent
+    /// Optional secondary action shown beside `action` via `StackingButtonRow` so button labels never wrap.
+    var secondaryAction: (title: String, run: () -> Void)? = nil
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
             // BeautifulUI's empty state: the mark on a raised tile, the title, a line of help and one action.
-            BUIEmptyState(symbol: Theme.Icon.styled(symbol), title: title, message: message, actionTitle: action?.title, action: action?.run)
-                .frame(maxWidth: .infinity)
+            VStack(spacing: Theme.Space.m) {
+                BUIEmptyState(symbol: Theme.Icon.styled(symbol), title: title, message: message, actionTitle: action?.title, action: action?.run)
+                    .frame(maxWidth: .infinity)
+                if let secondaryAction {
+                    Button(action: secondaryAction.run) { Text(secondaryAction.title).buttonLabelLine() }
+                        .themedButton()
+                }
+            }
         } else {
             plain
         }
@@ -521,7 +529,15 @@ struct EmptyStateView: View {
                 .font(Theme.Font.secondary)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            if let action {
+            if let action, let secondaryAction {
+                StackingButtonRow {
+                    Button(action: action.run) { Text(action.title).buttonLabelLine().frame(maxWidth: .infinity) }
+                        .themedButton(prominent: true)
+                    Button(action: secondaryAction.run) { Text(secondaryAction.title).buttonLabelLine().frame(maxWidth: .infinity) }
+                        .themedButton()
+                }
+                .padding(.top, Theme.Space.xs)
+            } else if let action {
                 switch actionLook {
                 case .prominent:
                     Button(action: action.run) { Text(action.title).lineLimit(1) }

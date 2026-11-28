@@ -59,7 +59,7 @@ const threeQuestions = JSON.parse(
     '{"question":"第三题","multi_select":false,"options":[{"label":"D"}]}]}',
 ) as Interaction;
 const permission = JSON.parse(
-  '{"id":"p_1","machine_id":"m","session_id":"s","kind":"permission","tool_name":"Bash","tool_input":{"command":"npm test"},"summary":"跑测试"}',
+  '{"id":"p_1","machine_id":"m","session_id":"s","kind":"permission","tool_name":"Bash","tool_input":{"command":"git status"},"summary":"git status"}',
 ) as Interaction;
 const plan = JSON.parse(
   '{"id":"pl_1","machine_id":"m","session_id":"s","kind":"plan","tool_name":"ExitPlanMode","plan":"## 计划\\n1. 第一步"}',

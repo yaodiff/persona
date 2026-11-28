@@ -88,7 +88,25 @@ type InboxThing struct {
 	// Parent is what the thing grew out of, when the connector knows (a reply to a todo's card, a thread an agent
 	// opened): the item keeps it, unless the user set another. Optional; the hub only keeps and lists it.
 	Parent *ThingParent `json:"parent,omitempty"`
+	// OwnerPromise is an observation from the built-in Lark CLI pilot. The
+	// assistant consumes it before admitting an ordinary Inbox item.
+	OwnerPromise *OwnerPromise `json:"owner_promise,omitempty"`
 }
+
+// OwnerPromise carries the exact source of a hand-typed follow-up. Request
+// identifies the preceding request when the connector could verify it.
+type OwnerPromise struct {
+	ChatID    LarkChatID    `json:"chat_id"`
+	TopicID   LarkTopicID   `json:"topic_id"`
+	RequestID LarkMessageID `json:"request_id,omitempty"`
+	Model     bool          `json:"model,omitempty"`
+}
+
+type LarkTopicID string
+type LarkMessageID string
+
+// OwnerPromiseKind identifies the pilot's private Inbox reminder.
+const OwnerPromiseKind = "owner_promise"
 
 // ThingParent is a thing's parent: kind "inbox" (an item's id), "todo" (a todo's id), "session" (a coding Agent's
 // "<machine>/<session>") or "agent" (a personal Agent's "<source>:<sessionKey>").

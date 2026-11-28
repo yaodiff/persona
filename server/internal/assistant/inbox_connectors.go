@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/extwire"
 )
 
@@ -37,7 +38,8 @@ type InboxConnector struct {
 	// Replay identifies an exact recovered move until ordinary activity advances the row.
 	Replay bool `json:"replay,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
-	Tags []connector.Tag `json:"tags,omitempty"`
+	Tags         []connector.Tag             `json:"tags,omitempty"`
+	OwnerPromise *connectorwire.OwnerPromise `json:"owner_promise,omitempty"`
 }
 
 // settleConnector files the connector's open items its rules now leave out (made under older rules, a muted
@@ -226,14 +228,18 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		if t.Read || now.Sub(t.At) > inboxWindow || done != nil && (done.Last == t.Last || !t.At.After(done.UpdatedAt)) {
 			continue
 		}
-		sum := sha1.Sum([]byte(t.Thread + "\n" + t.Last))
-		itemID := id + ":" + hex.EncodeToString(sum[:8])
+		itemID := connectorInboxItemID(id, t.Thread, t.Last)
 		if b.has(itemID) {
 			continue // this move started an item already (one handled since): adding it again would replace that item
 		}
 		it := &InboxItem{ID: itemID, Source: id, Account: id, AccountName: name, StartedAt: t.At, Count: moveCount(t)}
 		fillConnectorItem(it, t)
 		it.Connector.Replay = scoped
+		if t.OwnerPromise != nil {
+			it.Summary = t.Preview
+			it.Suggestion = &InboxSuggestion{Version: 1, Kind: SuggestTodo, Text: t.Preview, At: now.UTC()}
+			it.SuggestSeq = 1
+		}
 		b.setConnectorExternalPath(it, t)
 		b.noteReceived(it, inboxSeen{}, nil)
 		if t.Tier != "" {
@@ -254,6 +260,11 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		}
 	}
 	return changed
+}
+
+func connectorInboxItemID(source, thread, last string) string {
+	sum := sha1.Sum([]byte(thread + "\n" + last))
+	return source + ":" + hex.EncodeToString(sum[:8])
 }
 
 // settleThing ends an open item a thing says is over: the user's own reply in the source is recorded as such (and the
@@ -307,7 +318,7 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
 	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, ThreadState: t.ThreadState, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply,
-		Avatar: thingAvatar(t), RuleTier: string(rule), OwnerAssigned: t.OwnerAssigned, Tags: t.Tags}
+		Avatar: thingAvatar(t), RuleTier: string(rule), OwnerAssigned: t.OwnerAssigned, Tags: t.Tags, OwnerPromise: t.OwnerPromise}
 	if where := whereOf(t.Tags); where != "" {
 		it.Where = where
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // The owner's messages that could not go in (#10194, docs/assistant/assistant.md "Messages that could not go in").
@@ -71,14 +72,15 @@ const undeliveredMaxBytes = 16 << 20
 
 // keptMessage is one owner message kept for its conversation.
 type keptMessage struct {
-	ID           string         `json:"id"` // its client_msg_id
-	Machine      string         `json:"machine"`
-	Session      string         `json:"session"`
-	Params       map[string]any `json:"params"` // the app's message as it came (text, images, launcher, model)
-	Human        bool           `json:"human,omitempty"`
-	CredentialID string         `json:"credential_id,omitempty"`
-	Lang         string         `json:"lang,omitempty"`
-	At           time.Time      `json:"at"`
+	ID             string           `json:"id"` // its client_msg_id
+	Machine        string           `json:"machine"`
+	Session        string           `json:"session"`
+	Params         map[string]any   `json:"params"` // the app's message as it came (text, images, launcher, model)
+	Human          bool             `json:"human,omitempty"`
+	CredentialID   string           `json:"credential_id,omitempty"`
+	OriginDeviceID wireids.DeviceID `json:"origin_device_id,omitempty"`
+	Lang           string           `json:"lang,omitempty"`
+	At             time.Time        `json:"at"`
 	// State is proto.UndeliveredWaiting or proto.UndeliveredFailed.
 	State    string    `json:"state"`
 	Attempts int       `json:"attempts,omitempty"`
@@ -203,7 +205,7 @@ func (s *Service) KeepUndelivered(ctx context.Context, p assistantwire.KeepUndel
 			return k.wire(), nil
 		}
 	}
-	k := keptMessage{ID: id, Machine: p.MachineID, Session: p.SessionID, Params: params, Human: p.Human, Lang: string(lang), CredentialID: p.CredentialID,
+	k := keptMessage{ID: id, Machine: p.MachineID, Session: p.SessionID, Params: params, Human: p.Human, Lang: string(lang), CredentialID: p.CredentialID, OriginDeviceID: p.OriginDeviceID,
 		At: now, State: proto.UndeliveredWaiting, Attempts: 1, NextAt: now.Add(undeliveredBackoff[0]),
 		Error: undeliveredReason(lang, p.Code), WaitIdle: p.Code == assistantwire.CodeConversationBusy}
 	if p.Code == assistantwire.CodeUndeliveredAhead {
@@ -792,7 +794,7 @@ func (s *Service) deliverKept(ctx context.Context, k keptMessage) (doubt bool, e
 		return false, errors.Join(errKeptCredentialCheck, err)
 	}
 	params, err := s.messageParams(withLauncherNoteDiscarded(sctx), SendParams{MachineID: k.Machine, SessionID: k.Session,
-		Params: maps.Clone(k.Params), Lang: k.Lang, Human: k.Human}, true)
+		Params: maps.Clone(k.Params), Lang: k.Lang, Human: k.Human, OriginDeviceID: k.OriginDeviceID}, true)
 	if err != nil {
 		return false, err // nothing was sent
 	}

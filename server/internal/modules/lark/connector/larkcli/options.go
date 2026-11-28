@@ -11,7 +11,9 @@ import (
 // document Inbox settings share one object so options.get/options.set can
 // round-trip them without one poller overwriting the other.
 type InboxOptions struct {
-	InboxAllChats []string `json:"inbox_all_chats"`
+	InboxAllChats      []string `json:"inbox_all_chats"`
+	OwnerPromiseGroups []string `json:"owner_promise_groups,omitempty"`
+	OwnerPromiseModel  bool     `json:"owner_promise_model,omitempty"`
 	// InboxExcludeChats and InboxExcludeDirectChats remove matching chats from AI collection and read tools. Both
 	// controls are independent, and their zero values preserve the legacy behavior.
 	InboxExcludeChats       []string `json:"inbox_exclude_chats"`
@@ -35,11 +37,17 @@ func (c *Connector) Options() json.RawMessage {
 	for id := range c.inboxExcludeChats {
 		excluded = append(excluded, id)
 	}
+	var promiseGroups []string
+	for id := range c.ownerPromiseGroups {
+		promiseGroups = append(promiseGroups, id)
+	}
+	promiseModel := c.ownerPromiseModel
 	excludeDirect := c.inboxExcludeDirectChats
 	rules := c.triageRules
 	c.inboxMu.Unlock()
 	sort.Strings(ids)
 	sort.Strings(excluded)
+	sort.Strings(promiseGroups)
 
 	c.docs.mu.Lock()
 	documents := c.docs.options.normalized()
@@ -52,6 +60,8 @@ func (c *Connector) Options() json.RawMessage {
 	}
 	b, _ := json.Marshal(InboxOptions{
 		InboxAllChats:           ids,
+		OwnerPromiseGroups:      promiseGroups,
+		OwnerPromiseModel:       promiseModel,
 		InboxExcludeChats:       excluded,
 		InboxExcludeDirectChats: excludeDirect,
 		Documents:               documents.Documents,
@@ -65,6 +75,8 @@ func (c *Connector) Options() json.RawMessage {
 func (c *Connector) SetOptions(raw json.RawMessage) error {
 	var wire struct {
 		InboxAllChats           json.RawMessage `json:"inbox_all_chats"`
+		OwnerPromiseGroups      *[]string       `json:"owner_promise_groups"`
+		OwnerPromiseModel       *bool           `json:"owner_promise_model"`
 		InboxExcludeChats       json.RawMessage `json:"inbox_exclude_chats"`
 		InboxExcludeDirectChats bool            `json:"inbox_exclude_direct_chats"`
 		TriageRules             *string         `json:"triage_rules"`
@@ -96,6 +108,23 @@ func (c *Connector) SetOptions(raw json.RawMessage) error {
 		chats[id] = struct{}{}
 	}
 
+	var promiseGroups map[string]struct{}
+	if wire.OwnerPromiseGroups != nil {
+		if len(*wire.OwnerPromiseGroups) > maxOwnerPromiseGroups {
+			return fmt.Errorf("options.owner_promise_groups allows up to %d group ids", maxOwnerPromiseGroups)
+		}
+		promiseGroups = make(map[string]struct{}, len(*wire.OwnerPromiseGroups))
+		for _, id := range *wire.OwnerPromiseGroups {
+			id = strings.TrimSpace(id)
+			if !strings.HasPrefix(id, "oc_") || !validOpaqueID(id) {
+				return fmt.Errorf("options.owner_promise_groups must contain Lark group ids")
+			}
+			if _, exists := promiseGroups[id]; exists {
+				return fmt.Errorf("options.owner_promise_groups contains duplicate group ids")
+			}
+			promiseGroups[id] = struct{}{}
+		}
+	}
 	excluded, err := parseExcludedChatIDs(wire.InboxExcludeChats)
 	if err != nil {
 		return err
@@ -114,6 +143,18 @@ func (c *Connector) SetOptions(raw json.RawMessage) error {
 	}
 	c.inboxMu.Lock()
 	c.inboxAllChats = chats
+	if wire.OwnerPromiseGroups != nil {
+		c.ownerPromiseGroups = promiseGroups
+		for id := range c.inboxState.PromiseSince {
+			if _, selected := promiseGroups[id]; !selected {
+				delete(c.inboxState.PromiseSince, id)
+			}
+		}
+	}
+	if wire.OwnerPromiseModel != nil {
+		c.ownerPromiseModel = *wire.OwnerPromiseModel
+	}
+
 	c.inboxExcludeChats = excluded
 	c.inboxExcludeDirectChats = wire.InboxExcludeDirectChats
 	c.triageRules = rules

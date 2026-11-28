@@ -27,6 +27,11 @@ func RenderLarkCLIInboxContext(c LarkCLIInboxContext) string {
 	return render("inbox/larkcli_context", c)
 }
 
+// RenderOwnerPromise asks whether the owner's observed reply implies future work.
+func RenderOwnerPromise(language string) string {
+	return render("inbox/owner_promise", struct{ Language string }{language})
+}
+
 // InboxTriage is the system prompt that sorts an item into "Needs You" / "FYI" / "Noise" (inbox/triage).
 type InboxTriage struct {
 	Owner string // "" is the Chinese "you"

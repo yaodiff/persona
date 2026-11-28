@@ -1,6 +1,6 @@
 {
   "failed_title": "未能撤销此浏览器的访问权限",
-  "failed_body": "hub 未能撤销此浏览器的 token。如果你选择仍然退出，该 token 在 hub 上仍会保持有效，直到你在「设置 › 设备」中手动将其撤销。",
+  "failed_body": "hub 未能撤销此浏览器的 token。如果你选择仍然退出，该 token 在 hub 上仍会保持有效，直到你在「设置 › 高级 › 设备」中手动将其撤销。",
   "sign_out_anyway": "仍然退出",
   "retry": "重试",
   "nothing_title": "没有可撤销的 token",

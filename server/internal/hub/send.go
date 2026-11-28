@@ -810,7 +810,7 @@ func (h *Hub) keepUndelivered(ctx context.Context, m *Machine, sid string, msg m
 	}
 	res, err := callAssistant(kctx, h.asstOf(h.sessionOwner(m.cfg.ID, sid)), assistantwire.KeepUndeliveredMethod, assistantwire.KeepUndeliveredParams{
 		MachineID: m.cfg.ID, SessionID: sid, Params: msg, Human: personSent(ctx), Lang: string(h.contextLang(ctx)), Code: code, Error: why, TriedAt: tried,
-		CredentialID: credential,
+		CredentialID: credential, OriginDeviceID: wireids.DeviceID(originDeviceID(ctx)),
 	})
 	if err != nil || res.Undelivered == nil {
 		h.logf("send to %s/%s: not kept for later: %v", m.cfg.ID, sid, err)
