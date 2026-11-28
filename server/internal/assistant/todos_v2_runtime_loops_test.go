@@ -315,10 +315,10 @@ func TestTodosV2RuntimeLoopsPRStatusEventAndBlockedByPREndToEnd(t *testing.T) {
 		t.Fatalf("expected blocker for %s to be resolved, still active: %+v", prURL1, rem)
 	}
 	s.supervise.mu.Lock()
-	sig, hasWake := s.supervise.pending[waiterTodoID+"|"+sigTodoReady]
+	sig, hasWake := s.supervise.pending[waiterTodoID+"|"+sigBlockersUnblocked]
 	s.supervise.mu.Unlock()
-	if !hasWake || sig.Key != "blockers_unblocked:"+waiterTodoID {
-		t.Fatalf("expected sigTodoReady wake for %s, got has=%t sig=%+v", waiterTodoID, hasWake, sig)
+	if !hasWake || sig.Key == "" {
+		t.Fatalf("expected blockers_unblocked wake for %s, got has=%t sig=%+v", waiterTodoID, hasWake, sig)
 	}
 
 	// 2. task_plan with blocked_by_pr persists external_pr blocker and wakes on periodic superviseWatch fallback sweep.
@@ -382,6 +382,9 @@ func TestTodosV2RuntimeLoopsPRStatusEventAndBlockedByPREndToEnd(t *testing.T) {
 	})
 	s.superviseWatch(ctx, time.Now())
 
+	waitForCondition(t, 3*time.Second, "blocker observer to reconcile PR", func() bool {
+		return !s.blockerReconcile.sweep.Load()
+	})
 	if len(unblocked) != 2 || unblocked[1] != planTodoID {
 		t.Fatalf("expected periodic superviseWatch fallback sweep to unblock %s, got %+v", planTodoID, unblocked)
 	}

@@ -2,6 +2,8 @@ package node
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -10,33 +12,53 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 const (
 	orcaChatID   = "claude_0b0e9c8e_6f1a_4c3e_9d2b_4a5f6e7d8c9b"
 	orcaChatUUID = "0b0e9c8e-6f1a-4c3e-9d2b-4a5f6e7d8c9b"
+	// A Codex chat: Orca's session id and its Codex thread.
+	orcaCodexID     = "codex_1234abcd"
+	orcaCodexThread = "0199c5a2-1b2c-7d3e-8f40-5a6b7c8d9e0f"
 )
 
-// orcaChats is a fake Orca with one Claude chat (and a Codex chat and a terminal's agent, which the bridge leaves
-// alone), its history, options and pending requests as the test sets them.
+// orcaChats is a fake Orca with one Claude chat and one Codex chat (and a terminal's agent, which the bridge leaves
+// alone), their history, options and pending requests as the test sets them, and the chat tabs.
 type orcaChats struct {
 	f        *orcarttest.Fake
 	mu       sync.Mutex
 	state    string
 	main     string // the main agent's own state when it differs from the row's ("": the row's)
 	requests string // the pending requests' JSON
+	claude   bool   // the Claude chat is listed in worktree.ps (it has had a turn)
+	codex    bool   // so is the Codex chat
+	provider string // the Claude chat's Claude session ("" before its first message)
+	tabs     []any  // chat tabs beyond the listed chats' (session.tabs.listAll)
+	journal  []any  // the Codex chat's journal rows
 }
 
 func newOrcaChats(t *testing.T) *orcaChats {
 	t.Helper()
-	o := &orcaChats{f: orcarttest.New(t), state: "done", requests: "[]"}
+	o := &orcaChats{f: orcarttest.New(t), state: "done", requests: "[]", claude: true, codex: true, provider: orcaChatUUID}
 	o.trees()
 	o.f.Handle("agentSession.history", func(p map[string]any) any {
-		if p["sessionId"] != orcaChatID {
-			return orcarttest.Fail{Code: "agent_session_identity_required"}
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		page := map[string]any{"fence": 3, "working": false, "epoch": "ep-1", "items": []any{},
+			"liveCursor": map[string]any{"epoch": "ep-1", "sequence": 0}}
+		switch p["sessionId"] {
+		case orcaChatID:
+			if o.provider == "" {
+				return map[string]any{"ok": true, "page": page}
+			}
+			return map[string]any{"ok": true, "page": page, "providerSession": map[string]any{"key": "session_id", "id": o.provider}}
+		case orcaCodexID:
+			page["items"] = o.journal
+			page["liveCursor"] = map[string]any{"epoch": "ep-1", "sequence": len(o.journal) * 2}
+			return map[string]any{"ok": true, "page": page, "providerSession": map[string]any{"key": "session_id", "id": orcaCodexThread}}
 		}
-		return map[string]any{"ok": true, "page": map[string]any{"fence": 3, "working": false},
-			"providerSession": map[string]any{"key": "session_id", "id": orcaChatUUID}}
+		return orcarttest.Fail{Code: "agent_session_identity_required"}
 	})
 	o.f.Handle("agentSession.options", func(map[string]any) any {
 		return map[string]any{"current": map[string]any{"permissionMode": "accept-edits", "effort": "high", "model": "opus"}}
@@ -50,33 +72,54 @@ func newOrcaChats(t *testing.T) *orcaChats {
 		}
 		return map[string]any{"marker": marker, "json": o.requests, "nextCursor": nil}
 	})
+	o.f.Handle("session.tabs.listAll", func(map[string]any) any {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		return map[string]any{"snapshots": []any{map[string]any{"worktree": "repo::/w/app", "tabs": o.tabs}}}
+	})
 	for _, m := range []string{"agentSession.send", "agentSession.cancel", "agentSession.setOption",
 		"agentSession.respondToApproval", "agentSession.respondToQuestion"} {
 		o.f.Handle(m, func(map[string]any) any { return map[string]any{"ok": true, "value": map[string]any{}} })
 	}
+	o.f.Handle("agentSession.reveal", func(p map[string]any) any {
+		return map[string]any{"ok": true, "sessionId": p["sessionId"], "workspaceId": "repo::/w/app", "agent": "claude", "readable": true}
+	})
 	return o
 }
 
 func (o *orcaChats) trees() {
 	o.mu.Lock()
-	state, main := o.state, o.main
+	state, main, claude, codex := o.state, o.main, o.claude, o.codex
 	o.mu.Unlock()
 	if main == "" {
 		main = state
 	}
+	agents := []any{}
+	if claude {
+		agents = append(agents, map[string]any{"paneKey": "structured-agent-session-" + orcaChatID + ":aa", "agentType": "claude",
+			"state": state, "mainAgent": map[string]any{"state": main}, "conversationName": "Refactor the parser",
+			"lastAssistantMessage": "Done: tests pass.", "updatedAt": 1793850000000})
+	}
+	if codex {
+		agents = append(agents, map[string]any{"paneKey": "structured-agent-session-" + orcaCodexID + ":bb", "agentType": "codex",
+			"state": "done", "conversationName": "Fix the build", "updatedAt": 1793850001000})
+	}
+	agents = append(agents, map[string]any{"paneKey": "tab-1:leaf-1", "agentType": "claude", "state": "done"})
 	o.f.SetWorktrees(map[string]any{"worktreeId": "repo::/w/app", "path": "/w/app", "branch": "refs/heads/feat",
-		"hostId": "local", "parentWorktreeId": "repo::/w/main", "agents": []any{
-			map[string]any{"paneKey": "structured-agent-session-" + orcaChatID + ":aa", "agentType": "claude", "state": state,
-				"mainAgent": map[string]any{"state": main}, "conversationName": "Refactor the parser",
-				"lastAssistantMessage": "Done: tests pass.", "updatedAt": 1793850000000},
-			map[string]any{"paneKey": "structured-agent-session-codex_1234abcd:bb", "agentType": "codex", "state": "done"},
-			map[string]any{"paneKey": "tab-1:leaf-1", "agentType": "claude", "state": "done"},
-		}})
+		"hostId": "local", "parentWorktreeId": "repo::/w/main", "agents": agents})
 }
 
 func (o *orcaChats) set(state, requests string) {
 	o.mu.Lock()
 	o.state, o.requests = state, requests
+	o.mu.Unlock()
+	o.trees()
+}
+
+// with changes the fake's chats under its lock, then lists them again.
+func (o *orcaChats) with(change func(o *orcaChats)) {
+	o.mu.Lock()
+	change(o)
 	o.mu.Unlock()
 	o.trees()
 }
@@ -88,9 +131,17 @@ func (o *orcaChats) writes(method string) []map[string]any { return o.f.Params(m
 func orcaBridgeNode(t *testing.T) (*Node, *runtimeHub, *orcaChats) {
 	t.Helper()
 	o := newOrcaChats(t)
-	saved, savedPoll := orcaClient, orcaBridgePoll
+	n, hub := orcaBridgeNodeOn(t, o)
+	waitFor(t, "the chat listed", func() bool { _, ok := listed(t, n)[orcaChatUUID]; return ok })
+	return n, hub, o
+}
+
+// orcaBridgeNodeOn is a node whose bridge runs against o, with its book in book ("": in memory).
+func orcaBridgeNodeOn(t *testing.T, o *orcaChats) (*Node, *runtimeHub) {
+	t.Helper()
+	saved, savedPoll, savedTabs := orcaClient, orcaBridgePoll, orcaTabsPoll
 	orcaClient = func() *orcart.Client { return &orcart.Client{MetaPath: o.f.MetaPath} }
-	orcaBridgePoll = 50 * time.Millisecond
+	orcaBridgePoll, orcaTabsPoll = 50*time.Millisecond, 50*time.Millisecond
 	n, hub := runtimeNode(t)
 	if n.runtimeHost == nil {
 		t.Fatal("no runtime host")
@@ -98,19 +149,20 @@ func orcaBridgeNode(t *testing.T) (*Node, *runtimeHub, *orcaChats) {
 	n.runtimeHost.setOrcaBridge(true)
 	t.Cleanup(func() {
 		n.runtimeHost.setOrcaBridge(false)
-		orcaClient, orcaBridgePoll = saved, savedPoll
+		orcaClient, orcaBridgePoll, orcaTabsPoll = saved, savedPoll, savedTabs
 	})
-	waitFor(t, "the chat listed", func() bool { _, ok := listed(t, n)[orcaChatUUID]; return ok })
-	return n, hub, o
+	return n, hub
 }
 
 // A Claude chat is listed under its Claude session (its transcript), in its worktree's space, with Orca's title,
-// last answer and modes in Persona's words; Codex chats and terminals are not the bridge's.
+// last answer and modes in Persona's words, as one of the Orca engine's (host orca); a Codex chat as its Codex thread;
+// terminals are not the bridge's.
 func TestOrcaBridgeListsChats(t *testing.T) {
 	n, _, _ := orcaBridgeNode(t)
 	s := listed(t, n)[orcaChatUUID]
 	if s.Title != "Refactor the parser" || s.Cwd != "/w/app" || s.SpaceID != "repo::/w/app" || s.SpaceName != "feat" ||
-		s.SpaceKind != proto.EngineOrca || s.ParentSpaceID != "repo::/w/main" || s.Status != proto.StatusDone || s.Agent != "claude" {
+		s.SpaceKind != proto.EngineOrca || s.ParentSpaceID != "repo::/w/main" || s.Status != proto.StatusDone || s.Agent != "claude" ||
+		s.Host != proto.EngineOrca {
 		t.Fatalf("row %+v", s)
 	}
 	if s.PermissionMode != "acceptEdits" || s.Capabilities == nil || !s.Capabilities.Send || !s.Capabilities.Interrupt ||
@@ -118,7 +170,7 @@ func TestOrcaBridgeListsChats(t *testing.T) {
 		t.Fatalf("modes / capabilities %+v %+v", s.PermissionMode, s.Capabilities)
 	}
 	for id := range listed(t, n) {
-		if id == "codex_1234abcd" || id == "tab-1:leaf-1" {
+		if id == orcaChatID || id == "tab-1:leaf-1" {
 			t.Errorf("listed %s", id)
 		}
 	}
@@ -133,7 +185,7 @@ func TestBridgeReportedBotmuxPreview(t *testing.T) {
 		row  func(string) map[string]any
 	}{
 		{"Orca", func(reply string) map[string]any {
-			return orcaRow(orcart.Worktree{}, orcart.AgentRow{LastAssistantMessage: reply}, &orcaHead{provider: orcaChatUUID})
+			return orcaRow(orcaChat{agent: "claude", row: &orcart.AgentRow{LastAssistantMessage: reply}}, orcaBookEntry{Persona: orcaChatUUID}, &orcaHead{provider: orcaChatUUID})
 		}},
 		{"Cindy", func(reply string) map[string]any {
 			row, _ := mapCindySessionRow(cindyDBRow{ID: "sample", ListPreview: reply}, false, false, nil)
@@ -164,8 +216,8 @@ func TestBridgeReportedBotmuxPreview(t *testing.T) {
 	}
 }
 
-// Before the transcript is on disk the bridge answers session.items with an empty page the hub can read: history,
-// when present, is the transcript's version string (the hub's itemSpan), never a bool (#4886).
+// Before the transcript is on disk the bridge answers session.items from Orca's journal with a page the hub can read:
+// history is a string (the journal's epoch; the hub's itemSpan), never a bool (#4886).
 func TestOrcaBridgeItemsBeforeTranscriptDecodeAsSpan(t *testing.T) {
 	n, _, _ := orcaBridgeNode(t)
 	raw, err := nodeCall(t, n, "session.items", map[string]any{"session_id": orcaChatUUID})
@@ -180,8 +232,194 @@ func TestOrcaBridgeItemsBeforeTranscriptDecodeAsSpan(t *testing.T) {
 	if err := json.Unmarshal(raw, &page); err != nil {
 		t.Fatalf("hub can't read %s: %v", raw, err)
 	}
-	if len(page.Items) != 0 || page.History != "" || page.ToSeq == nil || *page.ToSeq != 0 {
+	if len(page.Items) != 0 || page.History != "orca:ep-1" || page.ToSeq == nil || *page.ToSeq != 0 {
 		t.Fatalf("page %s", raw)
+	}
+}
+
+// A Codex chat is listed once, as its Codex thread (the node lists no second row from Codex's history), named and
+// placed like a Claude chat; its content is Orca's journal, as Persona's items (words, thinking, a tool call and its
+// result, a warning; Orca's bookkeeping left out); a message goes to its Orca session.
+func TestOrcaBridgeCodexChat(t *testing.T) {
+	n, _, o := orcaBridgeNode(t)
+	o.with(func(o *orcaChats) {
+		o.journal = []any{
+			map[string]any{"itemId": "u-1", "revision": 1, "sequence": 2, "observedAt": 1793850000100,
+				"body": map[string]any{"kind": "message", "role": "user", "blocks": []any{map[string]any{"type": "text", "text": "Fix the build"}}}},
+			map[string]any{"itemId": "r-1", "revision": 1, "sequence": 3, "observedAt": 1793850000200,
+				"body": map[string]any{"kind": "message", "role": "reasoning", "blocks": []any{map[string]any{"type": "text", "text": "Look at make"}}}},
+			map[string]any{"itemId": "a-1", "revision": 1, "sequence": 4, "observedAt": 1793850000300,
+				"body": map[string]any{"kind": "message", "role": "assistant", "blocks": []any{
+					map[string]any{"type": "text", "text": "Running it."},
+					map[string]any{"type": "tool-call", "name": "Bash", "input": map[string]any{"command": "make"}, "callId": "c-1"}}}},
+			map[string]any{"itemId": "t-1", "revision": 1, "sequence": 5, "observedAt": 1793850000400,
+				"body": map[string]any{"kind": "message", "role": "tool", "blocks": []any{map[string]any{"type": "tool-result", "output": "ok", "isError": false}}}},
+			map[string]any{"itemId": "s-1", "revision": 1, "sequence": 6, "observedAt": 1793850000500,
+				"body": map[string]any{"kind": "status", "text": "Codex isn't signed in.", "tone": "error"}},
+			map[string]any{"itemId": "s-2", "revision": 1, "sequence": 7, "observedAt": 1793850000600,
+				"body": map[string]any{"kind": "status", "text": "Retrying", "tone": "info"}},
+			map[string]any{"itemId": "turn-1", "revision": 1, "sequence": 8, "observedAt": 1793850000700, "body": map[string]any{"kind": "turn"}},
+		}
+	})
+	rows := listed(t, n)
+	s, ok := rows[orcaCodexID]
+	if !ok {
+		t.Fatalf("no Codex chat among %v", orcaListedIDs(rows))
+	}
+	if s.Agent != "codex" || s.Title != "Fix the build" || s.SpaceID != "repo::/w/app" || s.Host != proto.EngineOrca ||
+		s.SourceKind != proto.SourceRuntime || s.Capabilities == nil || !s.Capabilities.Send {
+		t.Fatalf("row %+v", s)
+	}
+	for id, r := range rows {
+		if r.SourceThreadID == orcaCodexThread || id == orcaCodexThread {
+			t.Errorf("the Codex thread listed again as %s (%s)", id, r.SourceKind)
+		}
+	}
+	raw, err := nodeCall(t, n, "session.items", map[string]any{"session_id": orcaCodexID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Items   []proto.Item `json:"items"`
+		History string       `json:"history"`
+		ToSeq   int          `json:"to_seq"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range page.Items {
+		got = append(got, it.ID+" "+it.Role+" "+it.Kind+" "+firstOf(it.Text, it.ToolName)+" "+it.ToolUseID)
+	}
+	want := []string{"2#0 user text Fix the build ", "3#0 assistant thinking Look at make ", "4#0 assistant text Running it. ",
+		"4#1 assistant tool_use Bash c-1", "5#0 user tool_result ok c-1", "6#0 system notice Codex isn't signed in. "}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") || page.History != "orca:ep-1" || page.ToSeq != 14 {
+		t.Fatalf("items\n%s\nhistory %q to_seq %d", strings.Join(got, "\n"), page.History, page.ToSeq)
+	}
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": orcaCodexID, "text": "and the tests",
+		"client_msg_id": "m-codex"}); err != nil {
+		t.Fatal(err)
+	}
+	sends := o.writes("agentSession.send")
+	if len(sends) != 1 || sends[0]["envelope"].(map[string]any)["sessionId"] != orcaCodexID {
+		t.Fatalf("sends %v", sends)
+	}
+	if bad := o.f.Invalid(); len(bad) > 0 {
+		t.Fatalf("Orca's schema refused %v", bad)
+	}
+}
+
+// orcaListedIDs are a map's keys, for a failure's message.
+func orcaListedIDs[V any](m map[string]V) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// A chat with no turn yet is not in worktree.ps, only among Orca's chat tabs: it is listed at once, under Orca's own
+// session id (it has no Claude session yet), read from its journal. Its first message makes Claude's session and
+// Orca's row: the chat keeps its id, and its content is from then on the Claude transcript, which the row names (the
+// node then names the Claude session among its aliases, runtimes.md "Runtimes that run Claude Code").
+func TestOrcaBridgeListsANewChatBeforeItsFirstMessage(t *testing.T) {
+	o := newOrcaChats(t)
+	o.with(func(o *orcaChats) {
+		o.claude, o.provider = false, ""
+		o.tabs = []any{map[string]any{"type": "agent-session", "id": "agent-session:" + orcaChatID, "title": "Claude Chat",
+			"sessionId": orcaChatID, "agent": "claude"}}
+	})
+	n, _ := orcaBridgeNodeOn(t, o)
+	waitFor(t, "the new chat listed", func() bool { _, ok := listed(t, n)[orcaChatID]; return ok })
+	s := listed(t, n)[orcaChatID]
+	if s.Title != "Claude Chat" || s.Status != proto.StatusIdle || s.Agent != "claude" || s.Host != proto.EngineOrca || !s.Capabilities.Send {
+		t.Fatalf("row %+v", s)
+	}
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": orcaChatID, "text": "hello", "client_msg_id": "m-first"}); err != nil {
+		t.Fatal(err)
+	}
+	sdkTranscript(t, n, orcaChatUUID, "Done: tests pass.")
+	o.with(func(o *orcaChats) { o.claude, o.provider = true, orcaChatUUID })
+	waitFor(t, "the row naming its transcript", func() bool {
+		freshOffline()
+		rows := listed(t, n)
+		s, ok := rows[orcaChatID]
+		_, twice := rows[orcaChatUUID]
+		return ok && !twice && s.Title == "Refactor the parser" && slices.Contains(s.Aliases(), orcaChatUUID)
+	})
+}
+
+// A chat closed in Orca stays listed, not running, from the bridge's book, also after the node restarts: its content is
+// its transcript's, and a message opens it in Orca again (agentSession.reveal) and goes to it there, never to a terminal.
+// Closing it in Persona takes it off the list.
+func TestOrcaBridgeKeepsClosedChatsAcrossRestarts(t *testing.T) {
+	book := filepath.Join(t.TempDir(), "chats.json")
+	saved := orcaBookPath
+	orcaBookPath = func() string { return book }
+	t.Cleanup(func() { orcaBookPath = saved })
+	o := newOrcaChats(t)
+	n, _ := orcaBridgeNodeOn(t, o)
+	waitFor(t, "the chat listed", func() bool { _, ok := listed(t, n)[orcaChatUUID]; return ok })
+	n.runtimeHost.setOrcaBridge(false) // the book is written when the bridge stops
+	o.with(func(o *orcaChats) { o.claude = false })
+
+	n2, _ := orcaBridgeNodeOn(t, o) // the node again, after a restart: only the book knows the chat
+	waitFor(t, "the closed chat listed", func() bool {
+		s, ok := listed(t, n2)[orcaChatUUID]
+		return ok && s.Status == proto.StatusOffline
+	})
+	s := listed(t, n2)[orcaChatUUID]
+	if s.Title != "Refactor the parser" || s.Host != proto.EngineOrca || s.SpaceID != "repo::/w/app" || !s.Capabilities.Send {
+		t.Fatalf("row %+v", s)
+	}
+	if _, err := nodeCall(t, n2, "session.send", map[string]any{"session_id": orcaChatUUID, "text": "go on", "client_msg_id": "m-2"}); err != nil {
+		t.Fatal(err)
+	}
+	reveals, sends := o.writes("agentSession.reveal"), o.writes("agentSession.send")
+	if len(reveals) != 1 || reveals[0]["sessionId"] != orcaChatID || len(sends) != 1 ||
+		sends[0]["envelope"].(map[string]any)["sessionId"] != orcaChatID {
+		t.Fatalf("reveals %v sends %v", reveals, sends)
+	}
+	if c := o.f.Count("terminal.create"); c != 0 {
+		t.Fatalf("%d terminals opened", c)
+	}
+	o.f.Reset()
+	if _, err := nodeCall(t, n2, "session.close", map[string]any{"session_id": orcaChatUUID}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the closed chat off the list", func() bool { _, ok := listed(t, n2)[orcaChatUUID]; return !ok })
+	if c := o.f.Count("agentSession.close"); c != 0 {
+		t.Fatalf("closed in Orca %d times", c)
+	}
+}
+
+// The bridge's refusals keep the codes the node and the apps act on, and carry a reason the hub words in the user's
+// language; Orca's own words go with a refusal.
+func TestOrcaBridgeErrorsCarryReasons(t *testing.T) {
+	n, _, o := orcaBridgeNode(t)
+	o.f.Handle("agentSession.send", func(map[string]any) any {
+		return map[string]any{"ok": false, "refusal": map[string]any{"code": "agent_session_busy", "message": "The chat is busy."}}
+	})
+	_, err := nodeCall(t, n, "session.send", map[string]any{"session_id": orcaChatUUID, "text": "x", "client_msg_id": "m-r"})
+	if err == nil || !strings.Contains(err.Error(), "The chat is busy.") {
+		t.Fatalf("refusal %v", err)
+	}
+	for _, tc := range []struct {
+		err          error
+		code, reason string
+	}{
+		{orcart.ErrNotRunning, "runtime_away", "orca_away"},
+		{&orcart.Error{Code: "agent_session_busy", Message: "busy"}, "refused", "orca_refused"},
+		{&orcart.Error{Code: "agent_session_operation_unknown"}, "unknown", "orca_unknown"},
+	} {
+		re, ok := orcaWriteErr(tc.err).(*rpc.Error)
+		if !ok || re.Code != tc.code || !strings.Contains(string(re.Data), `"reason":"`+tc.reason+`"`) {
+			t.Errorf("%v: %#v", tc.err, orcaWriteErr(tc.err))
+		}
+	}
+	_, err = nodeCall(t, n, "session.interrupt", map[string]any{"session_id": "5d2c7a10-3b4e-4f6a-8c9d-0e1f2a3b4c5d"})
+	if err == nil {
+		t.Fatal("an unknown chat interrupted")
 	}
 }
 
@@ -244,12 +482,15 @@ func TestOrcaBridgeSendsInterruptsAndSetsModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	set := o.writes("agentSession.setOption")
-	if len(set) != 2 || set[0]["key"] != "permissionMode" || set[0]["value"] != "full-access" || set[1]["key"] != "effort" ||
-		set[1]["value"] != "max" {
+	if len(set) != 2 || set[0]["key"] != "effort" || set[0]["value"] != "max" || set[1]["key"] != "permissionMode" ||
+		set[1]["value"] != "full-access" {
 		t.Fatalf("options %v", set)
 	}
-	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": orcaChatUUID, "permission_mode": "plan"}); err == nil {
-		t.Error("plan mode taken: Orca has none")
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": orcaChatUUID, "permission_mode": "plan"}); err != nil {
+		t.Fatal(err) // Orca's interaction mode (orcabridge_controls_test.go)
+	}
+	if set = o.writes("agentSession.setOption"); len(set) != 3 || set[2]["key"] != "interactionMode" || set[2]["value"] != "plan" {
+		t.Fatalf("options %v", set)
 	}
 }
 
@@ -355,6 +596,65 @@ func TestOrcaBridgeQuestionCard(t *testing.T) {
 	got, _ := json.Marshal(o.writes("agentSession.respondToQuestion")[0]["answers"])
 	if want := `[{"optionIds":["u","e"],"questionId":"qa"},{"optionIds":[],"other":"staging-2","questionId":"qb"}]`; string(got) != want {
 		t.Fatalf("answers %s, want %s", got, want)
+	}
+}
+
+// An answer Orca turns down is not lost: while Orca still waits on the approval, it goes on the phone again as a new
+// card, which says in Orca's words why the last answer was not taken; the next answer goes to Orca.
+func TestOrcaBridgeOffersARefusedAnswerAgain(t *testing.T) {
+	_, hub, o := orcaBridgeNode(t)
+	allow := true
+	hub.mu.Lock()
+	hub.resolve = func(proto.Interaction) proto.Resolution { return proto.Resolution{Allow: &allow} }
+	hub.mu.Unlock()
+	var mu sync.Mutex
+	answers := 0
+	o.f.Handle("agentSession.respondToApproval", func(map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		if answers++; answers == 1 {
+			return map[string]any{"ok": false, "refusal": map[string]any{"code": "agent_session_revision_stale",
+				"message": "The request changed; answer it again."}}
+		}
+		return map[string]any{"ok": true, "value": map[string]any{}}
+	})
+	o.set("blocked", orcaApproval)
+	waitFor(t, "the second card", func() bool { hub.mu.Lock(); defer hub.mu.Unlock(); return len(hub.asked) >= 2 })
+	waitFor(t, "the second answer in Orca", func() bool { return len(o.writes("agentSession.respondToApproval")) >= 2 })
+	hub.mu.Lock()
+	first, second := hub.asked[0], hub.asked[1]
+	hub.mu.Unlock()
+	if first.ID == second.ID || first.Reason != "" || second.Reason != "The request changed; answer it again." ||
+		second.Kind != proto.IxPermission || second.ToolName != "Bash" {
+		t.Fatalf("cards %+v / %+v", first, second)
+	}
+	o.set("working", "[]")
+	polls := o.f.Count("worktree.ps")
+	waitFor(t, "a few more refreshes", func() bool { return o.f.Count("worktree.ps") >= polls+3 })
+	if n := len(o.writes("agentSession.respondToApproval")); n != 2 {
+		t.Errorf("answered %d times", n)
+	}
+}
+
+// A question of five parts keeps all five answers: every one goes to Orca, none is cut off.
+func TestOrcaBridgeKeepsEveryAnswer(t *testing.T) {
+	_, hub, o := orcaBridgeNode(t)
+	var qs []string
+	answers := map[string]string{}
+	for i := range 5 {
+		q := "Question " + string(rune('A'+i)) + "?"
+		qs = append(qs, `{"id":"q`+string(rune('a'+i))+`","question":"`+q+`","multiSelect":false,"options":[{"id":"y","label":"Yes"}]}`)
+		answers[q] = "Yes"
+	}
+	hub.mu.Lock()
+	hub.resolve = func(proto.Interaction) proto.Resolution { return proto.Resolution{Answers: answers} }
+	hub.mu.Unlock()
+	o.set("blocked", `[{"itemId":"q-5","revision":1,"body":{"kind":"question","question":"Question A?","options":[],"questions":[`+
+		strings.Join(qs, ",")+`],"resolution":{"state":"pending"}}}]`)
+	waitFor(t, "the answer in Orca", func() bool { return len(o.writes("agentSession.respondToQuestion")) > 0 })
+	got := o.writes("agentSession.respondToQuestion")[0]["answers"].([]any)
+	if len(got) != 5 {
+		t.Fatalf("%d answers: %v", len(got), got)
 	}
 }
 

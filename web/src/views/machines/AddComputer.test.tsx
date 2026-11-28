@@ -125,14 +125,14 @@ describe("AddComputer", () => {
     await startLinux();
     expect(posts[0]).toEqual({ path: "/auth/pair-codes", body: { add: { name: "家里的服务器", os: "linux" } } });
     expect(text()).toContain("curl -fsSL https://example.com/install.sh");
-    expect(text()).toContain("等「家里的服务器」连上来");
+    expect(text()).toContain("正在等待「家里的服务器」连接…");
 
     await poll(); // still offline
-    expect(text()).toContain("等「家里的服务器」连上来");
+    expect(text()).toContain("正在等待「家里的服务器」连接…");
 
     machine = { ...machine, online: true, os: "linux", hostname: "home" };
     await poll();
-    expect(text()).toContain("有一台电脑想加入：家里的服务器，是你的吗？");
+    expect(text()).toContain("一台电脑请求加入：家里的服务器，这是你的电脑吗？");
 
     await click("是我的电脑");
     expect(posts.at(-1)).toEqual({ path: "/machines/home/confirm", body: undefined });
@@ -150,16 +150,16 @@ describe("AddComputer", () => {
     machine = { ...machine, online: true };
     await show("visible");
     expect(reads).toBe(1);
-    expect(text()).toContain("有一台电脑想加入：家里的服务器，是你的吗？");
+    expect(text()).toContain("一台电脑请求加入：家里的服务器，这是你的电脑吗？");
   });
 
   it("removes it when it is not yours", async () => {
     await startLinux();
     machine = { ...machine, online: true };
     await poll();
-    await click("不是，删掉");
+    await click("不是，移除");
     expect(posts.at(-1)?.path).toBe("/machines/home/reject");
-    expect(text()).toContain("已删掉「家里的服务器」");
+    expect(text()).toContain("已移除「家里的服务器」");
   });
 
   it("confirming one that is not online: remove it, or a new link (first choice only if it never connected)", async () => {
@@ -171,14 +171,14 @@ describe("AddComputer", () => {
       await flush();
       expect(document.querySelector('[data-stage="offline"]')).not.toBeNull();
       // only asleep: a new link (it revokes the old pairing) is not the first choice
-      expect(button("重新出链接")?.className).toBe(button("删掉")?.className);
+      expect(button("重新生成链接")?.className).toBe(button("移除")?.className);
       Object.assign(getState(), { machines: [{ ...asleep, error_code: "never_connected" }] });
       await act(async () => root.render(<AddComputer open onClose={() => {}} confirm={{ id: "home", name: "家里的服务器" }} />));
       await flush();
-      expect(button("重新出链接")?.className).not.toBe(button("删掉")?.className);
-      await click("删掉");
+      expect(button("重新生成链接")?.className).not.toBe(button("移除")?.className);
+      await click("移除");
       expect(posts.at(-1)?.path).toBe("/machines/home/reject");
-      expect(text()).toContain("已删掉「家里的服务器」");
+      expect(text()).toContain("已移除「家里的服务器」");
     } finally {
       Object.assign(getState(), saved);
     }
@@ -192,7 +192,7 @@ describe("AddComputer", () => {
     expect(posts[0]?.body).toEqual({ add: { name: "我的 MacBook", os: "mac" } });
     expect(button("复制配对链接")).toBeTruthy();
     expect(document.querySelector<HTMLAnchorElement>('a[href$="persona-link-install.md"]')).toBeTruthy();
-    expect(text()).toContain("要自己从源码编译");
+    expect(text()).toContain("需要自行从源码编译");
     expect(text()).not.toContain("curl");
   });
 
@@ -202,7 +202,7 @@ describe("AddComputer", () => {
     await flush();
     await type("我的 MacBook");
     await click("下一步");
-    expect(text()).toContain("hub 还没打开安全连接");
+    expect(text()).toContain("hub 尚未开启安全连接");
     expect(button("下一步")).toBeTruthy(); // still on the form, to try again
   });
 
@@ -216,10 +216,10 @@ describe("AddComputer", () => {
       await type("我的 MacBook");
       await click("下一步");
       const box = document.querySelector("[data-too-many]");
-      expect(box?.textContent).toContain("都还没连上来过");
-      expect(box?.textContent).not.toContain("等你确认");
+      expect(box?.textContent).toContain("但均尚未连接");
+      expect(box?.textContent).not.toContain("等待确认");
       expect(box?.textContent).toContain("电脑 a");
-      const remove = [...box!.querySelectorAll("button")].find((b) => b.textContent?.trim() === "删掉")!;
+      const remove = [...box!.querySelectorAll("button")].find((b) => b.textContent?.trim() === "移除")!;
       await act(async () => remove.click());
       await flush();
       expect(posts.at(-1)?.path).toBe("/machines/a/reject");

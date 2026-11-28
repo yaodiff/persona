@@ -47,6 +47,14 @@ func (u *updater) routes(api *http.ServeMux) {
 		}
 		writeJSON(w, u.viewIn(u.h.requestLang(r)))
 	})
+	api.HandleFunc("POST /api/v1/hub/update/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if err := u.requestCancel(); err != nil {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		u.broadcastStatus()
+		writeJSON(w, u.viewIn(u.h.requestLang(r)))
+	})
 	api.HandleFunc("POST /api/v1/hub/update/check", func(w http.ResponseWriter, r *http.Request) {
 		if err := u.load(r.Context()); err != nil {
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))

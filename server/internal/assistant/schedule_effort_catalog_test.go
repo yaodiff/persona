@@ -122,6 +122,7 @@ func TestScheduledProviderOverrideKeepsItsOwnDefaults(t *testing.T) {
 	f.mu.Lock()
 	f.launcherList = append(f.launcherList, proto.Launcher{Name: "other", Source: "zshrc", Agent: "claude"})
 	f.mu.Unlock()
+	s.invalidateLauncherListCache("server")
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.shared", Model: "shell-model", Effort: "xhigh"})
 	setTasks(s, Task{ID: "report", Prompt: "Report", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true})
 	setModel(t, s, "task.report", ModelBinding{Provider: "launcher.other"})

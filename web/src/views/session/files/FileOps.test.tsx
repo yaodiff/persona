@@ -68,12 +68,12 @@ describe("useFileOps", () => {
     await act(async () => ops.trash([{ path: "/home/me/x/a.txt", name: "a.txt", dir: false }]));
     expect(dialog()?.textContent).toContain("a.txt");
     expect(trashEntries).not.toHaveBeenCalled(); // asked first
-    await click("移到废纸篓");
+    await click("移至废纸篓");
     expect(trashEntries).toHaveBeenCalledWith("m", ["/home/me/x/a.txt"], "/home/me/x", expect.objectContaining({ owner: expect.any(String), token: "example-file-ops-credential" }));
     expect(changed).toHaveBeenCalledWith(["/home/me/x"]);
     // said in the panel, not in the page's toasts over the chat box
     const status = host.querySelector<HTMLElement>('[role="status"]')!;
-    expect(status.textContent).toContain("「a.txt」已移到废纸篓");
+    expect(status.textContent).toContain("「a.txt」已移至废纸篓");
     const undo = [...status.querySelectorAll("button")].find((b) => b.textContent?.trim() === "撤销");
     await act(async () => undo!.click());
     await flush();
@@ -97,7 +97,7 @@ describe("useFileOps", () => {
     vi.mocked(uploadToDir).mockRejectedValueOnce(new ApiError(409, "exists", { code: "exists", name: "a.txt" }));
     await act(async () => ops.upload([new File(["x"], "a.txt")], "/home/me/x"));
     await flush();
-    await click("不传");
+    await click("跳过");
     expect(uploadToDir).toHaveBeenCalledTimes(1);
     expect(dialog()).toBeNull();
   });

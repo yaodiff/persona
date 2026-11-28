@@ -3,8 +3,8 @@
   "unit_minutes_other": "{count} 分钟",
   "unit_hours_other": "{count} 小时",
   "unit_days_other": "{count} 天",
-  "every_no_task": "每 {every}：还没写要做的事",
-  "usage": "格式：/loop [间隔] 要做的事，如 /loop 10m 看下 CI；不写间隔由 Claude 自己定节奏",
+  "every_no_task": "每 {every}：尚未填写任务内容",
+  "usage": "格式：/loop [间隔] 任务内容，例如 /loop 10m 检查 CI。若省略间隔，则由 Claude 自动决定执行节奏。",
   "every_task": "每 {every}重复：{task}",
-  "self_paced_task": "由 Claude 自己定节奏重复：{task}"
+  "self_paced_task": "由 Claude 自动决定节奏重复：{task}"
 }

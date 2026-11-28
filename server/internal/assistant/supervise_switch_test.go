@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,7 +51,21 @@ func getAssistantView(t *testing.T, s *Service) map[string]any {
 // when the switch was turned off a moment before they run.
 func setAutoSupervisionQuietly(t *testing.T, s *Service, on bool) {
 	t.Helper()
-	if _, err := s.updateSettings(context.Background(), func(v *Settings) error { v.AutoSupervisionMessages = &on; return nil }); err != nil {
+	mode := supervisionModeOff
+	if on {
+		mode = supervisionModeAll
+	}
+	setSupervisionModeQuietly(t, s, mode)
+}
+
+// setSupervisionModeQuietly saves the mode (and keeps the older switch in step) without the settings-changed hook.
+func setSupervisionModeQuietly(t *testing.T, s *Service, mode string) {
+	t.Helper()
+	on := mode != supervisionModeOff
+	if _, err := s.updateSettings(context.Background(), func(v *Settings) error {
+		v.AutoSupervisionMode, v.AutoSupervisionMessages = mode, &on
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -698,5 +713,459 @@ func TestAutoSupervisionPersonaSettingsToolSwitchesAtOnce(t *testing.T) {
 	}
 	if settingTitles["assistant.auto_supervision_messages"] != "title_auto_supervision_messages" {
 		t.Fatal("no approval-card title for assistant.auto_supervision_messages")
+	}
+}
+
+// ---- the three modes: all, outcomes, off (#16417) ----
+
+// putAssistant writes body to PUT /api/v1/assistant and answers the status and the view.
+func putAssistant(t *testing.T, s *Service, body string) (int, map[string]any) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assistant", strings.NewReader(body)))
+	var view map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &view)
+	return rec.Code, view
+}
+
+func putSupervisionMode(t *testing.T, s *Service, mode string) map[string]any {
+	t.Helper()
+	code, view := putAssistant(t, s, `{"auto_supervision_mode":"`+mode+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("PUT mode %s: %d %v", mode, code, view)
+	}
+	return view
+}
+
+func savedSupervision(t *testing.T, s *Service) (string, *bool) {
+	t.Helper()
+	v := s.settings(context.Background())
+	return v.AutoSupervisionMode, v.AutoSupervisionMessages
+}
+
+func TestSupervisionModeOfFallsBackToTheSwitch(t *testing.T) {
+	on, off := true, false
+	for _, c := range []struct {
+		name string
+		v    Settings
+		want string
+	}{
+		{"unset", Settings{}, supervisionModeAll},
+		{"switch on", Settings{AutoSupervisionMessages: &on}, supervisionModeAll},
+		{"switch off", Settings{AutoSupervisionMessages: &off}, supervisionModeOff},
+		{"mode wins", Settings{AutoSupervisionMode: supervisionModeOutcomes, AutoSupervisionMessages: &off}, supervisionModeOutcomes},
+		{"mode off", Settings{AutoSupervisionMode: supervisionModeOff}, supervisionModeOff},
+		{"unknown mode falls back", Settings{AutoSupervisionMode: "later", AutoSupervisionMessages: &off}, supervisionModeOff},
+	} {
+		if got := supervisionModeOf(c.v); got != c.want {
+			t.Errorf("%s: mode = %q, want %q", c.name, got, c.want)
+		}
+		if got := autoSupervisionOf(c.v); got != (c.want != supervisionModeOff) {
+			t.Errorf("%s: switch = %v", c.name, got)
+		}
+	}
+}
+
+// Every signal kind, the way outcomes judges it: one-shot handoffs, stops, failures, explicit reports and decisions go,
+// the routine checks while a task runs do not. all sends every one and off none.
+func TestSupervisionSignalAllowedByMode(t *testing.T) {
+	outcomes := []superviseSignal{
+		{Kind: sigReview}, {Kind: sigHandoffResult}, {Kind: sigParentCloseout}, {Kind: sigPRMerged}, {Kind: sigIdle},
+		{Kind: sigUnjudged}, {Kind: sigFailed}, {Kind: sigInterrupted}, {Kind: sigTimedOut}, {Kind: sigAllStopped},
+		{Kind: sigOrphaned}, {Kind: sigRecovered}, {Kind: sigNeedsYou}, {Kind: sigAsk}, {Kind: sigDecide},
+		{Kind: sigEscalated}, {Kind: sigDecisionReply}, {Kind: sigUndecidable}, {Kind: sigDeliveryHold},
+		{Kind: sigOwnerCannot}, {Kind: sigCardlessWait}, {Kind: sigNeedsUserExternalInfo}, {Kind: sigParkDecided},
+		{Kind: sigParkedDue}, {Kind: sigRecheck}, {Kind: sigOwnerPresent}, {Kind: sigOutageRecovery}, {Kind: sigTodoReady},
+		{Kind: sigBlockersUnblocked}, {Kind: sigMergeTrainTurn}, {Kind: sigWriteConflict},
+		{Kind: sigReport, Report: upReportDone}, {Kind: sigReport, Report: upReportBlocked},
+		{Kind: sigReport, Report: upReportQuestion}, {Kind: sigCheck, Report: checkDecidedReport},
+	}
+	routine := []superviseSignal{
+		{Kind: sigStalled}, {Kind: sigNoProgress}, {Kind: sigLeaderStuck}, {Kind: sigEstimateDue}, {Kind: sigOverdue},
+		{Kind: sigReviewNudge}, {Kind: sigStarted}, {Kind: sigParkedSummary}, {Kind: sigPRConflict}, {Kind: sigDraftPR},
+		{Kind: sigPREvent}, {Kind: sigInbox}, {Kind: sigReport, Report: upReportProgress}, {Kind: sigReport},
+		{Kind: sigCheck, Report: checkNoProgressReport}, {Kind: sigCheck, Report: checkErrorReport},
+	}
+	for _, g := range outcomes {
+		if !supervisionSignalAllowed(supervisionModeOutcomes, g) {
+			t.Errorf("outcomes dropped %s/%s", g.Kind, g.Report)
+		}
+	}
+	for _, g := range routine {
+		if supervisionSignalAllowed(supervisionModeOutcomes, g) {
+			t.Errorf("outcomes sent the routine %s/%s", g.Kind, g.Report)
+		}
+	}
+	for _, g := range append(outcomes, routine...) {
+		if !supervisionSignalAllowed(supervisionModeAll, g) || supervisionSignalAllowed(supervisionModeOff, g) {
+			t.Errorf("%s/%s: all must send it and off must not", g.Kind, g.Report)
+		}
+	}
+	// A message is judged by what it carries: one outcome among routine checks is enough; legacy text is sent unless off.
+	mixed := []superviseSignal{{Kind: sigStalled}, {Kind: sigReview}}
+	if !supervisionSignalsAllowed(supervisionModeOutcomes, mixed) || supervisionSignalsAllowed(supervisionModeOutcomes, routine) {
+		t.Fatal("outcomes judged a message by the wrong member")
+	}
+	routineMsg := relayMsg{Tool: superviseTool, Text: "x", Signals: encodeDigestSignals(routine)}
+	legacy := relayMsg{Tool: superviseTool, Text: "queued before signals"}
+	other := relayMsg{Tool: "conversation_send", Text: "hello"}
+	if supervisionRelayAllowed(supervisionModeOutcomes, routineMsg) || !supervisionRelayAllowed(supervisionModeOutcomes, legacy) ||
+		supervisionRelayAllowed(supervisionModeOff, legacy) || !supervisionRelayAllowed(supervisionModeOff, other) {
+		t.Fatal("relay judgement")
+	}
+}
+
+// The API: the mode is read and written with the older switch kept in step both ways; an unknown mode is refused; a
+// saved older switch with no mode still decides; and the mode survives a restart.
+func TestAutoSupervisionModeAPIKeepsTheSwitchCompatible(t *testing.T) {
+	ctx := context.Background()
+	st := &memStore{}
+	s, _ := newQuietServiceOn(t, st)
+	if v := getAssistantView(t, s); v["auto_supervision_mode"] != "all" || v["auto_supervision_messages"] != true {
+		t.Fatalf("default view: mode=%v messages=%v", v["auto_supervision_mode"], v["auto_supervision_messages"])
+	}
+	if v := putSupervisionMode(t, s, "outcomes"); v["auto_supervision_mode"] != "outcomes" || v["auto_supervision_messages"] != true {
+		t.Fatalf("outcomes view: %v %v", v["auto_supervision_mode"], v["auto_supervision_messages"])
+	}
+	if mode, on := savedSupervision(t, s); mode != "outcomes" || on == nil || !*on {
+		t.Fatalf("saved outcomes: mode=%q switch=%v", mode, on)
+	}
+	if code, _ := putAssistant(t, s, `{"auto_supervision_mode":"sometimes"}`); code != http.StatusBadRequest {
+		t.Fatalf("an unknown mode: %d, want 400", code)
+	}
+	if v := getAssistantView(t, s); v["auto_supervision_mode"] != "outcomes" {
+		t.Fatalf("a refused write changed it: %v", v["auto_supervision_mode"])
+	}
+	// The mode wins over the switch in the same body.
+	if _, v := putAssistant(t, s, `{"auto_supervision_mode":"outcomes","auto_supervision_messages":false}`); v["auto_supervision_mode"] != "outcomes" || v["auto_supervision_messages"] != true {
+		t.Fatalf("both in one body: %v %v", v["auto_supervision_mode"], v["auto_supervision_messages"])
+	}
+	again, _ := restartedService(t, st)
+	if again.supervisionMode(ctx) != supervisionModeOutcomes || getAssistantView(t, again)["auto_supervision_mode"] != "outcomes" {
+		t.Fatal("outcomes did not survive a restart")
+	}
+	if v := putSupervisionMode(t, again, "off"); v["auto_supervision_mode"] != "off" || v["auto_supervision_messages"] != false {
+		t.Fatalf("off view: %v %v", v["auto_supervision_mode"], v["auto_supervision_messages"])
+	}
+	if mode, on := savedSupervision(t, again); mode != "off" || on == nil || *on {
+		t.Fatalf("saved off: mode=%q switch=%v", mode, on)
+	}
+	// An older client that knows only the switch: true is all, false off.
+	if v := putAutoSupervision(t, again, true); v["auto_supervision_mode"] != "all" {
+		t.Fatalf("switch on: mode %v", v["auto_supervision_mode"])
+	}
+	putSupervisionMode(t, again, "outcomes")
+	if v := putAutoSupervision(t, again, false); v["auto_supervision_mode"] != "off" || again.autoSupervisionOn(ctx) {
+		t.Fatalf("switch off from outcomes: mode %v", v["auto_supervision_mode"])
+	}
+	// What an older hub saved (the switch only) still decides.
+	old, _ := newQuietServiceOn(t, &memStore{})
+	if _, err := old.updateSettings(ctx, func(v *Settings) error { off := false; v.AutoSupervisionMessages = &off; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if v := getAssistantView(t, old); v["auto_supervision_mode"] != "off" || v["auto_supervision_messages"] != false {
+		t.Fatalf("an older saved switch: %v %v", v["auto_supervision_mode"], v["auto_supervision_messages"])
+	}
+}
+
+// outcomes gathers and sends a task's stop, and gathers nothing of the routine checks while it runs.
+func TestAutoSupervisionOutcomesSendsOutcomesOnly(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	putSupervisionMode(t, s, "outcomes")
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "o-stalled", Minutes: 50})
+	s.queueSignal(superviseSignal{Todo: todo.ID, Kind: sigNoProgress, Key: "o-noprogress"})
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigReport, Report: upReportProgress, Key: "o-progress"})
+	s.restoreDigest([]superviseSignal{{Todo: todo.ID, Kind: sigEstimateDue, Key: "o-estimate"}}, time.Now(), time.Time{})
+	if mem, durable, timer := gatheredSignals(s); mem != 0 || durable != 0 || timer {
+		t.Fatalf("outcomes gathered a routine check: memory=%d durable=%d timer=%v", mem, durable, timer)
+	}
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigInterrupted, Key: "o-interrupted", Detail: "cut off in outcomes"})
+	waitFor(t, "the stop's message", func() bool { return len(f.notices()) == 1 })
+	if n := f.notices()[0]; !strings.Contains(n, "cut off in outcomes") {
+		t.Fatalf("message: %s", n)
+	}
+	time.Sleep(3 * shortSuperviseTimings.every) // sleep-ok: a negative check over several digest ticks; no event to wait for
+	if n := f.notices(); len(n) != 1 {
+		t.Fatalf("outcomes sent %d message(s), want only the stop: %q", len(n), n)
+	}
+}
+
+// queueRoutineOnly puts a supervision message made only of routine checks in conversation to's saved queue.
+func queueRoutineOnly(t *testing.T, s *Service, to string, g superviseSignal) {
+	t.Helper()
+	s.relays.mu.Lock()
+	defer s.relays.mu.Unlock()
+	if !s.relayLocked(context.Background()) {
+		t.Fatal("the relay queue cannot be read")
+	}
+	if s.relays.st.Queue == nil {
+		s.relays.st.Queue = map[string][]relayMsg{}
+	}
+	s.relays.st.Queue[to] = append(s.relays.st.Queue[to], relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool,
+		Text: "routine only", Signals: encodeDigestSignals([]superviseSignal{g}), At: time.Now().UTC()})
+	if err := s.saveRelayLocked(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// all → outcomes withdraws only what outcomes drops: the routine signals gathered in memory and in the durable outbox,
+// and a queued message made only of them; a queued outcome wake-up stays and is sent, the node is not asked to cancel
+// anything, and switching back to all replays nothing.
+func TestAutoSupervisionAllToOutcomesWithdrawsOnlyRoutine(t *testing.T) {
+	s, f, tasks := queuedDigestFixture(t, "Outcome example") // conv1 waits with an interrupted + unjudged digest
+	todo := tasks[0]
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "w-stalled", Minutes: 50})
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "w-review"})
+	s.updateSupervisePending(func(p map[string]superviseSignal) {
+		g := superviseSignal{Todo: todo.ID, Kind: sigEstimateDue, Key: "w-estimate"}
+		p[g.id()] = g
+	})
+	routine := superviseSignal{Todo: todo.ID, Kind: sigNoProgress, Key: "w-noprogress"}
+	queueRoutineOnly(t, s, "conv2", routine)
+	s.supervise.mu.Lock()
+	s.supervise.init()
+	s.supervise.setQueuedLocked("conv2", []superviseSignal{routine})
+	s.supervise.mu.Unlock()
+	if mem, durable, _ := gatheredSignals(s); mem != 2 || durable != 3 {
+		t.Fatalf("fixture: memory=%d durable=%d", mem, durable)
+	}
+	calls := f.callCount()
+
+	putSupervisionMode(t, s, "outcomes")
+	s.supervise.mu.Lock()
+	_, stalled := s.supervise.pending[todo.ID+"|"+sigStalled]
+	_, review := s.supervise.pending[todo.ID+"|"+sigReview]
+	_, indexed := s.supervise.queued["conv2"]
+	s.supervise.mu.Unlock()
+	if stalled || !review {
+		t.Fatalf("memory after outcomes: stalled=%v review=%v", stalled, review)
+	}
+	s.relays.mu.Lock()
+	durable := maps.Clone(s.relays.st.SupervisePending)
+	conv2 := len(s.relays.st.Queue["conv2"])
+	s.relays.mu.Unlock()
+	for id, g := range durable {
+		if !supervisionSignalAllowed(supervisionModeOutcomes, g) {
+			t.Errorf("the durable outbox kept the routine %s", id)
+		}
+	}
+	if _, ok := durable[todo.ID+"|"+sigReview]; !ok {
+		t.Fatal("the durable outbox lost the review")
+	}
+	if conv2 != 0 || indexed {
+		t.Fatalf("the routine-only message stayed: queued=%d indexed=%v", conv2, indexed)
+	}
+	if n, withdrawn := queuedSupervise(s, "conv1"); n != 1 || withdrawn != 0 {
+		t.Fatalf("the queued outcome wake-up: %d queued, %d withdrawn", n, withdrawn)
+	}
+	for _, c := range f.calls[calls:] {
+		if c.Method == deviceAssistantCancelSupervision {
+			t.Fatal("outcomes asked a node to cancel its waiting input")
+		}
+	}
+	drainQueuedDigest(t, s, f)
+	waitFor(t, "the queued outcome wake-up", func() bool { return len(f.notices()) >= 1 })
+	if n := f.notices()[0]; !strings.Contains(n, "Outcome example") {
+		t.Fatalf("the queued outcome message: %s", n)
+	}
+
+	// Back to all: what outcomes withdrew does not come back.
+	putSupervisionMode(t, s, "all")
+	s.supervise.mu.Lock()
+	_, back := s.supervise.pending[todo.ID+"|"+sigStalled]
+	s.supervise.mu.Unlock()
+	s.relays.mu.Lock()
+	_, backDurable := s.relays.st.SupervisePending[todo.ID+"|"+sigEstimateDue]
+	s.relays.mu.Unlock()
+	if back || backDurable {
+		t.Fatalf("switching back to all replayed a withdrawn signal: memory=%v durable=%v", back, backDurable)
+	}
+}
+
+// A queued message that carries an outcome among routine checks stays whole; one in flight made only of routine checks
+// keeps its head, withdrawn with nothing left to replay.
+func TestAutoSupervisionOutcomesKeepsMixedAndMarksInFlightRoutine(t *testing.T) {
+	s, _, tasks := queuedDigestFixture(t, "Mixed example")
+	todo := tasks[0]
+	s.relays.mu.Lock()
+	head := s.relays.st.Queue["conv1"][0]
+	signals, _ := decodeDigestSignals(head.Signals)
+	head.Signals = encodeDigestSignals(append(signals, superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "m-stalled"}))
+	s.relays.st.Queue["conv1"][0] = head
+	s.relays.draining["conv3"] = true
+	s.relays.mu.Unlock()
+	queueRoutineOnly(t, s, "conv3", superviseSignal{Todo: todo.ID, Kind: sigStalled, Key: "m-inflight"})
+	putSupervisionMode(t, s, "outcomes")
+	s.relays.mu.Lock()
+	mixed := s.relays.st.Queue["conv1"]
+	inflight := s.relays.st.Queue["conv3"]
+	delete(s.relays.draining, "conv3")
+	s.relays.mu.Unlock()
+	if len(mixed) != 1 || mixed[0].Withdrawn || mixed[0].Signals != head.Signals {
+		t.Fatalf("the mixed message changed: %+v", mixed)
+	}
+	if len(inflight) != 1 || !inflight[0].Withdrawn {
+		t.Fatalf("the in-flight routine head: %+v", inflight)
+	}
+	if got, structured := decodeDigestSignals(inflight[0].Signals); !structured || len(got) != 0 {
+		t.Fatalf("the in-flight routine head would replay %q", inflight[0].Signals)
+	}
+}
+
+// outcomes → off withdraws everything, outcomes included, and asks the nodes to cancel, exactly as off always did.
+func TestAutoSupervisionOutcomesToOffWithdrawsEverything(t *testing.T) {
+	s, f, tasks := queuedDigestFixture(t, "Off after outcomes")
+	putSupervisionMode(t, s, "outcomes")
+	s.signal(superviseSignal{Todo: tasks[0].ID, Kind: sigReview, Key: "x-review"})
+	if mem, _, _ := gatheredSignals(s); mem != 1 {
+		t.Fatalf("fixture: memory=%d", mem)
+	}
+	queued := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking, Queued: []string{"督办消息"}}
+	f.setSessions("server", queued)
+	putSupervisionMode(t, s, "off")
+	if n, _ := queuedSupervise(s, "conv1"); n != 0 {
+		t.Fatalf("off left %d queued", n)
+	}
+	if mem, durable, timer := gatheredSignals(s); mem != 0 || durable != 0 || timer {
+		t.Fatalf("off left: memory=%d durable=%d timer=%v", mem, durable, timer)
+	}
+	waitFor(t, "the node cancel", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, c := range f.calls {
+			if c.Method == deviceAssistantCancelSupervision {
+				return true
+			}
+		}
+		return false
+	})
+	drainQueuedDigest(t, s, f)
+	if len(f.notices()) != 0 {
+		t.Fatalf("sent while off: %q", f.notices())
+	}
+}
+
+// The delivery boundaries under outcomes: a routine-only supervision message is neither queued nor sent, an outcome or
+// a legacy text message is, and an ordinary relay is never touched.
+func TestAutoSupervisionOutcomesRelayBoundaries(t *testing.T) {
+	ctx := context.Background()
+	s, f, todo := newSupervisedService(t)
+	setSupervisionModeQuietly(t, s, supervisionModeOutcomes)
+	routine := relayMsg{From: superviseTool, Tool: superviseTool, Text: "routine", At: time.Now().UTC(),
+		Signals: encodeDigestSignals([]superviseSignal{{Todo: todo.ID, Kind: sigStalled, Key: "b-stalled"}})}
+	if _, err := s.queueRelayDurable("conv1", routine); !relaySuppressed(err) {
+		t.Fatalf("queueRelayDurable(routine) = %v, want suppressed", err)
+	}
+	if err := s.deliverRelay(ctx, "server", "conv1", routine); !relaySuppressed(err) {
+		t.Fatalf("deliverRelay(routine) = %v, want suppressed", err)
+	}
+	if len(f.notices()) != 0 {
+		t.Fatalf("a routine message went out: %q", f.notices())
+	}
+	outcome := relayMsg{From: superviseTool, Tool: superviseTool, Text: "outcome wake-up", At: time.Now().UTC(),
+		Signals: encodeDigestSignals([]superviseSignal{{Todo: todo.ID, Kind: sigFailed, Key: "b-failed"}})}
+	if err := s.deliverRelay(ctx, "server", "conv1", outcome); relaySuppressed(err) {
+		t.Fatalf("deliverRelay(outcome) suppressed")
+	}
+	legacy := relayMsg{From: superviseTool, Tool: superviseTool, Text: "legacy text", At: time.Now().UTC()}
+	if err := s.deliverRelay(ctx, "server", "conv1", legacy); relaySuppressed(err) {
+		t.Fatalf("deliverRelay(legacy) suppressed")
+	}
+	if n := f.notices(); len(n) != 2 {
+		t.Fatalf("outcome and legacy messages: %q", n)
+	}
+}
+
+// A task leader's Agent under outcomes: a message of routine checks only is not sent and starts no retry loop; one that
+// carries an outcome goes to the leader's session.
+func TestAutoSupervisionOutcomesLeaderRouting(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	lead := TodoAgent{MachineID: "box", SessionID: "leader1"}
+	setSupervisionModeQuietly(t, s, supervisionModeOutcomes)
+	routine := []superviseSignal{{Todo: todo.ID, Kind: sigNoProgress, Key: "l-noprogress"}}
+	calls := f.callCount()
+	if err := s.sendToLeader(context.Background(), lead, "text", routine, routine, nil, nil); !relaySuppressed(err) {
+		t.Fatalf("sendToLeader(routine) = %v, want suppressed", err)
+	}
+	if err := s.sendToLeaderNow(context.Background(), lead, "text", routine); !relaySuppressed(err) {
+		t.Fatalf("sendToLeaderNow(routine) = %v, want suppressed", err)
+	}
+	s.escalateLeaderMessage(lead, routine, routine, nil, "text", false, nil) // returns at once
+	if got := f.callCount() - calls; got != 0 {
+		t.Fatalf("%d node call(s) for a routine leader message", got)
+	}
+	outcome := []superviseSignal{{Todo: todo.ID, Kind: sigReview, Key: "l-review"}}
+	if err := s.sendToLeaderNow(context.Background(), lead, "text", outcome); relaySuppressed(err) {
+		t.Fatal("sendToLeaderNow(outcome) suppressed")
+	}
+	if f.callCount() == calls {
+		t.Fatal("an outcome leader message was not sent")
+	}
+}
+
+// persona_settings: assistant.auto_supervision_mode reads the mode, refuses an unknown one, changes on an approved
+// phone card that names both modes, and agrees with the web view; the older switch's key still turns it off.
+func TestAutoSupervisionModePersonaSettingsTool(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newQuietServiceOn(t, &memStore{})
+	tool := func(args string) (string, bool) {
+		r := s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(args), MachineID: "server", SessionID: "c1"})
+		return r.Content[0].Text, r.IsError
+	}
+	approve := func(wantCard string) {
+		go func() {
+			q, ok := awaitCard(s)
+			if !ok {
+				return
+			}
+			if wantCard != "" && q.Summary != wantCard {
+				t.Errorf("approval card: %q want %q", q.Summary, wantCard)
+			}
+			allow := true
+			answer, _ := json.Marshal(proto.Resolution{Allow: &allow})
+			if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: answer}); err != nil {
+				t.Errorf("answer: %v", err)
+			}
+		}()
+	}
+	if got, isErr := tool(`{"action":"get","key":"assistant.auto_supervision_mode"}`); isErr || got != "all" {
+		t.Fatalf("default read: %q error=%v", got, isErr)
+	}
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_mode","value":"sometimes"}`); !isErr {
+		t.Fatalf("an unknown mode was accepted: %q", out)
+	}
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_mode","value":"all"}`); isErr || len(s.pendingQuestions()) != 0 {
+		t.Fatalf("the mode in effect should be a no-op: %q error=%v", out, isErr)
+	}
+	name := func(m string) string { return i18n.T(i18n.Default, "assistant-settings_tool.auto_supervision_mode_"+m) }
+	approve(i18n.T(i18n.Default, "assistant-settings_tool.change_auto_supervision_mode", i18n.Args{"before": name("all"), "after": name("outcomes")}))
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_mode","value":"outcomes"}`); isErr {
+		t.Fatalf("approved change: %q", out)
+	}
+	if got, _ := tool(`{"action":"get","key":"assistant.auto_supervision_mode"}`); got != "outcomes" {
+		t.Fatalf("read back: %q", got)
+	}
+	if got, _ := tool(`{"action":"get","key":"assistant.auto_supervision_messages"}`); got != "true" {
+		t.Fatalf("the older key under outcomes: %q", got)
+	}
+	if v := getAssistantView(t, s); v["auto_supervision_mode"] != "outcomes" || v["auto_supervision_messages"] != true {
+		t.Fatalf("the web view disagrees: %v %v", v["auto_supervision_mode"], v["auto_supervision_messages"])
+	}
+	if mode, on := savedSupervision(t, s); mode != "outcomes" || on == nil || !*on {
+		t.Fatalf("saved: mode=%q switch=%v", mode, on)
+	}
+	// The older key still works: true is in effect under outcomes (a no-op), false turns everything off.
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":true}`); isErr || len(s.pendingQuestions()) != 0 {
+		t.Fatalf("true under outcomes should be a no-op: %q error=%v", out, isErr)
+	}
+	approve("")
+	if out, isErr := tool(`{"action":"set","key":"assistant.auto_supervision_messages","value":false}`); isErr {
+		t.Fatalf("the older key: %q", out)
+	}
+	if got, _ := tool(`{"action":"get","key":"assistant.auto_supervision_mode"}`); got != "off" {
+		t.Fatalf("the older key did not turn the mode off: %q", got)
+	}
+	if settingTitles["assistant.auto_supervision_mode"] != "title_auto_supervision_mode" {
+		t.Fatal("no approval-card title for assistant.auto_supervision_mode")
 	}
 }

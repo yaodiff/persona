@@ -19,7 +19,14 @@ func TestCodexSendSubmission(t *testing.T) {
 			} {
 				t.Run(outcome, func(t *testing.T) {
 					n, f, _ := codexNode(t, proto.StatusBlocked)
+					// Unconfirmed outcomes wait the whole window out, so theirs is short. The two confirmed ones return
+					// as soon as the box clears; "consumed later" needs several screen reads first, and a busy machine
+					// must not end its window before they are done (#16008).
+					success := outcome == "consumed" || outcome == "consumed later"
 					codexConfirm = 50 * time.Millisecond
+					if success {
+						codexConfirm = 10 * time.Second
+					}
 					f.setScreen(cxPane, cxEmpty)
 					fallback := route == "blocked fallback"
 					if fallback {
@@ -61,7 +68,6 @@ func TestCodexSendSubmission(t *testing.T) {
 						"session_id": cxID, "text": text, "client_msg_id": "synthetic-codex-submission",
 					}
 					_, err := n.handle(ctx, "session.send", mustJSON(params))
-					success := outcome == "consumed" || outcome == "consumed later"
 					if success {
 						if err != nil {
 							t.Fatalf("consumed message failed: %v", err)

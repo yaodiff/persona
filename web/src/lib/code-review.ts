@@ -3,6 +3,7 @@
 // hidden between hunks and those shown of them, viewed marks kept in this browser, ```suggestion blocks in a comment,
 // a range of lines picked for a comment, and the keys of a page of diffs. Drawn by views/extensions/DiffReview.tsx.
 import { hunkRows, type DiffRow, type Hunk } from "./code-view";
+import { safeWebURL } from "./format";
 
 // ── words that changed ────────────────────────────────
 
@@ -441,11 +442,7 @@ export function pickRange(anchor: Spot | null, to: Spot): { side: "old" | "new";
 export function lineLink(template: string | undefined, start: number, end = start): string | undefined {
   if (!template) return undefined;
   const url = template.replaceAll("{start}", String(start)).replaceAll("{end}", String(end));
-  try {
-    return new URL(url).protocol === "https:" ? url : undefined;
-  } catch {
-    return undefined;
-  }
+  return safeWebURL(url, true);
 }
 
 // ── keys ──────────────────────────────────────────────

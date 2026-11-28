@@ -11,13 +11,13 @@ import { FileGlyph } from "../session/files/parts";
 function status(f: ComposerFile): string {
   switch (f.state) {
     case "waiting":
-      return t("chat-composer.file_waiting");
+      return t("chat-composeroverlays.file_waiting");
     case "uploading":
       return f.size ? `${bytes(f.sent)} / ${bytes(f.size)}` : bytes(f.sent);
     case "ready":
       return bytes(f.size);
     case "failed":
-      return t("chat-composer.file_failed");
+      return t("chat-composeroverlays.file_failed");
   }
 }
 
@@ -47,7 +47,7 @@ export function FileTiles({ draftKey, files }: { draftKey: string; files: Compos
         style={{ animation: `pop-in 200ms ${EASE} both` }}
       >
         {failed ? (
-          <button type="button" onClick={() => retryFile(draftKey, f.id)} aria-label={t("chat-composer.file_retry", { name: f.name })} className="flex h-full min-w-0 flex-1 items-center gap-2 text-left hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent">
+          <button type="button" onClick={() => retryFile(draftKey, f.id)} aria-label={t("chat-composeroverlays.file_retry", { name: f.name })} className="flex h-full min-w-0 flex-1 items-center gap-2 text-left hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent">
             {body}
           </button>
         ) : body}
@@ -63,7 +63,7 @@ export function FileTiles({ draftKey, files }: { draftKey: string; files: Compos
           </span>
         )}
         <AttachmentRemoveButton
-          label={t(busy ? "chat-composer.file_cancel" : "ui-attachmenttray.remove", { name: f.name })}
+          label={t(busy ? "chat-composeroverlays.file_cancel" : "ui-attachmenttray.remove", { name: f.name })}
           onRemove={() => removeFile(draftKey, f.id)}
           file
         />

@@ -465,3 +465,57 @@ test('summarizeTranscript reuses prefix cache across active synthetic turns, pen
   assert.equal(exportedRow.context_tokens, 15000)
   assert.equal(exportedRow.output_tokens, 16045)
 })
+
+test('authoritative GetCascadeTrajectory idle verification resolves summary_behind to done/idle and invalidates on any transcript or summary change', async (t) => {
+  const { node, transcript, upsertSummary, trajectoryCalls, refreshList, setNative } = await makeFixture(t, {
+    summary: { status: 'CASCADE_RUN_STATUS_IDLE', step_count: 2, last_modified_time: '2026-01-01T00:00:10Z' },
+  })
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+
+  // Before session.items, listSessions must stay fail-closed unknown and never call GetCascadeTrajectory.
+  assert.equal(row().status, 'unknown')
+  assert.equal(trajectoryCalls(), 0)
+
+  // Watching from seq 4 has no turn_duration yet; once session.items verifies the idle native trajectory,
+  // cutChecks is cleared before syncTranscriptAppend so the live watch stream receives turn_duration immediately.
+  await node.peer.call('session.watch', { session_id: SESSION, since_seq: 4 })
+  const watchedBefore = node.all('session.items').length
+
+  // Reading session.items verifies the native trajectory once; matching idle trajectory resolves status to done and emits turn_duration.
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(trajectoryCalls(), 1)
+  assert.equal(page.items.at(-1).kind, 'turn_duration')
+  assert.equal(page.items.at(-1).seq, 4)
+  await until('watched stream receives live turn_duration on verified summary_behind', () =>
+    node.all('session.items').slice(watchedBefore).some((batch) =>
+      batch.session_id === SESSION && batch.items?.some((it) => it.kind === 'turn_duration' && it.seq === 4)),
+  )
+  await node.peer.call('session.unwatch', { session_id: SESSION })
+  await until('inventory updates to done after native trajectory verification', () => row()?.status === 'done')
+  assert.equal((await refreshList('Verified done cached')).status, 'done')
+  assert.equal(trajectoryCalls(), 1, 'subsequent refreshes reuse cached verification without extra RPCs')
+
+  // Changing only last_modified_time (same step_count) invalidates both verifiedNoCutSteps and listedTranscriptCache.
+  upsertSummary({ status: 'CASCADE_RUN_STATUS_IDLE', step_count: 2, last_modified_time: '2026-01-01T00:00:15Z' })
+  assert.equal((await refreshList('Timestamp changed only')).status, 'unknown')
+
+  // Appending a new unverified step invalidates verifiedNoCutSteps immediately and drops back to unknown.
+  const nextUser = { step_index: 4, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: '2026-01-01T00:00:20Z', content: 'Third question' }
+  appendFileSync(transcript, JSON.stringify(nextUser) + '\n')
+  assert.equal((await refreshList('Unverified append')).status, 'unknown')
+
+  // When GetCascadeTrajectory reports RUNNING (not IDLE), summary_behind stays unknown without turn_duration.
+  setNative({ status: 'CASCADE_RUN_STATUS_RUNNING', trajectory: { cascadeId: RAW, steps: [...baseRecords, nextUser].map(toNative) } })
+  const runningPage = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(trajectoryCalls(), 2)
+  assert.notEqual(runningPage.items.at(-1).kind, 'turn_duration')
+  assert.equal((await refreshList('Still running natively')).status, 'unknown')
+
+  // Once native trajectory is IDLE at the USER_INPUT tail (not a completed reply), verified status resolves to idle (no turn_duration).
+  setNative({ status: 'CASCADE_RUN_STATUS_IDLE' })
+  upsertSummary({ status: 'CASCADE_RUN_STATUS_IDLE', step_count: 2, last_modified_time: '2026-01-01T00:00:25Z' })
+  const idlePage = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(trajectoryCalls(), 3)
+  assert.notEqual(idlePage.items.at(-1).kind, 'turn_duration')
+  await until('inventory updates to idle for verified non-reply tail', () => row()?.status === 'idle')
+})

@@ -70,13 +70,14 @@ change: add tests freely. `python3 scripts/test/core_paths.py --tiers` counts th
 **What to do when your PR touches it:**
 
 1. Say in the issue why the core has to change and cannot be done in a module (or through an existing extension point).
-2. Add the label `core-change` to the PR.
+2. Add the label `core-change` to the PR (recommended for visibility, no longer a merge requirement since #17195).
 3. Fill in the section `## Why this must change the core` in the PR template: one or more real lines, not "n/a".
 4. Expect the owners' review. `.github/CODEOWNERS` requests it for core paths; whether it is *required* before a merge is
-   a branch setting the repository administrator controls.
+   a branch setting the repository administrator controls. Core changes get strict review (wire/protocol compatibility,
+   no module references, no UI dependency, typed core values, careful data-model changes).
 
-**Checks.** `scripts/hooks/core-change-check.py <PR number>` fails a PR that touches tier core without the label or the section, and
-lists the tier-core files it saw (panel-only PRs pass untouched); `scripts/hooks/merge-pr.sh` runs it before every merge. `scripts/test/test_core_paths.py`,
+**Checks.** `scripts/hooks/core-change-check.py <PR number>` is advisory (#17195): it reports the tier-core files it saw and
+whether a label / reason section is present, but does not block a merge (panel-only PRs pass untouched); `scripts/hooks/merge-pr.sh` runs it before every merge. `scripts/test/test_core_paths.py`,
 `scripts/test/test_codeowners.py` (regenerate the block with `python3 scripts/hooks/codeowners.py --write` after editing the
 list) and `scripts/test/test_core_references_no_module.py` (core and panel never import a module) run in `scripts/ci/scripts.sh`.
 Run any of them locally with `python3 scripts/test/<name>.py`.

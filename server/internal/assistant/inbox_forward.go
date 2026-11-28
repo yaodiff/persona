@@ -1114,7 +1114,7 @@ func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, 
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
 		err := eventMayResume(c)
 		if err == nil {
-			err = s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil)
+			err = s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil, resumeReview{})
 		}
 		if err != nil {
 			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, clip(oneLine(err.Error()), 240))
@@ -1230,7 +1230,7 @@ func (s *Service) retryUncertainInboxForward(ctx context.Context, t Todo, canoni
 		if err := eventMayResume(*matched); err != nil {
 			return stayUncertain(err.Error())
 		}
-		if err := s.resumeAllowed(ctx, supervisorSelf, am, *matched, resumeWhy, nil); err != nil {
+		if err := s.resumeAllowed(ctx, supervisorSelf, am, *matched, resumeWhy, nil, resumeReview{}); err != nil {
 			return stayUncertain(err.Error())
 		}
 		params := map[string]any{

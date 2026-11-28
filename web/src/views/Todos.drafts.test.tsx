@@ -61,7 +61,7 @@ beforeEach(async () => {
   setToken("synthetic-draft-owner-a");
   Object.assign(getState(), { todos: server.map((todo) => ({ ...todo })), todosLoaded: true, todosError: null, todosSupported: true, machines: [], sessions: {}, interactions: [], answered: {} });
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
-    const path = String(url).replace("/api/v1", "");
+    const path = new URL(String(url), "http://hub").pathname.replace("/api/v1", "");
     if (init.method === "PATCH") {
       const write = { path, body: JSON.parse(String(init.body)) };
       writes.push(write);

@@ -4,6 +4,7 @@ import { PhoneOutlineIcon } from '../design/PhoneOutlineIcon';
 import { Symbols } from '../design/Symbols';
 import { AgentDecisionQueue, AgentDecisionCard } from '../models/AgentDecisionQueue';
 import { InteractionDecisionForm } from './InteractionDecisionForm';
+import { RuleSuggestionBar } from './RuleSuggestionBar';
 import { util } from '@kit.ArkTS';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
@@ -23,6 +24,10 @@ import { Decision, ResourceRow, Wire } from '../models/Wire';
 import { MarkdownText } from './MarkdownText';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
+import { PhoneStyle } from '../design/PhoneStyle';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
+import { Haptics } from '../platform/Haptics';
 import { assistantBoardRows, assistantTrayRows, TaskTrayRow, TrayRequest } from '../models/AssistantTrays';
 import { ButtonStyles } from '../design/Controls';
 import { tr } from '../design/Strings';
@@ -80,6 +85,7 @@ export struct AssistantCards {
   private failureRow:ResourceRow|undefined;
   @Local trayContentHeight: number = 0;
   @Local trayBucket: string = '';
+  @Local private pressedTrayChip: string = '';
   private trayOwner: string = '';
   private readonly trayScroller: Scroller = new Scroller();
   private planScrollKey: string = '';
@@ -449,19 +455,33 @@ export struct AssistantCards {
     if (this.active && id && ['plan', 'receipt'].includes(kind)) this.onOpenCard(id, kind);
   }
 
+  @Builder moreDotsGlyph(tint: ResourceColor) {
+    Row({ space: 3.5 }) {
+      ForEach([0, 1, 2], (_dot: number) => {
+        Circle().width(4).height(4).fill(tint)
+      }, (dot: number) => String(dot))
+    }.accessibilityLevel('no')
+  }
+
   @Builder planSummary(item: Record<string, Object>) {
     Button({ type: ButtonType.Normal }) {
       Row({ space: Tokens.inset }) {
-        SymbolGlyph(Symbols.document).fontSize(Tokens.symbolFont).fontColor([Colors.ai])
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(Symbols.document).fontSize('18vp').fontColor([Colors.ai])
+        }
+          .width(34).height(34).borderRadius(Tokens.radiusControl)
+          .backgroundColor(Colors.aiWash)
         Column({ space: Tokens.fine }) {
-          Text(tr('assistant_feed_plan')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.ai).width('100%')
+          Text(tr('assistant_feed_plan')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontWeight(FontWeight.Medium).fontColor(Colors.ai).width('100%')
           Text(this.planSummaryTitle(item)).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
           if (this.planTasks(item).length > 1) Text(this.planSummaryMore(item)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.secondary).width('100%')
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         SymbolGlyph(Symbols.expand).fontSize(Tokens.meta).fontColor([Colors.secondary])
       }.width('100%').alignItems(VerticalAlign.Center)
-    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.grouped).borderRadius(Tokens.card)
-      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => this.openDetail(item))
+    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.styleCard || Colors.sheetBackground).borderRadius(Tokens.card)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.card })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => { Haptics.tap(); this.openDetail(item); })
       .id('assistant.detail.plan.' + Wire.text(item, 'id')).accessibilityText(tr('assistant_detail_view_plan') + ' ' + this.planSummaryTitle(item) + (this.planTasks(item).length > 1 ? ' ' + this.planSummaryMore(item) : ''))
   }
 
@@ -503,7 +523,7 @@ export struct AssistantCards {
             Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.edit).fontSize(Tokens.symbolFont).fontColor([Colors.link]) }
               .attributeModifier(ButtonStyles.chrome).accessibilityText(tr('edit')).enabled(this.feed.planCanEdit(this.planId(item)))
               .onClick(() => this.feed.editPlan(this.planId(item))).id('assistant.plan.edit')
-            Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.link) }
+            Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.link) }
               .attributeModifier(ButtonStyles.chrome).accessibilityText(tr('more')).enabled(this.feed.planCanDismiss(this.planId(item)))
               .bindMenu(this.planMenu(item)).id('assistant.plan.more')
             Blank().layoutWeight(1)
@@ -512,6 +532,15 @@ export struct AssistantCards {
               .onClick(() => this.feed.startPlan(this.planId(item), this.feed.rememberPlan(this.planId(item)), undefined,
                 JSON.stringify(this.plan(item))))
           }.width('100%')
+          if (Object.keys(Wire.object(this.plan(item), 'suggestion')).length > 0) {
+            RuleSuggestionBar({
+              model: this.model,
+              rawSuggestion: Wire.object(this.plan(item), 'suggestion'),
+              cardKey: 'plan|' + this.planId(item),
+              manager: this.feed.owner,
+              onSettled: () => { this.feed.refreshPlan(this.planId(item)); }
+            })
+          }
         }
         if (this.feed.planActionError(this.planId(item)) && this.feed.planIsFresh(this.planId(item))) Row({ space: Tokens.gap }) {
           Text(tr(this.feed.planActionError(this.planId(item)))).fontSize(Tokens.meta).fontColor(Colors.needs).layoutWeight(1)
@@ -605,18 +634,18 @@ export struct AssistantCards {
           this.taskMark(entry)
           Column({space:2}) {
             Row({space:8}) {
-              Text(entry.title || this.rowState(entry)).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontColor(Colors.ink)
+              Text(entry.title || this.rowState(entry)).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeHeading)).fontColor(Colors.ink)
                 .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
-              Text(this.trayDetail(entry)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(this.trayColor(entry.bucket)).maxLines(1)
+              Text(this.trayDetail(entry)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(this.trayColor(entry.bucket)).maxLines(1)
             }.width('100%')
-            if (this.rowNote(entry)) Text(this.rowNote(entry)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
+            if (this.rowNote(entry)) Text(this.rowNote(entry)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
               .fontColor(Colors.secondary).textAlign(TextAlign.Start).width('100%').maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
           SymbolGlyph(this.expandedEntry===entry.key() ? Symbols.down : Symbols.expand).fontSize(11).fontColor([Colors.tertiary])
         }.width('100%').padding({left:12,right:12,top:7,bottom:7}).constraintSize({minHeight:this.rowNote(entry) ? 54 : 40})
       }.width('100%').padding(0).backgroundColor(Color.Transparent)
         .id('chat.tasks.'+entry.kind+'.'+entry.id).accessibilityText([entry.title,this.trayDetail(entry),this.rowNote(entry)].filter((v:string) => !!v).join('、'))
-        .onClick(() => this.activateTray(entry))
+        .onClick(() => { Haptics.tap(); this.activateTray(entry); })
       if (entry.kind==='todo' && entry.status==='failed' && entry.resource) TaskTrayStartActions({model:this.model,feed:this.feed,row:entry.resource!,
         visible:():boolean=>this.trayOpen && this.active && this.trayScope()===this.trayOwner})
       if (this.expandedEntry===entry.key() && entry.kind==='message') this.message(entry.data)
@@ -638,9 +667,9 @@ export struct AssistantCards {
 
   @Builder taskBoard() {
     Column() {
-      Row().width(36).height(5).borderRadius(3).backgroundColor(Colors.tertiary).margin({top:5,bottom:6}).accessibilityLevel('no')
+      Row().width(36).height(5).borderRadius(Tokens.radiusCapsule).backgroundColor(Colors.tertiary).margin({top:5,bottom:6}).accessibilityLevel('no')
       Stack({alignContent:Alignment.Center}) {
-        Text(tr('task')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+        Text(tr('task')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeHeading)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
         Row() {
           Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor([Colors.ink]) }
             .width(36).height(36).backgroundColor(Colors.sheetControl).accessibilityText(tr('close')).onClick(() => this.boardOpen=false).id('tasks-board-close')
@@ -650,7 +679,7 @@ export struct AssistantCards {
       if (!this.boardRows.length) {
         Blank()
         Text(tr('tray_empty_tasks')).fontSize(19).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
-        Text(tr('tray_empty_tasks_detail')).fontSize(15).fontColor(Colors.secondary).textAlign(TextAlign.Center).padding(12)
+        Text(tr('tray_empty_tasks_detail')).fontSize(Tokens.typeSecondary).fontColor(Colors.secondary).textAlign(TextAlign.Center).padding(12)
         Blank()
       } else {
         Scroll() {
@@ -659,7 +688,7 @@ export struct AssistantCards {
               if (this.boardRows.some((row:TaskTrayRow) => row.bucket===bucket)) {
                 Column() {
                   Text(this.boardSectionTitle(bucket)+' · '+this.boardRows.filter((row:TaskTrayRow) => row.bucket===bucket).length)
-                    .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+                    .fontSize(Tokens.typeSectionHeader).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSectionHeader)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
                     .padding({left:20,top:12,bottom:10}).constraintSize({minHeight:40}).id('tasks-board.section.'+bucket)
                   Column() {
                     ForEach(this.boardRows.filter((row:TaskTrayRow) => row.bucket===bucket),(row:TaskTrayRow,index:number) => {
@@ -668,17 +697,17 @@ export struct AssistantCards {
                         Row({space:12}) {
                           this.boardMark(row)
                           Column({space:2}) {
-                            Text(row.title).fontColor(Colors.ink).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+                            Text(row.title).fontColor(Colors.ink).fontSize(Tokens.typeBody).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeBody)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
                             Row({space:5}) {
                               if (row.kind==='agent') SymbolGlyph(Symbols.agents).fontSize(13).fontColor([Colors.secondary])
-                              Text(row.note).fontColor(Colors.secondary).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+                              Text(row.note).fontColor(Colors.secondary).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
                             }.constraintSize({minHeight:14})
                           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
                           SymbolGlyph(Symbols.expand).fontSize(11).fontColor([Colors.tertiary])
                         }.width('100%').padding({left:20,right:20,top:14,bottom:14}).constraintSize({minHeight:row.note ? 67.5 : 66})
                       }.width('100%').padding(0).backgroundColor(Color.Transparent).onClick(() => this.openBoardRow(row)).id('tasks-board.'+row.kind+'.'+row.id)
                     },(row:TaskTrayRow,index:number) => JSON.stringify([index,row.key(),row.title,row.note,row.status]))
-                  }.width('100%').backgroundColor(Colors.sheetCard).borderRadius(16).clip(true)
+                  }.width('100%').backgroundColor(Colors.sheetCard).borderRadius(Tokens.radiusCard).clip(true)
                 }.width('100%').alignItems(HorizontalAlign.Start)
               }
             },(bucket:string) => bucket)
@@ -711,11 +740,11 @@ export struct AssistantCards {
   @Builder trayList() {
     Column() {
       Row({space:8}) {
-        Text(this.trayLabel(this.trayBucket)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium)
+        Text(this.trayLabel(this.trayBucket)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontWeight(FontWeight.Medium)
           .fontColor(Colors.secondary).layoutWeight(1)
         Button({type:ButtonType.Normal}) {
-          Text(tr('all')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
-            .padding({left:12,right:12,top:3,bottom:3}).backgroundColor(Colors.control).borderRadius(14)
+          Text(tr('all')).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(Colors.secondary)
+            .padding({left:12,right:12,top:3,bottom:3}).backgroundColor(Colors.control).borderRadius(Tokens.radiusCard)
         }.constraintSize({minWidth:50}).height(44).padding(0).backgroundColor(Color.Transparent)
           .onClick(() => { this.trayOpen=false; this.boardOpen=true; }).id('action-tray.board')
         Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.xmark')).fontSize(15).fontColor([Colors.secondary]) }
@@ -724,18 +753,24 @@ export struct AssistantCards {
       Scroll(this.trayScroller) {
         Column() {
           ForEach(this.trayRows.filter((row:TaskTrayRow) => row.bucket===this.trayBucket),(row:TaskTrayRow) => {
-            if (row.groupHeading) Text(this.trayGroupTitle(row.groupHeading)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
+            if (row.groupHeading) Text(this.trayGroupTitle(row.groupHeading)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
               .fontWeight(FontWeight.Medium).fontColor(Colors.secondary).textAlign(TextAlign.Start)
               .padding({left:12,top:6,bottom:2}).width('100%').constraintSize({minHeight:24}).id('chat.tasks.group.'+row.groupHeading)
             this.taskRow(row)
           },(row:TaskTrayRow) => JSON.stringify([row.key(),row.title,row.status,row.note,row.groupHeading,row.agentCount,row.waitingForOwner]))
-          if (!this.trayRows.some((row:TaskTrayRow) => row.bucket===this.trayBucket)) Text(tr('empty')).fontSize(13).fontColor(Colors.secondary).padding(16)
-          if (this.feed.todoError) Text(tr(this.feed.todoError)).fontSize(13).fontColor(Colors.danger)
+          if (!this.trayRows.some((row:TaskTrayRow) => row.bucket===this.trayBucket)) Text(tr('empty')).fontSize(Tokens.typeCaption).fontColor(Colors.secondary).padding(16)
+          if (this.feed.todoError) Text(tr(this.feed.todoError)).fontSize(Tokens.typeCaption).fontColor(Colors.danger)
         }.width('100%').onAreaChange((_old:Area,area:Area) => {this.trayContentHeight=Number(area.height);})
       }.width('100%').height(this.trayHeight()).align(Alignment.TopStart).scrollBar(BarState.Auto).id('action-tray.rows')
       if (this.pinnedTrayPlan) this.pinnedPlanActions(this.pinnedTrayPlan!,this.trayOwner)
     }.width('100%').alignItems(HorizontalAlign.Start).padding({bottom:4}).margin({bottom:16})
-      .backgroundColor(Colors.surface).border({width:0.5,color:Colors.divider,radius:20}).borderRadius(20).id('chat.tasks.tray')
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.glassSurface : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:Tokens.radiusSheetCard})
+      .borderRadius(Tokens.radiusSheetCard)
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+      .transition(Motion.slideFade(this.environment.reduceMotion, 8))
+      .id('chat.tasks.tray')
   }
 
   private metric(points:number):number {
@@ -843,18 +878,50 @@ export struct AssistantCards {
         if (Math.abs(event.offsetX)>66 && Math.abs(event.offsetX)>2*Math.abs(event.offsetY)) this.moveDecision(event.offsetX<0 ? 1 : -1);
       }))
   }
+  private trayDotColor(bucket: string): ResourceColor {
+    if (bucket === 'needs') return Colors.needsMark;
+    if (bucket === 'done') return Colors.positive;
+    return Colors.workingMark;
+  }
+  private trayCount(bucket: string): number {
+    return this.trayRows.filter((r: TaskTrayRow) => r.bucket === bucket).length;
+  }
   @Builder decisionEntry() {
     Button({type:ButtonType.Capsule}) {
       Row({space:6}) {
-        Text(tr('decision_to_decide')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
-        Text(String(this.decisionIds.length)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
+        Circle().width(7.5).height(7.5).fill(this.shownDecisions.length ? Colors.onAction : Colors.needsMark).accessibilityLevel('no')
+        Text(tr('decision_to_decide')).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontWeight(FontWeight.Medium)
+          .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.ink)
+        Text(String(this.decisionIds.length)).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontWeight(FontWeight.Bold)
+          .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
+          .padding({left:6,right:6,top:1,bottom:1}).borderRadius(Tokens.radiusCapsule)
+          .backgroundColor(this.shownDecisions.length ? Colors.onActionWash : Colors.accentWell)
         SymbolGlyph(this.shownDecisions.length ? Symbols.down : Symbols.up).fontSize('11vp').fontColor([this.shownDecisions.length ? Colors.onAction : Colors.needs])
-        if (this.decisionPager!.arrived(this.decisionIds)>0) Text('+'+String(this.decisionPager!.arrived(this.decisionIds))).fontSize(12).fontColor(Colors.needs)
+        if (this.decisionPager!.arrived(this.decisionIds)>0) Text('+'+String(this.decisionPager!.arrived(this.decisionIds))).fontSize(Tokens.typeLabel).fontWeight(FontWeight.Medium).fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
       }
-    }.constraintSize({minHeight:28}).padding({left:12,right:12,top:6,bottom:6})
-      .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs).backgroundColor(this.shownDecisions.length ? Colors.action : Colors.subtle)
-      .responseRegion({x:0,y:-7,width:'100%',height:44}).accessibilitySelected(this.shownDecisions.length>0)
-      .accessibilityText(tr('decision_to_decide')+' '+String(this.decisionIds.length)).onClick(() => this.toggleDecisions()).id('chat.decisions.toggle')
+    }.constraintSize({minHeight:32}).padding({left:11,right:11,top:5,bottom:5})
+      .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.ink)
+      .backgroundColor(this.shownDecisions.length ? Colors.action : (Colors.styleCard || Colors.sheetBackground))
+      .border({
+        width: PhoneStyle.surfaceEdgeWidth(0.5),
+        color: PhoneStyle.cardBorder(this.environment.dark),
+        radius: Tokens.radiusCapsule
+      })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .scale({
+        x: this.pressedTrayChip === 'decisions' ? MotionTokens.pressScale : 1,
+        y: this.pressedTrayChip === 'decisions' ? MotionTokens.pressScale : 1
+      })
+      .animation(Motion.release(this.environment.reduceMotion))
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) this.pressedTrayChip = 'decisions';
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          if (this.pressedTrayChip === 'decisions') this.pressedTrayChip = '';
+        }
+      })
+      .responseRegion({x:0,y:-6,width:'100%',height:44}).accessibilitySelected(this.shownDecisions.length>0)
+      .accessibilityText(tr('decision_to_decide')+' '+String(this.decisionIds.length))
+      .onClick(() => { Haptics.tap(); this.toggleDecisions(); }).id('chat.decisions.toggle')
   }
   @Builder taskDock() {
     Column({space:Tokens.fine}) {
@@ -864,22 +931,52 @@ export struct AssistantCards {
         this.questionCard(request,this.supervised(request),this.trayScope())
       },(request:Decision) => JSON.stringify([this.trayScope(),request.id,request.raw]))
       Scroll() {
-        Row({space:6}) {
+        Row({space:8}) {
           if (this.decisionPager && this.decisionIds.length) this.decisionEntry()
           ForEach(['needs','progress','done'],(bucket:string) => {
             if (bucket!=='done' || this.trayBucket==='done' && this.trayOpen || this.trayRows.some((r:TaskTrayRow) => r.bucket===bucket)) Button({type:ButtonType.Capsule}) {
-              Row({space:4}) {
-                Text(this.trayLabel(bucket)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium)
-                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : bucket==='needs' ? Colors.link : Colors.secondary)
-                Text(String(this.trayRows.filter((r:TaskTrayRow) => r.bucket===bucket).length)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
-                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : bucket==='needs' ? Colors.link : Colors.secondary)
+              Row({space:6}) {
+                Circle()
+                  .width(7.5)
+                  .height(7.5)
+                  .fill(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : this.trayDotColor(bucket))
+                  .opacity(this.trayOpen && this.trayBucket===bucket || this.trayCount(bucket) > 0 ? 1 : 0.45)
+                  .accessibilityLevel('no')
+                Text(this.trayLabel(bucket)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontWeight(FontWeight.Medium)
+                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : this.trayCount(bucket) > 0 ? Colors.ink : Colors.secondary)
+                Text(String(this.trayCount(bucket))).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontWeight(FontWeight.Bold)
+                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : this.trayCount(bucket) > 0 ? this.trayColor(bucket) : Colors.secondary)
+                  .padding({left:6,right:6,top:1,bottom:1}).borderRadius(Tokens.radiusCapsule)
+                  .backgroundColor(this.trayOpen && this.trayBucket===bucket
+                    ? Colors.onActionWash
+                    : this.trayCount(bucket) > 0 && bucket === 'needs'
+                      ? Colors.accentWell
+                      : Colors.pressOverlay)
               }
-            }.constraintSize({minHeight:28}).padding({left:12,right:12,top:5,bottom:5}).backgroundColor(this.trayOpen && this.trayBucket===bucket ? Colors.action : Colors.subtle)
-              .responseRegion({x:0,y:-7,width:'100%',height:44}).accessibilitySelected(this.trayOpen && this.trayBucket===bucket)
-              .accessibilityText(this.trayLabel(bucket)+'、'+String(this.trayRows.filter((r:TaskTrayRow) => r.bucket===bucket).length))
-              .onClick(() => this.openTray(bucket)).id('chat.tasks.'+bucket)
+            }.constraintSize({minHeight:32}).padding({left:11,right:9,top:5,bottom:5})
+              .backgroundColor(this.trayOpen && this.trayBucket===bucket ? Colors.action : (Colors.styleCard || Colors.sheetBackground))
+              .border({
+                width: PhoneStyle.surfaceEdgeWidth(0.5),
+                color: PhoneStyle.cardBorder(this.environment.dark),
+                radius: Tokens.radiusCapsule
+              })
+              .shadow(PhoneStyle.cardElevation(this.environment.dark))
+              .scale({
+                x: this.pressedTrayChip === bucket ? MotionTokens.pressScale : 1,
+                y: this.pressedTrayChip === bucket ? MotionTokens.pressScale : 1
+              })
+              .animation(Motion.release(this.environment.reduceMotion))
+              .onTouch((event: TouchEvent) => {
+                if (event.type === TouchType.Down) this.pressedTrayChip = bucket;
+                else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+                  if (this.pressedTrayChip === bucket) this.pressedTrayChip = '';
+                }
+              })
+              .responseRegion({x:0,y:-6,width:'100%',height:44}).accessibilitySelected(this.trayOpen && this.trayBucket===bucket)
+              .accessibilityText(this.trayLabel(bucket)+'、'+String(this.trayCount(bucket)))
+              .onClick(() => { Haptics.tap(); this.openTray(bucket); }).id('chat.tasks.'+bucket)
           },(bucket:string) => bucket)
-        }
+        }.padding({ top: 2, bottom: 3 })
       }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').align(Alignment.Start)
         .padding({left:4,right:4}).margin({top:this.shownDecisions.length ? Tokens.page : 0})
         .onAreaChange((_before:Area,area:Area):void => {
@@ -920,8 +1017,10 @@ export struct AssistantCards {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         SymbolGlyph(Symbols.expand).fontSize(Tokens.meta).fontColor([Colors.secondary])
       }.width('100%')
-    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.grouped).borderRadius(Tokens.card)
-      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => this.openDetail(item))
+    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.styleCard || Colors.sheetBackground).borderRadius(Tokens.card)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.card })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => { Haptics.tap(); this.openDetail(item); })
       .id('assistant.detail.receipt.' + Wire.text(item, 'id')).accessibilityText(tr('assistant_detail_view_receipt') + ' ' + projection.title + ' ' + tr('assistant_detail_receipt_' + projection.outcome) + ' ' + projection.summary)
   }
 

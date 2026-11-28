@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -121,7 +122,24 @@ func (e notFound) Unwrap() error { return e.error }
 func sameOrigin(a, b string) bool {
 	ua, err1 := url.Parse(a)
 	ub, err2 := url.Parse(b)
-	return err1 == nil && err2 == nil && ua.Scheme == ub.Scheme && strings.EqualFold(ua.Host, ub.Host)
+	if err1 != nil || err2 != nil || ua.Scheme == "" || ua.Hostname() == "" || !strings.EqualFold(ua.Scheme, ub.Scheme) {
+		return false
+	}
+	return strings.EqualFold(ua.Hostname(), ub.Hostname()) && canonicalPort(ua) == canonicalPort(ub)
+}
+
+func canonicalPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
 }
 
 // ErrRateLimited: the market refused a request for its rate limit, not for rights.
@@ -198,6 +216,8 @@ type Fetched struct {
 	Index        *MarketIndex
 	Warnings     []string
 	Raw, Payload []byte
+	// SignedBy is the trusted key ("ed25519:…") whose signature verified the catalog; "" when it was not verified.
+	SignedBy string
 }
 
 func (m *Market) Fetch(ctx context.Context) (*MarketIndex, []string, error) {
@@ -232,7 +252,7 @@ func (m *Market) FetchSigned(ctx context.Context) (*Fetched, error) {
 		err := anonymous.get(mirrorCtx, m.CatalogMirror, "application/json", &b, IndexMost)
 		stop()
 		if err == nil {
-			if f, err := ParseCatalog([]byte(b.String()), key); err == nil {
+			if f, err := ParseCatalogKeysForBuild([]byte(b.String()), []string{key}, m.HubBuild); err == nil {
 				return f, nil
 			}
 		}
@@ -243,7 +263,16 @@ func (m *Market) FetchSigned(ctx context.Context) (*Fetched, error) {
 	if err != nil {
 		return nil, catalogFailure(ErrCatalogUnavailable, err)
 	}
-	return ParseCatalog(raw, key)
+	return ParseCatalogKeysForBuild(raw, m.VerifyKeys(), m.HubBuild)
+}
+
+// VerifyKeys are the keys a catalog of m must be signed by (any one of them): the compiled-in key for the official
+// market, the owner's keys for a private market that has them, none for an unsigned market.
+func (m *Market) VerifyKeys() []string {
+	if IsOfficialMarket(m.Spec.String()) {
+		return []string{Official.SigningKey}
+	}
+	return slices.Clone(m.TrustedKeys)
 }
 
 // fetchRaw never reads an adjacent signature or another catalog filename.

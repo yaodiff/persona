@@ -1,5 +1,6 @@
 package persona.feature.assistant
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +32,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import persona.core.contracts.Machine
@@ -305,15 +307,59 @@ internal fun UsageCalendarPage(api: UsageHistoryApi?, onBack: () -> Unit, listSt
         return
     }
     val model = remember(api) { UsageCalendarModel(api) }
+    val projectsModel = remember(api) { UsageProjectsModel(api) }
     val state by model.state.collectAsStateWithLifecycle()
+    val projectsState by projectsModel.state.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    LaunchedEffect(model, lifecycle) {
-        lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { model.loadDetails() }
+    var range by rememberSaveable { mutableStateOf(USAGE_PROJECT_DEFAULT_RANGE) }
+    var selectedProjectKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val projects = projectsState.projects
+    val selectedProject = remember(projects, selectedProjectKey) {
+        selectedProjectKey?.let { key ->
+            projects?.ranges?.asSequence()?.flatMap { it.projects.asSequence() }?.firstOrNull { it.key == key }
+        }
+    }
+    LaunchedEffect(model, projectsModel, lifecycle) {
+        lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            coroutineScope {
+                launch { model.loadDetails() }
+                launch { projectsModel.loadProjects() }
+            }
+        }
+    }
+    LaunchedEffect(selectedProject?.key, projectsModel, lifecycle) {
+        val key = selectedProject?.key ?: return@LaunchedEffect
+        lifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { projectsModel.loadDetail(key) }
+    }
+    BackHandler(enabled = selectedProjectKey != null) {
+        selectedProjectKey = null
+        projectsModel.clearDetail()
+    }
+    if (selectedProject != null) {
+        UsageProjectPage(
+            selectedProject,
+            range,
+            onRange = { range = it },
+            state = projectsState,
+            onBack = {
+                selectedProjectKey = null
+                projectsModel.clearDetail()
+            },
+            onRefresh = { scope.launch { projectsModel.loadDetail(selectedProject.key) } },
+        )
+        return
     }
     val days = state.days
     JListPage(title = stringResource(R.string.assistant_usage_title), onBack = onBack, state = listState,
-        refreshing = state.loading && days != null, onRefresh = { scope.launch { model.loadDetails() } }) {
+        refreshing = (state.loading || projectsState.loading) && days != null, onRefresh = {
+            scope.launch {
+                coroutineScope {
+                    launch { model.loadDetails() }
+                    launch { projectsModel.loadProjects() }
+                }
+            }
+        }) {
         if (state.failure) item("failure") {
             JNotice(stringResource(R.string.assistant_usage_read_failed), status = Status.NeedsYou,
                 actionLabel = stringResource(R.string.assistant_usage_retry), onAction = { scope.launch { model.loadDetails() } })
@@ -329,6 +375,11 @@ internal fun UsageCalendarPage(api: UsageHistoryApi?, onBack: () -> Unit, listSt
                 val rows = if (LocalDensity.current.fontScale > 1f) stats.chunked(2) else listOf(stats)
                 Column(Modifier.padding(bottom = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     rows.forEach { JStatGrid(it) }
+                }
+            }
+            projects?.let { data ->
+                item("projects") {
+                    UsageProjectsSection(data, range, onRange = { range = it }, onOpen = { selectedProjectKey = it.key })
                 }
             }
             item("calendar") { UsageCalendarCard(days, onOpen = null, showLegend = true) }
@@ -420,12 +471,12 @@ private fun UsageHourlyGrid(history: UsageHours) {
     }
 }
 
-private fun usageZone(raw: String): ZoneId = raw.takeIf { it.isNotBlank() }
+internal fun usageZone(raw: String): ZoneId = raw.takeIf { it.isNotBlank() }
     ?.let { runCatching { ZoneId.of(it) }.getOrNull() }
     ?: ZoneId.systemDefault()
 
 @Composable
-private fun compactTokens(value: Long, locale: java.util.Locale): String = ChartMath.compact(value.toDouble(), locale)
+internal fun compactTokens(value: Long, locale: java.util.Locale): String = ChartMath.compact(value.toDouble(), locale)
 
 @Composable
 private fun formatDay(date: String, zone: ZoneId, full: Boolean = true): String {

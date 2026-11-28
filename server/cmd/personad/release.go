@@ -58,7 +58,9 @@ func runRelease(args []string) error {
 		// The release's nodes are this build's: they announce its node protocol (managers of other builds check it).
 		m, err := update.BuildManifest(*dir, update.Manifest{Version: *ver, Build: n, Commit: *commit, Released: time.Now().UTC().Truncate(time.Second),
 			MinAppBuild: *minApp, Protocol: proto.Protocol, Notes: *notes, Ancestors: ancestors, NodeProtocol: nodeproto.Version,
-			NodeProtocolMin: nodeproto.MinManagerVersion, NodeCapabilities: nodeproto.Announced})
+			NodeProtocolMin: nodeproto.MinManagerVersion, NodeCapabilities: nodeproto.Announced,
+			// The manifest is this program's edition: publish.sh writes each edition's with that edition's personad.
+			Edition: update.ThisEdition.Marker()})
 		if err != nil {
 			return err
 		}
@@ -96,6 +98,9 @@ func runRelease(args []string) error {
 		}
 		m, err := update.ParseManifest(b)
 		if err != nil {
+			return err
+		}
+		if err := m.ValidateEdition(update.ThisEdition); err != nil {
 			return err
 		}
 		if err := update.VerifyRelease(context.Background(), *dir, m); err != nil {

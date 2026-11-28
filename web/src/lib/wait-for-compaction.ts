@@ -1,6 +1,6 @@
 import { parseAPIError } from "./api-errors";
 import { COMPACTED_TEXT, isCompaction } from "./compaction";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { getSession, subscribe } from "./store";
 import type { Compaction, Item } from "./types";
 
@@ -181,7 +181,7 @@ export function watchTerminalCompaction(
     }
     const sess = getSession(mid, sid);
     if (!sess) return;
-    const st = stateOf(sess);
+    const st = activityOf(sess);
     if (st === "working") {
       sawWorking = true;
       clearTimeout(settleTimer);

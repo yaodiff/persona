@@ -1,8 +1,12 @@
 {
-  "send_to": "以你的身份在飞书上给「{chat}」发消息",
-  "reply_to": "以你的身份在飞书上回复「{chat}」里 {sender} 的消息",
-  "reply_in_chat": "以你的身份在飞书上回复「{chat}」里的消息",
+  "default_service": "飞书",
+  "send_to": "以你的身份在{service}上给「{chat}」发消息",
+  "reply_to": "以你的身份在{service}上回复「{chat}」里 {sender} 的消息",
+  "reply_in_chat": "以你的身份在{service}上回复「{chat}」里的消息",
+  "reply_to_sender": "以你的身份在{service}上回复 {sender} 的消息",
+  "reply_message": "以你的身份在{service}上回复消息 {message}",
   "topic_suffix": "（话题回复）",
   "original": "原消息：{text}",
+  "mentions": "@提及：{mentions}",
   "outgoing": "正文：\n{text}"
 }

@@ -104,9 +104,9 @@ export function listedModeOption(id: string): ModeOption {
   return PERMISSION_MODES.find((m) => m.id === id) ?? { id, title: id, detail: "" };
 }
 
-/** The effort chip and its speed submenu for protocol-driven Codex threads with advertised choices. */
+/** Thinking effort for sessions with advertised levels and no permission menu. */
 export function hasEffortOnly(s: Session | undefined): boolean {
-  return Boolean(s && !s.assistant && !hasModes(s) && (s.efforts?.length || s.service_tiers?.length) && sessionCan(s, "send"));
+  return Boolean(s && !s.assistant && !hasModes(s) && s.efforts?.length && sessionCan(s, "send"));
 }
 
 /** The effort menu's choices: the session's own levels when the node lists them, Claude Code's otherwise. */

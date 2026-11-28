@@ -135,4 +135,16 @@ final class RefinementTests: XCTestCase {
         XCTAssertEqual(rate.kbps, kbps, "no cut and no raise from the passes")
         XCTAssertEqual(rate.deliveredKbps, delivered, "nor a delivered rate taken from them")
     }
+
+    func testBackwardClockDoesNotTriggerPrematurePassAndLargeTargetDoesNotTrap() {
+        var r = Refinement()
+        r.changed(at: 1_000 * ms)
+        XCTAssertFalse(r.due(at: 900 * ms, calm: true), "backward clock before changedAt must not wrap into due")
+        XCTAssertTrue(r.due(at: 1_300 * ms, calm: true))
+        r.passed(at: 1_300 * ms)
+        XCTAssertFalse(r.due(at: 1_200 * ms, calm: true), "backward clock before lastPassAt must not wrap into due")
+        XCTAssertTrue(r.due(at: 1_500 * ms, calm: true))
+        XCTAssertEqual(Refinement.kbps(target: Int.max), CapturePlan.maxKbps)
+        XCTAssertEqual(Refinement.kbps(target: Int.min), CapturePlan.minKbps)
+    }
 }

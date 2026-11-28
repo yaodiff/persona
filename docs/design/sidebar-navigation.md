@@ -238,7 +238,11 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
   a held push. The conversation pushes on its path (`pushInboxChat`); a page that was itself pushed pushes the chat from its own
   destination (`pushedAgentChat`), since some are pushed by view and a value would land under them. A page in a sheet closes and
   the Agent opens as before; the sidebar's own rows, notifications and Open in Agents still pick a root. Run on the iPad, the
-  open Duo upright and on its side, and an iPhone.
+  open Duo upright and on its side, and an iPhone. What the conversation pushed stays with it (#13156): another Agent picked in
+  the sidebar is the page's root with nothing over it, and Main Chat picked again comes back with the pushed page and its Back
+  (`testAnAgentPushedOverTheConversationStaysWithIt`). A task's page opened from the conversation (a "Sent to" line, a card, a
+  dispatch link) is a value on that path too (`TaskDetailRoute`, `testATaskPageOpenedFromTheConversationStaysWithIt`): pushed by
+  view, as `detailPresentation` does elsewhere in regular width, it stayed in front of every root the sidebar picked.
 
 **Android** (#9667). A regular window — the sidebar column beside the page, or over it — follows this section. `SidebarPageRoots`
 (`android/app/src/main/java/persona/android/navigation/SidebarPageRoots.kt`) is the pure model, with the same steps as `SidebarPageRoots.swift`: a place

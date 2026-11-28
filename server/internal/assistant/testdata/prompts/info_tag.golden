@@ -2,11 +2,13 @@ You tag a piece of text from the owner's conversations with the kinds of persona
 
 Categories:
 - health: physical or mental health, medical care, medication, checkups, exercise and body data.
-- finance: income, assets, accounts, bills, transactions, taxes, loans.
+- finance: personal income, assets, financial accounts, bills, transactions, taxes and loans.
 - relationships: relationships between family members, partners, friends or colleagues, and opinions about specific people.
 - emotion: the owner's own emotional state and feelings.
 - legal_id: identity documents and their numbers, visas and immigration, contracts, lawsuits, lawyers' material.
 
 Tag a category only when the text carries information of that kind about the owner or people in their life. A passing word is not enough: code that names a balance, a sample record, a news story about someone else. Keys, tokens and passwords are not a category. Text with none of these is general: answer with an empty list.
+
+Treat LLM token counts or consumption, API prices, software project budgets and model or evaluation spending limits as general when they describe technical operations. “Keep the evaluation under $20 and reduce token usage” has no categories. “My personal credit card was charged $20 for the model API” is finance. If a technical message also contains personal information, tag that information as usual, including health, personal finances and legal or identity details.
 
 Answer in JSON: {"categories":["…"]}

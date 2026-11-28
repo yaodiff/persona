@@ -19,10 +19,15 @@ import { Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { PhoneStyle } from '../design/PhoneStyle';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
 import { tr, trError } from '../design/Strings';
-import { nativeEnvironment } from '../platform/NativeEnvironment';
+import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
+import { Haptics } from '../platform/Haptics';
+import { toastCenter } from '../models/ToastCenter';
 import { readerLink } from '../platform/ReaderLink';
 import { relativeActivityDate } from '../core/PhoneDate';
+import { gitMarkBadgeLabel, summarizeUnifiedDiff } from '../core/WorkPresentation';
 
 const TRANSFER_LIMIT: number = 32 * 1024 * 1024;
 
@@ -49,6 +54,11 @@ export struct SessionTools {
   @Param initialFile: string = '';
   @Param initialTab: number = 0;
   @Param phoneSheetHeight: number | SheetSize = SheetSize.LARGE;
+  @Param compactHeader: boolean = false;
+  @Local private paneWidth: number = 0;
+  @Computed get isCompactPane(): boolean { return this.compactHeader || (this.paneWidth > 0 && this.paneWidth < 400); }
+  private paneHorizontalPadding(): number { return this.isCompactPane ? 12 : PhoneStyle.page; }
+  private paneTopPadding(normal: number): number { return this.isCompactPane ? Math.max(4, normal - 4) : normal; }
   @Local workspace: SessionWorkspace = new SessionWorkspace();
   @Local fileRowBindings: BoundRow<WorkspaceEntry>[] = [];
   @Local gitRowBindings: BoundRow<WorkspaceGitFile>[] = [];
@@ -101,6 +111,8 @@ export struct SessionTools {
   @Local gitNewBranchName: string = '';
   @Local previewPathDraft: string = '/';
   @Local previewInput: string = '';
+  @Local private env: NativeEnvironment = nativeEnvironment;
+  @Local private pressedTerminalKey: string = '';
   private previewCopies: FilePreviewCopy[] = [];
   private folderScroller:Scroller = new Scroller();
   private folderPlacement:string = '';
@@ -783,22 +795,57 @@ export struct SessionTools {
     return [link,file.ignored ? tr('ignored') : '',file.directory ? '' : this.sizeText(file.size),modified].filter((v:string) => !!v).join('  ');
   }
 
+  private isCodeFileName(name: string): boolean {
+    return /\.(swift|ets|ts|tsx|js|jsx|go|rs|py|json|yaml|yml|toml|sh|md|css|html|c|cpp|h|kt|java)$/i.test(name);
+  }
+  private cardRim(): ResourceColor {
+    return PhoneStyle.cardBorder(this.env.dark);
+  }
+
   @Builder fileRow(binding:BoundRow<WorkspaceEntry>) {
     Row({space:Tokens.inset}) {
-      SymbolGlyph(binding.value.directory ? $r('sys.symbol.folder_fill') : /\.(swift|ts|js|go|rs|py|json)$/i.test(binding.value.name) ? $r('sys.symbol.code') : Symbols.document)
-        .fontSize(Tokens.interfaceFontVp(17, nativeEnvironment.fontScale)).fontColor([binding.value.ignored ? Colors.secondary : binding.value.directory ? Colors.link : Colors.secondary])
-        .width(24 * Math.min(nativeEnvironment.fontScale, Tokens.interfaceFontMaxScale)).flexShrink(0).id('session.fileRow.icon.'+binding.value.path)
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph(binding.value.directory ? $r('sys.symbol.folder_fill') : this.isCodeFileName(binding.value.name) ? $r('sys.symbol.code') : Symbols.document)
+          .fontSize(Tokens.interfaceFontVp(16, this.env.fontScale))
+          .fontColor([binding.value.ignored ? Colors.secondary : binding.value.directory ? Colors.link : this.isCodeFileName(binding.value.name) ? Colors.ai : Colors.secondary])
+      }
+        .width(34 * Math.min(this.env.fontScale, Tokens.interfaceFontMaxScale))
+        .height(34 * Math.min(this.env.fontScale, Tokens.interfaceFontMaxScale))
+        .borderRadius(Tokens.radiusControl)
+        .backgroundColor(binding.value.ignored
+          ? Colors.subtle
+          : binding.value.directory
+            ? Colors.accentWell
+            : this.isCodeFileName(binding.value.name)
+              ? Colors.aiWash
+              : Colors.pressOverlay)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusControl })
+        .flexShrink(0)
+        .id('session.fileRow.icon.'+binding.value.path)
       Column({space:2}) {
-        Text(binding.value.name).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(binding.value.ignored ? Colors.secondary : Colors.ink)
+        Text(binding.value.name).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontWeight(binding.value.directory ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(binding.value.ignored ? Colors.secondary : Colors.ink)
           .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).id('session.fileRow.name.'+binding.value.path)
         if (this.fileSubtitle(binding.value)) Text(this.fileSubtitle(binding.value))
           .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(binding.value.linkBroken ? Colors.danger : Colors.secondary)
           .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-      if (this.workspace.fileGitMark(binding.value)) Circle().width(7).height(7)
-        .fill(this.gitMarkColor(this.workspace.fileGitMark(binding.value))).id('session.files.git_mark.'+binding.value.path)
-      if (binding.value.directory) SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
-    }.width('100%').constraintSize({minHeight:54}).padding({top:15,bottom:15}).backgroundColor(this.phoneSheetHeight !== SheetSize.LARGE ? Colors.listBackground : Colors.canvas)
+      if (this.workspace.fileGitMark(binding.value)) {
+        Text(gitMarkBadgeLabel(this.workspace.fileGitMark(binding.value)))
+          .fontSize('11vp')
+          .fontWeight(FontWeight.Bold)
+          .fontFamily('monospace')
+          .fontColor(this.gitMarkColor(this.workspace.fileGitMark(binding.value)))
+          .textAlign(TextAlign.Center)
+          .width(20)
+          .height(20)
+          .borderRadius(6)
+          .backgroundColor(this.gitMarkFill(this.workspace.fileGitMark(binding.value)))
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleID === 'glass' ? Color.Transparent : this.gitMarkColor(this.workspace.fileGitMark(binding.value)), radius: 6 })
+          .id('session.files.git_mark.'+binding.value.path)
+      }
+      if (binding.value.directory) SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.tertiary])
+    }.width('100%').constraintSize({minHeight:56}).padding({top:12,bottom:12}).backgroundColor(this.phoneSheetHeight !== SheetSize.LARGE ? Colors.listBackground : Colors.canvas)
   }
 
   @Builder pathMenu() {
@@ -866,21 +913,96 @@ export struct SessionTools {
         .bindContextMenu(this.pathMenu,ResponseType.LongPress).id('session.files.path')
     },(owner:string) => owner)
   }
+  @Builder compactFolderBreadcrumbBar() {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: 6 }) {
+        SymbolGlyph((this.pathCrumbs[this.pathCrumbs.length - 1]?.home) ? $r('sys.symbol.house') : Symbols.folder)
+          .fontSize(Tokens.interfaceFontVp(13, nativeEnvironment.fontScale))
+          .fontColor([Colors.link])
+          .flexShrink(0)
+        Text(
+          (this.pathCrumbs[this.pathCrumbs.length - 1]?.home)
+            ? tr('file_crumb_home')
+            : (this.pathCrumbs[this.pathCrumbs.length - 1]?.title || this.workspace.currentPath)
+        )
+          .fontSize(Tokens.interfaceFontVp(13, nativeEnvironment.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.ink)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textAlign(TextAlign.Start)
+          .layoutWeight(1)
+        if (this.pathCrumbs[this.pathCrumbs.length - 1]?.session) {
+          Text(tr('file_crumb_session'))
+            .fontSize(Tokens.interfaceFontVp(11, nativeEnvironment.fontScale))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.link)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .backgroundColor(Colors.accentWell)
+            .borderRadius(Tokens.capsule)
+            .maxLines(1)
+            .flexShrink(0)
+        }
+        SymbolGlyph(Symbols.down)
+          .fontSize('10vp')
+          .fontColor([Colors.tertiary])
+          .flexShrink(0)
+      }
+      .width('100%')
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 34 })
+    .padding(0)
+    .backgroundColor(Colors.control)
+    .borderRadius(Tokens.capsule)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.capsule })
+    .accessibilityText(
+      ((this.pathCrumbs[this.pathCrumbs.length - 1]?.home)
+        ? tr('file_crumb_home')
+        : (this.pathCrumbs[this.pathCrumbs.length - 1]?.title || this.workspace.currentPath)) +
+      (this.pathCrumbs[this.pathCrumbs.length - 1]?.session ? ', ' + tr('file_crumb_session') : '')
+    )
+    .bindMenu(this.pathMenu)
+    .id('session.files.path')
+  }
+  @Builder folderNavButtons(buttonWidth: number, buttonHeight: number, glyphSize: string) {
+    Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.collapse).fontSize(glyphSize).fontColor([Colors.ink]) }
+      .width(buttonWidth).height(buttonHeight).padding(0).backgroundColor(Colors.control)
+      .border({ width: 0.5, color: this.cardRim(), radius: buttonHeight / 2 })
+      .enabled(this.workspace.folderBack.length > 0)
+      .accessibilityText(tr('session_folder_back')).onClick(() => { Haptics.tap(); this.folderHistory(false); }).id('session.files.back')
+    Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.expand).fontSize(glyphSize).fontColor([Colors.ink]) }
+      .width(buttonWidth).height(buttonHeight).padding(0).backgroundColor(Colors.control)
+      .border({ width: 0.5, color: this.cardRim(), radius: buttonHeight / 2 })
+      .enabled(this.workspace.folderForward.length > 0)
+      .accessibilityText(tr('session_folder_forward')).onClick(() => { Haptics.tap(); this.folderHistory(true); }).id('session.files.forward')
+    Button({ type: ButtonType.Circle }) { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(glyphSize).fontColor([Colors.link]).id('session.files.parent') }
+      .width(buttonWidth).height(buttonHeight).padding(0).backgroundColor(Colors.control)
+      .border({ width: 0.5, color: this.cardRim(), radius: buttonHeight / 2 })
+      .enabled(parentFolder(this.workspace.currentPath) !== this.workspace.currentPath && !!parentFolder(this.workspace.currentPath))
+      .accessibilityText(parentFolder(this.workspace.currentPath)).onClick(() => { Haptics.tap(); this.goFolder(parentFolder(this.workspace.currentPath)); }).id('session.files.up')
+  }
   @Builder folderBar() {
     Column({space:5}) {
-      Row({space:Tokens.gap}) {
-        Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.collapse).fontSize('16vp').fontColor([Colors.ink]) }
-          .width(this.fileNavigationHeight+10).height(this.fileNavigationHeight).padding(0).backgroundColor(Colors.control).enabled(this.workspace.folderBack.length>0)
-          .accessibilityText(tr('session_folder_back')).onClick(() => this.folderHistory(false)).id('session.files.back')
-        Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.expand).fontSize('16vp').fontColor([Colors.ink]) }
-          .width(this.fileNavigationHeight+10).height(this.fileNavigationHeight).padding(0).backgroundColor(Colors.control).enabled(this.workspace.folderForward.length>0)
-          .accessibilityText(tr('session_folder_forward')).onClick(() => this.folderHistory(true)).id('session.files.forward')
-        Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize('16vp').fontColor([Colors.link]).id('session.files.parent') }
-          .width(this.fileNavigationHeight+10).height(this.fileNavigationHeight).padding(0).backgroundColor(Colors.control)
-          .enabled(parentFolder(this.workspace.currentPath) !== this.workspace.currentPath && !!parentFolder(this.workspace.currentPath))
-          .accessibilityText(parentFolder(this.workspace.currentPath)).onClick(() => this.goFolder(parentFolder(this.workspace.currentPath))).id('session.files.up')
-        this.folderBreadcrumbs()
-      }.width('100%')
+      if (this.isCompactPane) {
+        Row({space:6}) {
+          this.folderNavButtons(36, 36, '14vp')
+          Blank().layoutWeight(1)
+          Button({type:ButtonType.Circle}) { this.horizontalMenuGlyph() }
+            .width(36).height(36).padding(0).backgroundColor(Colors.control)
+            .border({width:0.5,color:this.cardRim(),radius:18})
+            .bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
+            .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
+        }.width('100%').alignItems(VerticalAlign.Center)
+        this.compactFolderBreadcrumbBar()
+      } else {
+        Row({space:Tokens.gap}) {
+          this.folderNavButtons(this.fileNavigationHeight + 10, this.fileNavigationHeight, '16vp')
+          this.folderBreadcrumbs()
+        }.width('100%')
+      }
       if (this.editingPath) Row({space:5}) {
         TextInput({text:this.pathDraft,placeholder:tr('path')}).layoutWeight(1).height(Math.max(44,20*nativeEnvironment.fontScale+12)).fontSize(15)
           .onChange((v:string) => this.pathDraft=v).onSubmit(() => this.openPath()).id('session.files.path_input')
@@ -904,11 +1026,13 @@ export struct SessionTools {
         }.height(Math.max(34,20*Math.min(nativeEnvironment.fontScale,Tokens.interfaceScaleFor(15))+9))
           .layoutWeight(1).backgroundColor(Colors.tertiaryFill).borderRadius(22)
         else Blank().layoutWeight(1)
-        Button({type:ButtonType.Circle}) { this.horizontalMenuGlyph() }
-          .width(44).height(44).padding(0).backgroundColor(Colors.control).bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
-          .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
+        if (!this.isCompactPane) {
+          Button({type:ButtonType.Circle}) { this.horizontalMenuGlyph() }
+            .width(44).height(44).padding(0).backgroundColor(Colors.control).bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
+            .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
+        }
       }.width('100%').id('session.files.find')
-    }.padding({left:PhoneStyle.page,right:PhoneStyle.page,top:5,bottom:8}).width('100%')
+    }.padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding(),top:this.paneTopPadding(5),bottom:this.isCompactPane ? 6 : 8}).width('100%')
   }
   @Builder fileView() {
     Column() {
@@ -955,13 +1079,13 @@ export struct SessionTools {
           if (this.workspace.findTruncated) ListItem() { Text(tr('session_tools_first_entries')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).padding(10) }
         } else {
         ForEach(this.shownFileRows, (binding: BoundRow<WorkspaceEntry>) => {
-          ListItem() { this.fileRow(binding) }.onClick(() => this.openEntry(binding.value))
+          ListItem() { this.fileRow(binding) }.onClick(() => { Haptics.tap(); this.openEntry(binding.value); })
             .bindContextMenu(this.fileEntryMenu(binding), ResponseType.LongPress).id('session.files.' + binding.value.path)
         }, (binding: BoundRow<WorkspaceEntry>) => binding.key)
         if (!this.shownFileRows.length && !this.workspace.fileBusy && !this.workspace.fileError) ListItem() { Text(tr('empty')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).padding(14) }
         if (this.workspace.hasMoreEntries) ListItem() { Text(tr('session_tools_first_entries')).padding(Tokens.inset) }
         }
-      }.divider({strokeWidth:Tokens.divider,startMargin:35,color:Colors.divider}).width('100%').layoutWeight(1).padding({left:PhoneStyle.page,right:PhoneStyle.page})
+      }.divider({strokeWidth:Tokens.divider,startMargin:35,color:Colors.divider}).width('100%').layoutWeight(1).padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding()})
         .bindSheet($$this.fileOpen,this.fileViewer(),{title:{title:this.workspace.selectedFileName || tr('file')},height:SheetSize.LARGE,showClose:true})
     }.width('100%').height('100%').backgroundColor(this.phoneSheetHeight !== SheetSize.LARGE ? Colors.listBackground : Colors.canvas)
 
@@ -1097,10 +1221,13 @@ export struct SessionTools {
       if (this.workspace.fileReadBusy) LoadingProgress().layoutWeight(1).width(Tokens.touch).height(Tokens.touch)
       else if (this.workspace.selectedFileIsText) {
         Scroll() {
-          Text(this.workspace.selectedFileText).fontFamily('monospace').fontSize(Tokens.meta).copyOption(CopyOptions.LocalDevice)
-            .width('100%').textAlign(TextAlign.Start)
-        }.layoutWeight(1).width('100%')
-        if (this.workspace.fileHasMore) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('load_more')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('load_more', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('load_more')).bindTips(tr('load_more')).onClick(() => this.workspace.loadMoreText())
+          Text(this.workspace.selectedFileText).fontFamily('monospace').fontSize(13).lineHeight('20fp').fontColor(Colors.ink).copyOption(CopyOptions.LocalDevice)
+            .width('100%').textAlign(TextAlign.Start).padding(14)
+        }.layoutWeight(1).width('100%').align(Alignment.TopStart)
+          .backgroundColor(Colors.codeCanvas).borderRadius(14).clip(true)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 14 })
+          .shadow(PhoneStyle.cardElevation(this.env.dark))
+        if (this.workspace.fileHasMore) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('load_more')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('load_more', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('load_more')).bindTips(tr('load_more')).onClick(() => { Haptics.tap(); this.workspace.loadMoreText(); })
         if (this.workspace.fileTruncated && !this.workspace.fileHasMore) Text(tr('session_tools_truncated')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
       } else {
         Column({ space: Tokens.gap }) {
@@ -1157,9 +1284,15 @@ export struct SessionTools {
   private leaf(path:string):string { return path.split(/[\\/]/).pop() || path; }
   private relativeParent(path:string):string { return path.slice(0,Math.max(path.lastIndexOf('/'),path.lastIndexOf('\\'),0)); }
   private gitMarkColor(mark:string):ResourceColor {
-    if (mark==='A' || mark==='U') return Colors.diffAdded;
+    if (mark==='A' || mark==='U' || mark==='?' || mark==='??') return Colors.diffAdded;
     if (mark==='D' || mark==='!') return Colors.diffRemoved;
-    return mark==='M' ? Colors.diffModified : Colors.secondary;
+    return mark==='M' || mark==='R' ? Colors.diffModified : Colors.secondary;
+  }
+  private gitMarkFill(mark:string):ResourceColor {
+    if (mark==='A' || mark==='U' || mark==='?' || mark==='??') return Colors.codeAddedFill;
+    if (mark==='D' || mark==='!') return Colors.codeRemovedFill;
+    if (mark==='M' || mark==='R') return Colors.workingWash;
+    return Colors.subtle;
   }
   private gitDate(value:string):string {
     const date=new Date(value);
@@ -1170,10 +1303,16 @@ export struct SessionTools {
   }
 
   @Builder gitStatusBadge(mark:string, identity:string) {
-    Stack() {
-      Rect().width('100%').height('100%').fill(this.gitMarkColor(mark)).opacity(0.14).radius(5)
-      Text(mark || 'M').fontSize('12vp').fontWeight(FontWeight.Bold).fontFamily('monospace').fontColor(this.gitMarkColor(mark))
-    }.width(this.gitMetric(20,26.3,20)).aspectRatio(1).flexShrink(0).id(identity)
+    Stack({ alignContent: Alignment.Center }) {
+      Text(gitMarkBadgeLabel(mark)).fontSize('12vp').fontWeight(FontWeight.Bold).fontFamily('monospace').fontColor(this.gitMarkColor(mark))
+    }
+      .width(this.gitMetric(22,28,22))
+      .aspectRatio(1)
+      .borderRadius(7)
+      .backgroundColor(this.gitMarkFill(mark))
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleID === 'glass' ? Color.Transparent : this.gitMarkColor(mark), radius: 7 })
+      .flexShrink(0)
+      .id(identity)
   }
 
   @Builder branchSectionRow(label:string,symbol:Resource,count:string,mode:string,identity:string) {
@@ -1262,7 +1401,10 @@ export struct SessionTools {
         this.branchSectionRow('branch',$r('sys.symbol.arrow_triangle_merge'),'','branch','session.git.branch_picker')
         this.branchSectionRow('session_tools_stashes',$r('sys.symbol.archivebox'),this.workspace.gitStashCount() ? String(this.workspace.gitStashCount()) : '','stashes','session.git.stashes')
       }
-    }.width('100%').backgroundColor(Colors.surface).borderRadius(this.gitMetric(26,26,Tokens.card)).clip(true).id('session.git.summary')
+    }.width('100%').backgroundColor(Colors.surface).borderRadius(this.gitMetric(26,26,Tokens.card)).clip(true)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: this.gitMetric(26,26,Tokens.card) })
+      .shadow(PhoneStyle.cardElevation(this.env.dark))
+      .id('session.git.summary')
   }
 
   @Builder pullRequestSection() {
@@ -1297,6 +1439,8 @@ export struct SessionTools {
         }
       }.width('100%').constraintSize({minHeight:this.gitMetric(68,81.3,62)}).padding({left:this.gitMetric(20,20,16),right:this.gitMetric(20,20,12),top:7,bottom:7})
         .backgroundColor(Colors.surface).borderRadius(this.gitMetric(26,26,Tokens.card))
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: this.gitMetric(26,26,Tokens.card) })
+        .shadow(PhoneStyle.cardElevation(this.env.dark))
     }.width('100%').alignItems(HorizontalAlign.Start).padding({top:this.gitMetric(17.7,17.7,21),bottom:0}).id('session.git.pr')
   }
 
@@ -1326,7 +1470,7 @@ export struct SessionTools {
           .backgroundColor(binding.value.staged ? Colors.positive : Color.Transparent)
       }.width(this.gitMetric(44,57.7,44)).height(this.gitMetric(44,57.7,44)).padding(0).backgroundColor(Color.Transparent)
         .accessibilityText(tr(binding.value.staged && !binding.value.unstaged ? 'session_tools_unstage' : 'session_tools_stage')+' '+binding.value.path)
-        .onClick(() => this.workspace.stageGitFile(binding.value,binding.value.staged && !binding.value.unstaged))
+        .onClick(() => { Haptics.selection(); this.workspace.stageGitFile(binding.value,binding.value.staged && !binding.value.unstaged); })
         .id('session.git.toggle.'+binding.value.path)
       Row({space:this.gitMetric(12,12,8)}) {
         this.gitStatusBadge(binding.value.mark,'session.git.change_badge.'+binding.value.path)
@@ -1340,7 +1484,7 @@ export struct SessionTools {
         else if (binding.value.added || binding.value.deleted) Row({space:4}) {
           this.lineCounts(binding.value.added,binding.value.deleted)
         }.flexShrink(0)
-      }.layoutWeight(1).constraintSize({minHeight:44}).onClick(() => this.openGitFile(binding.value,this.gitFilter==='all' ? undefined : this.gitFilter==='staged'))
+      }.layoutWeight(1).constraintSize({minHeight:44}).onClick(() => { Haptics.tap(); this.openGitFile(binding.value,this.gitFilter==='all' ? undefined : this.gitFilter==='staged'); })
         .bindContextMenu(this.gitFileMenu(binding),ResponseType.LongPress).id('session.git.'+binding.value.path)
     }.width('100%').constraintSize({minHeight:this.gitMetric(52,65.7,48)}).padding({left:4,right:16,top:2,bottom:2}).backgroundColor(Colors.surface)
   }
@@ -1541,7 +1685,9 @@ export struct SessionTools {
         .enabled(this.workspace.canWriteGit() && !!Wire.text(this.workspace.gitStatus,'branch') && this.filterCount('staged') > 0)
         .backgroundColor(Color.Transparent).onClick(() => this.openGitSheet('commit')).id('session.git.commit.new')
     }.width('100%').padding({left:4,right:12,top:4,bottom:4}).backgroundColor(Colors.surface)
-      .border({width:0.5,color:Colors.divider,radius:26}).borderRadius(26).id('session.git.staged_summary')
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:this.cardRim(),radius:26}).borderRadius(26)
+      .shadow(PhoneStyle.cardElevation(this.env.dark))
+      .id('session.git.staged_summary')
   }
 
   @Builder gitView() {
@@ -1566,11 +1712,14 @@ export struct SessionTools {
               },(binding:BoundRow<WorkspaceGitFile>) => binding.key)
             }.divider({strokeWidth:Tokens.divider,startMargin:this.gitMetric(52,65,48),endMargin:16,color:Colors.divider})
               .backgroundColor(Colors.surface).borderRadius(this.gitMetric(26,26,Tokens.card)).clip(true)
+              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: this.gitMetric(26,26,Tokens.card) })
+              .shadow(PhoneStyle.cardElevation(this.env.dark))
             if (!this.visibleGitRows.length) ListItem() {
               Row({space:7}) {
                 SymbolGlyph(this.workspace.gitFiles.length ? Symbols.filter : Symbols.check).fontSize('16vp').fontColor([this.workspace.gitFiles.length ? Colors.secondary : Colors.positive])
                 Text(tr(!this.workspace.gitFiles.length ? 'session_tools_clean' : 'no_results')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary)
-              }.width('100%').padding(14).borderRadius(12).backgroundColor(Colors.surface)
+              }.width('100%').padding(14).borderRadius(14).backgroundColor(Colors.surface)
+                .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 14 })
             }
           }
           if (this.workspace.gitCommits.length) ListItem() {
@@ -1583,6 +1732,8 @@ export struct SessionTools {
             },(commit:Record<string,Object>) => Wire.text(commit,'hash')+'|'+Wire.text(commit,'refs'))
           }.divider({strokeWidth:Tokens.divider,startMargin:14,endMargin:12,color:Colors.divider})
             .backgroundColor(Colors.surface).borderRadius(this.gitMetric(26,26,Tokens.card)).clip(true)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: this.gitMetric(26,26,Tokens.card) })
+            .shadow(PhoneStyle.cardElevation(this.env.dark))
           if (this.workspace.gitMoreCommits) ListItem() {
             Button(tr(this.workspace.gitHistoryError ? 'retry' : 'session_git_earlier'),{buttonStyle:ButtonStyleMode.TEXTUAL})
               .height(44).width('100%').fontColor(Colors.link).enabled(!this.workspace.gitHistoryBusy)
@@ -1590,9 +1741,9 @@ export struct SessionTools {
           }
           if (this.workspace.gitHistoryBusy) ListItem() { LoadingProgress().width(25).height(25) }
           if (this.workspace.gitHistoryError) ListItem() { Text(tr('session_git_history_error')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.danger).padding(9) }
-        }.width('100%').layoutWeight(1).padding({left:PhoneStyle.page,right:PhoneStyle.page,top:this.phoneSheetHeight !== SheetSize.LARGE ? 35 : (nativeEnvironment.fontScale>=1.5 ? 10 : 27),bottom:12})
+        }.width('100%').layoutWeight(1).padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding(),top:this.phoneSheetHeight !== SheetSize.LARGE ? 35 : this.paneTopPadding(nativeEnvironment.fontScale>=1.5 ? 10 : 27),bottom:12})
         if (this.workspace.gitFiles.length > 0 && this.workspace.canWriteGit()) Row() { this.stagedCommitBar() }
-          .width('100%').padding({left:PhoneStyle.page,right:PhoneStyle.page,top:2,bottom:this.gitMetric(14,14,8)})
+          .width('100%').padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding(),top:2,bottom:this.gitMetric(14,14,8)})
       } else if (Object.keys(this.workspace.gitStatus).length) {
         Column({space:6}) {
           Text(tr('session_tools_not_repository')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
@@ -1643,28 +1794,98 @@ export struct SessionTools {
     const target=this.workspace.currentTarget(), revision=this.workspace.currentRevision();
     try {
       await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN,value));
+      Haptics.success();
+      toastCenter.success(tr('done'));
     } catch (_) {
+      Haptics.error();
       if (this.workspace.isCurrent() && this.workspace.currentTarget()===target && this.workspace.currentRevision()===revision)
         this.getUIContext().getPromptAction().showToast({message:tr('failed')});
     }
   }
+  @Builder diffSummaryBar(patch: string) {
+    Row({ space: 8 }) {
+      if (summarizeUnifiedDiff(patch).hunks > 0) {
+        Text('@@ ' + String(summarizeUnifiedDiff(patch).hunks))
+          .fontSize(12)
+          .maxFontScale(Tokens.interfaceScaleFor(12))
+          .fontFamily('monospace')
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Colors.secondary)
+          .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+          .backgroundColor(Colors.codeHunk)
+          .borderRadius(7)
+      }
+      Row({ space: 5 }) {
+        if (summarizeUnifiedDiff(patch).additions > 0) {
+          Text('+' + String(summarizeUnifiedDiff(patch).additions))
+            .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontFamily('monospace').fontWeight(FontWeight.Bold)
+            .fontColor(Colors.diffAdded).padding({ left: 6, right: 6, top: 3, bottom: 3 })
+            .backgroundColor(Colors.codeAddedFill).borderRadius(7)
+        }
+        if (summarizeUnifiedDiff(patch).deletions > 0) {
+          Text('−' + String(summarizeUnifiedDiff(patch).deletions))
+            .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontFamily('monospace').fontWeight(FontWeight.Bold)
+            .fontColor(Colors.diffRemoved).padding({ left: 6, right: 6, top: 3, bottom: 3 })
+            .backgroundColor(Colors.codeRemovedFill).borderRadius(7)
+        }
+      }
+      Blank().layoutWeight(1)
+      Button({ type: ButtonType.Capsule }) {
+        Row({ space: 4 }) {
+          SymbolGlyph(IconActions.symbol('copy')).fontSize('12vp').fontColor([Colors.secondary])
+          Text(tr('copy')).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+        }
+      }
+        .height(28).padding({ left: 10, right: 10 })
+        .backgroundColor(Colors.control)
+        .border({ width: 0.5, color: this.cardRim(), radius: 14 })
+        .onClick(() => this.copyText(patch))
+        .id('session.git.diff.copy_pill')
+    }
+      .width('100%')
+      .padding({ left: 12, right: 10, top: 8, bottom: 8 })
+      .backgroundColor(Colors.surface)
+      .borderRadius(Tokens.radiusCard)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
+      .alignItems(VerticalAlign.Center)
+  }
   @Builder diffViewer() {
-    Column({space:7}) {
+    Column({space:8}) {
       if (this.gitDiffHasBoth()) Row({space:3}) {
         ForEach(['session_tools_unstaged','session_tools_staged'],(key:string,i:number) => {
-          Button(tr(key),{type:ButtonType.Normal}).layoutWeight(1).height(44).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).padding(0)
+          Button(tr(key),{type:ButtonType.Normal}).layoutWeight(1).height(40).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).fontWeight(FontWeight.Medium).padding(0)
             .fontColor(this.workspace.gitDiffStaged===(i===1) ? Colors.ink : Colors.secondary)
-            .backgroundColor(this.workspace.gitDiffStaged===(i===1) ? Colors.surface : Color.Transparent).borderRadius(8)
-            .onClick(() => { if (this.workspace.gitDiffStaged!==(i===1)) { this.workspace.gitDiffStaged=i===1; this.workspace.loadGitDiff(); } })
+            .backgroundColor(this.workspace.gitDiffStaged===(i===1) ? Colors.surface : Color.Transparent).borderRadius(Tokens.radiusControl - 1)
+            .shadow(this.workspace.gitDiffStaged===(i===1) ? PhoneStyle.surfaceShadow({ radius: 4, color: Colors.hairlineGlass, offsetY: 1 }) : { radius: 0, color: Color.Transparent })
+            .onClick(() => { if (this.workspace.gitDiffStaged!==(i===1)) { Haptics.selection(); this.workspace.gitDiffStaged=i===1; this.workspace.loadGitDiff(); } })
             .id(i ? 'session.git.diff.staged' : 'session.git.diff.unstaged')
         },(key:string) => key)
-      }.width('100%').padding(3).borderRadius(10).backgroundColor(Colors.control)
+      }.width('100%').padding(3).borderRadius(Tokens.radiusControl).backgroundColor(Colors.control)
+        .border({ width: 0.5, color: this.cardRim(), radius: Tokens.radiusControl })
+        .margin({ left: this.phoneGitReader ? 12 : 0, right: this.phoneGitReader ? 12 : 0 })
       if (this.workspace.gitDiffError) Row() {
         Text(trError(this.workspace.gitDiffError)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.danger).layoutWeight(1)
-        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(() => this.workspace.loadGitDiff())
+        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).onClick(() => { Haptics.tap(); this.workspace.loadGitDiff(); })
       }.width('100%')
       if (this.workspace.gitDiffBusy) LoadingProgress().height(28).width(28)
-      else if (this.workspace.gitDiff) WorkspacePatch({patch:this.workspace.gitDiff, fileOnly:true, compact:this.phoneGitReader}).layoutWeight(1)
+      else if (this.workspace.gitDiff) {
+        Column({ space: 8 }) {
+          this.diffSummaryBar(this.workspace.gitDiff)
+          Column() {
+            WorkspacePatch({patch:this.workspace.gitDiff, fileOnly:true, compact:this.phoneGitReader})
+          }
+            .width('100%')
+            .layoutWeight(1)
+            .backgroundColor(Colors.codeCanvas)
+            .borderRadius(14)
+            .clip(true)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 14 })
+            .shadow(PhoneStyle.cardElevation(this.env.dark))
+        }
+          .width('100%')
+          .layoutWeight(1)
+          .padding({ left: this.phoneGitReader ? 10 : 0, right: this.phoneGitReader ? 10 : 0 })
+      }
       else if (!this.workspace.gitDiffError) Text(tr('session_tools_no_diff')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary)
       if (this.workspace.gitDiffTruncated) Text(tr('session_tools_truncated')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
     }.padding({bottom:8}).width('100%').height('100%').alignItems(HorizontalAlign.Start)
@@ -1718,8 +1939,14 @@ export struct SessionTools {
   }
 
   @Builder lineCounts(added:number,deleted:number) {
-    Text('+'+added).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.diffAdded)
-    Text('−'+deleted).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.diffRemoved)
+    if (added > 0) {
+      Text('+'+added).fontSize(11.5).maxFontScale(Tokens.interfaceScaleFor(11.5)).fontFamily('monospace').fontWeight(FontWeight.Medium)
+        .fontColor(Colors.diffAdded).padding({left:5,right:5,top:2,bottom:2}).backgroundColor(Colors.codeAddedFill).borderRadius(6)
+    }
+    if (deleted > 0) {
+      Text('−'+deleted).fontSize(11.5).maxFontScale(Tokens.interfaceScaleFor(11.5)).fontFamily('monospace').fontWeight(FontWeight.Medium)
+        .fontColor(Colors.diffRemoved).padding({left:5,right:5,top:2,bottom:2}).backgroundColor(Colors.codeRemovedFill).borderRadius(6)
+    }
   }
 
   @Builder commitFile(file: Record<string,Object>) {
@@ -1753,7 +1980,24 @@ export struct SessionTools {
         if (this.commitFilePath || this.showCommitPatch) {
           if (this.commitFilePath && !this.selectedCommitPatch) {
             Text(tr(Wire.bool(this.workspace.gitShow,'truncated') ? 'session_tools_truncated' : 'session_tools_no_diff')).fontColor(Colors.secondary)
-          } else WorkspacePatch({patch:this.commitFilePath ? this.selectedCommitPatch : Wire.text(this.workspace.gitShow,'diff'), fileOnly:!!this.commitFilePath, compact:this.phoneGitReader}).layoutWeight(1)
+          } else {
+            Column({ space: 8 }) {
+              this.diffSummaryBar(this.commitFilePath ? this.selectedCommitPatch : Wire.text(this.workspace.gitShow,'diff'))
+              Column() {
+                WorkspacePatch({patch:this.commitFilePath ? this.selectedCommitPatch : Wire.text(this.workspace.gitShow,'diff'), fileOnly:!!this.commitFilePath, compact:this.phoneGitReader})
+              }
+                .width('100%')
+                .layoutWeight(1)
+                .backgroundColor(Colors.codeCanvas)
+                .borderRadius(14)
+                .clip(true)
+                .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: 14 })
+                .shadow(PhoneStyle.cardElevation(this.env.dark))
+            }
+              .width('100%')
+              .layoutWeight(1)
+              .padding({ left: this.phoneGitReader ? 10 : 0, right: this.phoneGitReader ? 10 : 0 })
+          }
         } else {
           List({space:0}) {
             ListItem() { this.commitInfo(Wire.object(this.workspace.gitShow,'commit')) }
@@ -1777,65 +2021,172 @@ export struct SessionTools {
     }.width('100%').height('100%').padding(this.patchSubpage() ? 0 : {left:PhoneStyle.page,right:PhoneStyle.page,top:this.phoneGitReader ? 35 : PhoneStyle.page,bottom:PhoneStyle.page})
       .alignItems(HorizontalAlign.Start).id('session.git.commit_details')
   }
+  @Builder terminalKeyButton(label: string, keyId: string, danger: boolean, onTap: () => void) {
+    Button(label, { type: ButtonType.Normal })
+      .height(36)
+      .padding({ left: 12, right: 12 })
+      .fontSize(13)
+      .maxFontScale(Tokens.interfaceScaleFor(13))
+      .fontFamily('monospace')
+      .fontWeight(FontWeight.Medium)
+      .fontColor(danger ? Colors.danger : Colors.ink)
+      .backgroundColor(danger ? Colors.dangerWash : Colors.surface)
+      .borderRadius(Tokens.radiusControl)
+      .border({
+        width: PhoneStyle.surfaceEdgeWidth(0.5),
+        color: danger ? Colors.danger : PhoneStyle.cardBorder(this.env.dark),
+        radius: Tokens.radiusControl
+      })
+      .shadow(PhoneStyle.cardElevation(this.env.dark))
+      .scale({
+        x: this.pressedTerminalKey === keyId ? MotionTokens.pressScale : 1,
+        y: this.pressedTerminalKey === keyId ? MotionTokens.pressScale : 1
+      })
+      .animation(Motion.release(this.env.reduceMotion))
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) this.pressedTerminalKey = keyId;
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          if (this.pressedTerminalKey === keyId) this.pressedTerminalKey = '';
+        }
+      })
+      .onClick(() => { Haptics.tap(); onTap(); })
+  }
   @Builder terminalView() {
-    Column({ space: Tokens.gap }) {
+    Column({ space: 10 }) {
       Row({ space: Tokens.gap }) {
-        Text(tr('terminal')).fontSize(Tokens.title).layoutWeight(1)
-        if (this.workspace.terminalControlState === 'active') Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('release')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('release', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('release')).bindTips(tr('release')).onClick(() => this.workspace.setTerminalControl(false))
+        Column({ space: 3 }) {
+          Row({ space: 7 }) {
+            Circle()
+              .width(8)
+              .height(8)
+              .fill(this.workspace.terminalControlState === 'active'
+                ? Colors.positive
+                : this.workspace.terminalControlState === 'busy' || this.workspace.terminalControlState === 'starting'
+                  ? Colors.workingMark
+                  : Colors.secondary)
+              .accessibilityLevel('no')
+            Text(tr('terminal')).fontSize(Tokens.title).maxFontScale(Tokens.interfaceScaleFor(Tokens.title)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+          }
+          Text(this.controlDescription()).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+        if (this.workspace.terminalControlState === 'active') Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('release')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('release', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('release')).bindTips(tr('release')).onClick(() => { Haptics.tap(); this.workspace.setTerminalControl(false); })
         else if (this.workspace.terminalControlState === 'busy') Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('takeover')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('takeover', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('takeover')).bindTips(tr('takeover')).enabled(this.workspace.canControlTerminal())
-          .onClick(() => this.confirmTerminalControl(true))
-        else Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('control')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('control', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('control')).bindTips(tr('control')).enabled(this.workspace.canControlTerminal()).onClick(() => this.confirmTerminalControl())
-      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
-      Text(this.controlDescription()).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).padding({ left: Tokens.page, right: Tokens.page })
-      if (this.workspace.terminalError) Text(trError(this.workspace.terminalError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+          .onClick(() => { Haptics.tap(); this.confirmTerminalControl(true); })
+        else Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('control')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('control', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('control')).bindTips(tr('control')).enabled(this.workspace.canControlTerminal()).onClick(() => { Haptics.tap(); this.confirmTerminalControl(); })
+      }
+        .width('100%')
+        .padding({ left: 14, right: 10, top: 10, bottom: 10 })
+        .backgroundColor(Colors.surface)
+        .borderRadius(Tokens.radiusCard)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
+        .shadow(PhoneStyle.cardElevation(this.env.dark))
+      if (this.workspace.terminalError) Text(trError(this.workspace.terminalError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: 4, right: 4 })
       Scroll() {
         Text(this.workspace.terminalText || tr('session_tools_terminal_waiting'))
-          .fontFamily('monospace').fontSize(Tokens.meta).width('100%').textAlign(TextAlign.Start).copyOption(CopyOptions.LocalDevice)
-      }.layoutWeight(1).width('100%').onAreaChange((oldArea: Area, newArea: Area) => this.measureTerminal(newArea))
-      if (this.workspace.terminalControlState === 'active') {
-        TextArea({ text: this.terminalInput, placeholder: tr('session_tools_terminal_input') })
-          .height(Tokens.inputExpanded / 2).onChange((value: string) => this.terminalInput = value)
-        Row({ space: Tokens.gap }) {
-          Button('Esc').onClick(() => this.workspace.sendTerminalKey('escape'))
-          Button('Tab').onClick(() => this.workspace.sendTerminalKey('tab'))
-          Button('↑').onClick(() => this.workspace.sendTerminalKey('up'))
-          Button('↓').onClick(() => this.workspace.sendTerminalKey('down'))
-          Button('Ctrl-C').onClick(() => this.workspace.sendTerminalKey('ctrl_c'))
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('send')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('send', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('send')).bindTips(tr('send')).onClick(() => this.sendTerminalInput())
-        }.padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
+          .fontFamily('monospace').fontSize(12.5).lineHeight('19fp').fontColor(Colors.ink).width('100%').textAlign(TextAlign.Start).copyOption(CopyOptions.LocalDevice).padding(12)
       }
-    }.width('100%').height('100%')
+        .layoutWeight(1)
+        .width('100%')
+        .align(Alignment.TopStart)
+        .backgroundColor(Colors.codeCanvas)
+        .borderRadius(Tokens.radiusCard)
+        .clip(true)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
+        .shadow(PhoneStyle.cardElevation(this.env.dark))
+        .onAreaChange((_oldArea: Area, newArea: Area) => this.measureTerminal(newArea))
+      if (this.workspace.terminalControlState === 'active') {
+        Column({ space: 8 }) {
+          Row({ space: 8 }) {
+            TextArea({ text: this.terminalInput, placeholder: tr('session_tools_terminal_input') })
+              .layoutWeight(1).constraintSize({ minHeight: 42, maxHeight: 84 }).backgroundColor(Color.Transparent)
+              .fontSize(14).fontColor(Colors.ink).placeholderColor(Colors.secondary)
+              .onChange((value: string) => this.terminalInput = value)
+            Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('send')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('send', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('send')).bindTips(tr('send')).onClick(() => { Haptics.tap(); this.sendTerminalInput(); })
+          }
+            .width('100%')
+            .padding({ left: 10, right: 6, top: 4, bottom: 4 })
+            .backgroundColor(Colors.surface)
+            .borderRadius(20)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: 20 })
+          Scroll() {
+            Row({ space: 8 }) {
+              this.terminalKeyButton('Esc', 'term.esc', false, () => this.workspace.sendTerminalKey('escape'))
+              this.terminalKeyButton('Tab', 'term.tab', false, () => this.workspace.sendTerminalKey('tab'))
+              this.terminalKeyButton('↑', 'term.up', false, () => this.workspace.sendTerminalKey('up'))
+              this.terminalKeyButton('↓', 'term.down', false, () => this.workspace.sendTerminalKey('down'))
+              this.terminalKeyButton('Ctrl-C', 'term.ctrlc', true, () => this.workspace.sendTerminalKey('ctrl_c'))
+            }.padding({ top: 1, bottom: 2 })
+          }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').align(Alignment.Start)
+        }.width('100%')
+      }
+    }.width('100%').height('100%').padding({ left: this.paneHorizontalPadding(), right: this.paneHorizontalPadding(), top: this.paneTopPadding(10), bottom: 12 }).backgroundColor(Colors.grouped)
   }
 
   @Builder terminalScreenView() {
-    Column({ space: Tokens.gap }) {
+    Column({ space: 10 }) {
       Row({ space: Tokens.gap }) {
-        Text(tr('session_tools_terminal_screen')).fontSize(Tokens.title).layoutWeight(1)
-        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => this.workspace.refreshScreen())
-        if (this.workspace.screenControlRequested) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('release')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('release', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('release')).bindTips(tr('release')).onClick(() => this.workspace.revokeScreenControl())
-        else Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('control')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('control', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('control')).bindTips(tr('control')).enabled(this.workspace.canControlScreen()).onClick(() => this.confirmScreenControl())
-      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
-      Text(tr(this.workspace.screenControlRequested ? 'session_tools_terminal_screen_control_active' : 'session_tools_terminal_screen_view_only'))
-        .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).padding({ left: Tokens.page, right: Tokens.page })
-      if (this.workspace.screenError) Text(trError(this.workspace.screenError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
-      if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
+        Column({ space: 3 }) {
+          Row({ space: 7 }) {
+            Circle()
+              .width(8)
+              .height(8)
+              .fill(this.workspace.screenControlRequested ? Colors.positive : Colors.secondary)
+              .accessibilityLevel('no')
+            Text(tr('session_tools_terminal_screen')).fontSize(Tokens.title).maxFontScale(Tokens.interfaceScaleFor(Tokens.title)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+          }
+          Text(tr(this.workspace.screenControlRequested ? 'session_tools_terminal_screen_control_active' : 'session_tools_terminal_screen_view_only'))
+            .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => { Haptics.tap(); this.workspace.refreshScreen(); })
+        if (this.workspace.screenControlRequested) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('release')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('release', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('release')).bindTips(tr('release')).onClick(() => { Haptics.tap(); this.workspace.revokeScreenControl(); })
+        else Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('control')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('control', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('control')).bindTips(tr('control')).enabled(this.workspace.canControlScreen()).onClick(() => { Haptics.tap(); this.confirmScreenControl(); })
+      }
+        .width('100%')
+        .padding({ left: 14, right: 10, top: 10, bottom: 10 })
+        .backgroundColor(Colors.surface)
+        .borderRadius(Tokens.radiusCard)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
+        .shadow(PhoneStyle.cardElevation(this.env.dark))
+      if (this.workspace.screenError) Text(trError(this.workspace.screenError)).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: 4, right: 4 })
+      if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).fontColor($r('app.color.persona_danger')).padding({ left: 4, right: 4 })
       Scroll() {
         Text(this.workspace.screenText || tr('session_tools_terminal_waiting'))
-          .fontFamily('monospace').fontSize(Tokens.meta).width('100%').textAlign(TextAlign.Start).copyOption(CopyOptions.LocalDevice)
-      }.layoutWeight(1).width('100%')
-      if (this.workspace.screenControlRequested) {
-        TextInput({ text: this.screenInput, placeholder: tr('session_tools_terminal_screen_input') })
-          .height(Tokens.touch).onChange((value: string) => this.screenInput = value)
-        Row({ space: Tokens.gap }) {
-          Button('Esc').onClick(() => this.sendTerminalScreenKey('esc'))
-          Button('Tab').onClick(() => this.sendTerminalScreenKey('tab'))
-          Button('↑').onClick(() => this.sendTerminalScreenKey('up'))
-          Button('↓').onClick(() => this.sendTerminalScreenKey('down'))
-          Button('Ctrl-C').onClick(() => this.sendTerminalScreenKey('ctrl+c'))
-          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('send')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('send', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('send')).bindTips(tr('send')).onClick(() => this.sendTerminalScreenText())
-        }.padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
+          .fontFamily('monospace').fontSize(12.5).lineHeight('19fp').fontColor(Colors.ink).width('100%').textAlign(TextAlign.Start).copyOption(CopyOptions.LocalDevice).padding(12)
       }
-    }.width('100%').height('100%')
+        .layoutWeight(1)
+        .width('100%')
+        .align(Alignment.TopStart)
+        .backgroundColor(Colors.codeCanvas)
+        .borderRadius(Tokens.radiusCard)
+        .clip(true)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.cardRim(), radius: Tokens.radiusCard })
+        .shadow(PhoneStyle.cardElevation(this.env.dark))
+      if (this.workspace.screenControlRequested) {
+        Column({ space: 8 }) {
+          Row({ space: 8 }) {
+            TextInput({ text: this.screenInput, placeholder: tr('session_tools_terminal_screen_input') })
+              .layoutWeight(1).height(42).backgroundColor(Color.Transparent)
+              .fontSize(14).fontColor(Colors.ink).placeholderColor(Colors.secondary)
+              .onChange((value: string) => this.screenInput = value)
+            Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('send')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('send', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('send')).bindTips(tr('send')).onClick(() => { Haptics.tap(); this.sendTerminalScreenText(); })
+          }
+            .width('100%')
+            .padding({ left: 10, right: 6, top: 4, bottom: 4 })
+            .backgroundColor(Colors.surface)
+            .borderRadius(20)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: 20 })
+          Scroll() {
+            Row({ space: 8 }) {
+              this.terminalKeyButton('Esc', 'scr.esc', false, () => this.sendTerminalScreenKey('esc'))
+              this.terminalKeyButton('Tab', 'scr.tab', false, () => this.sendTerminalScreenKey('tab'))
+              this.terminalKeyButton('↑', 'scr.up', false, () => this.sendTerminalScreenKey('up'))
+              this.terminalKeyButton('↓', 'scr.down', false, () => this.sendTerminalScreenKey('down'))
+              this.terminalKeyButton('Ctrl-C', 'scr.ctrlc', true, () => this.sendTerminalScreenKey('ctrl+c'))
+            }.padding({ top: 1, bottom: 2 })
+          }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').align(Alignment.Start)
+        }.width('100%')
+      }
+    }.width('100%').height('100%').padding({ left: this.paneHorizontalPadding(), right: this.paneHorizontalPadding(), top: this.paneTopPadding(10), bottom: 12 }).backgroundColor(Colors.grouped)
   }
 
   @Builder previewServerRow(binding: BoundRow<WorkspacePreviewServer>) {
@@ -1866,7 +2217,7 @@ export struct SessionTools {
           Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.expand).fontSize(Tokens.symbolFont).fontColor([IconActions.color('session_tools_forward', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('session_tools_forward')).bindTips(tr('session_tools_forward')).onClick(() => this.previewAction('forward'))
           Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => this.previewAction('reload'))
         }
-      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
+      }.padding({ left: this.paneHorizontalPadding(), right: this.paneHorizontalPadding(), top: this.paneTopPadding(Tokens.inset), bottom: Tokens.gap })
       if (this.workspace.previewError) Text(trError(this.workspace.previewError)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.workspace.previewState === 'starting' || this.workspace.previewState === 'opening' || this.workspace.previewState === 'connecting') LoadingProgress()
@@ -1993,6 +2344,7 @@ export struct SessionTools {
   }
 
   @Monitor('workspace.tab') workspacePageChanged(): void {
+    Haptics.selection();
     if (this.workspace.tab === 0 && this.fileQuery.trim()) this.workspace.loadFileIndex();
     this.pathDraft = this.workspace.currentPath;
   }
@@ -2005,5 +2357,11 @@ export struct SessionTools {
       else if (this.workspace.tab === 3) this.terminalScreenView()
       else this.previewView()
     }.width('100%').height('100%')
+      .onAreaChange((_old: Area, area: Area) => {
+        const width = Number(area.width);
+        if (Number.isFinite(width) && width > 0 && Math.abs(width - this.paneWidth) > 1) {
+          this.paneWidth = width;
+        }
+      })
   }
 }

@@ -32,8 +32,20 @@ func (t SecretStoreTarget) Validate() error {
 	seen := map[string]bool{}
 	for _, f := range t.Fields {
 		k := strings.ToLower(f.Name)
-		if !storeFieldName.MatchString(f.Name) || strings.TrimSpace(f.Name) != f.Name || seen[k] || (f.Type != "STRING" && f.Type != "CONCEALED") {
+		if !storeFieldName.MatchString(f.Name) || strings.TrimSpace(f.Name) != f.Name || seen[k] {
 			return bad
+		}
+		if f.Delete {
+			if t.Operation != "edit" || f.Type != "" || f.KeepValue {
+				return bad
+			}
+		} else {
+			if f.KeepValue && t.Operation != "edit" {
+				return bad
+			}
+			if f.Type != "STRING" && f.Type != "CONCEALED" && f.Type != "OTP" {
+				return bad
+			}
 		}
 		seen[k] = true
 	}

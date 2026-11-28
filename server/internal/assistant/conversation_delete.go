@@ -318,12 +318,12 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 			c = row
 		}
 	}
-	queued, readable := s.queuedRelays()
+	waiting, readable := s.relayWaitingFor(id)
 	if !readable {
 		return i18n.Err("assistant-conversation_delete.queue_unavailable")
 	}
 	if c.Starting || c.Status == proto.StatusWorking || c.Status == proto.StatusBlocked || c.PendingInteractions > 0 || backgroundRunning(c) ||
-		(c.Compaction != nil && c.Compaction.State == proto.CompactionRunning) || len(c.Queued) > 0 || len(queued[id]) > 0 {
+		(c.Compaction != nil && c.Compaction.State == proto.CompactionRunning) || len(c.Queued) > 0 || waiting {
 		return &rpc.Error{Code: "conversation_busy", Message: i18n.T(s.lang(ctx), "assistant-conversation_delete.busy")}
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {

@@ -712,7 +712,7 @@ private final class Collected<Element: Sendable>: Sendable {
         let client = hub.client
         // Every hook into the app is a no-op: the upload's defaults reach the app's shared syncs.
         upload = RecordingDaySync(store: store, library: library, api: { client }, features: { [RecordingDayContract.feature] },
-                                  now: { clock.now }, days: { 14 }, appState: RecordingDayForeground(),
+                                  now: { clock.now }, audioDays: { 14 }, appState: RecordingDayForeground(),
                                   noteParts: { _, _ in }, removed: { _ in }, removeEverywhere: { _ in }, recapFinal: {},
                                   debounce: .zero)
         self.library = library

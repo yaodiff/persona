@@ -2,7 +2,11 @@ package assistant
 
 import (
 	"context"
+	"debug/buildinfo"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/devices"
@@ -12,7 +16,7 @@ import (
 )
 
 // Only the independent assistant uses this loop. The Hub restarts its own child.
-func followDevelopment(ctx context.Context, dir string, build update.Build, d *devices.Devices, idle Idle, logf func(string, ...any)) *managerupdate.DevelopmentImage {
+func followDevelopment(ctx context.Context, dir, hostDataDir string, build update.Build, d *devices.Devices, idle Idle, logf func(string, ...any)) *managerupdate.DevelopmentImage {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" || build.Channel == update.Docker {
 		return nil
 	}
@@ -21,9 +25,20 @@ func followDevelopment(ctx context.Context, dir string, build update.Build, d *d
 	var lastError string
 	var ready bool
 	for {
-		t := d.DevelopmentTarget()
+		t, _ := d.ManagerBuild()
 		if t != nil && (t.Version != build.Version || t.Commit != build.Commit || t.Build != build.Number) {
-			image, err := prepareDevelopmentManager(ctx, dir, *t, d, idle)
+			// The service's own watcher handles an installed replacement. A
+			// manager with its own executable can also follow a co-located
+			// node that just received this exact build on Redeploy.
+			exe, _ := os.Executable()
+			exe = strings.TrimSuffix(exe, " (deleted)")
+			eligible := func(automatic bool) bool {
+				if managerProgramAt(ctx, exe, *t, "personad", "persona-manager") {
+					return false
+				}
+				return automatic || nodeInstalledAt(ctx, hostDataDir, *t)
+			}
+			image, err := prepareDevelopmentManager(ctx, dir, *t, d, idle, eligible)
 			if err != nil && err.Error() != lastError {
 				lastError = err.Error()
 				logf("development manager update: %v", err)
@@ -46,21 +61,29 @@ func followDevelopment(ctx context.Context, dir string, build update.Build, d *d
 	}
 }
 
-func prepareDevelopmentManager(ctx context.Context, dir string, t devicewire.DevelopmentTarget, d *devices.Devices, idle Idle) (*managerupdate.DevelopmentImage, error) {
+func prepareDevelopmentManager(ctx context.Context, dir string, t devicewire.DevelopmentTarget, d *devices.Devices, idle Idle, local ...func(bool) bool) (*managerupdate.DevelopmentImage, error) {
 	tried, err := managerupdate.DevelopmentTried(dir, t)
 	if err != nil || tried {
 		return nil, err
 	}
-	canStop := func() bool {
-		current := d.DevelopmentTarget()
+	allowed := func() bool {
+		current, automatic := d.ManagerBuild()
 		if current == nil || *current != t || !d.DevelopmentIdle() {
+			return false
+		}
+		if len(local) > 0 {
+			return local[0](automatic)
+		}
+		return automatic
+	}
+	canStop := func() bool {
+		if !allowed() {
 			return false
 		}
 		check, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		ok, _ := idle(check)
-		current = d.DevelopmentTarget()
-		return ok && current != nil && *current == t && d.DevelopmentIdle()
+		return ok && allowed()
 	}
 	if !canStop() {
 		return nil, nil
@@ -80,4 +103,29 @@ func prepareDevelopmentManager(ctx context.Context, dir string, t devicewire.Dev
 		return nil, err
 	}
 	return image, nil
+}
+
+func nodeInstalledAt(ctx context.Context, root string, t devicewire.DevelopmentTarget) bool {
+	if root == "" {
+		return false
+	}
+	for _, name := range []string{"persona-node", "personad"} {
+		if managerProgramAt(ctx, filepath.Join(root, "bin", name), t, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func managerProgramAt(ctx context.Context, path string, t devicewire.DevelopmentTarget, programs ...string) bool {
+	info, err := buildinfo.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, program := range programs {
+		if info.Path == "github.com/nwverse/persona/server/cmd/"+program {
+			return update.CheckBinary(ctx, path, &update.Manifest{Version: t.Version, Build: t.Build}) == nil
+		}
+	}
+	return false
 }

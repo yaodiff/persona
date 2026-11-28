@@ -5,6 +5,7 @@
 // as iOS (PendingMessage.arrived / same) and Android (MessageEcho).
 
 import type { Item } from "./types";
+import { timeOrNaN } from "./times";
 
 /** The computer's clock may be behind this one by this much. */
 export const CLOCK_SLACK_MS = 120_000;
@@ -74,7 +75,7 @@ export interface Seen {
 export function isEcho(sent: Sent, user: Seen): boolean {
   if (user.client_msg_id && sent.id) return user.client_msg_id === sent.id;
   if (user.source || user.injected || user.from) return false;
-  const at = user.ts ? Date.parse(user.ts) : NaN;
+  const at = timeOrNaN(user.ts);
   if (!Number.isNaN(at) && at < sent.at - (sent.inDoubt ? 5_000 : CLOCK_SLACK_MS)) return false;
   if (user.images.length + (user.photos?.length ?? 0) < sent.images.length) return false;
   const cut = user.text.lastIndexOf(CUT_MARK);

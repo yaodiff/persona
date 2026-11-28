@@ -1,5 +1,5 @@
 {
   "effort": "思考 {effort}",
   "not_configured": "未配置",
-  "runtime_fallback": "已退回 CLI：{reason}"
+  "runtime_fallback": "已回退至 CLI：{reason}"
 }

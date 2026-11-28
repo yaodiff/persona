@@ -60,6 +60,11 @@ data class CountsViewCounts(
      * The to-dos that need the owner, N of the To-dos list (docs/protocol/counts.md, "todos_needs_you").
      */
     @SerialName("todos_needs_you") val todosNeedsYou: CountsViewCount? = null,
+    /**
+     * Pending owner cards on Persona conversations and quiet tasks' agents, one per card (docs/protocol/counts.md,
+     * "persona_cards").
+     */
+    @SerialName("persona_cards") val personaCards: CountsViewCount? = null,
 )
 
 /**
@@ -76,6 +81,10 @@ data class CountsViewTotals(
      * counts.todos_needs_you.n.
      */
     @SerialName("todos_needs_you") val todosNeedsYou: Int? = null,
+    /**
+     * counts.persona_cards.n.
+     */
+    @SerialName("persona_cards") val personaCards: Int? = null,
 )
 
 /**
@@ -108,8 +117,8 @@ data class CountsViewCount(
 data class CountsRow(
     val id: CountsRowKey = CountsRowKey(""),
     /**
-     * The row's pending cards, oldest first: a card on no session is its own one card. Absent for a session that
-     * waits in its terminal with no card.
+     * The row's pending cards, oldest first: a card row lists that one card. Absent for a session that waits in its
+     * terminal with no card.
      */
     val cards: List<CountsCardID>? = null,
 )
@@ -125,7 +134,7 @@ data class CountsHeldRow(
 
 /**
  * A row as the shared fixtures key it: agent:<machine>/<session> for a session (its children's and sides' cards under
- * it), card:<interaction id> for a card on no session. It encodes as the bare string.
+ * it), card:<interaction id> for a card counted on its own. It encodes as the bare string.
  */
 @Serializable
 @JvmInline

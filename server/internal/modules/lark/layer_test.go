@@ -31,6 +31,14 @@ func (h *outboundHost) UpdateCard(_ context.Context, messageID string, card *bot
 	return nil
 }
 
+func (h *outboundHost) StartGroupGuest(context.Context, string, string, string, []string) (string, string, error) {
+	return "", "", nil
+}
+
+func (h *outboundHost) SendGroupGuest(context.Context, string, string, string, string) error {
+	return nil
+}
+
 // The layer's outbound port hands each send to the core's host unchanged and gives back what it answers; the bot's
 // status and switches are the chat's own, read from the hub (a to-do's topic lines are the module's own too,
 // thread_posts_test.go).

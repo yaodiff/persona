@@ -15,15 +15,16 @@ import (
 // (docs/protocol/counts.md, #15512).
 const viewSamples = "../../../../../spec/fixtures/counts/view_samples.json"
 
-// Each view sample that names a needs-you case holds, as its counts and totals, what View writes of fleetcount's
-// Agents list tally of that case's sessions and cards: the rows and the number, each held row's reason a word the wire
-// knows, and the totals repeating the number. The case hands in its quiet agents, which the view lists in neither
-// list, as the live round never hands them in. A sample that also names a todo-counts case holds todos_needs_you as
-// View writes it of that list's counts; one that names none has no to-dos counted.
+// Samples naming a fleet fixture hold the counts and totals View writes for that fleet. A sample that also names
+// a todo-counts case holds todos_needs_you as View writes it from the list's counts.
 func TestViewSamplesAreFleetcountsRows(t *testing.T) {
 	byName := map[string]needsYouCase{}
 	for _, c := range needsYouCases(t) {
 		byName[c.Name] = c
+	}
+	persona := map[string]personaCardsCase{}
+	for _, c := range personaCardsCases(t) {
+		persona[c.Name] = c
 	}
 	b, err := os.ReadFile(viewSamples)
 	if err != nil {
@@ -33,8 +34,9 @@ func TestViewSamplesAreFleetcountsRows(t *testing.T) {
 		Cases []struct {
 			Name  string `json:"name"`
 			Input struct {
-				NeedsYou   string `json:"needs_you"`
-				TodoCounts string `json:"todo_counts"`
+				NeedsYou     string `json:"needs_you"`
+				TodoCounts   string `json:"todo_counts"`
+				PersonaCards string `json:"persona_cards"`
 			} `json:"input"`
 			Expected struct {
 				View assistantwire.CountsView `json:"view"`
@@ -47,13 +49,23 @@ func TestViewSamplesAreFleetcountsRows(t *testing.T) {
 	lists := todoCountsCases(t)
 	checked := 0
 	for _, s := range file.Cases {
-		if s.Input.NeedsYou == "" {
+		if s.Input.NeedsYou == "" && s.Input.PersonaCards == "" {
 			continue // a sample of the shape alone (more, an absent count), which no fixture case gives
 		}
 		t.Run(s.Name, func(t *testing.T) {
-			c, ok := byName[s.Input.NeedsYou]
-			if !ok {
-				t.Fatalf("no needs-you case %q", s.Input.NeedsYou)
+			var f *Fleet
+			if s.Input.PersonaCards != "" {
+				c, ok := persona[s.Input.PersonaCards]
+				if !ok {
+					t.Fatalf("no persona-cards case %q", s.Input.PersonaCards)
+				}
+				f = c.fleet(t)
+			} else {
+				c, ok := byName[s.Input.NeedsYou]
+				if !ok {
+					t.Fatalf("no needs-you case %q", s.Input.NeedsYou)
+				}
+				f = c.fleet(t)
 			}
 			want := s.Expected.View.Counts.AgentsNeedsYou
 			if want == nil {
@@ -67,7 +79,6 @@ func TestViewSamplesAreFleetcountsRows(t *testing.T) {
 				}
 				todos = opt.Some(counts)
 			}
-			f := c.fleet(t)
 			got := f.View(f.decide(fleetcount.SurfaceBadge()), todos)
 			// A sample may leave its totals out (they are optional); the manager always writes them.
 			if tot := s.Expected.View.Totals; !reflect.DeepEqual(got.Counts, s.Expected.View.Counts) ||
@@ -88,6 +99,6 @@ func TestViewSamplesAreFleetcountsRows(t *testing.T) {
 		checked++
 	}
 	if checked == 0 {
-		t.Fatalf("%s: no sample names a needs-you case", viewSamples)
+		t.Fatalf("%s: no sample names a fleet fixture", viewSamples)
 	}
 }

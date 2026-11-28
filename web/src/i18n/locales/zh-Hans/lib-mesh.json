@@ -1,6 +1,6 @@
 {
   "via_local": "本机",
   "via_link": "电脑链路",
-  "via_peer": "经互联",
+  "via_peer": "经互联 hub",
   "hops_other": "{count} 跳"
 }

@@ -519,6 +519,20 @@ func TestInboxReplyUsesBot(t *testing.T) {
 	}
 }
 
+func TestInboxReplyHonorsExplicitSender(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "args.log")
+	t.Setenv("LARKCLI_FAKE_LOG", logPath)
+	c := inboxTestConnector(t, "inbox")
+	ctx := connectorwire.WithSendIdentity(context.Background(), "user")
+	if err := c.Reply(ctx, connectorwire.InboxReply{Thread: "larkcli:chat:oc_example_group", Text: "Explicit owner message"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(raw), "--as user --format json") || strings.Contains(string(raw), "--as bot") {
+		t.Fatalf("selected identity ignored: %s", raw)
+	}
+}
+
 func TestInboxAllChatsOptionIsOptIn(t *testing.T) {
 	c := inboxTestConnector(t, "inbox")
 	var defaults InboxOptions

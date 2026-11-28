@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -55,7 +56,9 @@ type a2aToolArgs struct {
 	Before         string `json:"before"`
 	CWD            string `json:"cwd"`
 	Launcher       string `json:"launcher"`
+	Tier           string `json:"tier"`
 	PermissionMode string `json:"permission_mode"`
+	Presets        bool   `json:"presets"`
 	Turns          int    `json:"turns"`
 }
 
@@ -104,6 +107,9 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 	var err error
 	switch name {
 	case "a2a_sessions":
+		if a.Presets { // and where a2a_send can start an Agent, with the Agent presets each computer can start
+			return map[string]any{"sessions": s.a2aDiscover(ctx, cfg, c.Ref, a.Machine), "computers": s.a2aComputers(ctx, cfg, a.Machine)}, nil
+		}
 		return s.a2aDiscover(ctx, cfg, c.Ref, a.Machine), nil
 	case "a2a_read":
 		return s.a2aRead(ctx, cfg, c.Ref, a.a2aRef, a.Turns)
@@ -125,14 +131,26 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 				if err := s.workerRefusal(ctx, c.Ref.Machine, c.Ref.Session); err != nil {
 					return nil, err
 				}
-				launch = &a2aLaunch{CWD: a.CWD, Launcher: a.Launcher, PermissionMode: a.PermissionMode, Pending: true, Subagent: true}
+				launch = &a2aLaunch{CWD: a.CWD, Launcher: a.Launcher, Tier: strings.TrimSpace(a.Tier), PermissionMode: a.PermissionMode, Pending: true, Subagent: true}
 			} else if err := s.a2aCanSendMessage(ctx, c.Ref, a.a2aRef, a.Text); err != nil {
 				return nil, err
 			}
 			if old, err := decodeA2A(st.A2ARequest(ctx, c.Owner, a.ID)); err == nil && old == nil && a2aValidID(a.ID) && a2aValidText(a.Text) &&
 				a.a2aRef != c.Ref && (launch != nil || s.a2aAllowed(ctx, cfg, a.a2aRef)) {
-				// A new hand-off, not a retry of one already made (a2aStart answers those).
-				if err := s.a2aConfirm(ctx, c.Ref, a.a2aRef, a.CWD, a.Text, args); err != nil {
+				// A new hand-off, not a retry of one already made (a2aStart answers those). Its tier is resolved, or
+				// refused, before anything is asked or recorded (agent_presets.go), and a launch that could not start
+				// read-only where it would go is refused there too (start_host.go).
+				where := a.CWD
+				if launch != nil {
+					if err := s.a2aLaunchTier(ctx, cfg, a.Machine, launch); err != nil {
+						return nil, err
+					}
+					if err := s.a2aLaunchCheck(ctx, cfg, a.a2aRef, a.Context, launch); err != nil {
+						return nil, err
+					}
+					where = s.a2aLaunchWhere(ctx, launch)
+				}
+				if err := s.a2aConfirm(ctx, c.Ref, a.a2aRef, where, a.Text, args); err != nil {
 					return nil, err
 				}
 			}

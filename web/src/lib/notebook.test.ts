@@ -98,7 +98,7 @@ describe("parseNotebook", () => {
 describe("helpers", () => {
   it("strips color codes and caps long output", () => {
     expect(stripAnsi("\u001b[1;32mok\u001b[0m")).toBe("ok");
-    expect(capLines("a\nb\nc\nd\n", 2)).toBe("a\nb\n… 还有 2 行没有显示");
+    expect(capLines("a\nb\nc\nd\n", 2)).toBe("a\nb\n… 另有 2 行未显示");
     expect(capLines("a\nb", 5)).toBe("a\nb");
   });
   it("points attachments at a fragment and names the colorer's file", () => {

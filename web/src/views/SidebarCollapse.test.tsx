@@ -82,6 +82,18 @@ describe("folding the whole sidebar", () => {
     act(() => open.click());
     expect(getLayout().sidebarCollapsed).toBe(false);
   });
+
+  it("omits duplicate collapse, search bar, and top rail buttons when MacBayTools hosts them (#17136)", async () => {
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
+    await flush();
+    expect(button("收起侧边栏")).toBeUndefined();
+    expect([...host.querySelectorAll("button")].find((b) => b.textContent?.includes("搜索会话"))).toBeUndefined();
+
+    act(() => root.render(<SidebarRail route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
+    await flush();
+    expect(button("展开侧边栏")).toBeUndefined();
+    expect(host.querySelector("[data-rail-top-controls]")).toBeNull();
+  });
 });
 
 describe("the focus across a fold (web usability audit item 23)", () => {
@@ -267,7 +279,7 @@ describe("folding a block of the sidebar", () => {
     expect(localStorage.getItem("fold:pages")).toBe("1");
     expect(sectionBody("页面").hasAttribute("inert")).toBe(true);
     // the Persona row stays above it
-    expect(host.querySelector('a[aria-description="Persona 的主对话"]')).not.toBeNull();
+    expect(host.querySelector('a[aria-description="Persona 主对话"]')).not.toBeNull();
   });
 
   it("gives a section and its chevron the same fold tokens in both directions", async () => {
@@ -377,7 +389,7 @@ describe("the main conversation: the column's first row, Main chat with its home
   const conv = (id: string, title: string): Session => ({ machine_id: "hub", session_id: id, title, cwd: "/", status: "idle", state: "idle", assistant: true, pending_interactions: id === "main" ? 2 : 0 });
   const assistant: AssistantInfo = { machine_id: "hub", main: "main", leaders: ["c1"], conversations: [conv("main", "Persona"), conv("c1", "整理周报")] };
   const block = (title: string) => button(title)!.closest(".mt-1, .mt-3") as HTMLElement;
-  const mainRow = () => host.querySelector<HTMLAnchorElement>('a[aria-description="Persona 的主对话"]')!;
+  const mainRow = () => host.querySelector<HTMLAnchorElement>('a[aria-description="Persona 主对话"]')!;
   const load = async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       const body = new URL(url, "http://x").pathname === "/api/v1/assistant" ? assistant : {};
@@ -437,14 +449,14 @@ describe("the main conversation: the column's first row, Main chat with its home
     const line = host.querySelector("[data-persona-divider]")!;
     expect(mainRow().compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(line.compareDocumentPosition(button("页面")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(host.querySelectorAll('a[aria-description="Persona 的主对话"]')).toHaveLength(1);
+    expect(host.querySelectorAll('a[aria-description="Persona 主对话"]')).toHaveLength(1);
     expect(host.querySelectorAll("[data-persona-divider]")).toHaveLength(1);
     expect(host.querySelector('a[href="/persona/main"]')).toBeNull();
     // "Persona chats"starts with the other conversations, the main one not in it
-    expect(block("Persona 对话").querySelector('a[aria-description="Persona 的主对话"]')).toBeNull();
+    expect(block("Persona 对话").querySelector('a[aria-description="Persona 主对话"]')).toBeNull();
     expect(block("Persona 对话").textContent).toContain("整理周报");
     // its ⋯ opens the conversation's menu
-    expect(mainRow().parentElement!.querySelector('button[aria-label="对话的操作"]')).not.toBeNull();
+    expect(mainRow().parentElement!.querySelector('button[aria-label="对话操作"]')).not.toBeNull();
   });
 
   it("stays on show however 页面 and「Persona 对话」are folded", async () => {

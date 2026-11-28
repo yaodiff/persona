@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { SESSIONS_HIERARCHY_FEATURE } from "../lib/child-sessions";
 import { homeKey } from "../lib/folded-rows";
-import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
+import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, activityOf, tabLabel } from "../lib/format";
 import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
@@ -95,7 +95,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
     if (!whole) return hubAgentCounts && new Map(Object.entries(hubAgentCounts));
     const byMachine = new Map<string, number>();
     for (const s of agentSessions) {
-      if (stateOf(s) !== "offline") byMachine.set(s.machine_id, (byMachine.get(s.machine_id) ?? 0) + 1);
+      if (activityOf(s) !== "offline") byMachine.set(s.machine_id, (byMachine.get(s.machine_id) ?? 0) + 1);
     }
     return byMachine;
   }, [list, whole, hubAgentCounts, agentSessions]);
@@ -357,12 +357,13 @@ function MarkAllSeen({ count, onClick }: { count: number; onClick: () => void })
 }
 
 // `grid`: its rows go two, then three to a line as the page gets wider; "cards" (rows with buttons, read before
-// answering) only once each still has room for its question and buttons.
+// answering) only once each still has room for its question and buttons. A section's only card fills a two-column
+// row, but stops at two columns' width when the row has three.
 const GRID = {
-  rows: "grid grid-cols-1 items-start gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
+  rows: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
   // task cards differ in height (a stage bar or not): a row stretches them to one height, the agent line at the bottom
-  tasks: "grid grid-cols-1 items-stretch gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
-  cards: "grid grid-cols-1 items-start gap-1.5 @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3",
+  tasks: "grid grid-cols-1 items-stretch gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
+  cards: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3 @min-[120rem]:[&>:only-child]:col-span-2",
 };
 
 function Group({ title, count, children, right, hint, grid }: { title: string; count: number; children: React.ReactNode; right?: React.ReactNode; hint?: string; grid?: true | "cards" | "tasks" }) {
@@ -482,7 +483,7 @@ function SessionTask({ s, i, machine, pill, footer }: { s: Session; i: number; m
   const title = sessionTitle(s);
   // the source is a tag once, not again in front of the latest words
   // the latest words are Markdown: one line of them reads without its marks, as the sidebar's row line does (#10939)
-  return <TaskRow i={i} state={stateOf(s)} waiting={backgroundWaiting(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={plainMarkdown(sessionPreview(s))} pill={pill} footer={footer} />;
+  return <TaskRow i={i} state={activityOf(s)} waiting={backgroundWaiting(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={plainMarkdown(sessionPreview(s))} pill={pill} footer={footer} />;
 }
 
 // One tab's agents as one row (#2320): the "Lead"'s title (the first pane's when the panes are peers), the most urgent
@@ -503,9 +504,9 @@ function GroupTask({ g, i, machine, pill, footer }: { g: TabGroup; i: number; ma
       detail={s === head ? preview : agentLabel(s) && preview ? t("home.agent_preview", { agent: agentLabel(s), preview }) : agentLabel(s) || preview}
       pill={
         <>
-          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${backgroundWaiting(x) ? stateName("bg_waiting") : STATE_LABEL[stateOf(x)]}`).join("\n")}>
+          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${backgroundWaiting(x) ? stateName("bg_waiting") : STATE_LABEL[activityOf(x)]}`).join("\n")}>
             <span aria-hidden className="flex items-center gap-0.5">
-              {g.sessions.map((x) => <StatusMark key={x.session_id} state={stateOf(x)} size="sm" waiting={backgroundWaiting(x)} />)}
+              {g.sessions.map((x) => <StatusMark key={x.session_id} state={activityOf(x)} size="sm" waiting={backgroundWaiting(x)} />)}
             </span>
             <span className="max-sm:sr-only">{t("home.machine_agents", { count: g.sessions.length })}</span>
           </span>
@@ -748,13 +749,13 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
         {(detail || tags.length > 0) && (
           <span className={cx("mt-0.5 flex min-w-0 gap-1.5 text-[12.5px] leading-[18px] text-ink-2", actions ? "flex-col items-start gap-0.5" : "items-center")}>
             {tags.length > 0 && (
-              <span className="hidden shrink-0 items-center gap-1 sm:flex" data-row-tags>
+              <span className="hidden min-w-0 max-w-full items-center gap-1 sm:flex" data-row-tags>
                 {tags.map((x) => (
                   <span key={x} className="max-w-[12em] truncate rounded-chip bg-field px-1.5 text-[11px] leading-[17px] text-ink-3">{x}</span>
                 ))}
               </span>
             )}
-            {detail && <span className={cx("min-w-0", actions ? "line-clamp-3 w-full [overflow-wrap:anywhere]" : "flex-1 truncate")} title={actions ? detail : undefined}>{detail}</span>}
+            {detail && <span className={actions ? "line-clamp-3 w-full min-w-0 [overflow-wrap:anywhere]" : "min-w-1/2 flex-1 truncate"} title={actions ? detail : undefined}>{detail}</span>}
           </span>
         )}
       </span>

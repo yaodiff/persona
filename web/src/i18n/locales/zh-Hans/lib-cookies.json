@@ -1,6 +1,6 @@
 {
-  "unreadable": "读不懂这个文件：既不是 cookies.txt，也不是 JSON",
-  "json_no_list": "JSON 里没有 cookie 列表",
-  "json_empty": "JSON 里没有 cookie",
-  "txt_empty": "文件里没有 cookie（应是 cookies.txt：每行用制表符分隔的 7 列）"
+  "unreadable": "无法解析该文件：它既不是 cookies.txt 格式，也不是有效的 JSON。",
+  "json_no_list": "JSON 中未找到 cookie 列表",
+  "json_empty": "JSON 中不包含任何 cookie",
+  "txt_empty": "文件中未找到 cookie（应为标准 cookies.txt 格式，每行包含 7 列由制表符分隔的字段）"
 }

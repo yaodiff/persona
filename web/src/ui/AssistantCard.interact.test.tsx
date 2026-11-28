@@ -137,7 +137,7 @@ describe("活卡片的版本", () => {
     await flush();
     expect(calls).toHaveLength(1);
     await click(button("提交", host));
-    expect(document.body.textContent).toContain("卡片刚更新过");
+    expect(document.body.textContent).toContain("卡片刚刚已更新");
     replies.push({ status: 200, body: record("view_7", "y") });
     await click(button("发送"));
     expect(calls).toHaveLength(2);

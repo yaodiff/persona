@@ -210,6 +210,7 @@ func scanBackground(f *os.File, off *int64, m *transcript.Meta, size int64) {
 		}
 		if !long {
 			m.ObserveNamingMetadata(line)
+			m.ObserveSpeed(line)
 		} else if refusalLine != nil {
 			m.ObserveNamingMetadata(refusalLine)
 		}

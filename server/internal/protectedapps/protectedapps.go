@@ -8,6 +8,7 @@ package protectedapps
 import (
 	"encoding/json"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -147,9 +148,78 @@ func ScriptApps(script string) (apps []string, all bool) {
 		len(launchWord.FindAllString(script, -1)) == len(launchLiteral.FindAllString(script, -1))
 }
 
-// StepsApps is the apps Cua run_steps steps name (each step's own app, else the call's), an app a launch_app step
-// opens included, and whether that is all they may touch (false: a step with no app of its own or the call's, a
-// launch_app naming no app).
+type stepAction struct {
+	tool string
+	raw  json.RawMessage
+}
+
+// rawStringField reads an exact-case string field from a decoded JSON object map, ignoring
+// non-string values or differently-cased sibling keys (unlike struct json.Unmarshal).
+func rawStringField(m map[string]json.RawMessage, key string) string {
+	var s string
+	if raw, ok := m[key]; ok && json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+// stepActions returns every action in a run_steps step in deterministic order, supporting both
+// {"tool": …, "args": …} and {<tool>: args} forms (including mixed or multi-action steps).
+func stepActions(s map[string]json.RawMessage) []stepAction {
+	var actions []stepAction
+	rawTool, hasTool := s["tool"]
+	var tool string
+	if hasTool {
+		_ = json.Unmarshal(rawTool, &tool)
+		tool = strings.TrimSpace(tool)
+		if tool != "" {
+			actions = append(actions, stepAction{tool: tool, raw: s["args"]})
+		}
+	}
+	keys := make([]string, 0, len(s))
+	for k := range s {
+		tk := strings.TrimSpace(k)
+		if tk == "wait_for" || tk == "expect" || tk == "timeout_ms" || tk == "tool" || (tool != "" && tk == "args") {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		actions = append(actions, stepAction{tool: strings.TrimSpace(k), raw: s[k]})
+	}
+	if hasTool && len(actions) == 0 {
+		actions = append(actions, stepAction{tool: "", raw: s["args"]})
+	}
+	return actions
+}
+
+// actionApps returns every app identifier named directly by one step action: always exact-case
+// "app", and for appTools ("launch_app", "bring_to_front", "kill_app", "invoke_menu",
+// "set_window_frame") also "name" and "bundle_id", decoded per-key so non-string siblings or
+// case-folded duplicate keys cannot abort or overwrite extraction.
+func actionApps(a stepAction) []string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(a.raw, &fields) != nil {
+		return nil
+	}
+	var out []string
+	add := func(v string) {
+		if v != "" && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	add(rawStringField(fields, "app"))
+	if appTools[a.tool] {
+		add(rawStringField(fields, "name"))
+		add(rawStringField(fields, "bundle_id"))
+	}
+	return out
+}
+
+// StepsApps is the apps Cua run_steps steps name (each step action's own app, else the call's), an app a launch_app
+// or app-level step targets included, and whether that is all they may touch (false: a step action with no app of its
+// own or the call's, or a launch_app naming no app).
 func StepsApps(app string, steps json.RawMessage) (apps []string, all bool) {
 	add := func(a string) {
 		if a = strings.TrimSpace(a); a != "" && !slices.Contains(apps, a) {
@@ -160,42 +230,32 @@ func StepsApps(app string, steps json.RawMessage) (apps []string, all bool) {
 	_ = json.Unmarshal(steps, &list)
 	all = len(list) > 0
 	for _, s := range list {
-		if opened, ok := LaunchTarget(s); ok {
-			if opened == "" {
+		actions := stepActions(s)
+		if len(actions) == 0 {
+			if strings.TrimSpace(app) == "" {
 				all = false
 			} else {
-				add(opened)
+				add(app)
 			}
 			continue
 		}
-		found := stepApp(s)
-		if found == "" {
-			found = app
+		for _, act := range actions {
+			found := actionApps(act)
+			if len(found) > 0 {
+				for _, f := range found {
+					add(f)
+				}
+				continue
+			}
+			// launch_app never inherits the call's default app (LaunchTarget).
+			if act.tool == "launch_app" || strings.TrimSpace(app) == "" {
+				all = false
+				continue
+			}
+			add(app)
 		}
-		if found == "" {
-			all = false
-			continue
-		}
-		add(found)
 	}
 	return apps, all
-}
-
-// stepApp is the app a step names itself, in either form ({"click": {"app": …}} or {"tool": …, "args": {"app": …}}).
-func stepApp(s map[string]json.RawMessage) string {
-	found := ""
-	for k, raw := range s {
-		if k == "wait_for" || k == "expect" || k == "tool" {
-			continue
-		}
-		var named struct {
-			App string `json:"app"`
-		}
-		if json.Unmarshal(raw, &named) == nil && strings.TrimSpace(named.App) != "" {
-			found = named.App
-		}
-	}
-	return found
 }
 
 // LaunchTarget is the app a launch_app step opens, {"launch_app": {"name": …}} or {"tool": "launch_app", "args": {…}}:
@@ -206,6 +266,7 @@ func LaunchTarget(s map[string]json.RawMessage) (opened string, ok bool) {
 	args := s["launch_app"]
 	if raw, has := s["tool"]; has {
 		_ = json.Unmarshal(raw, &tool)
+		tool = strings.TrimSpace(tool)
 	}
 	switch {
 	case tool == "launch_app":
@@ -213,18 +274,15 @@ func LaunchTarget(s map[string]json.RawMessage) (opened string, ok bool) {
 	case tool != "" || args == nil:
 		return "", false
 	}
-	var a struct {
-		Name     string `json:"name"`
-		BundleID string `json:"bundle_id"`
-	}
-	_ = json.Unmarshal(args, &a)
-	if opened = strings.TrimSpace(a.Name); opened == "" {
-		opened = strings.TrimSpace(a.BundleID)
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(args, &fields)
+	if opened = rawStringField(fields, "name"); opened == "" {
+		opened = rawStringField(fields, "bundle_id")
 	}
 	return opened, true
 }
 
-// UnnamedSteps: some step names no app of its own and the call names none either (it acts on whatever has the
+// UnnamedSteps: some step action names no app of its own and the call names none either (it acts on whatever has the
 // focus, or where it points).
 func UnnamedSteps(app string, steps json.RawMessage) bool {
 	if strings.TrimSpace(app) != "" {
@@ -233,14 +291,14 @@ func UnnamedSteps(app string, steps json.RawMessage) bool {
 	var list []map[string]json.RawMessage
 	_ = json.Unmarshal(steps, &list)
 	for _, s := range list {
-		if opened, ok := LaunchTarget(s); ok {
-			if opened == "" {
+		actions := stepActions(s)
+		if len(actions) == 0 {
+			return true
+		}
+		for _, act := range actions {
+			if len(actionApps(act)) == 0 {
 				return true
 			}
-			continue
-		}
-		if stepApp(s) == "" {
-			return true
 		}
 	}
 	return false

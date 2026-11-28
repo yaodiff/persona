@@ -16,11 +16,11 @@ import go_test_partitioned as gtp
 MODULE = ["example/server/cmd/personad", "example/server/internal/assistant", "example/server/internal/assistantwire",
           "example/server/internal/node", "example/server/internal/node/sub"]
 NODE, ASSISTANT = "./internal/node", "./internal/assistant"
-# The fixture module has no internal/hub, internal/devices, internal/extmgr or internal/modules/voice: they split the way
-# internal/assistant does.
+# The fixture module has no internal/hub, internal/devices, internal/extmgr, internal/modules/voice or internal/db:
+# they split the way internal/assistant does.
 PATTERNS = {NODE: ["^(TestA|TestC)$", "^(TestB)$"], ASSISTANT: ["^(TestX|TestZ)$", "^(TestY)$"],
             "./internal/hub": ["^(TestH)$"], "./internal/devices": ["^(TestD)$"], "./internal/extmgr": ["^(TestM)$"],
-            "./internal/modules/voice": ["^(TestV)$"]}
+            "./internal/modules/voice": ["^(TestV)$"], "./internal/db": ["^(TestDB)$"]}
 PREFIX = "example/server/"
 # MODULE with subpackages of internal/assistant, for the ./<dir>/... arguments check-fast passes (#12765).
 TREE = MODULE + [PREFIX + "internal/assistant/inbox", PREFIX + "internal/assistant/inbox/item"]
@@ -362,7 +362,8 @@ class CoverageIntegrationTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.env = os.environ.copy()
         self.env.pop("GOFLAGS", None)
-        self.env.update(GOTOOLCHAIN="local", GOMAXPROCS="2")
+        # Go chooses the fixture's declared minimum on older hosts, as it does for the repository itself.
+        self.env.update(GOTOOLCHAIN="auto", GOMAXPROCS="2")
         (self.root / "go.mod").write_text("module example.com/coverfixture\n\ngo 1.27.1\n")
         self.write("internal/node/node.go", """package node
 
@@ -406,6 +407,9 @@ func TestValue(t *testing.T) {
 	}
 }
 """)
+
+    def test_fixture_uses_the_module_minimum_instead_of_an_older_local_go(self):
+        self.assertEqual(self.env["GOTOOLCHAIN"], "auto")
 
     def write(self, relative, contents):
         path = self.root / relative
@@ -556,7 +560,8 @@ class SubtreeIntegrationTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.env = os.environ.copy()
         self.env.pop("GOFLAGS", None)
-        self.env.update(GOTOOLCHAIN="local", GOMAXPROCS="2")
+        # Go chooses the fixture's declared minimum on older hosts, as it does for the repository itself.
+        self.env.update(GOTOOLCHAIN="auto", GOMAXPROCS="2")
         (self.root / "go.mod").write_text("module example.com/subtreefixture\n\ngo 1.27.1\n")
         tests = {"internal/assistant/assistant_test.go": ("assistant", ["TestA1", "TestA2", "TestA3", "TestA4"]),
                  "internal/assistant/inbox/inbox_test.go": ("inbox", ["TestInbox"]),

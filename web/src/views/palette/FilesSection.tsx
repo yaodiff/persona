@@ -9,7 +9,7 @@ import type { MachinePanes } from "../../lib/palette";
 import type { Route } from "../../lib/router";
 import { getSession } from "../../lib/store";
 import { copyText } from "../../ui/atoms";
-import { FileGlyph } from "../session/files/parts";
+import { FileGlyph } from "../session/files/file-glyph";
 
 /** One selectable row of the files section. */
 export interface FileRow {

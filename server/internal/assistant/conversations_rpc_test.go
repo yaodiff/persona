@@ -52,7 +52,10 @@ func askConversations(t *testing.T, s *Service, method, params string, out any) 
 	if err != nil {
 		return err
 	}
-	b, _ := json.Marshal(res)
+	b, err := rpc.Marshal(res)
+	if err != nil {
+		return err
+	}
 	return json.Unmarshal(b, out)
 }
 
@@ -220,6 +223,57 @@ func TestExtensionMessagesRefuse(t *testing.T) {
 	}
 	if _, ok, _ := s.conversationsRequest(context.Background(), "assistant.send", nil); ok {
 		t.Fatal("another method answered here")
+	}
+}
+
+func TestExtensionReadRPCRejectsUnknownParams(t *testing.T) {
+	s, _ := conversationsService(t)
+	for _, method := range []string{
+		assistantwire.MethodExtensionTrustForget,
+		assistantwire.MethodAssistantExtensionRead,
+		assistantwire.MethodAssistantConversations,
+		assistantwire.MethodAssistantMessages,
+		assistantwire.MethodAssistantEntriesList,
+		assistantwire.MethodAssistantMemory,
+	} {
+		var out json.RawMessage
+		err := askConversations(t, s, method, `{"unsupported":true}`, &out)
+		var wireErr *rpc.Error
+		if !errors.As(err, &wireErr) || wireErr.Code != bus.CodeInvalidParams || wireErr.Message != method+`: json: unknown field "unsupported"` {
+			t.Errorf("%s: %v", method, err)
+		}
+	}
+}
+
+func TestExtensionReadRPCWire(t *testing.T) {
+	s, f := conversationsService(t)
+	f.items = []proto.Item{convItem(1, "user", proto.KindText, "x < y & z > w")}
+	const params = `{"extension":"example","method":"assistant.messages","params":{"id":"main-0000-0000"}}`
+	const want = `{"messages":[{"seq":1,"at":"2026-01-02T09:01:00Z","role":"user","text":"x < y & z > w"}]}`
+	var out json.RawMessage
+	if err := askConversations(t, s, assistantwire.MethodAssistantExtensionRead, params, &out); err != nil || string(out) != want {
+		t.Fatalf("assistant read: %s, %v, want %s", out, err, want)
+	}
+}
+
+func TestExtensionReadRPCDispatch(t *testing.T) {
+	s, _ := conversationsService(t)
+	for _, tc := range []struct {
+		name, params, message string
+	}{
+		{"read allowlist", `{"extension":"example","method":"assistant.entries.list"}`, `assistant.extension_read: method must be an assistant read`},
+		{"omitted params", `{"extension":"example","method":"assistant.conversations"}`, `assistant.conversations: since is required (an RFC 3339 time)`},
+		{"unknown inner field", `{"extension":"example","method":"assistant.messages","params":{"unsupported":true}}`,
+			`assistant.messages: json: unknown field "unsupported"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out json.RawMessage
+			err := askConversations(t, s, assistantwire.MethodAssistantExtensionRead, tc.params, &out)
+			var re *rpc.Error
+			if !errors.As(err, &re) || re.Code != bus.CodeInvalidParams || re.Message != tc.message {
+				t.Fatalf("error = %v, want %q", err, tc.message)
+			}
+		})
 	}
 }
 

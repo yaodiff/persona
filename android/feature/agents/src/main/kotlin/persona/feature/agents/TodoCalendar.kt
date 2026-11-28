@@ -721,7 +721,7 @@ internal fun EntryChip(
 /** What TalkBack reads for a to-do on the calendar: its title, its state and when ("All day", "18:00", "Was due 11:30"), as iOS `CalendarEntryLook.spoken`. */
 @Composable
 internal fun entrySpoken(entry: CalendarEntry): String =
-    listOf(entry.title, entry.state.label, entryWhen(entry, LocalConfiguration.current.locales[0])).joinToString(", ")
+    listOf(entry.title, entry.restStatus?.label ?: entry.state.label, entryWhen(entry, LocalConfiguration.current.locales[0])).joinToString(", ")
 
 /** When a to-do on the calendar is due, as its day's list says: "All day", "18:00", or "Was due 11:30" once past. */
 @Composable
@@ -812,7 +812,7 @@ private fun DayEntryRow(entry: CalendarEntry, locale: Locale, onReschedule: (() 
         }
         if (entry.high) JIcon(PhIcons.Flag, stringResource(R.string.agents_todo_priority_high), size = Tokens.Space.l, tint = palette.cautionText)
         if (entry.reminding) JIcon(PhIcons.BellSimple, stringResource(R.string.agents_todo_calendar_reminder), size = Tokens.Space.l, tint = palette.ink3)
-        JTag(entry.state.label)
+        entry.restStatus?.let { TodoRestStatusTag(it) } ?: JTag(entry.state.label)
     }
 }
 

@@ -382,6 +382,9 @@ func TestTodoAskWordsNoAgentRecorded(t *testing.T) {
 	for _, state := range []string{"decision_no_agent", "decision_no_origin_no_agent"} {
 		t.Run(state, func(t *testing.T) {
 			sc := todoAskScene(t, state)
+			// The handoff skips the scene's one-hour gather (#17099): hold the digest timer so it is still pending
+			// when read below, instead of already told to the main conversation.
+			sc.s.stopSuperviseTimers()
 			asked := askOf(sc.s, sc.row).AskedAt
 			const words = "Hanami, but only with a late check-in"
 			rec := answerTodoAsk(sc.s, sc.row, sc.own, `{"text":"`+words+`"}`)

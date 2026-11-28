@@ -81,5 +81,6 @@
   "execution_space_directory": "空间里的任务只能使用空间目录。请清空工作目录后重试。",
   "unknown_space": "这个空间不能用于定时任务。请换一个空间，或者不选空间。",
   "bad_topic_policy": "请选择每次运行是开新对话，还是接着同一个对话。",
-  "space_owner_only": "只有你本人能在 App 里把任务移进或移出空间。"
+  "space_owner_only": "只有你本人能在 App 里把任务移进或移出空间。",
+  "bad_delivery": "投递锚点必须指定 channel 为 \"feishu\" 及有效的 chat_id 和 thread_id。"
 }

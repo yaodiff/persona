@@ -245,31 +245,6 @@ func (s *Service) queueWorkspaceBusy(planID string, i int, t PlanTask, busy *wor
 	}
 }
 
-// workspaceWaitAfterBlockers returns the unsatisfied after prerequisite IDs for a workspace-queued task.
-func (s *Service) workspaceWaitAfterBlockers(ctx context.Context, task PlanTask, todo Todo) ([]string, error) {
-	afterIDs := cleanIDs(slices.Concat(task.After, todo.After))
-	if len(afterIDs) == 0 {
-		return nil, nil
-	}
-	requireAccepted := todo.PartOf != "" && s.hasRequestGate(todo.PartOf)
-	var blockers []string
-	for _, depID := range afterIDs {
-		dep, ok := s.todoNow(depID)
-		if !ok {
-			blockers = append(blockers, depID)
-			continue
-		}
-		_, satisfied, err := s.prerequisiteSatisfied(ctx, dep, requireAccepted)
-		if err != nil {
-			return nil, err
-		}
-		if !satisfied {
-			blockers = append(blockers, depID)
-		}
-	}
-	return blockers, nil
-}
-
 // clearWorkspaceQueueEntry removes a workspace queue entry from a started plan task when its to-do has ended or
 // been cancelled, removing the JSON key so TaskPlansQueued stops scanning the plan.
 func (s *Service) clearWorkspaceQueueEntry(ctx context.Context, planID string, index int, todoID string) {
@@ -374,25 +349,25 @@ func (s *Service) drainWorkspaceQueue(ctx context.Context, machine, cwd string) 
 	})
 
 	for idx, w := range waiters {
-		blockers, err := s.workspaceWaitAfterBlockers(dctx, w.task, w.todo)
+		readiness, err := s.taskTodoReadiness(dctx, w.todo, w.task)
 		if err != nil {
-			s.logf("task %s: workspace queue: check after prerequisites: %v", w.task.TodoID, err)
+			s.logf("task %s: workspace queue: read prerequisites: %v", w.task.TodoID, err)
 			continue
 		}
-		if len(blockers) > 0 {
+		if !readiness.ready() {
+			s.saveApprovedPRBlockers(dctx, w.todo.ID, readiness.missingPRs, false)
+			blockers := readiness.refs()
+			if len(readiness.after) == 0 {
+				q := s.blockerWaitQueue(dctx, blockers)
+				q.Retry = w.task.Queue.Retry
+				s.replaceTaskQueue(dctx, w.task, q, queueCAS)
+				continue
+			}
 			if w.task.Queue.Workspace.OwnerID != "" || !slices.Equal(w.task.Queue.Blockers, blockers) {
 				updated := s.workspaceAfterWaitEntry(dctx, effMachine, w.task.Queue.Workspace.Path, blockers, w.task.Queue)
 				s.replaceTaskQueue(dctx, w.task, &updated, queueCAS)
 			}
 			continue
-		}
-		if s.settings(dctx).todosV2On() {
-			if refs := s.activeTodoBlockerRefs(dctx, w.task.TodoID); len(refs) > 0 {
-				q := s.blockerWaitQueue(refs)
-				q.Retry = w.task.Queue.Retry
-				s.replaceTaskQueue(dctx, w.task, q, queueCAS)
-				continue
-			}
 		}
 		if !s.preclaimWorkspace(dctx, effMachine, w.task.Queue.Workspace.Path, w.task.TodoID) {
 			return // workspace was claimed concurrently

@@ -38,7 +38,7 @@ const (
 	// relayFailedSetup: the owner must fix the setup first (relaySetupCodes). Queued until it goes in; conversation_send
 	// returns it.
 	relayFailedSetup
-	// relayFailedGone: the conversation is gone. Dropped; conversation_send returns it.
+	// relayFailedGone: the conversation is gone (or the runtime reports not_found). Dropped; conversation_send returns it.
 	relayFailedGone
 	// relayFailedLocal: the manager's own refusal, with no code (a pick, model or connection that is gone or cannot be
 	// read). Queued, as before; conversation_send returns it.
@@ -84,13 +84,15 @@ func relayFailureOf(err error) relayFailure {
 	if strings.Contains(err.Error(), "is gone") {
 		return relayFailedGone
 	}
-	if errors.Is(err, apierr.ErrOffline) { // machine_offline as the bus gives it back (busError) or a machine of the manager's own
+	if errors.Is(err, apierr.ErrOffline) || errors.Is(err, rpc.ErrNotSent) || errors.Is(err, rpc.ErrNotWritten) { // machine_offline or transport proved nothing went out
 		return relayFailedNotNow
 	}
 	code, coded := relayErrCode(err)
 	switch {
 	case !coded:
 		return relayFailedLocal
+	case code == "not_found":
+		return relayFailedGone
 	case code == "" || code == "internal" || code == CodeMachineOffline || code == CodeNodeClosed:
 		return relayFailedNotNow
 	case slices.Contains(relayBusyCodes, code):
@@ -129,7 +131,7 @@ func sendNotTaken(err error) bool {
 		return true
 	case relayFailedNotNow:
 		code, _ := relayErrCode(err)
-		return errors.Is(err, apierr.ErrOffline) || code == CodeMachineOffline
+		return unwritten || errors.Is(err, apierr.ErrOffline) || code == CodeMachineOffline
 	case relayFailedLocal:
 		return unwritten || !errors.Is(err, context.Canceled)
 	case relayFailedInDoubt:
@@ -181,6 +183,10 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 	defer func() { s.logf("relay %s to %s: refused for good (%s): %s", msg.Tool, short(to), code, what) }()
 	push := func(ctx context.Context) { s.reportRelayRefused(ctx, machine, to, msg.Tool, code) }
 	switch {
+	case msg.standalonePermission():
+		s.workEvent(machine, to, "ask_internal_delivery_failed", map[string]any{"id": msg.Card, "to": to, "code": code})
+		what = "the card can return to the app when its hold ends"
+		return false, nil
 	case msg.Tool == superviseTool:
 		// One try and the owner's push; the task stays open for review. Whether it should move to the main
 		// conversation's supervision route instead waits on #11393's decision 2.
@@ -276,6 +282,17 @@ func (s *Service) reportRelayRefused(ctx context.Context, machine, to, tool, cod
 	}
 	s.push(withCard(ctx, cardRelayRefusal), Notification{DeviceID: machine, SessionID: to,
 		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"), Body: i18n.T(lang, relayRefusedBody(tool, code), args)})
+}
+
+// reportSupervisionUnconfirmed pushes the owner when an unconfirmed supervision relay exhausts its confirmation
+// retries and is retired so newer supervision digests can deliver without manual intervention.
+func (s *Service) reportSupervisionUnconfirmed(ctx context.Context, machine, to string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	lang := s.lang(ctx)
+	s.push(withCard(ctx, cardRelayRefusal), Notification{DeviceID: machine, SessionID: to,
+		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"),
+		Body:  i18n.T(lang, "assistant-conversations.supervision_delivery_unconfirmed")})
 }
 
 // relayRefusedBody is the key of the push's text when a message of kind tool is refused for good with code.

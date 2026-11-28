@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Where text naming lark-cli matters (#8119). Words only run as a command at a command's own position, which
@@ -221,15 +222,20 @@ func larkInlineScript(args []string, valued, flags string) (string, bool) {
 	return "", false
 }
 
-// larkWritesFile: a segment's redirections write a file (anything but /dev/null or another descriptor); the notes
-// among them (larkNoteFile) are listed apart.
-func larkWritesFile(redirect string) (writes bool, notes []string) {
+// larkWritesFileVars: a segment's redirections write a file (anything but /dev/null or another descriptor); the notes
+// among them (larkNoteFile) are listed apart. vars, when not nil, are the literal values earlier assignments in the
+// command gave (classifyLarkRelaxed): a note's directory may then come from one (larkNotePath, #15860).
+func larkWritesFileVars(redirect string, vars map[string]string) (writes bool, notes []string) {
 	for _, t := range strings.Fields(redirect) {
 		op := strings.TrimLeft(t, "0123456789&")
 		if !strings.HasPrefix(op, ">") || redirectFD.MatchString(t) {
 			continue
 		}
-		switch target := strings.TrimLeft(op, ">|"); {
+		target := strings.TrimLeft(op, ">|")
+		if path, ok := larkNotePath(target, vars); ok {
+			target = path
+		}
+		switch {
 		case target == "/dev/null":
 		case larkNoteFile.MatchString(target):
 			notes = append(notes, target)
@@ -238,6 +244,28 @@ func larkWritesFile(redirect string) (writes bool, notes []string) {
 		}
 	}
 	return writes, notes
+}
+
+// larkNotePath is a redirect target whose directory comes from literal variables (`$d/note.md`, `"${d}/note.md"`),
+// with them filled in. The file's own name has to be written out: a program that runs the note then names it
+// (larkTextRuns), as it would a literal path. ok is false for anything else, a variable this command did not set to a
+// literal value included; the target then stays a write.
+func larkNotePath(target string, vars map[string]string) (string, bool) {
+	slash := strings.LastIndex(target, "/")
+	if len(vars) == 0 || slash < 0 || !strings.Contains(target[:slash], "$") ||
+		strings.ContainsAny(strings.Trim(target[slash+1:], `"'`), "$`\\\"'{}") {
+		return "", false
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(": "+target), "")
+	if err != nil || len(file.Stmts) != 1 {
+		return "", false
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) != 2 || len(file.Stmts[0].Redirs) != 0 {
+		return "", false
+	}
+	path, _, ok := literalLoopWord(call.Args[1], vars)
+	return path, ok && larkNoteFile.MatchString(path)
 }
 
 // larkNoteFile: a literal path to a note (Markdown, plain text, a log, a table). No program runs one unless it is

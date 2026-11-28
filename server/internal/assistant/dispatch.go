@@ -166,6 +166,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		Cwd       string `json:"cwd"`
 		Prompt    string `json:"prompt"`
 		Launcher  string `json:"launcher"`
+		Tier      string `json:"tier"`
 		MessageID string `json:"message_id"`
 		Worktree  struct {
 			Branch string `json:"branch"`
@@ -193,8 +194,19 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	defer cancel()
 	a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
 	source := a2aRef{machine, session}
-	launch := a2aLaunch{CWD: a.Cwd, Launcher: strings.TrimSpace(a.Launcher), Branch: strings.TrimSpace(a.Worktree.Branch), Title: clip(oneLine(a.Prompt), 100)}
-	tracker, existing, err := s.admitDispatchA2A(sctx, source, s.canonical(am.ID), a.MessageID, a.Prompt, launch, now)
+	launch := a2aLaunch{CWD: a.Cwd, Launcher: strings.TrimSpace(a.Launcher), Tier: strings.TrimSpace(a.Tier), Branch: strings.TrimSpace(a.Worktree.Branch), Title: clip(oneLine(a.Prompt), 100)}
+	if launch.Tier != "" && !s.dispatchRetry(sctx, source, a.MessageID) {
+		// The tier is resolved, or refused, before the task is recorded (agent_presets.go); a retry matches it as named.
+		run, err := s.agentStartTier(sctx, am, launch.Tier, launch.Launcher)
+		if err != nil {
+			return "", fmt.Errorf("%w; nothing was started", err)
+		}
+		launch.Run = run
+	}
+	// A start that could not run read-only where it would go is refused before its task is recorded; a retry by
+	// message_id is answered as before (admitDispatchA2A).
+	refused := s.dispatchStartRefusal(sctx, am, launch)
+	tracker, existing, err := s.admitDispatchA2A(sctx, source, s.canonical(am.ID), a.MessageID, a.Prompt, launch, now, refused)
 	if err != nil {
 		return "", err
 	}
@@ -226,6 +238,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	title := localTabName(a.Prompt)
 	params := map[string]any{"cwd": a.Cwd, "launcher": strings.TrimSpace(a.Launcher), "model": "", "effort": "",
 		"tab_name": title, "title": title, "prompt": s.withCloseoutBrief(sctx, am.ID, prompts.RenderDispatchTask(from), false)}
+	launch.Run.lay(params) // a tier's launcher, model, effort and speed; never its permission mode (agent_presets.go)
 	if err := s.applyModel(sctx, "agent.new", params); err != nil {
 		return "", fmt.Errorf("%w; nothing was started", err)
 	}
@@ -248,7 +261,18 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		params["cwd"], params["workspace_id"] = wt.Path, wt.WorkspaceID
 		note = fmt.Sprintf(" It runs in a new worktree on branch %s.", wt.Branch)
 	}
+	if launch.Run.Launcher != "" { // what runs, Model configuration › Agents laid over the tier, as agent_start says it
+		selected := pickOf(params)
+		note += fmt.Sprintf(" Preset %s: runs on %s.", launch.Tier,
+			ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed}.runs())
+	}
 	dispatchAllowAll(sctx, s, am, a.Launcher, params)
+	// Where it starts, decided as it goes out (start_host.go): an agy launcher on the computer's companion where that
+	// runs it, as for agent_start; a read-only start a pane cannot hold is refused here, not by the node.
+	companion, err := s.agentStartedHost(sctx, am, params)
+	if err != nil {
+		return "", err
+	}
 	s.setPlanThen(ctx, am.ID, params)
 	decision := newPlacement(am.ID, "report")
 	if tracker != nil {
@@ -256,7 +280,15 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	}
 	sctx = context.WithValue(sctx, placementBindKey{}, decision)
 	attempted = true
-	if startErr = s.call(sctx, am.ID, DeviceSessionStart, params, &res); startErr != nil {
+	startErr = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+	if companionAway(startErr, companion) && params["permission_mode"] != "plan" {
+		// The companion went away before the start reached it: nothing ran, and a writable start opens in the default
+		// host. A read-only one fails with the node's reason: no pane holds it read-only.
+		delete(params, "host")
+		s.logf("dispatch: the Antigravity companion is not connected on %s; starting in its default host", am.ID)
+		startErr = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
+	}
+	if startErr != nil {
 		switch {
 		case errors.Is(startErr, apierr.ErrOffline):
 			return "", fmt.Errorf("%s is offline; nothing was started", am.Name)
@@ -416,18 +448,27 @@ func (s *Service) dispatchRead(ctx context.Context, machine, session string, arg
 	return transcriptText(head, sessionLink(s.webBase(ctx), t.Machine, t.Session, false), res.Items), nil
 }
 
-// dispatchOverview lists the computers a task can go to from machine, and the calling agent's tasks.
+// dispatchOverview lists the computers a task can go to from machine, each with the Agent presets it can start
+// (dispatch_start's tier), and the calling agent's tasks.
 func (s *Service) dispatchOverview(ctx context.Context, machine string, mine []dispatchTask) string {
 	var b strings.Builder
 	b.WriteString("Computers a task can go to:\n")
 	n := 0
 	_, durableErr := s.a2aStore()
 	cfg := s.a2aConfig(ctx)
+	var targets, online []Device
 	for _, m := range s.devices(ctx) {
 		if s.canonical(m.ID) == machine || s.isWorkMachine(m.ID) ||
 			durableErr == nil && !s.a2aMachineAllowed(ctx, cfg, s.canonical(m.ID)) {
 			continue
 		}
+		targets = append(targets, m)
+		if m.Online || m.Reachable {
+			online = append(online, m)
+		}
+	}
+	presets := s.presetsOn(ctx, online)
+	for _, m := range targets {
 		state := "offline"
 		if m.Online || m.Reachable {
 			state = "online"
@@ -437,6 +478,7 @@ func (s *Service) dispatchOverview(ctx context.Context, machine string, mine []d
 			home = "home not reported"
 		}
 		fmt.Fprintf(&b, "- %s (id %s): %s, %s\n", m.Name, m.ID, state, home)
+		writePresets(&b, presets, m.ID)
 		n++
 	}
 	if n == 0 {
@@ -478,6 +520,22 @@ func (s *Service) superviseDispatched(ctx context.Context, am Device, c proto.Se
 		s.taskCard(ctx, main, todo.ID, "")
 	}
 	return todo.ID
+}
+
+// dispatchStartRefusal is why a new dispatch_start on am cannot go out, worked out on a probe before its task is
+// recorded: the start as it will reach the node (launch's launcher with Model configuration › Agents laid over it,
+// and dispatch_start's permission rule, dispatchAllowAll) in plan on a computer that cannot hold its launcher
+// read-only (agentStartedHost). nil when it can go out, or when Model configuration cannot give its launcher now: the
+// start reports that as before.
+func (s *Service) dispatchStartRefusal(ctx context.Context, am Device, launch a2aLaunch) error {
+	probe := map[string]any{"launcher": launch.Launcher, "model": "", "effort": ""}
+	launch.Run.lay(probe) // the tier's launcher and model, as the start lays them on its own params
+	if s.applyModel(ctx, "agent.new", probe) != nil {
+		return nil
+	}
+	dispatchAllowAll(ctx, s, am, launch.Launcher, probe)
+	_, err := s.agentStartedHost(ctx, am, probe)
+	return err
 }
 
 // dispatchAllowAll starts a dispatched Agent, a supervised task's (superviseDispatched), in Allow all as agent_start

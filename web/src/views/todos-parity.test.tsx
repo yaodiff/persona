@@ -33,17 +33,17 @@ const before = { ...getState() };
 afterEach(() => seed(before));
 
 describe("the todos page", () => {
-  it("shows loading before the first load, not 没有待办", () => {
+  it("shows loading before the first load, not 暂无待办", () => {
     seed({ todos: [], todosLoaded: false });
     const html = renderToStaticMarkup(<TodosView />);
     expect(html).toContain('data-testid="todos-loading"');
-    expect(html).not.toContain("没有待办");
+    expect(html).not.toContain("暂无待办");
   });
 
   it("shows the iPhone's empty state with 新建待办 once loaded", () => {
     seed({ todos: [], todosLoaded: true });
     const html = renderToStaticMarkup(<TodosView />);
-    expect(html).toContain("没有待办");
+    expect(html).toContain("暂无待办");
     expect(html).toContain("记下一件要做的事，交给 Agent 执行并跟踪进度。");
     // the header's (wider screens' button; a phone's plus, its label and its tooltip, #2029) and the empty state's
     expect(html.match(/新建待办/g)?.length).toBe(4);
@@ -127,15 +127,15 @@ describe("the task board", () => {
   it("says how tasks come about when there are none", () => {
     seed({ todos: [], sessions: {} });
     const html = renderToStaticMarkup(<TaskBoard open conversation="c1" onClose={() => {}} />);
-    expect(html).toContain("还没有任务");
-    expect(html).toContain("在对话里说要做的事，Persona 会把它变成任务。");
+    expect(html).toContain("暂无任务");
+    expect(html).toContain("在对话中说明你想做的事，Persona 会自动将其整理为任务。");
   });
 });
 
 describe("the plan card", () => {
-  it("offers 开始 / 改一下 / 不开 on one line each", () => {
+  it("offers 开始 / 编辑 / 暂不启动 on one line each", () => {
     const html = renderToStaticMarkup(<PlanCard plan={{ id: "p1", conversation: "c1", state: "open", tasks: [{ title: "补测试", prompt: "补", machine: "m1", cwd: "/w" }] }} />);
     const labels = [...html.matchAll(/<button[^>]*whitespace-nowrap[^>]*>(?:<[^>]+>)*([^<]+)<\/button>/g)].map((m) => m[1]);
-    expect(labels).toEqual(["开始", "改一下", "不开"]);
+    expect(labels).toEqual(["开始", "编辑", "暂不启动"]);
   });
 });

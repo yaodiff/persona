@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
@@ -60,7 +63,7 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 				State:     "open",
 				Review:    "approved",
 				Checks:    "failure",
-				CheckedAt: now,
+				CheckedAt: now.Add(-time.Minute),
 			},
 			OtherPRs: []TodoPRStatus{
 				{
@@ -280,6 +283,64 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 		t.Fatalf("unbound todo should omit repo_gate even when todos_v2=true, got: %v", enabled[unboundID]["repo_gate"])
 	}
 
+	// After the ordinary PR freshness window, the bound gate still holds both a list read and a view recheck.
+	later := now.Add(2 * time.Hour)
+	list, err := s.listedTodos(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := s.todoProjectionOf(t.Context(), list, later)
+	recheck, err := s.todoViewsOf(t.Context(), map[string]bool{blockedID: true}, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, row := range list {
+		if row.ID != blockedID {
+			continue
+		}
+		wait := full.waits[i]
+		if wait == nil || wait.URL != wantBlocked.BlockingPR ||
+			!reflect.DeepEqual(wait.PrBlockers, []assistantwire.TodoWaitPRBlocker{assistantwire.TodoWaitPRBlockerChecksFailing}) {
+			t.Fatalf("bound gate did not keep its structured waiting evidence: %+v", wait)
+		}
+		if len(recheck.waits) != 1 || !reflect.DeepEqual(recheck.waits[0], wait) ||
+			todoClassOf(recheck.views[0]) != todoClassOf(full.views[i]) {
+			t.Fatalf("recheck diverged from the bound gate in the list: %+v", recheck)
+		}
+	}
+
+	assertPRHistory := func(row map[string]any) {
+		t.Helper()
+		for _, key := range []string{"pr_url", "pr_status", "other_prs"} {
+			if want := before[blockedID][key]; want == nil || !reflect.DeepEqual(row[key], want) {
+				t.Errorf("%s = %v, want original PR history %v", key, row[key], want)
+			}
+		}
+	}
+
+	// Accept the task while the last CI observation still says the delivery PR failed.
+	s.todos.mu.Lock()
+	s.todos.todos[blockedID].DoneAt = &now
+	s.todos.todos[blockedID].DoneBy = db.DoneByReview
+	s.todos.mu.Unlock()
+	for _, result := range []struct {
+		route string
+		row   map[string]any
+	}{
+		{"list", getTodosRaw()[blockedID]},
+		{"detail", getTodoItemRaw(blockedID)},
+	} {
+		if got := decodeGate(result.row); got != nil {
+			t.Errorf("%s closed todo repo_gate = %+v, want omitted", result.route, got)
+		}
+		view, _ := result.row["view"].(map[string]any)
+		if result.row["done_at"] == nil || view["phase"] != string(assistantwire.TodoPhaseDone) || result.row["wait"] != nil {
+			t.Errorf("%s closed todo has done_at=%v, phase=%v, wait=%v, want done without a wait",
+				result.route, result.row["done_at"], view["phase"], result.row["wait"])
+		}
+		assertPRHistory(result.row)
+	}
+
 	// Phase 3: lossless rollback to todos_v2=false -> repo_gate immediately disappears again.
 	setTodosV2(false, true)
 	after := getTodosRaw()
@@ -293,9 +354,10 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 	if gotTitle, _ := after[blockedID]["title"].(string); !strings.Contains(gotTitle, "Cross-repo feature") {
 		t.Fatalf("unexpected title after rollback: %q", gotTitle)
 	}
+	assertPRHistory(after[blockedID])
 }
 
-func TestTodosV2RepoGateUnlinkedTargetRepoAndPrefixFallback(t *testing.T) {
+func TestTodosV2RepoGateUnlinkedTargetNeedsExplicitPR(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 
 	st := &fakeTodoRepoStore{
@@ -317,8 +379,9 @@ func TestTodosV2RepoGateUnlinkedTargetRepoAndPrefixFallback(t *testing.T) {
 			PRURL:     "https://github.com/org/core/pull/5",
 			PRStatus: &TodoPRStatus{
 				URL:       "https://github.com/org/core/pull/5",
-				State:     "merged",
-				CheckedAt: now,
+				State:     "open",
+				Checks:    "failure",
+				CheckedAt: now.Add(-time.Hour),
 			},
 		},
 	}
@@ -349,10 +412,19 @@ func TestTodosV2RepoGateUnlinkedTargetRepoAndPrefixFallback(t *testing.T) {
 		},
 	}
 
+	assertSnapshotState := func(want string) {
+		t.Helper()
+		if got := snapshotStatesForTest(s, context.Background())[todoID].State; got != want {
+			t.Fatalf("task snapshot state = %q, want %q", got, want)
+		}
+	}
+	assertSnapshotState("PR 检查失败") // i18n-ignore: legacy task snapshot label
+
 	w, _ := permissionSettingsRequest(t, s, "PUT", "/api/v1/assistant", s.managerIdentity(), "full", `{"todos_v2":true,"expected_todos_v2":false}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT todos_v2=true: %d %s", w.Code, w.Body.String())
 	}
+	assertSnapshotState("还没开始") // i18n-ignore: task snapshot label
 
 	r := httptest.NewRequest("GET", "/api/v1/todos", nil)
 	r.Header.Set(RoleHeader, "full")
@@ -376,9 +448,9 @@ func TestTodosV2RepoGateUnlinkedTargetRepoAndPrefixFallback(t *testing.T) {
 	want := &repoGate{
 		State:          repoGateMissingPR,
 		TargetCount:    2,
-		ReadyCount:     1,
+		ReadyCount:     0,
 		ReferenceCount: 0,
-		BlockingRepo:   "org/worker",
+		BlockingRepo:   "org/core",
 		Reason:         "missing_pr",
 	}
 	if !reflect.DeepEqual(payload.Todos[0].RepoGate, want) {

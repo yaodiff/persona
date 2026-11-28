@@ -3,6 +3,7 @@ package assistantwire
 import (
 	"context"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -11,6 +12,8 @@ const EventAssistantEntriesChanged = "assistant.entries.changed"
 
 type AssistantEntriesParams = proto.AssistantEntriesParams
 type AssistantEntriesResult = proto.AssistantEntriesResult
+
+var AssistantEntriesListMethod = buswire.Method[AssistantEntriesParams, AssistantEntriesResult]{Name: MethodAssistantEntriesList}
 
 // Entry changes are invalidation hints, not entry contents. RecordID names the
 // appended correction; ID names the entry that was marked wrong.

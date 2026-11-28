@@ -83,6 +83,24 @@ func LegacyEngine(c EngineChoice) string {
 	return EngineHerdr
 }
 
+// LegacyEngineOnto is the set a single engine from an older client ({"engine": X}) leaves on a machine whose set is
+// stored: when no single engine stands for the stored set (herdr, Orca and Paseo built on the web, say) and the set
+// already holds every host of X, X only becomes its default — a phone that can name one engine must not drop the
+// others with a Save (#17052). Otherwise X's own set, as before: an engine outside the set, and any set a single
+// engine stands for (a host alone, herdr with herdr-core), which the older client could show and so replaces.
+func LegacyEngineOnto(stored EngineChoice, engine string) EngineChoice {
+	want := EngineHostsOf(engine)
+	if LegacyExpresses(stored) {
+		return want
+	}
+	for _, h := range want.Hosts {
+		if !slices.Contains(stored.Hosts, h) {
+			return want
+		}
+	}
+	return EngineChoice{Hosts: slices.Clone(stored.Hosts), Default: want.Default}
+}
+
 // SameEngineChoice reports whether two sets are the same hosts with the same default.
 func SameEngineChoice(a, b EngineChoice) bool {
 	return a.Default == b.Default && slices.Equal(a.Hosts, b.Hosts)

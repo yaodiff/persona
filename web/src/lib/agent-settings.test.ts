@@ -88,11 +88,11 @@ describe("agent settings", () => {
     expect(applySummary([{ id: "a", name: "A" }])).toEqual({ ok: true, text: "已保存" });
     expect(applySummary([{ id: "a", name: "A" }, { id: "b", name: "B" }, { id: "c", name: "C" }])).toEqual({ ok: true, text: "已应用到 3 台机器" });
     expect(applySummary([{ id: "a", name: "A" }, { id: "b", name: "NAS", error: "machine is offline" }])).toEqual({ ok: false, text: "1 台已应用，1 台失败（NAS：machine is offline）" });
-    expect(applySummary([{ id: "b", name: "NAS", error: "x" }]).text).toBe("没有改成（NAS：x）");
+    expect(applySummary([{ id: "b", name: "NAS", error: "x" }]).text).toBe("未能应用更改（NAS：x）");
   });
 
   it("name Claude Code's options in plain words, without the settings-file key (#3599)", () => {
-    expect(settingTitle(recap)).toBe("回来时先说进展");
+    expect(settingTitle(recap)).toBe("返回时总结进展");
     expect(settingDetail(recap)).toContain("离开 5 分钟");
     expect(optionText("effortLevel", "xhigh")).toBe("XHigh");
     expect(optionText("model_reasoning_effort", "ultra")).toBe("Ultra");
@@ -118,8 +118,8 @@ describe("agent settings", () => {
     for (const [key, list] of Object.entries(options)) {
       for (const o of list) expect(optionText(key, o), `${key}=${o}`).not.toBe(o);
     }
-    expect(optionText("approval_policy", "never")).toBe("一律不问");
-    expect(optionText("sandbox_mode", "danger-full-access")).toBe("不设限（危险）");
+    expect(optionText("approval_policy", "never")).toBe("从不询问");
+    expect(optionText("sandbox_mode", "danger-full-access")).toBe("无限制（高风险）");
     const sandbox: AgentSetting = { key: "sandbox_mode", title: "沙箱", detail: "danger-full-access 不设限", type: "enum" };
     expect(settingDetail(sandbox)).not.toMatch(/[a-z]-[a-z]/);
   });
@@ -147,8 +147,8 @@ describe("agent settings", () => {
     }
     expect(settingTitle(row("ui.permission_mode"))).toBe("权限模式");
     expect(settingDetail(row("ui.permission_mode"))).toContain("always-approve");
-    expect(settingDetail(row("ui.permission_mode"))).toContain("批准每一次工具调用");
-    expect(settingDetail(row("ui.yolo"))).toContain("一律批准工具调用");
+    expect(settingDetail(row("ui.permission_mode"))).toContain("直接批准所有工具调用");
+    expect(settingDetail(row("ui.yolo"))).toContain("始终自动批准工具调用");
   });
 });
 
@@ -166,9 +166,9 @@ describe("blocked claude dirs", () => {
   it("reads paths and rows", () => {
     expect(shortPath("/home/me/.automation/a", "/home/me")).toBe("~/.automation/a");
     expect(shortPath("/home/user/x", "/home/me")).toBe("/home/user/x");
-    expect(dirMeta(state.dirs[0])).toBe("默认目录，不能屏蔽 · 40 个会话");
+    expect(dirMeta(state.dirs[0])).toBe("默认目录，无法屏蔽 · 40 个会话");
     expect(dirMeta(state.dirs[1])).toBe("自动发现 · 120 个会话 · 1 个正在运行 · 由规则 ~/.automation/* 屏蔽");
-    expect(dirMeta(state.dirs[2])).toBe("hub.json 里配的");
+    expect(dirMeta(state.dirs[2])).toBe("在 hub.json 中配置");
   });
   it("blocks a directory by its path and lifts the rule that blocks one", () => {
     expect(toggledPatterns(state, state.dirs[2])).toEqual(["~/.automation/*", "/opt/x", "~/.config/cc/work"]);
@@ -184,7 +184,7 @@ describe("blocked claude dirs", () => {
     expect(patternError("", [])).not.toBe("");
     expect(patternError("relative", [])).toContain("开头");
     expect(patternError("~", [])).not.toBe("");
-    expect(patternError("/opt/x/", ["/opt/x"])).toBe("已经屏蔽了");
+    expect(patternError("/opt/x/", ["/opt/x"])).toBe("已屏蔽");
     expect(patternError(" ~/.bots/* ", [])).toBe("");
     expect(withPattern(["/a"], " ~/.bots/ ")).toEqual(["/a", "~/.bots"]);
   });

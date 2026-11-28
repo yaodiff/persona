@@ -17,9 +17,12 @@ import { HealthToday } from './HealthToday';
 import { HealthConversationHistory, HealthRowDivider } from './HealthConversationHistory';
 import { PhoneDictationControl } from './PhoneDictationControl';
 import { PhoneStyle } from '../design/PhoneStyle';
+import { Motion } from '../design/Motion';
 import { PhoneOutlineIcon } from '../design/PhoneOutlineIcon';
+import { Haptics } from '../platform/Haptics';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
 import { compactDraftRoom } from '../core/ComposerSize';
+import { workspaceGridColumns, workspaceGridGutter, workspaceHorizontalPadding } from '../core/WorkspaceGrid';
 
 const HEALTH_REPORT_LIMIT: number = 32 * 1024 * 1024;
 const HEALTH_REPORT_SELECTION_LIMIT: number = 8;
@@ -89,6 +92,7 @@ export struct HealthWorkspacePage {
 
   private send(text: string): void {
     if (!text.trim() || !this.active || this.workspace.busy || this.pickerBusy) return;
+    Haptics.tap();
     this.workspace.startConversation(text).then((row: ResourceRow | undefined) => {
       if (row && this.active && this.workspace.isHealthConversation(row)) this.onChat(row);
     }).catch(() => undefined);
@@ -241,8 +245,17 @@ export struct HealthWorkspacePage {
   }
 
   private openReport(report: HealthReport, record: boolean): void {
+    Haptics.tap();
     const row = this.workspace.openReport(report, record);
     if (row) this.onOpenResource(row);
+  }
+
+  private healthColumns(): number {
+    return workspaceGridColumns(this.paneWidth, this.environment.fontScale, 2);
+  }
+
+  private healthSidePadding(): number {
+    return workspaceHorizontalPadding(this.paneWidth);
   }
 
   @Builder memoryDetail(binding: Binding<HealthMemoryFile>) {
@@ -250,7 +263,7 @@ export struct HealthWorkspacePage {
       Row({ space: Tokens.gap }) {
         Text(binding.value.name === 'MEMORY.md' ? tr('health_memory_index') : binding.value.name).fontSize(Tokens.body).fontWeight(FontWeight.Medium).layoutWeight(1)
         if (binding.value.name !== 'MEMORY.md' && !this.editingMemory) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('health_memory_edit')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('health_memory_edit', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('health_memory_edit')).bindTips(tr('health_memory_edit'))
-          .onClick(() => this.editingMemory = true).id('health.memory.edit')
+          .onClick(() => { Haptics.tap(); this.editingMemory = true; }).id('health.memory.edit')
       }.width('100%')
       if (this.editingMemory && binding.value.name !== 'MEMORY.md') {
         TextArea({ text: this.workspace.memoryDraft, placeholder: tr('health_memory_content') }).height(Tokens.inputExpanded)
@@ -259,49 +272,54 @@ export struct HealthWorkspacePage {
           .fontColor($r('app.color.persona_danger')).width('100%')
         Row({ space: Tokens.gap }) {
           Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('cancel')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('cancel', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('cancel')).bindTips(tr('cancel')).onClick(() => {
+            Haptics.tap();
             this.editingMemory = false; this.workspace.openMemory(binding.value);
           })
           Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('save')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('save', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('save')).bindTips(tr('save')).enabled(this.workspace.canSaveMemory())
-            .onClick(() => this.workspace.saveMemory().then((saved: boolean) => { if (saved) this.editingMemory = false; }).catch(() => false))
+            .onClick(() => this.workspace.saveMemory().then((saved: boolean) => { if (saved) { Haptics.success(); this.editingMemory = false; } }).catch(() => false))
             .id('health.memory.save')
           Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('delete')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('delete', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('delete')).bindTips(tr('delete')).enabled(this.workspace.canEditMemory() && !this.workspace.busy)
-            .onClick(() => this.confirmDeleteMemory(binding.value)).id('health.memory.delete')
+            .onClick(() => { Haptics.attention(); this.confirmDeleteMemory(binding.value); }).id('health.memory.delete')
         }.width('100%')
       } else {
         MarkdownText({ text: this.workspace.memoryDraft, onLink: (url: string) => this.safeLink(url) })
         if (this.workspace.memoryError) Text(tr(this.workspace.memoryError)).fontSize(Tokens.meta)
           .fontColor($r('app.color.persona_danger')).width('100%')
         if (binding.value.name !== 'MEMORY.md') Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('delete')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('delete', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('delete')).bindTips(tr('delete')).enabled(this.workspace.canEditMemory() && !this.workspace.busy)
-          .onClick(() => this.confirmDeleteMemory(binding.value)).id('health.memory.delete')
+          .onClick(() => { Haptics.attention(); this.confirmDeleteMemory(binding.value); }).id('health.memory.delete')
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
-      .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
+      .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .animation(Motion.layout(this.environment.reduceMotion))
   }
 
   @Builder conversationSection() {
     HealthConversationHistory({model:this.model,workspace:this.workspace,rows:this.conversationRowBindings,
-      onOpen:(row: ResourceRow) => { if (this.active) this.onChat(row); }})
+      onOpen:(row: ResourceRow) => { if (this.active) { Haptics.tap(); this.onChat(row); } }})
   }
 
   @Builder memorySection() {
     Column({ space: Tokens.gap }) {
-      Text(tr('health_memory')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
+      Text(tr('health_memory')).fontSize(Tokens.body).fontWeight(600).fontColor(Colors.ink).width('100%')
       if (this.workspace.loading && !this.workspace.memories.length) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       else if (!this.workspace.memoryEntries().length && !this.workspace.indexMemory()) Text(tr('health_no_memory'))
         .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
       ForEach(this.memoryRowBindings, (binding: BoundRow<HealthMemoryFile>) => Button({ type: ButtonType.Normal }) { Row({ space: Tokens.inset }) { Text(binding.value.name).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1); SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(Tokens.meta).fontColor([Colors.secondary]) }.width('100%').constraintSize({ minHeight: Tokens.touch }) }.buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).padding({ left: Tokens.page, right: Tokens.page }).width('100%')
-        .onClick(() => { this.editingMemory = false; this.workspace.openMemory(binding.value); }).id('health.memory.' + binding.value.name),
+        .onClick(() => { Haptics.tap(); this.editingMemory = false; this.workspace.openMemory(binding.value); }).id('health.memory.' + binding.value.name),
         (binding: BoundRow<HealthMemoryFile>) => binding.key)
       if (this.workspace.indexMemory()) Button({ type: ButtonType.Normal }) { Row({ space: Tokens.inset }) { Text(tr('health_memory_index')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1); SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(Tokens.meta).fontColor([Colors.secondary]) }.width('100%').constraintSize({ minHeight: Tokens.touch }) }.buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%').padding({ left: Tokens.page, right: Tokens.page })
-        .onClick(() => { this.editingMemory = false; const index = this.workspace.indexMemory(); if (index) this.workspace.openMemory(index); })
+        .onClick(() => { Haptics.tap(); this.editingMemory = false; const index = this.workspace.indexMemory(); if (index) this.workspace.openMemory(index); })
         .id('health.memory.index')
       if (this.workspace.selectedMemory) this.memoryDetail(UIUtils.makeBinding((): HealthMemoryFile => this.workspace.selectedMemory || new HealthMemoryFile()))
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(15)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
 
   @Builder reportsSection() {
     Column({ space: Tokens.gap }) {
-      Text(tr('health_checkup_reports')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).width('100%')
+      Text(tr('health_checkup_reports')).fontSize(Tokens.body).fontWeight(600).fontColor(Colors.ink).width('100%')
       if (this.workspace.loading && !this.workspace.reports.length) LoadingProgress().width(Tokens.touch).height(Tokens.touch)
       else if (!this.workspace.reports.length && !this.workspace.error) Text(tr('health_no_reports'))
         .fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
@@ -316,15 +334,18 @@ export struct HealthWorkspacePage {
             if (binding.value.path) Button({ type: ButtonType.Normal }) { Row({ space: Tokens.inset }) { Text(tr('health_report_original')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1); SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(Tokens.meta).fontColor([Colors.secondary]) }.width('100%').constraintSize({ minHeight: Tokens.touch }) }.buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%').padding({ left: Tokens.page, right: Tokens.page }).layoutWeight(1)
               .onClick(() => this.openReport(binding.value, false)).id('health.report.original.' + binding.value.name)
             Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('delete')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('delete', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('delete')).bindTips(tr('delete')).enabled(!this.workspace.busy)
-              .onClick(() => this.confirmDeleteReport(binding.value)).id('health.report.delete.' + binding.value.name)
+              .onClick(() => { Haptics.attention(); this.confirmDeleteReport(binding.value); }).id('health.report.delete.' + binding.value.name)
           }.width('100%')
         }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
-          .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.inset)
+          .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(PhoneStyle.cardRadius)
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
       }, (binding: BoundRow<HealthReport>) => binding.key)
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(15)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
 
-  private reportTint(): string { return this.environment.dark ? '#FF6B8B' : '#D62E5C'; }
+  private reportTint(): ResourceColor { return Colors.healthRose; }
 
   @Builder suggestionLabel(key: string, upload: boolean) {
     Row({space:16}) {
@@ -374,7 +395,9 @@ export struct HealthWorkspacePage {
             .accessibilityText(tr(key)).enabled(this.workspace.canStartConversation() && !this.pickerBusy)
             .onClick(() => this.send(tr(key))).id('health.suggestion.'+key)
         }, (key: string) => key)
-      }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(26).clip(true)
+      }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
+        .shadow(PhoneStyle.cardElevation(this.environment.dark)).clip(true)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -383,24 +406,40 @@ export struct HealthWorkspacePage {
       Row({space:Tokens.gap}) {
         SymbolGlyph($r('sys.symbol.checkmark_shield')).fontSize(Tokens.interfaceFontVp(17,this.environment.fontScale))
           .fontColor([Colors.ink]).accessibilityLevel('no')
-        Text(tr('privacy')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(600).fontColor(Colors.ink)
+        Text(tr('privacy')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeHeading)).fontWeight(600).fontColor(Colors.ink)
       }
-      Text(tr('health_privacy_note')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary)
+      Text(tr('health_privacy_note')).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(Colors.secondary)
         .width('100%').id('health.privacy.note')
     }.width('100%').alignItems(HorizontalAlign.Start).padding({left:20,right:20,top:16,bottom:16})
-      .backgroundColor(Colors.surface).borderRadius(26).id('health.privacy')
+      .backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('health.privacy')
   }
 
   @Builder home() {
     Scroll() {
-      Column({ space: 12 }) {
+      Column({ space: 14 }) {
         HealthToday({intake:this.workspace.intake,model:this.model,resolving:this.workspace.loading,unavailable:this.workspace.error,onLink:(link:string) => this.onLink(link)})
-        this.suggestions()
-        this.reportsSection()
-        this.conversationSection()
-        this.memorySection()
-        this.privacy()
-      }.padding({left:Tokens.page,right:Tokens.page,bottom:Tokens.page,top:PhoneStyle.formSize(4,0,this.environment.fontScale)})
+        if (this.healthColumns() > 1) {
+          GridRow({ columns: this.healthColumns(), gutter: { x: workspaceGridGutter(this.healthColumns()), y: 14 } }) {
+            GridCol({ span: 1 }) { this.suggestions() }
+            GridCol({ span: 1 }) {
+              Column({ space: 14 }) {
+                this.reportsSection()
+                this.conversationSection()
+              }.width('100%').alignItems(HorizontalAlign.Start)
+            }
+            GridCol({ span: 1 }) { this.memorySection() }
+            GridCol({ span: 1 }) { this.privacy() }
+          }.width('100%')
+        } else {
+          this.suggestions()
+          this.reportsSection()
+          this.conversationSection()
+          this.memorySection()
+          this.privacy()
+        }
+      }.padding({left:this.healthSidePadding(),right:this.healthSidePadding(),bottom:Tokens.page,top:PhoneStyle.formSize(4,0,this.environment.fontScale)})
         .width('100%').alignItems(HorizontalAlign.Start)
     }.scrollable(ScrollDirection.Vertical).scrollBar(BarState.Auto).layoutWeight(1).width('100%')
   }
@@ -458,8 +497,9 @@ export struct HealthWorkspacePage {
           }})
       }
     }.width('100%').padding({left:4,right:4,top:2,bottom:2}).backgroundColor(Colors.surface).borderRadius(this.composerControl()/2+2)
-      .outline({width:0.5,color:$r('sys.color.comp_divider'),radius:this.composerControl()/2+2})
-    }.width('100%').padding({left:12,right:12,top:8,bottom:this.composerBottomPadding})
+      .outline({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:this.composerControl()/2+2})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+    }.width('100%').padding({left:this.healthSidePadding(),right:this.healthSidePadding(),top:8,bottom:this.composerBottomPadding})
   }
 
   build() {

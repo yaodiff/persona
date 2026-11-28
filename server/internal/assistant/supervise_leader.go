@@ -12,8 +12,6 @@ import (
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Direction leads supervise the tasks they plan; main supervises its own work (#13362). Explicit transfers
@@ -277,8 +275,8 @@ func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal)
 		return s.effectiveSupervisor(ctx, cfg, t)
 	}
 	own := s.ownSupervisor(cfg)
-	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
-		// Dependent readiness and parent closeout wakes go to the owning supervisor conversation (Leader or Main chat),
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.todoV2Wake() {
+		// These task wakes go to the owning supervisor conversation (Leader or Main chat),
 		// never to the background supervisor.
 		if g.To != "" && g.To != cfg.BackgroundSupervisor {
 			return g.To
@@ -360,8 +358,8 @@ func (s *Service) digestConversation(ctx context.Context, cfg Settings, g superv
 	if to != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
 		return to
 	}
-	if g.Kind == sigFailed || g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
-		return cfg.Main // the background supervisor has no start remedies and never receives todo_ready or parent_closeout wakes
+	if g.Kind == sigFailed || g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.todoV2Wake() {
+		return cfg.Main // the background supervisor has no start remedies and does not receive these task wakes
 	}
 	own := s.runtimeSupervisorFallback(ctx, cfg)
 	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))
@@ -518,113 +516,15 @@ func sameLeaders(a, b []string) bool {
 	return slices.Equal(a, b) || len(a) == 0 && len(b) == 0
 }
 
-// ---- a cancelled task's agents ----
-
-// cancelStopWait is how long a cancelled task's closed agent may still read busy before it is left unarchived;
-// cancelStopPoll how often it is looked at meanwhile.
-var cancelStopWait, cancelStopPoll = 30 * time.Second, 500 * time.Millisecond
-
-// stopTaskAgents stops what task t's agents still ask of the user once t is cancelled: each agent on it is closed on
-// its computer (session.close: its tab and process go, its transcript stays, and where its engine can resume it a
-// message does), its
-// cards still waiting end, and it is archived (reversible, nothing deleted). It runs in the background: closing can
-// take a while and the review is answered first.
-func (s *Service) stopTaskAgents(ctx context.Context, t Todo) {
-	var agents []TodoAgent
-	for _, a := range t.Agents {
-		if a.ReleasedAt == nil && a.DismissedAt == nil && a.SessionID != "" {
-			agents = append(agents, a)
-		}
-	}
-	if len(agents) == 0 {
-		return
-	}
-	ctx = context.WithoutCancel(ctx)
-	go func() {
-		for _, a := range agents {
-			s.stopCancelledAgent(ctx, t.ID, a.MachineID, a.SessionID)
-		}
-	}()
-}
-
-// stopCancelledAgent stops, ends the cards of and archives one agent of cancelled task id; one that works for another
-// open task now, an assistant conversation (the user's to stop) or a session its machine does not list is left alone.
-// The agent quits and its terminal stays (session.stop, #4754); a session with no terminal (another tool's, an engine
-// that runs agents itself) is closed as before.
-func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session string) {
-	s.todos.mu.RLock()
-	other, linked := s.todos.activeBySession[[2]string{machine, session}]
-	s.todos.mu.RUnlock()
-	if linked && other != id {
-		s.logf("task %s cancelled: agent %s/%s works for %s now, left alone", id, machine, short(session), other)
-		return
-	}
-	c, err := s.agentArchiveTarget(ctx, machine, session) // refuses an assistant conversation and an unknown session
-	if err != nil {
-		s.logf("task %s cancelled: agent %s/%s left alone: %v", id, machine, short(session), err)
-		return
-	}
-	machine = c.MachineID
-	closed := false
-	if !agentCloseBusy(c) && s.closeEndedTerminals(ctx) {
-		// A cancelled task ends its idle Agent's session: with the owner's close-on-end setting its terminal goes
-		// too (#10355); a busy one is only stopped below and keeps its terminal.
-		var err error
-		if closed, err = s.closeEndedTerminal(ctx, machine, session, proto.StopUser); err != nil {
-			s.logf("task %s cancelled: close agent %s/%s: %v", id, machine, short(session), err)
-		}
-	}
-	if c.Status != proto.StatusOffline && !closed {
-		cctx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
-		err := s.call(cctx, machine, deviceSessionStop, map[string]any{"session_id": session}, nil)
-		if re := (*rpc.Error)(nil); errors.As(err, &re) && re.Code == "no_terminal" {
-			err = s.call(cctx, machine, "session.close", map[string]any{"session_id": session}, nil)
-		}
-		if err != nil {
-			s.logf("task %s cancelled: stop agent %s/%s: %v", id, machine, short(session), err)
-		}
-		cancel()
-	}
-	s.endSessionCards(machine, session)
-	// The archive waits for the list to show it closed: a row still busy there (working, a card waiting) would bring
-	// it straight back (archivedSessions).
-	var row proto.Session
-	for deadline := time.Now().Add(cancelStopWait); ; time.Sleep(cancelStopPoll) {
-		r, err := s.agentArchiveTarget(ctx, machine, session)
-		if err != nil {
-			s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-			return
-		}
-		if !agentArchiveBusy(r) {
-			row = r
-			break
-		}
-		if time.Now().After(deadline) {
-			s.logf("task %s cancelled: agent %s/%s still busy, left unarchived", id, machine, short(session))
-			return
-		}
-	}
-	changedAt, err := s.noteAgentArchiveAt(ctx, row, true)
-	if err != nil {
-		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-		return
-	}
-	row.ArchiveChangedAt = archiveChangedAt(changedAt)
-	publishMark, err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), false) // what it writes as it goes is not new work
-	if err != nil {
-		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
-		s.publishList(row.MachineID) // the archive itself committed; secondary metadata failure must not hide it
-	} else if publishMark != 0 {
-		s.publishListAtArchiveMark(row.MachineID, publishMark)
-	}
-	s.logf("task %s cancelled: closed and archived agent %s/%s", id, machine, short(session))
-}
-
 // endSessionCards ends the cards machine/session still waits on (cancelled in the history), as when its node goes away.
-func (s *Service) endSessionCards(machine, session string) {
+// A caller that inspected particular cards before stopping the session can limit cancellation to those ids.
+func (s *Service) endSessionCards(machine, session string, only ...string) {
 	s.fleet.mu.Lock()
 	var ids []string
 	for id, p := range s.fleet.interactions {
+		if len(only) > 0 && !slices.Contains(only, id) {
+			continue
+		}
 		if p.ix.SessionID == session && s.sameMachine(p.ix.MachineID, machine) && (p.prepared != nil || !p.claimed) {
 			if p.prepared == nil {
 				p.claimed = true

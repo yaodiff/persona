@@ -98,10 +98,66 @@ describe("hovering sidebar rows", () => {
     expect(calls.sidebar).toBe(0);
     expect(calls.agents).toBe(0);
 
-    // the pointer leaves the list: the box goes back to the open row; this route has none in the list, so it fades out
+    // the pointer leaves the list: no open-row overlap; the box fades out instead
     act(() => void links[9].dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
     expect(glide.style.opacity).toBe("0");
     expect(calls.sidebar).toBe(0);
+  });
+
+  it("mounts glide inside [data-sidebar-scroller], matches row horizontal bounds, snaps from hidden, and hides over active row (#17136)", async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-sidebar-scroller")) {
+        return { top: 100, bottom: 700, height: 600, left: 0, right: 260, width: 260, x: 0, y: 100, toJSON() {} } as DOMRect;
+      }
+      if (this.tagName === "A") {
+        const hrefAttr = this.getAttribute("href") ?? "";
+        const i = [...document.querySelectorAll("a")].indexOf(this as HTMLAnchorElement);
+        const top = 120 + i * 36;
+        // Simulate narrower indented/keepTrailing row bounds for agent links vs full-width links
+        const left = hrefAttr.startsWith("/s/mac/") ? 22 : 10;
+        const width = hrefAttr.startsWith("/s/mac/") ? 210 : 236;
+        return { top, bottom: top + 32, height: 32, left, right: left + width, width, x: left, y: top, toJSON() {} } as DOMRect;
+      }
+      return { top: 0, bottom: 10_000, height: 10_000, left: 0, right: 260, width: 260, x: 0, y: 0, toJSON() {} } as DOMRect;
+    });
+
+    await act(() => refresh());
+    act(() =>
+      root.render(
+        <Sidebar route={{ name: "session", mid: "mac", sid: "s1" }} onSearch={() => {}} onNewAgent={() => {}} />,
+      ),
+    );
+    await flush();
+
+    const list = host.querySelector<HTMLElement>("[data-sidebar-rows]")!;
+    const scroller = list.querySelector<HTMLElement>("[data-sidebar-scroller]")!;
+    const glide = list.querySelector<HTMLElement>("[data-glide]")!;
+    expect(scroller.contains(glide)).toBe(true);
+    // Initial state without hover: hidden so it never compounds on top of active row's CURRENT_ROW
+    expect(glide.style.opacity).toBe("0");
+
+    const activeRow = host.querySelector<HTMLAnchorElement>('a[href="/s/mac/s1"]')!;
+    const otherAgent = host.querySelector<HTMLAnchorElement>('a[href="/s/mac/s2"]')!;
+    const inboxRow = host.querySelector<HTMLAnchorElement>('a[href="/inbox"]')!;
+
+    // Hovering non-active agent: appears via opacity snap (no transform slide from stale row) and matches row width
+    act(() => void otherAgent.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null })));
+    expect(glide.style.opacity).toBe("1");
+    expect(glide.style.left).toBe("22px");
+    expect(glide.style.width).toBe("210px");
+    expect(glide.style.transition).toBe("opacity 150ms ease");
+
+    // Moving directly to another non-active row: glides via transform and adopts that row's width
+    act(() => void inboxRow.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null })));
+    expect(glide.style.opacity).toBe("1");
+    expect(glide.style.left).toBe("10px");
+    expect(glide.style.width).toBe("236px");
+    expect(glide.style.transition).toContain("transform");
+
+    // Moving onto the active row: fades out so CURRENT_ROW never double-composites with [data-glide]
+    act(() => void activeRow.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null })));
+    expect(glide.style.opacity).toBe("0");
   });
 
   it("opens and dismisses Persona and Agent cards without rendering either list", async () => {

@@ -13,7 +13,7 @@ import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { updateTodo, type Todo } from "../../lib/todos";
 import { briefBody } from "../../lib/brief-rows";
 import { acceptBrief, failedKey, handledLater, type BriefBody, type BriefRow, type FeedItem } from "../../lib/feed";
-import { shortDuration } from "../../lib/format";
+import { safeWebURL, shortDuration } from "../../lib/format";
 import { formatDate, t } from "../../i18n";
 import { Button, cx, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
@@ -40,9 +40,9 @@ function More({ n, text = "assistant-brief.more" }: { n: number; text?: string }
   return n > 0 ? <div className="py-1 text-label text-ink-2">{t(text, { n })}</div> : null;
 }
 
-/** A link the hub gave, if it is a web address: anything else is not drawn as one. */
+/** A link the hub gave, if it is a safe web address: anything else is not drawn as one. */
 function webLink(link?: string): string | undefined {
-  return link && /^https?:\/\//i.test(link) ? link : undefined;
+  return safeWebURL(link);
 }
 
 /** Opens the chat a waiting or later row came from in the app (#12055), as iOS and Android do (#2320): an Agent's as the
@@ -293,6 +293,32 @@ export function BriefCard({ item }: { item: FeedItem }) {
           <More n={body.later_total - body.later.length} text="assistant-brief.later_more" />
         </Section>
       )}
+      {body.deferred_supervision.length > 0 && (
+        <Section icon="list" tint="bg-field text-ink-2" title={t("assistant-brief.supervision_deferred")}>
+          {body.deferred_supervision.map((row) => (
+            <div key={row.id} className="flex items-start gap-2 py-1 text-meta">
+              <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                <div className="font-medium">{row.title}</div>
+                <div className="text-ink-2">{row.reason}</div>
+              </div>
+              <Button onClick={() => openTask(row.todo_id)}>{t("assistant-brief.open")}</Button>
+            </div>
+          ))}
+        </Section>
+      )}
+      {body.contributions.map((entry) => (
+        <Section key={entry.extension_id + ":" + entry.contribution_id} icon="list" tint="bg-field text-ink-2" title={entry.title}>
+          <div className="space-y-1 py-1 text-meta [overflow-wrap:anywhere]">
+            {entry.facts.map((fact, i) => <p key={i}>{fact}</p>)}
+            {entry.sections.map((section, i) => (
+              <div key={i}>
+                <h4 className="font-medium">{section.title}</h4>
+                <p className="whitespace-pre-line text-ink-2">{section.body}</p>
+              </div>
+            ))}
+          </div>
+        </Section>
+      ))}
       {body.progress_total > 0 && (
         <Section icon="gear" tint="bg-orange-tint text-orange" title={t("assistant-brief.progress_head", { n: body.progress_total })}>
           {body.progress.map((p) => (

@@ -23,5 +23,7 @@
   "failed_hint": "受信箱または元の会話で、対応が必要な内容を確認してください。",
   "retry": "再試行",
   "current_suggestion": "現在の提案",
-  "retry_after": "送信元は {seconds} 秒後の再試行を推奨しています。"
+  "retry_after": "送信元は {seconds} 秒後の再試行を推奨しています。",
+  "mentions_will": "メンション予定：",
+  "mentions_sent": "メンション済み："
 }

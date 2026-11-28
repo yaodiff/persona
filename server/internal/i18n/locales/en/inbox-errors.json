@@ -10,8 +10,8 @@
   "suggestion_stale": "the suggestion was updated",
   "answer_only": "this device can only confirm a reply or a conclusion as text",
   "suggestion_action": "action must be confirm, reject or instruct",
-  "parent_kind": "parent kind must be inbox, todo or session",
-  "parent_id": "parent id must be 1–256 printable characters",
+  "parent_kind": "parent kind must be inbox, todo, session or agent",
+  "parent_id": "parent id must be 1–256 printable characters; a personal Agent's is <source>:<sessionKey>",
   "parent_cycle": "that parent would make a cycle",
   "parent_deep": "that parent would sit the item too deep (at most 8 levels)",
   "bulk_limit": "too many items in one request",
@@ -56,5 +56,6 @@
   "send_rate_limited": "The app this came from is limiting how often replies can be sent, so nothing was sent. Try again in a moment.",
   "send_failed": "The app this came from couldn’t send the reply, so nothing was sent. Try again, or reply in that app.",
   "send_unrecorded": "The reply couldn’t be recorded before sending, so nothing was sent. Try again in a moment.",
+  "bot_not_in_chat": "The bot is not in this chat. Add it to the group, then try again. Your account was not used.",
   "reply_policy_blocked": "Reply policy blocked this owner draft, so nothing was sent."
 }

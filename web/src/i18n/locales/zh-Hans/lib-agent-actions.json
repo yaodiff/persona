@@ -1,12 +1,12 @@
 {
-  "save_failed": "没改成：{error}",
+  "save_failed": "保存失败：{error}",
   "pinned": "已置顶",
   "unpinned": "已取消置顶",
   "space_pinned": "已置顶空间",
   "space_unpinned": "已取消置顶空间",
   "muted": "已屏蔽通知",
   "unmuted": "已恢复通知",
-  "space_muted": "已屏蔽这个空间",
-  "space_unmuted": "已恢复这个空间的通知",
-  "send_failed": "没发出去：{error}"
+  "space_muted": "已屏蔽空间通知",
+  "space_unmuted": "已恢复空间通知",
+  "send_failed": "发送失败：{error}"
 }

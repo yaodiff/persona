@@ -3,6 +3,8 @@ package node
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,8 +22,44 @@ import (
 // -c, a session running in its own process, 0.153 without a daemon, a compatible CLI) keeps the terminal route (codexask.go); so
 // does a joined one whose app-server goes away, until it is back.
 
-// codexJoinRetry: a pane whose join failed is tried again after this long.
-var codexJoinRetry = 30 * time.Second
+// Background join throttling and retry backoff (#13578): cap concurrent joins per app-server so an app-server restart
+// with hundreds of resumable panes never stampedes the daemon, and space retries with capped exponential backoff + jitter.
+var (
+	codexJoinConcurrency = 4
+	codexJoinRetry       = 30 * time.Second
+	codexJoinRetryMax    = 5 * time.Minute
+	codexJoinJitter      = defaultCodexJoinJitter
+)
+
+func defaultCodexJoinJitter(base time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	span := base / 4
+	if span <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(span) + 1))
+}
+
+func codexJoinBackoff(fails int) time.Duration {
+	base := codexJoinRetry
+	if base <= 0 {
+		return 0
+	}
+	shift := min(max(fails-1, 0), 4)
+	wait := base << shift
+	capWait := max(codexJoinRetryMax, base)
+	if wait > capWait || wait < base {
+		wait = capWait
+	}
+	if codexJoinJitter != nil {
+		if extra := codexJoinJitter(wait); extra > 0 {
+			wait += extra
+		}
+	}
+	return wait
+}
 
 // Routes of a live Codex pane (proto.Session.CodexRoute).
 const (
@@ -31,42 +69,69 @@ const (
 
 type codexJoinState struct {
 	busy     bool
+	fails    int
 	failedAt time.Time
+	nextAt   time.Time
 	note     string
 }
 
-// joinCodexPanes joins, in the background, every live Codex pane whose thread runs on a connected app-server and is
-// not joined yet. A failed join waits codexJoinRetry before the next try.
+// joinCodexPanes enqueues, on each owning app-server's bounded background worker pool, every live Codex pane whose
+// thread runs on a connected app-server and is not joined yet, plus active or blocked threads on connected app-servers.
+// Failed joins back off with jitter before retrying.
 func (n *Node) joinCodexPanes(ctx context.Context) {
-	if n == nil {
+	if n == nil || ctx.Err() != nil || n.codices == nil {
 		return
 	}
 	n.mu.Lock()
 	var ids []string
 	for id, a := range n.agents {
-		// botmux's sessions stay botmux's: it delivers their messages, and its Codex may run on an app-server too.
+		// A botmux pane alone does not trigger a join because botmux delivers its own messages.
 		if a.Agent == "codex" && a.PaneID != "" && host.ParsePane(a.PaneID).Kind != host.Botmux {
 			ids = append(ids, id)
 		}
 	}
 	n.mu.Unlock()
+	n.codices.mu.Lock()
+	remotes := slices.Collect(mapRemoteValues(n.codices.remotes))
+	n.codices.mu.Unlock()
+	for _, c := range remotes {
+		c.mu.Lock()
+		for _, t := range c.threads {
+			if c.ready && !t.joined && (t.status == proto.StatusWorking || t.status == proto.StatusBlocked) {
+				ids = append(ids, t.publicID)
+			}
+		}
+		c.mu.Unlock()
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	if len(ids) == 0 {
+		return
+	}
+	byRemote := map[*codexRemote][]string{}
 	for _, id := range ids {
 		c, t, err := n.codexOwner(id)
-		if err != nil || t.joined || t.parent != "" || !n.cx.startJoin(id) {
+		if err != nil || t.joined || !n.cx.joinDue(id) {
 			continue
 		}
-		go func() {
-			jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			err := c.join(jctx, id, false)
-			n.cx.endJoin(id, err)
-			if err != nil {
-				n.logf("codex %s: joining it on app-server %s failed, it stays on the terminal: %v", id, c.spec.ID, err)
-				return
-			}
-			n.logf("codex %s: joined on app-server %s", id, c.spec.ID)
-		}()
+		byRemote[c] = append(byRemote[c], id)
 	}
+	for c, batch := range byRemote {
+		c.enqueueBackgroundJoins(batch)
+	}
+}
+
+func (c *codexCards) joinDue(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := c.joins[id]
+	if s.busy {
+		return false
+	}
+	if !s.nextAt.IsZero() {
+		return !time.Now().Before(s.nextAt)
+	}
+	return s.failedAt.IsZero() || time.Since(s.failedAt) >= codexJoinRetry
 }
 
 func (c *codexCards) startJoin(id string) bool {
@@ -76,7 +141,14 @@ func (c *codexCards) startJoin(id string) bool {
 		c.joins = map[string]codexJoinState{}
 	}
 	s := c.joins[id]
-	if s.busy || (!s.failedAt.IsZero() && time.Since(s.failedAt) < codexJoinRetry) {
+	if s.busy {
+		return false
+	}
+	now := time.Now()
+	if !s.nextAt.IsZero() && now.Before(s.nextAt) {
+		return false
+	}
+	if s.nextAt.IsZero() && !s.failedAt.IsZero() && now.Sub(s.failedAt) < codexJoinRetry {
 		return false
 	}
 	s.busy = true
@@ -87,11 +159,22 @@ func (c *codexCards) startJoin(id string) bool {
 func (c *codexCards) endJoin(id string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := codexJoinState{}
-	if err != nil {
-		s.failedAt, s.note = time.Now(), "接入 app-server 失败："+err.Error()
+	if c.joins == nil {
+		c.joins = map[string]codexJoinState{}
 	}
-	c.joins[id] = s
+	if err == nil {
+		c.joins[id] = codexJoinState{}
+		return
+	}
+	now := time.Now()
+	fails := c.joins[id].fails + 1
+	wait := codexJoinBackoff(fails)
+	c.joins[id] = codexJoinState{
+		fails:    fails,
+		failedAt: now,
+		nextAt:   now.Add(wait),
+		note:     "接入 app-server 失败：" + err.Error(),
+	}
 }
 
 func (c *codexCards) joinNote(id string) string {

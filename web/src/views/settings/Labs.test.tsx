@@ -128,7 +128,7 @@ describe("Settings › Labs", () => {
     await click(radios()[1]);
     expect(field().querySelector('[role="alert"]')?.textContent).toBe(t("settings-labs.save_failed"));
     expect(chosen()).toBe(t("settings-labs.terminal_renderer_standard"));
-    expect(field().textContent).not.toContain(t("settings-configuration.saved"));
+    expect(field().querySelector("[aria-live]")?.textContent).not.toContain(t("settings-configuration.saved"));
   });
 
   it("says when the browser won't let it read what is saved", async () => {
@@ -338,7 +338,7 @@ describe("Settings › Labs", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url.endsWith("/api/v1/todos")) {
+      if (url.split("?")[0].endsWith("/api/v1/todos")) {
         todosRefreshes++;
         return new Response(JSON.stringify({ todos: [] }), {
           status: 200,

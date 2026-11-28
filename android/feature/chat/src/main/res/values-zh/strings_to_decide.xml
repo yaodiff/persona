@@ -1,0 +1,12 @@
+<resources>
+    <string name="chat_to_decide">待选择</string>
+    <string name="chat_to_decide_arrived">待选择 +%1$d</string>
+    <string name="chat_to_decide_view_source">在对话中查看</string>
+    <string name="chat_to_decide_skip">跳过</string>
+    <string name="chat_to_decide_skip_terminal">请在对话中回复这个问题。</string>
+    <string name="chat_to_decide_skip_permission">选择拒绝可阻止工具运行。</string>
+    <string name="chat_to_decide_skip_plan">选择退回可让 Agent 修改计划。</string>
+    <string name="chat_to_decide_previous">上一张卡片</string>
+    <string name="chat_to_decide_next">下一张卡片</string>
+    <string name="chat_to_decide_position">%1$d / %2$d</string>
+</resources>

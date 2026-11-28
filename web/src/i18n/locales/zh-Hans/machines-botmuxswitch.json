@@ -1,6 +1,6 @@
 {
   "label": "同时显示 botmux 会话",
-  "footer": "这台电脑装了 botmux 时，botmux 里的会话和所选引擎的会话一起列出。关掉后不再列出，也不再运行 botmux。",
+  "footer": "当这台电脑安装了 botmux 时，其会话会与所选引擎的会话一同列出。关闭后将不再列出这些会话，也不会运行 botmux。",
   "save_failed": "保存失败：{error}",
   "on": "开",
   "off": "关"

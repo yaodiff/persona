@@ -1,0 +1,27 @@
+{
+  "session": {},
+  "subscription_type": "enterprise",
+  "rate_limits_available": true,
+  "rate_limits": {
+    "five_hour": null,
+    "seven_day": null,
+    "limits": [
+      {
+        "kind": "session",
+        "percent": 28,
+        "resets_at": "2026-11-21T14:00:00Z",
+        "scope": null
+      },
+      {
+        "kind": "weekly_scoped",
+        "percent": 11,
+        "resets_at": "2026-11-26T00:00:00Z",
+        "scope": {
+          "model": {
+            "display_name": "Opus"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -101,7 +101,7 @@ internal fun InteractionPanel(
     val closeCard: @Composable (Interaction) -> Unit = { request ->
         val requestBlock = resolveRequestApprovalBlockedReason(request, blockFor(request))
         val stoppedWork = requestBlock != null && request.isManagerWorkCard
-        val localOnly = !stoppedWork && (requestBlock != null || (request.kind == "question" && request.canCancel != true))
+        val localOnly = request.isLocalDiscard(requestBlock)
         if ((localOnly && onDiscardLocal != null) || stoppedWork || (request.kind == "question" && request.canCancel == true)) {
             val canClose = busyId == null && !linkVisible && if (localOnly) onDiscardLocal != null else
                 request.id !in uncertainIds && !RequestExpiry.expired(request.expiresAt, now)
@@ -164,6 +164,9 @@ internal fun InteractionPanel(
         }
     }
 }
+
+internal fun Interaction.isLocalDiscard(blocked: String?): Boolean =
+    (blocked == null || !isManagerWorkCard) && (blocked != null || (kind == "question" && canCancel != true))
 
 @Composable
 private fun Interaction.cardTitle(): String = when {
@@ -520,7 +523,7 @@ internal fun InteractionForm(
         if (!interaction.isSecretRun && !interaction.isSecretHandoff) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             if (onTerminal != null || showTerminalHelp) JTextButton(if (onTerminal != null) RequestExpiry.terminalLabel.text() else stringResource(R.string.chat_request_terminal_help),
                 { password = ""; if (onTerminal != null) onTerminal() else terminalHelp = true })
-            if (ApprovalPolicy.actions(AnswerEntry.Conversation, interaction.kind, false).any { it.id == ApprovalAction.Dismiss }) {
+            if (!interaction.noHandBack && ApprovalPolicy.actions(AnswerEntry.Conversation, interaction.kind, false).any { it.id == ApprovalAction.Dismiss }) {
                 JTextButton(stringResource(R.string.chat_request_dismiss), { act(AnswerAction.Dismiss) }, enabled = enabled(AnswerAction.Dismiss))
             }
         }

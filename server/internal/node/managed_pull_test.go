@@ -179,42 +179,50 @@ func TestOwnLauncherCountsOnlyTheUsersOwn(t *testing.T) {
 	}
 }
 
-// An agy provider delivered on demand is still pulled ahead: the Antigravity companion runs all the time and takes the
-// launcher's key when it starts, so without the pull it stayed on agy's own sign-in (#13871).
-func TestOnDemandAgyProviderIsPulledForTheCompanion(t *testing.T) {
+// An on-demand managed agy launcher is NOT prefetched on catalog push: catalog updates only refresh the index/rev,
+// and secrets are pulled on demand when a session or probe resolves its channel pool (agyChannelFor).
+func TestOnDemandAgyProviderWaitsUntilSessionUsesIt(t *testing.T) {
 	n := &Node{bin: "/usr/local/bin/personad"}
+	var mu sync.Mutex
+	var asked []string
 	h := &pullHub{answer: func(name string) (any, error) {
+		mu.Lock()
+		asked = append(asked, name)
+		mu.Unlock()
 		return map[string]any{"launcher": proto.ManagedLauncher{Name: name, Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", APIKey: "agy-pulled-key"}}, nil
 	}}
 	withPullHub(t, n, h)
 	entry := proto.ManagedLauncher{Name: "agy-gw", Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", Delivery: proto.DeliveryOnDemand, Rev: "r1"}
-	n.setCatalog([]proto.ManagedLauncher{entry.Public()})
-	pulledAgy := func(n *Node) func() bool {
-		return func() bool {
-			return strings.Contains(strings.Join(n.agyProviderEnv(), "\n"), "GEMINI_API_KEY=agy-pulled-key")
-		}
+	pushed := proto.ManagedLauncher{Name: "push-sentinel", BaseURL: "https://push.example.com", Model: "m1", Delivery: proto.DeliveryPush, Rev: "r1"}
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"},
+		entry.Public(),
+		pushed.Public(),
+	})
+
+	// Wait for the background prefetch goroutine to finish pulling the pushed sentinel listed after agy-gw.
+	waitWithin(t, 5*time.Second, "pushed sentinel prefetched", func() bool {
+		l, ok := n.managedLauncher(pushed.Name)
+		return ok && !l.Withheld
+	})
+	mu.Lock()
+	prefetched := slices.Clone(asked)
+	mu.Unlock()
+	if !slices.Equal(prefetched, []string{pushed.Name}) {
+		t.Fatalf("on-demand agy launcher was prefetched on catalog push: asked %v, want only [%s]", prefetched, pushed.Name)
 	}
-	waitWithin(t, 5*time.Second, "an on-demand agy provider in the companion's env", pulledAgy(n))
-	// A Claude provider on demand still waits for a start. Listed before an agy one, it would be pulled before it (one
-	// goroutine pulls ahead in list order): once the agy one is in, the Claude one was never asked for.
-	other := &Node{bin: "/usr/local/bin/personad"}
-	var mu sync.Mutex
-	var asked []string
-	h2 := &pullHub{answer: func(name string) (any, error) {
-		mu.Lock()
-		asked = append(asked, name)
-		mu.Unlock()
-		if name == entry.Name {
-			return map[string]any{"launcher": proto.ManagedLauncher{Name: name, Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", APIKey: "agy-pulled-key"}}, nil
-		}
-		return nil, errors.New("not expected")
-	}}
-	withPullHub(t, other, h2)
-	other.setCatalog([]proto.ManagedLauncher{{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"}, entry.Public()})
-	waitWithin(t, 5*time.Second, "the agy provider pulled after the Claude one's place", pulledAgy(other))
+
+	// Resolving the channel on demand triggers launchers.pull and returns the isolated channel spec.
+	ch, err := n.agyChannelFor(t.Context(), entry.Name)
+	if err != nil || ch == nil {
+		t.Fatalf("agyChannelFor(%q) = %+v, %v", entry.Name, ch, err)
+	}
+	if ch.ID != entry.Name || ch.AuthMode != "gemini-api-key" || ch.Rev != "r1" || ch.Env["GEMINI_API_KEY"] != "agy-pulled-key" {
+		t.Fatalf("unexpected channel spec: %+v", ch)
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !slices.Equal(asked, []string{entry.Name}) {
-		t.Fatalf("an on-demand Claude provider was pulled ahead: asked for %v", asked)
+	if !slices.Equal(asked, []string{pushed.Name, entry.Name}) {
+		t.Fatalf("expected on-demand pull for %s after sentinel, got %v", entry.Name, asked)
 	}
 }

@@ -46,12 +46,24 @@ export interface KBEntry {
   extra?: string;
   /** recordings: meeting, note or day (#8870); absent from an older hub */
   recording_kind?: string;
+  /** recordings: why in-flight work (minutes, recap or upload) is paused on the hub ("module_off"); absent otherwise (#15214) */
+  paused?: string;
   /** chats: the source they came from; docs, meetings and events: the connector that supplied them (#8872) */
   source?: string;
   /** recordings: the id of the imported meeting it overlaps, as the meetings list has it (#8872) */
   meeting_id?: string;
   /** recordings in the meetings list (this client's, `mergeMeetingLists` in views/knowledge/meetings.ts): the imported meeting it stands for (#8872) */
   imported?: KBEntry;
+}
+
+/** Why a stored recording's in-flight work is paused on the hub (#15214): closed so an unknown reason from a newer hub
+ *  neither crashes nor triggers module-off wording. */
+export type RecordingPause = "module_off" | "unknown";
+
+/** Decodes `paused` from a recording entry or detail into the closed set; empty, absent or non-string values are null. */
+export function recordingPaused(value: unknown): RecordingPause | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value === "module_off" ? "module_off" : "unknown";
 }
 
 /** The tag a recording's row carries in the meetings list (#8871): notes and all-day recordings are the exceptions among
@@ -98,10 +110,16 @@ export interface KBDetail {
   moments?: KBMomentRef[] | null;
   /** recordings: the transcript, seconds from the start (docs/protocol/protocol.md "Recording sync"). */
   segments?: KBSegment[] | null;
+  /** recordings: hub-separated speakers and owner-chosen names (#17674, docs/assistant/meeting-minutes.md "Speakers
+   *  (#17674)"). Read defensively on its own (lib/recording-speakers.ts `decodeSpeakers`), so a broken block never
+   *  costs the rest of the detail. */
+  speakers?: unknown;
   /** Recordings may retain older minutes while a newer revision is pending or failed. */
   minutes?: RecordingMinutes | null;
   /** An all-day recording's recap (#4741), kept while a newer one is pending or failed. */
   recap?: DayRecap | null;
+  /** recordings: why in-flight work (minutes, recap or upload) is paused on the hub ("module_off"); absent otherwise (#15214) */
+  paused?: string;
   /** topics: the knowledge points (docs/assistant/knowledge.md "Knowledge points"). */
   points?: TopicPoint[] | null;
 }
@@ -153,6 +171,9 @@ export interface RecordingMinutes {
   /** The summary card (#6563): the headline, the core conclusions and the points and decisions grouped by topic. Read
    *  defensively on its own (modules/recording/minutes-overview.ts `minutesOverview`), so a broken one never costs the fields above. */
   overview?: unknown;
+  /** Real disagreements and each side's stance (#16728). Read defensively on its own
+   *  (modules/recording/minutes-debates.ts `minutesDebates`), so a broken block never costs the fields above. */
+  debates?: unknown;
   partial?: boolean;
   /** The same minutes as Markdown, what Copy sends; it follows the summary card when there is one. */
   markdown: string;
@@ -216,6 +237,10 @@ export interface KBSegment {
   /** Persona's own answer heard by the meeting's microphone (#5905, docs/assistant/meeting-minutes.md "Persona's echo"):
    *  kept on the hub, not shown as the meeting's. */
   echo?: boolean;
+  /** Hub-assigned speaker id ("s1", "s2", ...) for a hub-transcribed meeting with a timeline (#17674). */
+  speaker?: string;
+  /** True when the line's speaker assignment is unsure or the meeting's separation quality is low (#17674). */
+  speaker_unsure?: boolean;
 }
 
 /** One question asked in an attended meeting (docs/assistant/meeting-minutes.md "Attending a meeting", `Ask`). `state`,
@@ -340,6 +365,23 @@ export interface KBDetailResponse {
   detail: KBDetail;
   agents?: Session[] | null;
   matches?: KBMatch[] | null;
+  /** chats: the chat's Inbox items (#15356, docs/assistant/knowledge.md "A chat's Inbox items"); absent: none. */
+  inbox?: KBInboxItem[] | null;
+}
+
+/** An Inbox item a chat's page lists: what its row draws, and `messages`, the rows of the page's `recent` it holds,
+ *  each by its day and its lines as written there (the hub matched them on time, sender and text). */
+export interface KBInboxItem {
+  id: string;
+  title: string;
+  tier?: string;
+  /** an open item's section (action, working, fyi, noise) as the Inbox has it */
+  status?: string;
+  summary?: string;
+  preview?: string;
+  updated_at: string;
+  done_at?: string | null;
+  messages?: { day: string; line: string }[] | null;
 }
 
 /** One entry a search found (`/kb-search?results=1`): how many lines matched and the first few. */
@@ -898,6 +940,24 @@ export function parseRecent(text?: string): RecentDay[] {
   }
   flush();
   return out.filter((d) => d.messages.length);
+}
+
+/** What a row of a chat's recent messages goes by: its day and the row as parseMessageLine reads it. */
+export function messageRowKey(day: string | null, m: MessageLine): string {
+  return [day ?? "", m.time, m.sender, m.text].join("\u0000");
+}
+
+/** The Inbox item each row of a chat's recent messages belongs to, by messageRowKey: a row an item's `messages` names,
+ *  read as parseRecent reads it (the first item naming it, the newest, when two do). */
+export function inboxOfRows(items: readonly KBInboxItem[] | null | undefined): Map<string, KBInboxItem> {
+  const out = new Map<string, KBInboxItem>();
+  for (const it of items ?? []) {
+    for (const m of it.messages ?? []) {
+      const key = messageRowKey(m.day, parseMessageLine(m.line));
+      if (!out.has(key)) out.set(key, it);
+    }
+  }
+  return out;
 }
 
 // ── Ask Persona ────────────────────────────────────────

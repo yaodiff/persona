@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -27,12 +28,14 @@ func TestBusFileCallCancelReachesManager(t *testing.T) {
 			close(cancelled)
 			return nil, ctx.Err()
 		})
+		h.devices.mu.Lock()
+		h.devices.upOpen = map[string]bool{devicesOwner: true}
+		h.devices.mu.Unlock()
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		done := make(chan error, 1)
-		var res json.RawMessage
 		go func() {
-			done <- h.callBusAsIs(ctx, assistantwire.AssistantID, devicewire.MethodFileCall,
-				devicewire.NodeCall{MachineID: "m1", Method: "file.copy", Params: json.RawMessage(`{}`)}, &res)
+			done <- (&busNode{h: h, id: "m1"}).Call(ctx, "file.copy", json.RawMessage(`{}`), nil)
 		}()
 		select {
 		case <-started:
@@ -49,8 +52,8 @@ func TestBusFileCallCancelReachesManager(t *testing.T) {
 		}
 		select {
 		case err := <-done:
-			if err == nil {
-				t.Fatal("cancelled file.copy succeeded")
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled file.copy returned %v, want context.Canceled", err)
 			}
 		case <-time.After(time.Second):
 			t.Fatal("caller did not stop waiting")
@@ -111,7 +114,7 @@ func TestBusFileCallFallsBackOnlyForOldManager(t *testing.T) {
 	}{
 		{name: "old manager copy", method: "file.copy", firstErr: &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method devices.file_call"}, wantCalls: []string{devicewire.MethodFileCall, devicewire.MethodCall}},
 		{name: "old manager zip", method: "file.zip", firstErr: &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method devices.file_call"}, wantCalls: []string{devicewire.MethodFileCall, devicewire.MethodCall}},
-		{name: "other error is not retried", method: "file.copy", firstErr: &rpc.Error{Code: bus.CodeInvalidParams, Message: "bad file call"}, wantCalls: []string{devicewire.MethodFileCall}, wantErr: true},
+		{name: "other error is not retried", method: "file.copy", firstErr: &rpc.Error{Code: bus.CodeInvalidParams, Message: "bad file call", Data: json.RawMessage(`{"field":"path"}`)}, wantCalls: []string{devicewire.MethodFileCall}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -132,11 +135,13 @@ func TestBusFileCallFallsBackOnlyForOldManager(t *testing.T) {
 				h.devices.mu.Unlock()
 				var out map[string]any
 				err := (&busNode{h: h, id: "m1"}).Call(context.Background(), tc.method, map[string]any{}, &out)
-				if (err != nil) != tc.wantErr {
-					t.Fatalf("Call error = %v, wantErr %v", err, tc.wantErr)
-				}
-				if !tc.wantErr && out["ok"] != true {
-					t.Fatalf("Call result = %#v", out)
+				if tc.wantErr {
+					var got *rpc.Error
+					if !errors.As(err, &got) || got.Code != tc.firstErr.Code || got.Message != tc.firstErr.Message || string(got.Data) != string(tc.firstErr.Data) {
+						t.Fatalf("Call error = %#v (%v), want %#v", got, err, tc.firstErr)
+					}
+				} else if err != nil || out["ok"] != true {
+					t.Fatalf("Call result = %#v, %v", out, err)
 				}
 				if len(calls) != len(tc.wantCalls) {
 					t.Fatalf("manager received %d calls, want %d", len(calls), len(tc.wantCalls))
@@ -153,12 +158,13 @@ func TestBusFileCallFallsBackOnlyForOldManager(t *testing.T) {
 
 func TestDeviceBusMethod(t *testing.T) {
 	for method, want := range map[string]string{
-		"file.copy":    devicewire.MethodFileCall,
-		"file.zip":     devicewire.MethodFileCall,
-		"file.move":    devicewire.MethodCall,
-		"session.send": devicewire.MethodCall,
+		"file.copy":          devicewire.MethodFileCall,
+		"file.zip":           devicewire.MethodFileCall,
+		"file.move":          devicewire.MethodCall,
+		"session.send":       devicewire.MethodCall,
+		nodeproto.StopIfIdle: devicewire.MethodRetireCall,
 	} {
-		if got := deviceBusMethod(method); got != want {
+		if got := deviceBusMethod(method).Name; got != want {
 			t.Errorf("%s uses %q, want %q", method, got, want)
 		}
 	}

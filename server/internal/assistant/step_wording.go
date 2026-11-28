@@ -180,6 +180,7 @@ var stepMCP = map[string]string{
 	"mail_search":                 "step_mail_search",
 	"mail_read":                   "step_mail_read",
 	"mail_send":                   "step_mail_send",
+	"mail_move":                   "step_mail_move",
 	"kb_update":                   "step_kb_update",
 	"search_knowledge":            "step_kb",
 }

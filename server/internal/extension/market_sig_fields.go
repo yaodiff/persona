@@ -12,6 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
+var catalogIndexType = reflect.TypeFor[MarketIndex]()
+
 // catalogFields checks names only where encoding/json decodes a known struct.
 // strictJSON already rejects exact duplicates everywhere. Arbitrary maps and raw
 // schemas keep case-sensitive keys; unknown catalog metadata remains extensible.
@@ -78,7 +80,7 @@ func catalogFields(raw []byte, typ reflect.Type) error {
 	if typ == reflect.TypeFor[MarketIndex]() {
 		known["extensions"] = reflect.TypeFor[[]MarketEntry]()
 	}
-	if typ == reflect.TypeFor[MarketEntry]() {
+	if typ == reflect.TypeFor[MarketEntry]() || typ == reflect.TypeFor[MarketRelease]() {
 		known["manifest"] = reflect.TypeFor[Manifest]()
 	}
 	for name, value := range fields {
@@ -152,10 +154,10 @@ var catalogItemTypes = map[string]reflect.Type{
 
 	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
 	"disk_offload":         reflect.TypeFor[DiskOffloadItem](),
+	"text_lookup":          reflect.TypeFor[TextLookupItem](),
 }
 
-// Include the parsed projection as well as the signed entry fields: callers may
-// copy an entry, but cannot replace its package or parsed manifest and retain proof.
+// Bind the active release, its parsed projection, and the other releases to the proof.
 func entryFingerprint(e *MarketEntry) [sha256.Size]byte {
 	raw, _ := json.Marshal(struct {
 		Entry  *MarketEntry

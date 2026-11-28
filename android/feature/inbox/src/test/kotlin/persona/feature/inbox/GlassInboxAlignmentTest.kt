@@ -79,6 +79,13 @@ class GlassInboxAlignmentTest {
                             InboxSourceOption("feishu", "Lark", "lark"),
                             InboxSourceOption("acc1", "me@example.com", "mail"),
                         ),
+                        kinds = listOf(
+                            "mention" to "@me",
+                            "dm" to "DM",
+                            "group" to "Group",
+                            "mail" to "Mail",
+                            "agent" to "Agent",
+                        ),
                         activeSource = source,
                         activeKind = kind,
                         onSelectSource = { source = it },

@@ -283,6 +283,10 @@ func TestTodosV2DispatchDefaultsAutoSeenEndToEndAndRollback(t *testing.T) {
 	}
 
 	// 4. Roll back todos_v2=false: new dispatches revert to blank defaults, existing records stay intact.
+	// The rollback must change nothing of the agents, in-memory guards included; closing the to-do in step 2 already
+	// set resumeInvalidatedAt on them (#17678), so the copy to compare whole is the one from just before.
+	beforeRollback, _ := s.todoNow(td.ID)
+	rollbackAgents := append([]TodoAgent(nil), beforeRollback.Agents...)
 	setTodosV2ForTest(t, s, false, true)
 
 	postRollback := dispatchNewTodo(t, s, "lead0001", dispatchTaskArgs("Post-rollback leader task", nil))
@@ -298,10 +302,22 @@ func TestTodosV2DispatchDefaultsAutoSeenEndToEndAndRollback(t *testing.T) {
 	if existingAfterRollback.Origin != "lead0001" ||
 		existingAfterRollback.Supervision == nil ||
 		existingAfterRollback.Supervision.Supervisor != "lead0001" ||
-		!reflect.DeepEqual(existingAfterRollback.Agents, origAgents) ||
+		!reflect.DeepEqual(existingAfterRollback.Agents, rollbackAgents) ||
+		agentRecords(t, existingAfterRollback.Agents) != agentRecords(t, origAgents) ||
 		existingAfterRollback.DirectionID != "lead0001" ||
 		existingAfterRollback.Audience != db.AudienceAutonomous ||
 		!existingAfterRollback.AutoSeenUndone {
 		t.Fatalf("existing todo corrupted after rollback: %+v", existingAfterRollback)
 	}
+}
+
+// agentRecords is what a to-do lists of its agents, and so what the store keeps of them: their exported fields, as
+// JSON. In-memory guards such as resumeInvalidatedAt (#17678) are not part of it.
+func agentRecords(t *testing.T, agents []TodoAgent) string {
+	t.Helper()
+	b, err := json.Marshal(agents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

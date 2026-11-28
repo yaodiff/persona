@@ -81,9 +81,9 @@ class AgentArchivesFlowTest {
         rule.waitUntil(5_000) { model.page.value.loaded }
         rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(session.displayTitle))
         rule.onNodeWithText(session.displayTitle).performTouchInput { longClick() }
-        rule.onNode(hasText("Archive agent") and hasClickAction()).performClick()
+        rule.onNode(hasText("Archive session") and hasClickAction()).performClick()
         rule.onNodeWithText("Archive “${session.displayTitle}”?", substring = true).assertIsDisplayed()
-        rule.onNode(hasText("Archive agent") and hasClickAction()).performClick()
+        rule.onNode(hasText("Archive session") and hasClickAction()).performClick()
         rule.waitUntil(5_000) {
             api.rows.any { it.key == session.key } && model.page.value.sessions.none { it.key == session.key }
         }
@@ -94,13 +94,13 @@ class AgentArchivesFlowTest {
         rule.onNodeWithText("Range: Running").performScrollTo().performClick()
         rule.waitUntil(5_000) { model.page.value.preferences.range == AgentRange.Running }
         rule.onNodeWithContentDescription("List settings").performClick()
-        rule.onNodeWithText("Archived agents").performClick()
+        rule.onNodeWithText("Archived sessions").performClick()
         rule.onNodeWithText(session.displayTitle).assertIsDisplayed()
         rule.onNodeWithTag("restore:${session.key.path}").assertIsEnabled().performClick()
         rule.waitUntil(5_000) {
             api.rows.isEmpty() && stored.value[agentRangeKey("")] == AgentRange.All.name
         }
-        rule.onNodeWithText("No archived agents").assertIsDisplayed()
+        rule.onNodeWithText("No archived sessions").assertIsDisplayed()
         rule.onNodeWithContentDescription("Back").performClick()
         rule.waitUntil(5_000) {
             model.page.value.preferences.range == AgentRange.All &&

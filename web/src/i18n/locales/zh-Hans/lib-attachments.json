@@ -1,4 +1,4 @@
 {
-  "too_big_image": "{name} 太大了（图片最多 8 MB）",
-  "too_big_file": "{name} 太大了（文件最多 200 MB）"
+  "too_big_image": "{name} 超出大小限制（图片最大 8 MB）",
+  "too_big_file": "{name} 超出大小限制（文件最大 200 MB）"
 }

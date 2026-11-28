@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import { readFileSync } from 'node:fs';
 
-const screen = { foldable: false, region: undefined, failure: false };
+const screen = { foldable: false, region: undefined, failure: false, foldStatus: 0, foldDisplayMode: 0, density: 3.2, listeners: new Map() };
 globalThis.__personaNativeEnvironment = screen;
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@kit.AbilityKit') return { url: 'native-environment:ability', shortCircuit: true };
     if (specifier === '@kit.AccessibilityKit') return {url:'native-environment:accessibility',shortCircuit:true};
     if (specifier === '@kit.ArkUI') return { url: 'native-environment:display', shortCircuit: true };
+    if (specifier.endsWith('/core/FoldPosture')) return { url: new URL('../core/FoldPosture.ts', context.parentURL).href, shortCircuit: true };
     return next(specifier, context);
   },
   load(url, context, next) {
@@ -18,9 +19,17 @@ registerHooks({
     if (url === 'native-environment:display') return { format: 'module', shortCircuit: true, source: `
       const s = globalThis.__personaNativeEnvironment;
       export const window = {WindowStatusType:{FULL_SCREEN:1},AvoidAreaType:{TYPE_NAVIGATION_INDICATOR:3,TYPE_SYSTEM:0,TYPE_KEYBOARD:5}};
-      export const display = { isFoldable: () => s.foldable, getCurrentFoldCreaseRegion() {
-        if (s.failure) throw new Error('display unavailable'); return s.region;
-      } };
+      export const display = {
+        isFoldable: () => s.foldable,
+        getFoldStatus: () => s.foldStatus,
+        getFoldDisplayMode: () => s.foldDisplayMode,
+        getDefaultDisplaySync: () => ({ densityPixels: s.density }),
+        on: (name, cb) => s.listeners.set(name, cb),
+        off: (name, cb) => { if (s.listeners.get(name) === cb) s.listeners.delete(name); },
+        getCurrentFoldCreaseRegion() {
+          if (s.failure) throw new Error('display unavailable'); return s.region;
+        }
+      };
     ` };
     if (url.endsWith('/NativeEnvironment.ets')) return { format: 'module', shortCircuit: true,
       source: stripTypeScriptTypes(readFileSync(new URL(url), 'utf8').replace(/@ObservedV2\s*/g, '').replace(/@Trace\s+/g, '')) };
@@ -108,4 +117,72 @@ test('phone form sheets follow the attached portrait window and retain native si
   [width,height] = [1206,2622]; handlers.get('windowSizeChange')({}); env.nativeHoverAvailable = true; assert.equal(form.compactFormHeight(), 'native');
   env.nativeHoverAvailable=false; inset=0; handlers.get('avoidAreaChange')({}); assert.equal(form.compactNavigationInset(), 0);
   env.unbindWindow(); assert.equal(env.windowHeightPx, 0); assert.equal(env.isFullScreen, false);
+});
+
+test('NativeEnvironment uses live densityPixels and fold listeners across Mate XT landscape, portrait, and floating windows', () => {
+  const env = new NativeEnvironment();
+  const handlers = new Map();
+  let rect = { width: 3184, height: 2232, top: 0 };
+  screen.foldable = true;
+  screen.density = 3.0;
+  screen.foldStatus = 11;
+  screen.foldDisplayMode = 5;
+  screen.region = { creaseRects: [{ left: 0, top: 100, width: 100, height: 10 }] };
+  screen.failure = false;
+
+  const nativeWindow = {
+    getWindowProperties: () => ({ windowRect: rect }),
+    getWindowStatus: () => 1,
+    getWindowAvoidArea: () => ({ topRect: { height: 0 }, bottomRect: { height: 0 } }),
+    on: (key, fn) => handlers.set(key, fn),
+    off: (key) => handlers.delete(key)
+  };
+  env.bindWindow(nativeWindow);
+  // 3184 / 3.0 = 1061.3vp -> trifold_unfolded
+  assert.equal(env.foldPosture, 'trifold_unfolded');
+  assert.equal(env.isTriFold, true);
+  assert.equal(env.creaseTopPx, 100);
+  assert.equal(env.creaseHeightPx, 10);
+  assert.equal(screen.listeners.has('foldStatusChange'), true);
+  assert.equal(screen.listeners.has('foldDisplayModeChange'), true);
+
+  // Rotate to 3-screen portrait (2232 / 3.0 = 744vp) -> dual_unfolded, isTriFold=false
+  rect = { width: 2232, height: 3184, top: 0 };
+  handlers.get('windowSizeChange')(rect);
+  assert.equal(env.foldPosture, 'dual_unfolded');
+  assert.equal(env.isTriFold, false);
+
+  // Resize to floating window (1260 / 3.0 = 420vp) while hardware still reports GLOBAL_FULL (5) -> cover, isTriFold=false
+  rect = { width: 1260, height: 2400, top: 0 };
+  handlers.get('windowSizeChange')(rect);
+  assert.equal(env.foldPosture, 'cover');
+  assert.equal(env.isTriFold, false);
+
+  // Restore landscape wide and test foldStatusChange listener to Z-stand (21) -> trifold_angled
+  rect = { width: 3184, height: 2232, top: 0 };
+  handlers.get('windowSizeChange')(rect);
+  screen.foldStatus = 21;
+  screen.listeners.get('foldStatusChange')(21);
+  assert.equal(env.foldPosture, 'trifold_angled');
+  assert.equal(env.isTriFold, true);
+
+  // MatePad 2880x1920 at density 2.0 -> 1440vp -> trifold_unfolded even when non-foldable
+  screen.foldable = false;
+  screen.foldStatus = 0;
+  screen.foldDisplayMode = 0;
+  screen.density = 2.0;
+  rect = { width: 2880, height: 1920, top: 0 };
+  env.update({});
+  handlers.get('windowSizeChange')(rect);
+  assert.equal(env.foldPosture, 'trifold_unfolded');
+  assert.equal(env.creaseTopPx, 0);
+  assert.equal(env.creaseHeightPx, 0);
+
+  env.unbindWindow();
+  assert.equal(screen.listeners.size, 0);
+  screen.foldable = false;
+  screen.density = 3.2;
+  screen.foldStatus = 0;
+  screen.foldDisplayMode = 0;
+  screen.region = undefined;
 });

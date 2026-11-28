@@ -10,12 +10,20 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// The persisted states of a send receipt, shared by the hub and manager.
+const (
+	SendStateSending   = "sending"
+	SendStateDelivered = "delivered"
+	SendStateUnknown   = "unknown"
+	SendStateLater     = "later"
+)
+
 // ClaimSend records a message about to be sent. A client_msg_id seen before returns that send's state instead
-// ("sending", "delivered", "unknown"); "" means this one is new and now recorded as sending.
+// (sending, delivered, unknown, or later). The empty string means this one is new and now recorded as sending.
 func (d *DB) ClaimSend(ctx context.Context, id, machine, session string) (string, error) {
 	// A restored outbox can retry much later. Expiring an unacknowledged operation makes an old retry execute again.
 	tag, err := d.pool.Exec(ctx, `INSERT INTO sent_messages (client_msg_id, machine_id, session_id, state)
-		VALUES ($1, $2, $3, 'sending') ON CONFLICT DO NOTHING`, id, machine, session)
+		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`, id, machine, session, SendStateSending)
 	if err != nil || tag.RowsAffected() == 1 {
 		return "", err
 	}
@@ -50,9 +58,10 @@ func (d *DB) RecordEcho(ctx context.Context, id, machine string, echo json.RawMe
 			// Manager A2A deliveries skip the app send ledger. A trusted node's
 			// receipt still has to be available when that node reconnects.
 			_, err := d.pool.Exec(ctx, `INSERT INTO sent_messages (client_msg_id, machine_id, session_id, state, echo)
-				VALUES ($1, $2, $3, 'unknown', $4) ON CONFLICT (client_msg_id) DO UPDATE SET echo = EXCLUDED.echo
+				VALUES ($1, $2, $3, $4, $5) ON CONFLICT (client_msg_id) DO UPDATE SET echo = EXCLUDED.echo
 				WHERE sent_messages.machine_id = EXCLUDED.machine_id AND sent_messages.session_id = EXCLUDED.session_id
-				AND (coalesce(sent_messages.echo->>'line', '') = '' OR coalesce(EXCLUDED.echo->>'line', '') <> '')`, id, machine, receipt.Session, echo)
+				AND (coalesce(sent_messages.echo->>'line', '') = '' OR coalesce(EXCLUDED.echo->>'line', '') <> '')`,
+				id, machine, receipt.Session, SendStateUnknown, echo)
 			return err
 		}
 	}

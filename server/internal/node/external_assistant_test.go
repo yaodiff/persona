@@ -73,8 +73,12 @@ func externalAssistantFixture(t *testing.T, warm ...bool) (*cliFixture, string, 
 	previousRoot := externalAdapterTrustRoot
 	externalAdapterTrustRoot = trustRoot
 	t.Cleanup(func() { externalAdapterTrustRoot = previousRoot })
-	// The fake home, working directories and adapter runtime files must share this boundary too.
+	// The fake home, working directories and adapter runtime files must share this boundary too. TMPDIR places the
+	// node's os.MkdirTemp("", …) directories; t.TempDir() uses GOTMPDIR ahead of TMPDIR when it is set, as
+	// scripts/test/server_test_env.py does (#17172). A test's first t.TempDir() fixes the parent of all its later
+	// ones, so no test calls it before this fixture.
 	t.Setenv("TMPDIR", trustRoot)
+	t.Setenv("GOTMPDIR", trustRoot)
 	f := cliTest(t)
 	t.Setenv(agentSandboxEnv, "off")
 	managedFiles, managedDirs := claudeManagedSettings, claudeManagedSettingsDirs

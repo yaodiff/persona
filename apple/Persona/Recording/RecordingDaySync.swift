@@ -549,7 +549,7 @@ nonisolated enum RecordingDayUpload {
     @ObservationIgnored private let api: () -> APIClient?
     @ObservationIgnored private let features: () -> Set<String>
     @ObservationIgnored private let now: () -> Date
-    @ObservationIgnored private let days: () -> Int
+    @ObservationIgnored private let audioDays: () -> Int
     @ObservationIgnored private let appState: RecordingDayAppState
     @ObservationIgnored private let noteParts: (UUID, [UUID]) -> Void
     @ObservationIgnored private let removed: (UUID) -> Void
@@ -614,7 +614,7 @@ nonisolated enum RecordingDayUpload {
 
     /// - Parameters:
     ///   - features: the hub's features from its last `hello` (empty: not known, the cached flag decides).
-    ///   - days: the hub's `recording_days` (`RecordingSync`): an older day is not uploaded.
+    ///   - audioDays: the hub's `audio_days` (`RecordingSync`): an older day is not uploaded; 0 is forever.
     ///   - noteParts: a day's hub ids past its first part, for deletes (`RecordingSync.noteDayParts`).
     ///   - removed: a day was removed here (cancels its transcription).
     ///   - removeEverywhere: the hub deleted a part of a day (`410`): the whole day goes, here, on the hub and on the
@@ -624,7 +624,7 @@ nonisolated enum RecordingDayUpload {
          api: @escaping () -> APIClient? = { AppModel.shared.api },
          features: @escaping () -> Set<String> = { AppModel.shared.hubFeatures },
          now: @escaping () -> Date = { .now },
-         days: @escaping () -> Int = { RecordingSync.shared.store.days },
+         audioDays: @escaping () -> Int = { RecordingSync.shared.audioRetentionDays },
          appState: RecordingDayAppState = RecordingDaySystemState.shared,
          noteParts: @escaping (UUID, [UUID]) -> Void = { RecordingSync.shared.noteDayParts($0, $1) },
          removed: @escaping (UUID) -> Void = { RecordingDayTranscriber.shared.cancel($0) },
@@ -632,7 +632,7 @@ nonisolated enum RecordingDayUpload {
          recapFinal: @escaping () -> Void = { RecordingDayKeeper.shared.deadlineChanged() },
          debounce: Duration = .seconds(1)) {
         self.store = store; self.library = library; self.api = api; self.features = features; self.now = now
-        self.days = days; self.appState = appState; self.noteParts = noteParts; self.removed = removed
+        self.audioDays = audioDays; self.appState = appState; self.noteParts = noteParts; self.removed = removed
         self.removeEverywhere = removeEverywhere; self.recapFinal = recapFinal; self.debounce = debounce
     }
 
@@ -937,7 +937,10 @@ nonisolated enum RecordingDayUpload {
             await store.update(id) { $0.unsupportedUntilHello = false }
         }
         // Past the hub's window nothing is uploaded (it would answer `expired`); the keeper purges it.
-        guard record.startedAt >= now().addingTimeInterval(-Double(days()) * RecordingDayRecord.secondsPerDay) else { return .done }
+        let days = audioDays()
+        guard days <= 0 || record.startedAt >= now().addingTimeInterval(-Double(days) * RecordingDayRecord.secondsPerDay) else {
+            return .done
+        }
         await prepare(id, retryRejected: !rejectedSeen.contains(id))
         guard let prepared = await store.record(id) else { return .done }
         notePartsIfNeeded(id, prepared)

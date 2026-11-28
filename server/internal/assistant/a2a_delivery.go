@@ -553,10 +553,10 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 			return nil
 		}
 		if sess, ok, _ := s.sessionNow(ctx, t.TargetMachine, t.TargetSession); ok {
-			return s.a2aLaunched(ctx, st, t, sess, sess.StartError != "")
+			return s.a2aLaunched(ctx, st, t, sess, sess.StartError != "", sess.StartError)
 		}
 		if time.Since(e.Attempted) > agentStartTimeout+time.Minute {
-			return s.a2aLaunched(ctx, st, t, proto.Session{}, true)
+			return s.a2aLaunched(ctx, st, t, proto.Session{}, true, "") // no answer and no session: unknown
 		}
 		return nil
 	}
@@ -583,15 +583,34 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 	request := map[string]any{"cwd": t.Launch.CWD, "launcher": t.Launch.Launcher, "session_id": sid,
 		"client_msg_id":  a2aDeliveryID(taskID, 1),
 		"message_source": a2aMessageSource(from), "permission_mode": permMode}
+	t.Launch.Run.lay(request) // a tier's launcher, model, effort and speed; never its permission mode (agent_presets.go)
 	go func() {
 		ctx, cancel := context.WithTimeout(s.runCtx(), agentStartTimeout)
 		defer cancel()
 		var out struct{ Session proto.Session }
 		err := s.applyModel(ctx, "agent.new", request)
+		companion := false
+		if err == nil {
+			// Where it starts is decided as it goes out, with what the computer runs now (start_host.go): an agy
+			// launcher on its companion, and a read-only start a pane cannot hold refused here, not by the node.
+			companion, err = s.agentStartedHost(ctx, dev, request)
+		}
 		definite := err != nil
 		if err == nil {
 			request["prompt"] = a2aPrompt(&taskSnap, &first, from, lang, s.a2aLaunchExecutable(ctx, dev, request))
-			err = s.call(context.WithValue(ctx, placementTaskKey{}, taskID), mid, DeviceSessionStart, request, &out)
+			start := func() error {
+				return s.call(context.WithValue(ctx, placementTaskKey{}, taskID), mid, DeviceSessionStart, request, &out)
+			}
+			err = start()
+			if companionAway(err, companion) && request["permission_mode"] != "plan" {
+				// The companion went away before the start reached it: nothing ran, and a writable start opens in the
+				// default host. A read-only one fails with the node's reason: no pane holds it read-only. The first
+				// prompt may name the terminal executable, which depends on the host, so it is written again.
+				delete(request, "host")
+				request["prompt"] = a2aPrompt(&taskSnap, &first, from, lang, s.a2aLaunchExecutable(ctx, dev, request))
+				s.logf("A2A launch %s: the Antigravity companion is not connected on %s; starting in its default host", taskID, mid)
+				err = start()
+			}
 			definite = err != nil && !startResultUnknown(err) && !sendUnknown(err)
 		}
 		keep, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -600,9 +619,13 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 			_ = s.a2aReceipt(keep, st, taskID, 1, a2aUncertain)
 			return
 		}
+		why := ""
+		if definite {
+			why = err.Error()
+		}
 		t, readErr := decodeA2A(st.A2AGet(keep, taskID))
 		if readErr == nil && t != nil && t.Launch.Pending && !a2aTerminal(t.State) {
-			if err := s.a2aLaunched(keep, st, t, out.Session, definite); err != nil {
+			if err := s.a2aLaunched(keep, st, t, out.Session, definite, why); err != nil {
 				s.logf("A2A launch %s: %v", taskID, err)
 			}
 		}
@@ -611,11 +634,43 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 	return nil
 }
 
-func (s *Service) a2aLaunched(ctx context.Context, st a2aStore, t *a2aTask, session proto.Session, failed bool) error {
+// a2aLaunchCheck refuses a new a2a_send launch on computer to.Machine before anything is asked or recorded when it
+// would start read-only where its launcher cannot be held read-only (agentStartedHost, on the start as a2aLaunch will
+// send it). A launch a2aStart refuses anyway is not looked at, and neither is one whose launcher Model configuration
+// cannot give now: a2aLaunch records why that one did not start. A retry by message_id is not checked again:
+// a2aStart answers it.
+func (s *Service) a2aLaunchCheck(ctx context.Context, cfg assistantwire.A2AConfig, to a2aRef, contextID string, launch *a2aLaunch) error {
+	dev, ok := s.machineByName(ctx, to.Machine)
+	if to.Session != "" || contextID != "" || !ok || dev.ID != to.Machine || !s.a2aMachineAllowed(ctx, cfg, to.Machine) ||
+		!cfg.LaunchAllowed() {
+		return nil // a2aStart refuses it
+	}
+	probe := map[string]any{"launcher": launch.Launcher, "permission_mode": cmp.Or(strings.TrimSpace(launch.PermissionMode), "plan")}
+	launch.Run.lay(probe) // the tier's launcher and model, as the start lays them on its own request
+	if s.applyModel(ctx, "agent.new", probe) != nil {
+		return nil
+	}
+	_, err := s.agentStartedHost(ctx, dev, probe)
+	return err
+}
+
+// a2aNotStarted is the failed status of a launch that did not start: why, when that is known (the node's or the
+// manager's refusal, or the error its launcher stopped with), so the calling Agent can start it another way. Only a
+// start whose outcome is unknown says that Persona could not confirm it.
+func a2aNotStarted(why string) string {
+	if why = oneLine(why); why == "" {
+		return "Persona could not confirm the Agent started."
+	}
+	return "The Agent did not start: " + clip(why, 1000)
+}
+
+// a2aLaunched records how t's launch ended: session started, or the launch failed. why is what a definite failure
+// gives as its reason (a2aNotStarted), "" for a start whose outcome is unknown.
+func (s *Service) a2aLaunched(ctx context.Context, st a2aStore, t *a2aTask, session proto.Session, failed bool, why string) error {
 	t.Launch.Pending = false
 	if failed {
 		t.Events[0].Delivery = a2aDiscarded
-		t.append(a2aReturn(t, a2aEvent{ID: randomHex(16), Kind: "status", State: a2aFailed, Text: "Persona could not confirm the Agent started."}))
+		t.append(a2aReturn(t, a2aEvent{ID: randomHex(16), Kind: "status", State: a2aFailed, Text: a2aNotStarted(why)}))
 	} else {
 		t.TargetSession = session.SessionID
 		if t.Launch.Branch != "" {

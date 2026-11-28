@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { useStore } from "./store";
-import { sessionTitle, stateOf } from "./format";
+import { sessionTitle, activityOf, stateOf } from "./format";
 import { sessionCard } from "./folded-rows";
 import { paneRoute } from "./herdr-tree";
 import { rowLine } from "./row-line";
@@ -14,6 +14,7 @@ import { useAgentSessions, useFullAgentSessions } from "./sessions";
 import { stateCount, stateName } from "./state-labels";
 import type { Interaction, Session } from "./types";
 import type { DesktopIsland, DesktopIslandRow, DesktopIslandState } from "./desktop-types";
+import { byTime } from "./times";
 
 /** The most rows the island lists, as the desktop draws them. */
 export const ISLAND_ROWS = 5;
@@ -35,19 +36,19 @@ function joinLead(lead: string, text: string): string {
 export function islandState(sessions: readonly Session[], interactions: readonly Interaction[]): DesktopIslandState {
   // the card a row speaks for, as the Agents list finds it: its own, else one a child session folded under it waits on
   const card = (s: Session) => sessionCard(interactions, s.machine_id, s.session_id);
-  const since = (s: Session) => Date.parse(s.state_since ?? s.updated_at ?? "") || 0;
+  const since = (s: Session) => s.state_since ?? s.updated_at;
   // filter makes the copy that is sorted: the hooks' shared lists are never reordered
-  const agents = sessions.filter((s) => !s.assistant && stateOf(s) in RANK);
+  const agents = sessions.filter((s) => !s.assistant && activityOf(s) in RANK && (stateOf(s) !== "needs_you" || !s.view || s.view.counted));
   const rows = agents
-    .sort((a, b) => RANK[stateOf(a)] - RANK[stateOf(b)] || since(b) - since(a))
+    .sort((a, b) => RANK[activityOf(a)] - RANK[activityOf(b)] || byTime(since(b), since(a)))
     .slice(0, ISLAND_ROWS)
     .map((s): DesktopIslandRow => {
-      const state = stateOf(s);
+      const state = activityOf(s);
       const words = state === "working" ? undefined : rowLine(s, card(s));
       const line = words ? joinLead(words.lead ?? "", words.text) : (s.activity?.trim() ?? "");
       return { title: sessionTitle(s), state, label: stateName(state), line, route: href(paneRoute(s)) };
     });
-  const count = (state: string) => agents.filter((s) => stateOf(s) === state).length;
+  const count = (state: string) => agents.filter((s) => activityOf(s) === state).length;
   const counts = { needs: count("needs_you"), working: count("working"), unread: count("unread") };
   const summary = [
     counts.needs > 0 && stateCount("needs_you", counts.needs),

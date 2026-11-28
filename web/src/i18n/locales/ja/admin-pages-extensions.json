@@ -98,5 +98,6 @@
   "host_placeholder": "アドレス（例：rss.example.orgまたはrss.example.org:8443）",
   "host_field_label": "{name}に許可するアドレス",
   "host_allowed": "{host}を許可しました",
-  "host_revoked": "{host}の許可を取り消しました"
+  "host_revoked": "{host}の許可を取り消しました",
+  "signature_key": "鍵 {key} で検証"
 }

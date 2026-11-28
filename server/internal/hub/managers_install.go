@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/pgdocker"
 )
 
@@ -293,7 +294,7 @@ func (h *Hub) serveInstallScript(w http.ResponseWriter, r *http.Request, docker 
 	} else {
 		h.upd.freshRelease(r.Context()) // the sums of the release the download will be
 		version, sums := h.releaseSums()
-		script = managerInstallScript(managerScript{ID: c.ManagerID, Name: c.Name, Hub: base, Code: code,
+		script = managerInstallScript(managerScript{Edition: h.build.Edition, ID: c.ManagerID, Name: c.Name, Hub: base, Code: code,
 			Fingerprint: fp, DL: h.updateURL(), Version: version, Sums: sums,
 			HubVersion: h.build.Version})
 	}
@@ -313,6 +314,9 @@ type managerScript struct {
 	Sums    map[string]string
 	// HubVersion is this hub's own, to say so when the published release is another.
 	HubVersion string
+	// Edition is the hub's edition (the zero value: the full build). The script downloads that edition's personad:
+	// the core's is served as core-<archive>, checked against core-SHA256SUMS when the hub had no sums.
+	Edition nodeproto.Edition
 }
 
 // releaseSums are the published release's version and its downloads' sha256s by archive name, as the hub last read
@@ -341,6 +345,26 @@ func (h *Hub) releaseSums() (string, map[string]string) {
 // sha256 the hub put in the script (m.Sums; SHA256SUMS from the download site only when the hub had none), then joins
 // and installs. Arguments after `sh -s --` go to the join (--dir, --database-url).
 func managerInstallScript(m managerScript) string {
+	script := fullManagerInstallScript(m)
+	edition := m.Edition.OrFull()
+	if edition == nodeproto.EditionFull {
+		return script
+	}
+	// The same script, fetching the edition's own files: the names it checks stay the manifest's (File.Name).
+	served := edition.Served("$archive")
+	return strings.NewReplacer(
+		`fetch "$DL/$archive" "$tmp/$archive" || fail "could not download $DL/$archive"`,
+		`fetch "$DL/`+served+`" "$tmp/$archive" || fail "could not download $DL/`+served+`"`,
+		`checking against $DL/SHA256SUMS" >&2`, `checking against $DL/`+edition.Served("SHA256SUMS")+`" >&2`,
+		`fetch "$DL/SHA256SUMS" "$tmp/SHA256SUMS" || fail "could not download $DL/SHA256SUMS"`,
+		`fetch "$DL/`+edition.Served("SHA256SUMS")+`" "$tmp/SHA256SUMS" || fail "could not download $DL/`+edition.Served("SHA256SUMS")+`"`,
+		`want="$(awk -v n="$archive" '$2 == n || $2 == "*" n { print $1 }' "$tmp/SHA256SUMS")"`,
+		`want="$(awk -v n="$archive" -v s="`+served+`" '$2 == n || $2 == "*" n || $2 == s || $2 == "*" s { print $1 }' "$tmp/SHA256SUMS")"`,
+	).Replace(script)
+}
+
+// fullManagerInstallScript is the script for the full edition, byte for byte what it was before editions.
+func fullManagerInstallScript(m managerScript) string {
 	q := shellWord
 	names := make([]string, 0, len(m.Sums))
 	for n := range m.Sums {

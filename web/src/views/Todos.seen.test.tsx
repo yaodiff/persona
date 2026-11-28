@@ -110,7 +110,7 @@ describe("seen to-dos (#5707)", () => {
   });
 
   it("draws Got it at the end of the status line, adding no line, and its press never opens the to-do (#6578)", async () => {
-    const row = () => section("just_done")?.querySelector<HTMLElement>("[data-testid=todo-triage-row][data-id=notes] > [role=button]");
+    const row = () => section("just_done")?.querySelector<HTMLElement>("[data-testid=todo-triage-row][data-id=notes] > [data-todo]");
     const lines = () => row()!.querySelector("[data-testid=todo-status-line]")!.parentElement!.children.length;
     await render(["locale"]);
     const without = lines();
@@ -132,7 +132,7 @@ describe("seen to-dos (#5707)", () => {
     expect(location.search).toBe("");
     expect(section("done")?.getAttribute("data-todos")).toBe("1");
     // the row under it does open a to-do on a click
-    await act(async () => section("other")!.querySelector<HTMLElement>("[data-id=nas] > [role=button]")!.click());
+    await act(async () => section("other")!.querySelector<HTMLElement>("[data-id=nas] [data-testid=todo-row-open]")!.click());
     expect(location.search).toBe("?id=nas");
     history.replaceState(null, "", "/");
   });

@@ -36,13 +36,13 @@ describe("运行情况 (docs/extensions/extensions.md)", () => {
     expect(m.series).toHaveLength(12);
     const { calls, latency } = metricsCharts(m);
     expect(calls.stacked).toBe(true);
-    expect(calls.series?.map((s) => s.name)).toEqual(["成功", "出错"]);
+    expect(calls.series?.map((s) => s.name)).toEqual(["成功", "失败"]);
     const total = calls.series!.flatMap((s) => s.points).reduce((a, p) => a + p.value, 0);
     expect(total).toBe(m.total.calls);
     expect(latency?.kind).toBe("line");
     expect(metricsCharts({ window: "1h", series: [{ at: m.from, calls: 0, errors: 0, p95_ms: null }] }).latency).toBeNull();
     expect(stepLabel("2026-11-05T10:00:00", "24h")).toBe("10:00");
-    expect(stepLabel("2026-11-05T06:00:00", "7d")).toBe("11-05 06时");
+    expect(stepLabel("2026-11-05T06:00:00", "7d")).toBe("11-05 06:00");
   });
 
   it("keeps the latest log lines once, and copies them as text", () => {

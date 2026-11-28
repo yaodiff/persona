@@ -374,6 +374,18 @@ struct SidebarRouteDestinations<Page: View>: ViewModifier {
     func body(content: Content) -> some View {
         if enabled {
             content.navigationDestination(for: SidebarRoute.self) { route in page(route).splitDetailPage() }
+                // A task's detail opened from inside the page (#13156), pushed as `detailPresentation` pushed it by view.
+                .navigationDestination(for: TaskDetailRoute.self) { r in
+                    Group {
+                        if let id = r.todo {
+                            TaskDetailSheet(todoID: id, initialAgent: r.taskAgent)
+                        } else if let key = r.agent {
+                            TaskDetailSheet(agent: key)
+                        }
+                    }
+                    .id(r)
+                    .environment(\.detailPushed, true)
+                }
         } else {
             content
         }

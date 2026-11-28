@@ -117,7 +117,8 @@ type InboxItem struct {
 	PreMergeTitle   string `json:"pre_merge_title,omitempty"`
 	PreMergeTitleBy string `json:"pre_merge_title_by,omitempty"`
 	MergeTitle      string `json:"merge_title,omitempty"`
-	// Parent is what the item grew out of: another item, a todo or an agent session (inbox_parent.go, #2128).
+	// Parent is what the item grew out of: another item, a todo, an Agent session or a personal Agent session
+	// (inbox_parent.go, #2128).
 	Parent *InboxParent `json:"parent,omitempty"`
 	// Folder is the "/"-separated folder path the item is filed under ("" none); FolderBy says who filed it, "model"
 	// or "user" (inbox_folders.go, #2463).
@@ -316,6 +317,10 @@ func (it *InboxItem) listed() InboxItem {
 	c.ReplyInstruction, c.RejectedReplyDraft, c.RejectedReplyDrafts = nil, "", nil
 	c.Status = it.status()
 	c.Now, c.TitleBy = it.nowKey(), ""
+	if it.DoneBy == "replied" && it.DoneAt != nil && it.hasChainEventAt(ChainSelfReplied, *it.DoneAt) {
+		// Older clients treat "replied" as a sent receipt for every draft on the item.
+		c.done(*it.DoneAt, "source_replied")
+	}
 	c.PreMergeTitle, c.PreMergeTitleBy, c.MergeTitle = "", "", ""
 	if it.Follow != nil {
 		f := *it.Follow
@@ -330,7 +335,7 @@ func (it *InboxItem) listed() InboxItem {
 	}
 	if g := currentSuggestion(it); g != nil {
 		g := *g
-		g.Changes, g.Cwd = slices.Clone(g.Changes), ""
+		g.Mentions, g.Changes, g.Cwd = slices.Clone(g.Mentions), slices.Clone(g.Changes), ""
 		g.MailTarget = nil // the reply's internal conflict check, not a client's target to choose
 		g.Owner, g.SourceOf, g.ReplyInstruction = nil, "", ""
 		g.ReplyPublicationFailed = false

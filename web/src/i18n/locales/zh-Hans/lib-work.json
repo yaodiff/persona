@@ -1,8 +1,8 @@
 {
-  "retry_soon": "马上重试",
-  "wake_soon": "马上叫醒",
+  "retry_soon": "即将重试",
+  "wake_soon": "即将唤醒",
   "retry_in": "{duration}后重试",
-  "wake_in": "{duration}后叫醒",
+  "wake_in": "{duration}后唤醒",
   "line_when": "{line}（{when}）",
   "minutes_other": "{count} 分钟",
   "hours_minutes": "{hours} 小时 {minutes} 分",
@@ -11,14 +11,14 @@
   "closeout_merged_yes": "已合并",
   "closeout_merged_no": "未合并",
   "closeout_merged_confirmed": "已合并 ✓",
-  "closeout_merged_contradicted": "✗ 说已合并，实际没有",
+  "closeout_merged_contradicted": "✗ 报告已合并，实际未合并",
   "closeout_deployed_yes": "已部署",
   "closeout_deployed_no": "未部署",
   "closeout_deployed_confirmed": "已部署 ✓",
-  "closeout_deployed_contradicted": "✗ 说已部署，实际没有",
-  "closeout_blocked_on": "卡在：{waiting}",
-  "closeout_blocked": "卡住了",
-  "closeout_not_done_missing": "没做完：{missing}",
-  "closeout_not_done": "没做完",
-  "closeout_done": "自述已完成"
+  "closeout_deployed_contradicted": "✗ 报告已部署，实际未部署",
+  "closeout_blocked_on": "阻塞于：{waiting}",
+  "closeout_blocked": "已阻塞",
+  "closeout_not_done_missing": "未完成：{missing}",
+  "closeout_not_done": "未完成",
+  "closeout_done": "已报告完成"
 }

@@ -38,9 +38,10 @@ func (s *Recordings) minutesWritten(ctx context.Context, r recordingwire.Recordi
 	set := s.settings(ctx)
 	n := Notification{ID: "ntf_minutes_" + r.ID + "_" + strconv.Itoa(m.Version), Kind: NotifyPush, Title: title, Body: body,
 		DeviceID: set.MachineID, SessionID: set.Main, RecordingID: r.ID}
-	s.noteCard(ctx, cardMinutesReady, n)
 	if err := s.h.Notify(ctx, n); err != nil {
 		s.logf("assistant: minutes push: %v", err)
+	} else {
+		s.noteCard(ctx, cardMinutesReady, n)
 	}
 	if link := recordingLink(s.webBase(ctx), r.ID); link != "" {
 		body += "\n" + link

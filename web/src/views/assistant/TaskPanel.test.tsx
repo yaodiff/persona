@@ -17,7 +17,8 @@ import { handoffFrom } from "../../lib/handoff";
 import { applyCompleteSessions, getState, refreshTodos, reset } from "../../lib/store";
 import { TODO_STATUS_INFO, type Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
-import { loadFeed, type TaskPlan } from "../../lib/feed";
+import { later, loadFeed, type TaskPlan } from "../../lib/feed";
+import { decisionLaterKey } from "../../lib/assistant-entries";
 import { SidePanel } from "../SidePanel";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -101,6 +102,32 @@ async function expectSessionWindow(s = first) {
   expect(newWindow).toHaveBeenLastCalledWith(href({ name: "session", mid: s.machine_id, sid: s.session_id }), "_blank", "noopener");
   expect(newWindow.mock.calls.at(-1)?.[0]).not.toContain("/todos");
 }
+
+it("answers a rolled-up step's decision from its task panel", async () => {
+  const step: Todo = {
+    ...task(), part_of: "example-parent",
+    supervision: { state: "needs_user", supervisor: "example-conversation" },
+    ask: {
+      asked_at: at, outcome: "decide", verdict: "Choose a release", question: "Which release should go out?",
+      recommend: "Preview", options: [{ label: "Preview" }, { label: "Stable" }],
+    },
+    view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 },
+  };
+  await open({ kind: "task", todo: step.id }, step);
+  await expect.poll(() => host.querySelector("aside [data-decision-question]")?.textContent).toBe(step.ask?.question);
+  const laterButton = [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((button) => button.textContent === t("assistant-task-actions.later"));
+  expect(laterButton).toBeDefined();
+  await act(async () => laterButton!.click());
+  expect(host.querySelector("aside [data-decision-question]")).toBeNull();
+  await act(async () => later(decisionLaterKey(step), false));
+  const option = [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((button) => button.textContent === "Stable");
+  expect(option).toBeDefined();
+  await act(async () => option!.click());
+  const writes = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith("/accept") && init?.method === "POST");
+  expect(writes.map(([url, init]) => [url, JSON.parse(String(init?.body))])).toEqual([
+    [`/api/v1/todos/${step.id}/accept`, { asked_at: at, option: "Stable" }],
+  ]);
+});
 
 describe("Agent panel new-window destination", () => {
   it("opens the verification report first and restores it after inspecting a released worker", async () => {

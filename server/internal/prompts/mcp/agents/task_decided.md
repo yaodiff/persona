@@ -1,4 +1,4 @@
-Record the owner's needs_user choice; main chat or supervisor only. Quote their words and exact option; never guess. told_agent=true means already delivered (also direct Agent chat): record only. Otherwise send and record. Both settle the ask.{{template "shared/mcp_language" .}}
+Record the owner's needs_user choice or user_check Pass ("Pass"); main chat or supervisor only. Quote their words and exact option; never guess. told_agent=true records only (already relayed); false also sends. Both settle the ask.{{template "shared/mcp_language" .}}
 
 ```json
 {

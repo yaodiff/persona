@@ -105,7 +105,8 @@ func (n *Node) startEffortRemote(ctx context.Context, home, endpoint, exe, cwd s
 		cmd := exec.CommandContext(ctx, exe, "app-server", "daemon", "start")
 		if runtime.GOOS != "windows" {
 			// Load the same proxy, credentials and PATH as the pane on a cold daemon start.
-			cmd = exec.CommandContext(ctx, codexStartShellProgram(), "-ic", `builtin cd -- "$1" && exec "$2" app-server daemon start`, "persona-codex-daemon", cwd, exe)
+			shell := codexStartShellProgram()
+			cmd = exec.CommandContext(ctx, shell, shellFlag(shell), `builtin cd -- "$1" && exec "$2" app-server daemon start`, "persona-codex-daemon", cwd, exe)
 		}
 		cmd.Dir = cwd
 		cmd.Env = append(append(cmd.Environ(), pane...), codexStartMarker, "CODEX_HOME="+home)

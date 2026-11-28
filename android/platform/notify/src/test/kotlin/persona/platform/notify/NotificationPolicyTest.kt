@@ -167,6 +167,26 @@ class NotificationPolicyTest {
         for (key in listOf("allow", "always", "deny")) assertNull(NotificationPolicy.resolution(card, key, null))
     }
 
+    /** A multi-select checkbox dialog must be submitted whole in the app, not offered as dead one-tap notification buttons. */
+    @Test fun multiSelectScreenDialogHasNoNotificationActionButtons() {
+        val multi = interaction("screen").copy(dialog = ScreenDialog(
+            multi = true,
+            options = listOf(
+                DialogOption("a", "Option A", kind = "plain", checked = true),
+                DialogOption("b", "Option B", kind = null, checked = false),
+            ),
+        ))
+        assertTrue("Multi-select screen dialogs must not expose dead notification action buttons",
+            NotificationPolicy.actions(multi).isEmpty())
+        assertNull(NotificationPolicy.resolution(multi, "option.a", null))
+        assertNull(NotificationPolicy.resolution(multi, "option.b", null))
+
+        // Single-select plain dialog options remain actionable from notifications.
+        val single = multi.copy(dialog = multi.dialog!!.copy(multi = false))
+        assertEquals(listOf("option.a", "option.b"), NotificationPolicy.actions(single).map { it.key })
+        assertEquals(persona.core.contracts.Resolution(option = "a"), NotificationPolicy.resolution(single, "option.a", null))
+    }
+
     private fun interaction(kind: String) = Interaction("request", kind = kind,
         questions = listOf(Question(question = "选择", options = List(4) { QuestionOption("选项 $it") })),
         dialog = ScreenDialog(options = listOf(DialogOption("input", "输入", kind = "type_something")) +

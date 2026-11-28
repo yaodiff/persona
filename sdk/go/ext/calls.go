@@ -166,6 +166,16 @@ func (h *Hub) KBList(ctx context.Context, p wire.KBListParams) (wire.KBListResul
 	return callHub[wire.KBListResult](ctx, h, "kb.list", p)
 }
 
+// KBImportCheckpoint reads the selected import's current progress.
+func (h *Hub) KBImportCheckpoint(ctx context.Context) (wire.KBImportCheckpointResult, error) {
+	return callHub[wire.KBImportCheckpointResult](ctx, h, "kb.import_checkpoint", wire.KBImportCheckpointParams{})
+}
+
+// KBSentMarkers reads sent-as-user annotations for the approved import and day.
+func (h *Hub) KBSentMarkers(ctx context.Context, p wire.KBSentMarkersParams) (wire.KBSentMarkersResult, error) {
+	return callHub[wire.KBSentMarkersResult](ctx, h, "kb.sent_markers", p)
+}
+
 // KBRecent is what came in from every source since a time, newest first, a page at a time (next_offset).
 func (h *Hub) KBRecent(ctx context.Context, p wire.KBRecentParams) (wire.KBRecentResult, error) {
 	return callHub[wire.KBRecentResult](ctx, h, "kb.recent", p)

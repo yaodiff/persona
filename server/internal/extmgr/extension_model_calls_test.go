@@ -24,6 +24,9 @@ func TestExtensionIdentityAssistantCapabilityAndRegisteredStorageOwner(t *testin
 	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		calls = append(calls, method)
 		if method == assistantwire.MethodExtensionIdentity {
+			if string(params) != `{}` {
+				t.Fatalf("identity params: %s", params)
+			}
 			if supported {
 				return json.RawMessage(`{"supported":true}`), nil
 			}
@@ -65,12 +68,13 @@ func TestExtensionModelCallNeedsItsScopeAndIsAttributed(t *testing.T) {
 	var mu sync.Mutex
 	var asked []string
 	var got []json.RawMessage
+	const reply = `{"text":"ok","future":{"detail":true},"model":"m","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2,"requests":1,"future_tokens":3}}`
 	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		asked = append(asked, method)
 		got = append(got, params)
-		return json.RawMessage(`{"text":"ok","model":"m","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2,"requests":1}}`), nil
+		return json.RawMessage(reply), nil
 	}
 	params := `{"messages":[{"role":"user","content":"hi"}],"extension":"someone-else"}`
 	for _, spec := range []struct {
@@ -90,8 +94,8 @@ func TestExtensionModelCallNeedsItsScopeAndIsAttributed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw, _ := json.Marshal(out); !strings.Contains(string(raw), `"text":"ok"`) {
-		t.Fatalf("%s", raw)
+	if raw, err := json.Marshal(out); err != nil || string(raw) != reply {
+		t.Fatalf("extension received %s (%v), want the full assistant reply %s", raw, err, reply)
 	}
 	var env assistantwire.ExtensionComplete
 	if len(asked) != 1 || asked[0] != assistantwire.MethodModelsExtensionComplete || json.Unmarshal(got[0], &env) != nil ||

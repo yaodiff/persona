@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -17,15 +19,19 @@ const testReportDelay = 50 * time.Millisecond
 
 // reportService is a task service whose Feishu bot is paired, with reports on (or off) and the execution steps on (the
 // card as it was before #3218), recording the posts.
-func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) {
+func reportService(t *testing.T, on bool, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true})
+	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true}, stores...)
 }
 
 // reportServiceWith is reportService with the bot's switches as given.
-func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, func() []string) {
+func reportServiceWith(t *testing.T, feats FeishuFeatures, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	s, f := newTaskService(t)
+	var st Store
+	if len(stores) > 0 {
+		st = stores[0]
+	}
+	s, f := newTaskServiceOn(t, st)
 	s.reports.mu.Lock()
 	s.reports.delay = testReportDelay
 	s.reports.mu.Unlock()
@@ -56,8 +62,10 @@ func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, 
 // task's page, the PR and the agent; never a bare id. The todo carries the stage and the PR for the apps.
 func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 	needsLarkLayer(t)
-	s, f, posts := reportService(t, true)
+	s, f, posts := reportService(t, true, repositorystore.New(todoTestDB(t)))
 	todo := startedTask(t, s, f)
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor",
+		"fix/login", "fix/login", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "修好了，https://github.com/o/r/pull/901 已合并", 0)
 	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
@@ -166,6 +174,98 @@ func TestStageOf(t *testing.T) {
 		t.Errorf("open at develop = %s", got)
 	}
 	_ = context.Background
+}
+
+func TestStageOfSelectsOnlyAnUnambiguousLegacyPR(t *testing.T) {
+	const delivery = "https://github.com/example/project/pull/12"
+	const unrelated = "https://github.com/example/project/pull/13"
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"one distinct PR", delivery + "\n" + delivery + "#discussion_r123", delivery},
+		{"multiple prose PRs", delivery + "\n" + unrelated, ""},
+		{"explicit closeout", delivery + "\n<closeout status=\"done\">\nartifact: pr " + unrelated + "\nartifact: url " + delivery + "\n</closeout>", unrelated},
+		{"closeout without a PR", unrelated + "\n" + researchNoPRCloseout, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, got := stageOf(tc.text); got != tc.want {
+				t.Fatalf("stage PR = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
+	const delivery = "https://github.com/example/project/pull/12"
+	const english = "https://github.com/example/project/pull/13"
+	const chinese = "https://github.com/example/project/pull/14"
+	const replacement = "https://github.com/example/project/pull/15"
+	s, todo, _ := linkRoleTask(t)
+	ctx := t.Context()
+	store := s.store().(todoRepositoryImportStore)
+	if _, _, err := store.ImportTodoRepositoryLinks(ctx, todo.ID, []string{delivery}, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	// A repository link alone is enough to disable prose-based delivery extraction.
+	s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english)
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("prose assigned a stage PR despite a repository binding: %q", got)
+	}
+	// A structured closeout can explicitly set the primary PR. The following reports use a stale
+	// snapshot so the stored PR must win even if the caller has not seen it.
+	a := todo.Agents[0]
+	f := s.hub.(*fakeHub)
+	deliveryText := "<closeout status=\"done\">\nartifact: pr " + delivery + "\n</closeout>"
+	deliveryReply := artifactReportProof(f, todo, deliveryText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, deliveryText, deliveryReply.TS)
+	for _, enabled := range []bool{true, false} {
+		setSettings(t, s, func(v *Settings) { v.TodosV2 = &enabled })
+		s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english+"\n与 "+chinese+" 无重叠。") // i18n-ignore: task report fixture
+		s.advanceTaskReply(ctx, todo, "", "", "Related work: "+delivery)
+		s.advanceTaskReply(ctx, todo, "", "", "Checked no overlap with PR #16")
+		if got := todoNow(s, todo.ID); got.PRURL != delivery || len(got.PRs) != 0 {
+			t.Fatalf("todos_v2=%v: stored PR = %q, earlier PRs = %v", enabled, got.PRURL, got.PRs)
+		}
+	}
+	replacementText := "Checked " + english + "\n<closeout status=\"done\">\nartifact: pr " + replacement + "\nartifact: url " + chinese + "\n</closeout>"
+	replacementReply := artifactReportProof(f, todo, replacementText, replacement)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, replacementText, replacementReply.TS)
+	if got := todoNow(s, todo.ID).PRURL; got != replacement {
+		t.Fatalf("explicit replacement PR = %q, want %q", got, replacement)
+	}
+	roles := linkRoles(t, s, todo.ID)
+	for u, want := range map[string]string{
+		delivery: repository.LinkRoleDelivery, replacement: repository.LinkRoleDelivery,
+		english: repository.LinkRoleReference, chinese: repository.LinkRoleReference,
+	} {
+		if roles[u] != want {
+			t.Errorf("role of %s = %q, want %q", u, roles[u], want)
+		}
+	}
+}
+
+func TestAdvanceTaskReplyLegacyDeliveryAfterReferences(t *testing.T) {
+	const reference = "https://github.com/example/project/pull/12"
+	const other = "https://github.com/example/project/pull/13"
+	const delivery = "https://github.com/example/project/pull/14"
+	s, todo, _ := linkRoleTask(t)
+	ctx := t.Context()
+	s.advanceTaskReply(ctx, todo, "", "", reference+" and "+other)
+	s.advanceTaskReply(ctx, todo, "", "", reference)
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("prose selected a saved reference as the PR: %q", got)
+	}
+	a := todo.Agents[0]
+	openText := "Opened " + delivery
+	openReply := artifactReportProof(s.hub.(*fakeHub), todo, openText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, openText, openReply.TS)
+	if got := todoNow(s, todo.ID).PRURL; got != delivery {
+		t.Fatalf("legacy single PR = %q, want %q", got, delivery)
+	}
+	roles := linkRoles(t, s, todo.ID)
+	if roles[reference] != repository.LinkRoleReference || roles[other] != repository.LinkRoleReference || roles[delivery] != repository.LinkRoleDelivery {
+		t.Fatalf("stored roles = %v, want only the single legacy PR as delivery", roles)
+	}
 }
 
 // A decision whose question card the bot already posted (cards / all_cards) is not told again as waiting.

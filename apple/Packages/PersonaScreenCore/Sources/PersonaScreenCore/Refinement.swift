@@ -53,8 +53,8 @@ public struct Refinement: Equatable, Sendable {
     /// Whether a pass is due at `now`, the link being `calm`.
     public func due(at now: UInt64, calm: Bool) -> Bool {
         guard calm, let changedAt, done < Self.passes, tries < Self.attempts else { return false }
-        if let lastPassAt { return now &- lastPassAt >= Self.betweenMicros }
-        return now &- changedAt >= Self.firstAfterMicros
+        if let lastPassAt { return now >= lastPassAt && now - lastPassAt >= Self.betweenMicros }
+        return now >= changedAt && now - changedAt >= Self.firstAfterMicros
     }
 
     /// A pass went to the encoder at `now`.
@@ -68,5 +68,8 @@ public struct Refinement: Equatable, Sendable {
     public mutating func dropped() { done = max(0, done - 1) }
 
     /// The bitrate a pass is encoded at, in kbit/s: `boost` times the target, within the helper's range.
-    public static func kbps(target: Int) -> Int { min(CapturePlan.maxKbps, max(CapturePlan.minKbps, target * boost)) }
+    public static func kbps(target: Int) -> Int {
+        let clamped = min(CapturePlan.maxKbps, max(0, target))
+        return min(CapturePlan.maxKbps, max(CapturePlan.minKbps, clamped * boost))
+    }
 }

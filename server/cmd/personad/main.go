@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/operations/backup"
 	"github.com/nwverse/persona/server/internal/outboxcli"
+	"github.com/nwverse/persona/server/internal/recordingcli"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
@@ -83,6 +84,7 @@ var usage = `usage:
 ` + nodecmd.SysmonUsage + `
 ` + outboxcli.Usage + `
 ` + chatexport.Usage + `
+` + recordingcli.Usage + `
 ` + agentsend.Usage + `
   personad backup create|inspect|verify|restore …
                            verified whole-install backup and staged recovery (personad backup <command> -h)
@@ -123,7 +125,7 @@ func main() {
 		os.Exit(sandbox.Run(os.Args[2:], os.Stderr))
 	}
 	var err error
-	if handled, nerr := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad}); handled {
+	if handled, nerr := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad, Edition: update.ThisEdition}); handled {
 		finish(nerr)
 		return
 	}
@@ -140,6 +142,8 @@ func main() {
 		err = agentsend.Run(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 	case "chat":
 		err = chatexport.Run(ctx, os.Args[2:], os.Stdout, os.Stderr)
+	case "recordings":
+		err = recordingcli.Run(ctx, os.Args[2:], os.Stdout)
 	case "backup":
 		err = backup.Run(ctx, os.Args[2:], os.Stdout, os.Stderr)
 	case "release":

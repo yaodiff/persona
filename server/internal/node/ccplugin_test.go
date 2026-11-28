@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -310,6 +311,133 @@ func TestCCPluginPollsAreTheSessionsOwn(t *testing.T) {
 	status, out = pluginPost(t, c, "poll", map[string]any{"session_id": sidA, "wait_ms": 100})
 	if status != http.StatusOK || out["retry_ms"] != float64(ccPluginOtherRetry.Milliseconds()) {
 		t.Errorf("an SDK's claude: %d %v", status, out)
+	}
+}
+
+// Exercise the process-bound poll and both readers of session effort (the list and details).
+func TestCCPluginDesktopEffortReadback(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	bgTranscript(t, home, home, sidA, "first")
+	bgTranscript(t, home, home, sidB, "second")
+	writeOutsideClaude(t, home, sidA, "claude-desktop", "idle", nil, nil)
+	writeClaudeProc(t, home, os.Getppid(), map[string]any{"sessionId": sidB, "cwd": home, "entrypoint": "claude-desktop", "kind": "interactive", "status": "idle"})
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	c := pluginSocket(t, n)
+	poll := func(level string, at time.Time) {
+		t.Helper()
+		req := map[string]any{"session_id": sidA, "wait_ms": 1}
+		if !at.IsZero() {
+			req["observed_effort"] = map[string]any{"at_ms": at.UnixMilli(), "level": level}
+		}
+		if status, body := pluginPost(t, c, "poll", req); status != http.StatusOK {
+			t.Fatalf("poll: %d %v", status, body)
+		}
+	}
+	check := func(id, want string) {
+		t.Helper()
+		if _, effort := n.modesOf(id); effort != want {
+			t.Errorf("details for %s: effort %q, want %q", id, effort, want)
+		}
+		for _, row := range listSessions(t, n) {
+			if row.SessionID == id {
+				if row.Effort != want {
+					t.Errorf("row for %s: effort %q, want %q", id, row.Effort, want)
+				}
+				return
+			}
+		}
+		t.Fatalf("missing session %s", id)
+	}
+
+	now := time.Now()
+	check(sidA, "")
+	poll("high", now)
+	check(sidA, "high")
+	check(sidB, "")
+	poll("low", now.Add(time.Millisecond))
+	check(sidA, "low")
+	poll("high", now) // an overlapping poll arrives out of order
+	check(sidA, "low")
+	poll("", now.Add(2*time.Millisecond))
+	check(sidA, "")
+	poll("high", now.Add(3*time.Millisecond))
+	check(sidA, "high")
+	poll("", time.Time{}) // a wake poll with no readback can arrive late
+	check(sidA, "high")
+	reset := now.Add(4 * time.Millisecond)
+	status, _ := pluginPost(t, c, "poll", map[string]any{"session_id": sidA, "wait_ms": 1,
+		"observed_effort": map[string]any{"at_ms": reset.UnixMilli(), "reset": true}})
+	if status != http.StatusOK {
+		t.Fatalf("reset: %d", status)
+	}
+	poll("high", now)
+	check(sidA, "")
+	poll("max", now.Add(5*time.Millisecond))
+	n.mu.Lock()
+	n.agents[sidA] = host.Agent{Agent: "claude", PaneID: "w1:p2"}
+	n.mu.Unlock()
+	if _, effort := n.modesOf(sidA); effort != "" {
+		t.Fatalf("Desktop effort leaked into terminal pane details: %q", effort)
+	}
+	n.mu.Lock()
+	delete(n.agents, sidA)
+	n.mu.Unlock()
+	n.ccPlugins.mu.Lock()
+	n.ccPlugins.sessions[sidA].effortSeen = now.Add(-ccPluginStale - time.Second)
+	n.ccPlugins.mu.Unlock()
+	check(sidA, "")
+
+	// Repeating a poll must not turn old evidence into a new step after an explicit pick.
+	n.noteModes(sidA, "", "medium")
+	poll("low", now.Add(-time.Minute))
+	check(sidA, "medium")
+	poll("xhigh", time.Now().Add(time.Second))
+	check(sidA, "xhigh")
+	poll("auto", time.Now().Add(2*time.Second))
+	check(sidA, "auto")
+}
+
+func TestCCPluginSameEffortUpdatesTimeWithoutRebuildingList(t *testing.T) {
+	var r ccPluginRegistry
+	poll := func(level string, at int64) bool {
+		_, _, _, _, changed := r.polled(sidA, 1, "", "", ccPluginCaps{}, false, false, ccPluginEffort{Level: level, AtMS: at})
+		return changed
+	}
+	if !poll("high", 1) || poll("high", 2) || !poll("low", 3) {
+		t.Fatal("expected a list notification only for a new or changed level")
+	}
+	observed, _ := r.observedEffort(sidA)
+	if observed.Level != "low" || observed.AtMS != 3 {
+		t.Fatalf("last observation: %+v", observed)
+	}
+}
+
+func TestCCPluginDesktopEffortPollWhileListBlocked(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	writeOutsideClaude(t, home, sidA, "claude-desktop", "idle", nil, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	c := pluginSocket(t, n)
+	// Start with an established channel, then block list building while the native level switches.
+	pluginPost(t, c, "poll", map[string]any{"session_id": sidA, "wait_ms": 1})
+	withFakeHub(t, n)
+	t.Cleanup(func() { <-n.notifySessionsSoon() })
+	offlineCache.Lock()
+	defer offlineCache.Unlock()
+	done := make(chan int, 1)
+	go func() {
+		status, _ := pluginPost(t, c, "poll", map[string]any{"session_id": sidA, "wait_ms": 1,
+			"observed_effort": map[string]any{"at_ms": time.Now().UnixMilli(), "level": "high"}})
+		done <- status
+	}()
+	select {
+	case status := <-done:
+		if status != http.StatusOK {
+			t.Fatalf("poll: %d", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("effort poll waited for the session list")
 	}
 }
 

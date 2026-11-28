@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -144,19 +145,23 @@ func TestActiveBlockerWaitEmitsTypedTodoWait(t *testing.T) {
 			},
 		},
 	}
-	views := []assistantwire.TodoSummary{
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
+	facts := make([]projection.Facts, len(list))
+	for i, row := range list {
+		facts[i] = projectionFacts(row, nil, nil)
+		facts[i].TodosV2 = true
 	}
-	waits := make([]*assistantwire.TodoWait, 2)
-	applyActiveBlockersToViews(list, views, waits)
+	views, waits := projection.ViewsAndWaits(facts, time.Now())
 
 	if waits[0] == nil || waits[0].Kind != assistantwire.TodoWaitKindPrMerge ||
 		waits[0].WaitingOn != "example/app#77" || waits[0].URL != "https://github.com/example/app/pull/77" {
 		t.Fatalf("unexpected PR blocker wait: %+v", waits[0])
 	}
 	if waits[1] == nil || waits[1].Kind != assistantwire.TodoWaitKindExternalEvent ||
-		waits[1].WaitingOn != "Upstream CDN rollout (+1 more)" {
+		waits[1].WaitingOn != "Upstream CDN rollout" {
 		t.Fatalf("unexpected external blocker wait: %+v", waits[1])
+	}
+	if line := views[1].Line; line == nil || line.Key != assistantwire.TodoLineKeyParked ||
+		line.Args[assistantwire.TodoLineArgReason] != "Upstream CDN rollout" || line.Args["remaining"] != "1" {
+		t.Fatalf("external blocker did not send a target and separate count: %+v", line)
 	}
 }

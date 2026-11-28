@@ -33,6 +33,22 @@ struct PersonaAgentsControl: ControlWidget {
     }
 }
 
+/// Control: open the main conversation with the keyboard up (#17789), as the Message Persona App Shortcut does.
+struct MessagePersonaControl: ControlWidget {
+    var body: some ControlWidgetConfiguration { Self.configuration(kind: "persona.control.message") }
+
+    static func configuration(kind: String) -> some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: kind) {
+            ControlWidgetButton(action: OpenPersonaTypingIntent()) {
+                // Theme.Icon.keyboard; the extension keeps its own symbol names, like the neighbouring controls.
+                Label("Message Persona", systemImage: "keyboard")
+            }
+        }
+        .displayName("Message Persona")
+        .description("Opens your main chat with the keyboard up.")
+    }
+}
+
 /// Control: open a new assistant conversation with dictation already running.
 struct DictatePersonaControl: ControlWidget {
     var body: some ControlWidgetConfiguration { Self.configuration(kind: "persona.control.dictate") }

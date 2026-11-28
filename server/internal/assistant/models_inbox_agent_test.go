@@ -3,6 +3,7 @@ package assistant
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -11,6 +12,81 @@ import (
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestTraexIsOfferedForTerminalAgentsAndInboxExecution(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.inbox = newFakeInbox()
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "traex", Agent: "traex", Source: "zshrc"}}}
+	f.agentModels = map[string][]proto.AgentModel{"traex": {{ID: "example-fast", Name: "Example Fast", Efforts: []string{"xhigh"}}}}
+
+	if p := purposeOf(t, s, "agent.new"); !slices.Contains(p.ProviderIDs, "launcher.traex") {
+		t.Fatalf("terminal provider missing: %+v", p)
+	}
+	if p := purposeOf(t, s, purposeAgent); !slices.Contains(p.ProviderIDs, "launcher.traex") {
+		t.Fatalf("TRAE CLI missing for Inbox execution: %+v", p)
+	}
+	w := request(s, http.MethodGet, "/api/v1/model-config/providers/launcher.traex/models", "")
+	var catalog proto.LauncherModels
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &catalog) != nil || catalog.Agent != "traex" ||
+		len(catalog.Models) != 1 || catalog.Models[0].ID != "example-fast" || !slices.Equal(catalog.Models[0].Efforts, []string{"xhigh"}) {
+		t.Fatalf("provider catalog: %d %s", w.Code, w.Body.String())
+	}
+	body := `{"revision":0,"provider":"launcher.traex","model":"example-fast","effort":"xhigh"}`
+	if w := modelRequest(s, http.MethodPatch, purposeAgent, body); w.Code != http.StatusOK {
+		t.Fatalf("Inbox write: %d %s", w.Code, w.Body.String())
+	}
+	if w := modelRequest(s, http.MethodPatch, "agent.new", body); w.Code != http.StatusOK {
+		t.Fatalf("terminal write: %d %s", w.Code, w.Body.String())
+	}
+	if p := purposeOf(t, s, "agent.new"); p.Effective.Model != "example-fast" || p.Effective.Effort != "xhigh" {
+		t.Fatalf("terminal configuration did not keep picker values: %+v", p.Effective)
+	}
+	params, err := s.AgentStartParams(context.Background(), AgentStartParams{MachineID: "server"})
+	if err != nil || params["launcher"] != "traex" || params["model"] != "example-fast" || params["effort"] != "xhigh" {
+		t.Fatalf("saved terminal configuration did not reach session.start: %+v, %v", params, err)
+	}
+	if p := purposeOf(t, s, purposeAgent); p.Effective.Model != "example-fast" || p.Effective.Effort != "xhigh" {
+		t.Fatalf("Inbox configuration did not keep picker values: %+v", p)
+	}
+	for _, unsupported := range []string{proto.ModePlan, "unknown"} {
+		body := fmt.Sprintf(`{"revision":1,"permission_mode":%q}`, unsupported)
+		if w := modelRequest(s, http.MethodPatch, purposeAgent, body); w.Code != http.StatusBadRequest {
+			t.Fatalf("Inbox %s write: %d %s", unsupported, w.Code, w.Body.String())
+		}
+	}
+	for revision, mode := range []string{proto.ModeDefault, "acceptEdits", "auto", proto.ModeBypass} {
+		body := fmt.Sprintf(`{"revision":%d,"permission_mode":%q}`, revision+1, mode)
+		if w := modelRequest(s, http.MethodPatch, purposeAgent, body); w.Code != http.StatusOK {
+			t.Fatalf("Inbox %s write: %d %s", mode, w.Code, w.Body.String())
+		}
+		if got := purposeOf(t, s, purposeAgent).Effective.PermissionMode; got != mode {
+			t.Fatalf("Inbox mode = %q, want %q", got, mode)
+		}
+	}
+	if w := modelRequest(s, http.MethodPatch, "agent.new", `{"revision":1,"permission_mode":"default"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("terminal TRAE permission write: %d %s", w.Code, w.Body.String())
+	}
+	it := &InboxItem{ID: "event-traex", Title: "Fixture", Agent: &InboxAgent{State: AgentRunning, ProcessingTurn: "traex-model"}}
+	s.inbox.mu.Lock()
+	s.inbox.items = map[string]*InboxItem{it.ID: it}
+	s.inbox.mu.Unlock()
+	before := len(f.sends)
+	if _, _, err := s.startInboxAgent(context.Background(), InboxAgentConfig{Enabled: true}, it, "TRAE Inbox fixture"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	if len(f.sends) <= before {
+		f.mu.Unlock()
+		t.Fatal("Inbox dispatch did not reach the node")
+	}
+	params = f.sends[before]
+	f.mu.Unlock()
+	for key, want := range map[string]any{"launcher": "traex", "model": "example-fast", "effort": "xhigh", "origin": OriginInbox, "origin_known": true, "inbox_permission_mode": proto.ModeBypass} {
+		if params[key] != want {
+			t.Errorf("assistant.send %s = %#v, want %#v", key, params[key], want)
+		}
+	}
+}
 
 // The AI twin's opt-in override (#4232), checked through the twin's own start (startInboxAgent) and the parameters the
 // node is started with, not only through resolution.

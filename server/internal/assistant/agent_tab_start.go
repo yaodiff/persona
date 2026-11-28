@@ -16,7 +16,7 @@ func agentTabNameStart(machine string, c proto.Session, requested, nameFrom stri
 	return assistantwire.AgentTabNameStart{
 		MachineID: assistantwire.AgentMachineID(machine), SessionID: assistantwire.AgentSessionID(c.SessionID),
 		TabID:           assistantwire.AgentTabID(cmp.Or(c.SlotID, c.TabID)),
-		ExpectedTabName: cmp.Or(c.HerdrTabName(), requested), NameFrom: nameFrom,
+		ExpectedTabName: cmp.Or(c.RenamableTabName(), requested), NameFrom: nameFrom,
 	}
 }
 
@@ -88,7 +88,7 @@ func (s *Service) startedTabIdentity(ctx context.Context, p assistantwire.AgentT
 	for {
 		current, found := s.rawAgentForNaming(ctx, string(p.MachineID), string(p.SessionID))
 		if found {
-			label := current.HerdrTabName()
+			label := current.RenamableTabName()
 			if label != "" && label != p.ExpectedTabName {
 				return p, false
 			}

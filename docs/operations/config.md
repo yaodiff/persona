@@ -16,13 +16,18 @@ The configs live outside the repo: releases run in a clean worktree (`docs/opera
 
 ## Naming and configuration
 
-Persona is the only supported spelling. The canonical binary is `personad`, the connector is `persona-link`, runtime state defaults to `~/.persona`, and build/deploy configuration defaults to `~/.config/persona/config.json`. `PERSONA_HOME` and `PERSONA_CONFIG` are the only brand-prefixed overrides. No previous-brand variable, directory, command or URL aliases are read or created.
+Use Persona names for new installs. The canonical binary is `personad`, the connector is `persona-link`, runtime state defaults to `~/.persona`, and build/deploy configuration defaults to `~/.config/persona/config.json`. Use `PERSONA_HOME` and `PERSONA_CONFIG` for explicit overrides. Existing installs can keep the service names, state roots and configuration supported by the [rolling-upgrade compatibility matrix](../protocol/rolling-upgrade-compatibility.md).
 
-See [the naming contract](rename.md) and [the approval-gated cutover](persona-cutover.md). Existing installations require explicit, one-time service/config/data/MCP migration before running this version. A source merge does not change live services. Back up and identify the actual storage first; two independent stores must never be merged automatically.
+The [in-place upgrade checklist](upgrade.md#in-place-upgrade-for-existing-installs) records the supported
+compatibility path and the checks to prepare for an existing install. It does not authorize a production
+update by itself; the production-authorization boundary remains unresolved in
+[#1102](https://github.com/nwverse/persona/issues/1102). The [historical cutover](persona-cutover.md)
+describes an earlier coordinated replacement and keeps its own prohibition. Preserve the active storage and
+select the intended root explicitly if there are two independent stores.
 
-Actual registered bundle / application IDs, App Groups, iCloud containers and keychain access groups come from private configuration and stay unchanged. Naming their carrier variables `PERSONA_*` does not change their values. Other runtime contracts, caches and persisted preferences need the cutover described above. The avatar model remains `persona`: the two bundled choices are Mochi (`persona`) and Milk Frog (`nwverse`); retired choices resolve to Mochi, see [Avatars](../apple/persona.md).
+Keep the registered bundle and application IDs, App Groups, iCloud containers and keychain access groups in the private configuration. The [naming contract](rename.md) describes the native compatibility path for persisted preferences and system identities. The avatar model uses `persona`. The two bundled choices are Mochi (`persona`) and Milk Frog (`nwverse`). Retired choices resolve to Mochi, as described in [Avatars](../apple/persona.md).
 
-The role-specific root resolver reads only canonical service definitions, including HOME-only environment-file overrides; it does not execute shell configuration or expose credentials. Missing required files fail closed. Queries are read-only, and `--prepare` initializes only the selected root without compatibility links.
+The role-specific root resolver reads installed systemd units and their root overrides. For a macOS hub, use the root from its actual LaunchAgent. See [Recover the runtime directory per service](rename.md#recover-the-runtime-directory-per-service). Queries are read-only and missing required files fail closed. `--prepare` initializes the selected root and can add the current-name alias for an existing default root under the former name.
 
 ## Who owns a setting
 
@@ -156,7 +161,7 @@ No `ssh_host`, and no SSH setup on the hub. The SSH setup in steps 1–6 above s
 | `app.carplay_voice` | Boolean, default `false`: enabling adds the CarPlay voice-conversation entitlement (`com.apple.developer.carplay-voice-based-conversation`) to signing, making Persona visible in the car. Apply to Apple first and enable it on the App ID after approval; do not enable before approval or signing fails. `scripts/persona_config.py xcconfig` generates `apple/PersonaOptIn.entitlements` and writes `PERSONA_APP_ENTITLEMENTS` (see `docs/apple/carplay.md`) |
 | `app.health_background_delivery` | Boolean, default `false`: enabling adds the HealthKit background delivery entitlement (`com.apple.developer.healthkit.background-delivery`) to signing and sets Info.plist `PersonaHealthBackgroundDelivery` (`PERSONA_HEALTH_BACKGROUND_DELIVERY`), so a workout report comes right after the workout is saved to Health, even while Persona is closed. Enable it only after the App ID's provisioning profile allows the entitlement, or signing fails or the export drops it; `scripts/release/entitlements.py check` reports a release without it. Off: reports come when Persona is next opened (see `docs/assistant/health.md`, "Automatic workout reports (iOS)") |
 | `app.homekit` | Boolean, default `false`: enabling adds the HomeKit entitlement (`com.apple.developer.homekit`) to the generated `apple/PersonaOptIn.entitlements` and writes `PERSONA_HOMEKIT = YES` (Info.plist `PersonaHomeKit`), which turns on the Home source and its tools (`docs/apple/phone-tools.md`, "iPhone system integrations"). Turn the HomeKit capability on for the App ID (and regenerate the provisioning profiles) first, or signing fails |
-| `app.siri_calls` | Boolean, default `false`: "Call Persona using Persona" through SiriKit (`docs/apple/siri.md` ("Calling Persona")). Enabling makes `persona_config.py env` export `PERSONA_SIRI_CALLS=YES`, so xcodegen merges `apple/siri-calls.yml` (the Intents extension `PersonaCallIntents`, bundle ID `<app.bundle_id>.callintents`; the app signed with `apple/PersonaSiriCalls.entitlements`, its entitlements plus Siri's `com.apple.developer.siri`, written by xcodegen and git-ignored; `NSSiriUsageDescription` added to the built Info.plist; Siri's example phrases `AppIntentVocabulary.plist` in en, zh-Hans and ja). No tracked file is rewritten, so a release worktree stays clean. `xcconfig` lists the entitlement in `apple/PersonaOptIn.entitlements` too; `scripts/release/asc_signing.py` asks for `SIRIKIT` on the App ID and the extension's App ID and "Persona Call Intents App Store" profile, and the export options name that profile. Prepare the account first (`docs/operations/release.md` ("Siri calls")): turned on before, the release preflight (`asc_signing.py --check`) stops the release. Off, the project, the signing preflight and the release are unchanged. The App Shortcut "Call Persona" needs none of this |
+| `app.siri_calls` | Boolean, default `false`: "Call Persona using Persona" through SiriKit (`docs/apple/siri.md` ("Calling Persona")). Enabling makes `persona_config.py env` export `PERSONA_SIRI_CALLS=YES`, so xcodegen merges `apple/siri-calls.yml` (the Intents extension `PersonaCallIntents`, bundle ID `<app.bundle_id>.callintents`; the app signed with `apple/PersonaSiriCalls.entitlements`, its entitlements plus Siri's `com.apple.developer.siri`, written by xcodegen and git-ignored; `PersonaSiriCalls` set to `YES` in the built Info.plist; Siri's example phrases `AppIntentVocabulary.plist` in en, zh-Hans and ja). `NSSiriUsageDescription` stays in `apple/project.yml` and `apple/Persona/Resources/Info.plist` in every build so App Store Connect does not reject uploads with ITMS-90683 (the iOS app always links `Intents`), while the extension, Siri entitlement and runtime Siri authorization prompt remain gated by this switch. No tracked file is rewritten, so a release worktree stays clean. `xcconfig` lists the entitlement in `apple/PersonaOptIn.entitlements` too; `scripts/release/asc_signing.py` asks for `SIRIKIT` on the App ID and the extension's App ID and "Persona Call Intents App Store" profile, and the export options name that profile. Prepare the account first (`docs/operations/release.md` ("Siri calls")): turned on before, the release preflight (`asc_signing.py --check`) stops the release. Off, the extension, Siri entitlement, signing preflight and runtime prompt stay off. The App Shortcut "Call Persona" needs none of this |
 | `app.meta_wearables` | Meta glasses (`docs/apple/meta-glasses.md`): when `enabled` is true, `persona_config.py env` exports `PERSONA_META_WEARABLES=YES`, and only then does xcodegen merge `apple/meta-wearables.yml` (Meta's DAT SDK and the Info.plist keys it needs) into the project; `app_id` and `client_token` are the app's ID and Client Token from the Wearables Developer Center, written to `PERSONA_META_APP_ID` and `PERSONA_META_CLIENT_TOKEN` in `Config.xcconfig`; they can be left empty while the glasses are in Developer Mode (`app_id` 0). Off by default: it needs Xcode 26.4 or later, and carries risk in external TestFlight / App Store review |
 | `app.tunnel_core` | Directory containing the in-App tunnel core (`libpersonatunnel.a`, `module.modulemap`, headers; [network.md](network.md) ("Connecting to hub through an in-app tunnel")). Only when set does it write `PERSONA_TUNNEL_INCLUDE` and `PERSONA_TUNNEL_LDFLAGS` into `Config.xcconfig`; only hardware builds link it. Missing files cause `xcconfig` to fail immediately. Omitted means no in-App tunnel |
 | `app_store.*` | For `release.sh` / `asc*.py` (`asc_cli.py` hands them to the App Store Connect CLI, `docs/operations/release.md` ("Releasing with asc")): the API key (`key_id`, `issuer_id`, `key_path`), the App record's numeric ID, internal testers, the TestFlight feedback email; `external` is external testing (group name, public link switch and tester limit (`public_link_limit`, 0 means unlimited), privacy policy URL, extra testers invited by email, Beta App Review contact and notes, `docs/operations/release.md`). Env vars such as `ASC_KEY_ID` can still override (key file path `ASC_KEY_PATH` or `ASC_PRIVATE_KEY_PATH`) |
@@ -232,6 +237,12 @@ The sections that are a manager's (whose assistant it is, `ai`, `agents`, `inbox
 - `security.proxy_protocol` (optional, omitted by default): with same-machine port forwarding, a reverse tunnel, or nginx `stream` passthrough in front of the hub, public connections all look like loopback to the hub.
   Set `{"from": ["127.0.0.1/32"]}`: connections from these upstreams must carry a PROXY header (v1 / v2), and the hub checks the real source in the header; `listeners` defaults to only `tls`.
   Syntax, rules, and self-checks in [network.md](network.md#proxy-protocol).
+- `preview` (optional, off by default): isolated wildcard-subdomain origins for web dev-server previews ([preview.md](../web/preview.md) "Isolated preview origin", [network.md](network.md) "Wildcard preview origins"). When omitted or `preview.domain` is empty, preview-origin proxying is disabled, `preview_origin` is not announced, and the hub ignores preview hostnames.
+  - `preview.domain`: bare DNS domain with at least two labels (no scheme, wildcard, port or path), e.g. `"preview.example.com"`. Each `(machine, port)` receives a stable, unguessable origin `https://<label>.<preview.domain>[:<port>]`. Must not overlap `public_url`, `public.advertise`, or `sharing.public_origin`.
+  - `preview.port` (optional, `1`–`65535`): external HTTPS port emitted in preview URLs when not `443`. When omitted or `0`, defaults to the hub's TLS port if `preview.cert_file` is set, otherwise `443`.
+  - `preview.cert_file` / `preview.key_file` (optional, must be set together): wildcard TLS certificate covering `*.<preview.domain>` and its private key, served by `public.tls_listen` on matching SNI and reloaded on the hub's 2-minute TLS refresh timer without changing the hub's pinned identity key (`fp`). Requires `public.tls_listen`. Omit both when a reverse proxy in front of the hub terminates TLS.
+  - `preview.allowed_ancestors` (optional): additional canonical `http(s)://host[:port]` web origins permitted in `Content-Security-Policy: frame-ancestors` alongside the hub's own web origins (`public_url`, `public.advertise`, and the verified same-host `Origin` of the grant request). Entries must not be under `preview.domain`.
+  - Manual edits require a hub restart (renewing `preview.cert_file` / `preview.key_file` on disk reloads automatically).
 - `name` (optional): the hub's display name (e.g. "Home"), reported by persona-link and shown by clients.
   Defaults to the short host name of the hub machine; if the host name is a Docker container id or `PERSONA_LOCAL_NODE=0`, it uses `hub-<first 6 chars of hub_id>`. Manual file edits require a hub restart;
   edits in the admin UI's "Overview" take effect immediately ([admin.md](admin.md)).
@@ -425,6 +436,12 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   never reopens the knowledge base: the import reads it again before every call, so `enabled: false` stops it before its next call.
   `kb.history` keeps only the switch and the pacing: which chats are read, how much of each and how far back (`history.<source>.back_days`) are the knowledge base's
   selection, which the manager keeps in its settings table, not here,
+  `lark_minutes` (the owner's Lark minutes and document titles through lark-cli, **off unless `enabled` is `true`**; `docs/assistant/knowledge.md` "Lark minutes and documents"):
+  `{"enabled": true, "since_days": 30, "interval_minutes": 60, "binary": "lark-cli", "profile": "", "doc_search": ["<keyword>"]}`. `since_days` is how far back each run searches (default 30),
+  `interval_minutes` the least time between two runs (default 60), `binary` lark-cli's path when the manager's `PATH` cannot find it (the adapter also tries the login shell's `PATH`),
+  `profile` a lark-cli profile (empty: its default), and `doc_search` the keywords that discover documents (empty: off). The import needs the user's own `lark-cli` login on the manager's computer (minutes, docs, drive scopes);
+  a failure is logged and never stops the round. Changing it does not reopen the knowledge base: it is read again every round.
+  `speaker_turns_import` (debug only, default `false`, read once at manager start; no app or `PUT /api/v1/assistant` can change it): when `true`, enables `PUT /api/v1/recordings/{id}/speakers/turns` for importing speaker timelines ([meeting-minutes.md](../assistant/meeting-minutes.md) "Speakers (#17674)").
   `ai` (model for compression and tagging, same fields as `ai`; defaults to `inbox.triage_ai`, then `ai`), `extra_dirs` (note directories you maintain on the manager's machine, the hub machine for the built-in manager,
   e.g. a git repo of facts / lessons: `kb_search` also searches Markdown in these directories (read-only, skips dot directories such as `.git`), and the assistant's CLAUDE.md mentions them; `~/` is that machine's home).
   Use `remote_folders` for named sources on other connected personal computers. See [Remote knowledge folders](../assistant/knowledge.md#remote-knowledge-folders-kbremote_folders) for fields and exclusions.
@@ -540,6 +557,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   The assistant's Lark write rules also go here: `connector` is `lark`, `action` is "method path", e.g. `{"connector":"lark","action":"POST /conversations/*/messages","decision":"allow"}`,
   or lark-cli's `{"connector":"lark","action":"CLI /im/+messages-send","decision":"allow"}` (`*` matches one path segment, `**` the rest, `"*"` any call; `match` matches top-level body fields).
   These precede the old `lark_gate`, followed by built-in rules (`docs/assistant/assistant.md` ("Lark: skill supplied by the Lark extension")).
+- `connector_auto_confirm` (optional, off by default): opt-in hub-side policies allowing a verified extension installation to participate in **guarded conditional auto-confirm** for exact actions (`docs/protocol/connector-protocol.md` "Guarded conditional auto-confirm", `server/internal/connector/auto_confirm.go`). Each entry requires exact `extension` (hub-verified extension id), exact `connector` (connector id), and a non-empty list of exact `actions` (each prefixed `<connector>_`, no wildcards); optional fields are `name` (label recorded in `sent_as_user`, default `<extension>/<connector>`), `protocol` (default `guarded-auto-confirm-v1`), `min_version` / `max_version` (inclusive `MAJOR.MINOR.PATCH` semver bounds), `sources` (default `["installed", "builtin"]`; `"hub.json"` must be opted in explicitly; unpackaged remote-socket extensions are never eligible), `market_key` (pin to verified catalog key), `max_ttl_seconds` (1–300, default 120), and `disabled`. An invalid list stops the manager from starting, like `connector_gate`. Explicit `deny` / `confirm` rules in `connector_gate`, repeated JSON argument keys, `ConfirmEach` (space/health) conversations and non-owner callers (guests, work machines, coding Agents, pairing tokens) always take precedence and never auto-confirm.
 - `sent_ledger_days` (optional): how many days the ledger of what was written as the user is kept (`docs/extensions/connectors.md` "Sent as the user"); omitted or 0 means 90, below 0 keeps it for good.
 - `sent_recall_hours` (optional): how many hours after a send its message can still be taken back (`docs/extensions/connectors.md` "Sent as the user", Recall); omitted or 0 means 24, below 0 no limit. A connector may allow less (GitHub's comments have no limit of their own).
 - `github` (optional): GitHub connector. `{"auth": {"from_machine": "<machine id>"}}`: use `gh`'s login on that machine (the hub runs `gh auth token` via the node,
@@ -565,7 +583,8 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   and existing data on the hub can be deleted separately. Logs contain neither numbers nor bodies (`docs/plans/plan-connectors.md` ("V")).
 - `bots.feishu` (optional): application credentials for the bot used to chat with Persona in Lark: `app_id`, `app_secret`, `domain` (`feishu` / `lark` / open-platform address),
   for people who do not want to enter them in the App. Values saved in the App (**Settings › Connectors › Lark Bot**) win; switches, pairing, and all features are in the App (`docs/extensions/bots.md`).
-- `bots.endpoints` (optional): explicit bot endpoint registrations for **Agents → Bots**. Phase 1 accepts `provider: "orca"` only; each entry needs a stable lowercase `id`, display `title`, and exact `machine_id` + `session_id` binding. For example: `{"id":"research","provider":"orca","title":"Research bot","machine_id":"<machine id>","session_id":"<explicitly allowlisted Orca session id>"}`. Only these entries appear from the Orca source; arbitrary structured sessions are never inferred to be bots. This is the phase-1 manager-owned registration flow (there is no browser link/add form and no `/api/v1/bots` chat API). Extensions granted `agents.control` can send to a registered endpoint, so register only a session you would let them instruct. Keep this file 0600, restart the manager after an edit, and remove an entry to remove that endpoint. See `docs/plans/plan-orca-support.md` ("Registered bot endpoints").
+- `bots.endpoints` (optional): explicit bot endpoint registrations for **Agents → Bots**. It accepts `provider: "orca"` only. Each entry needs a stable lowercase `id`, a display `title` and a `machine_id`, and binds either one exact Orca `session_id` or one Orca `bot_id` (exactly one of the two). A `bot_id` entry follows the bot to each new Home Chat; it needs a node that announces `orca_bots_v1` (an older one refuses it as an invalid request). For example: `{"id":"research","provider":"orca","title":"Research bot","machine_id":"<machine id>","session_id":"<explicitly allowlisted Orca session id>"}`, or `"bot_id":"<Orca bot id>"` in place of `session_id`. Arbitrary structured sessions are never inferred to be bots. There is no browser link/add form and no `/api/v1/bots` chat API. Extensions granted `agents.control` can send to a registered endpoint, so register only a session you would let them instruct. Keep this file 0600, restart the manager after an edit, and remove an entry to remove that endpoint. See `docs/integrations/orca.md` ("Registered bot endpoints").
+- `bots.discovery` (optional): the bots of Orca on each connected computer are found by themselves and listed in **Agents → Bots**, one per bot, followed to each new Home Chat. The computer's local Orca reads `bots.roster` and `bots.chats` (`docs/integrations/orca.md`, "Bots found on a computer"). Set `"off"` to find none. A bot an entry of `bots.endpoints` already registers gets no second row. Found bots are reachable by the same devices and extensions as registered endpoints.
 - `extensions` (old `plugins` key still read): extensions hand-written in manager.json, started by the manager and forwarded to the App (voice chat, etc.): `id`, `name`, `kind`, `command` + `args` (or only `socket` for an extension running elsewhere),
   `dir` (working directory), `env` (extra environment variables), `disabled` (`true` disables while keeping the config), `config` (the extension's own settings), see `docs/extensions/extensions.md` ("Extensions in manager.json");
   extensions installed with `personad extension install` are registered in the database, not here. For personad's built-in voice extension (GPT-Live), use `"command": "personad", "args": ["voice"]`,
@@ -573,6 +592,88 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 - `extension_market.proxy` (optional): an HTTP or SOCKS5 proxy for extension marketplace catalog reads, package downloads and HTTPS git clones, independent of the GitHub connector. Write `http://[user:password@]host:port` or `socks5://[user:password@]host:port` (default ports 80 and 1080). It covers GitHub, ordinary HTTPS markets, OCI registries and mirrors. An explicit value overrides `github.proxy`, the process proxy environment and `NO_PROXY`; an invalid value fails rather than falling back to a direct connection. SSH git clones do not use it. When omitted, GitHub keeps using `github.proxy` and other market traffic follows the manager process environment, as before. Proxy credentials belong only in this 0600 manager.json. Restart the manager after changing it.
 - `extension_market.ca_file` (optional): a path to a PEM file containing one or more CA certificates for a private HTTPS extension marketplace. Use an absolute path so lookup does not depend on the manager's working directory, for example `"extension_market":{"ca_file":"/etc/persona/market-ca.pem"}`. The certificates are appended to the system root pool only for the extension marketplace HTTP client used for catalog reads and package downloads; other manager HTTP clients, process-wide trust and git clones are unchanged. HTTPS git clones that need the same CA must configure Git separately (for example `http.sslCAInfo`). The added roots are trusted for every host this client contacts, including GitHub, registries, mirrors and redirect targets, so configure only CAs you control and use a name-constrained CA when the trust must be narrower. Certificate and hostname verification stays enabled, and marketplaces must still use HTTPS or GitHub. The file must be a regular file no larger than 1 MiB. An unreadable, non-regular or oversized file, or one with no parseable PEM certificates, fails all marketplace operations that use this client, including the official marketplace, with a clear error instead of silently using the system-only pool. When omitted, TLS behavior is unchanged. Remove the setting and restart the manager to return to system roots only; restart after every change to the file or setting.
 - `trusted_extension_markets` (deprecated): retained for configuration decoding only during the one-release warning window; startup logs a deprecation warning when entries are present. Nonofficial signing metadata and saved keys no longer grant a sandbox exemption; installed extensions keep the default sandbox unless the owner explicitly chooses otherwise (`docs/extensions/extensions.md` ("Sandbox", "Naming and compatibility")).
+
+### Project review
+
+The optional `project_review` section of `manager.json` is disabled by default. Use a dedicated
+Codex target with its own model selection. List the project slugs the owner has approved for
+review. The manager uses its task ledger's current project and active Agent links, including
+later assignments and replacements.
+
+```json
+{
+  "project_review": {
+    "enabled": true,
+    "target": {"machine_id": "server", "session_id": "review-session"},
+    "model": "gpt-6.2-sol",
+    "projects": ["project-example"],
+    "app_inputs": true,
+    "feishu_owner_inputs": false,
+    "review_unassigned_tasks": false
+  }
+}
+```
+
+App input uses Persona's authenticated full-device paths for starts and messages. It covers the
+first prompt of a new assistant conversation or Agent, and accepted messages with a stable client
+ID, including in the main chat. Any non-empty client ID counts; one that is not a plain reference
+(letters, digits and `_.:/@-`, up to 256 characters) is named in the event by its hash. A manager that enabled App input can receive pending hub relays
+after reconnecting. The optional Feishu input uses the built-in bot and requires the paired owner
+in an approved chat. It produces an unscoped review notification. Generic extensions, terminal
+input, guest and health conversations, meeting turns, and scheduled or internal sends are outside
+these input paths. Existing-session App clients without a stable message ID also fall outside them.
+
+The manager observes named execution receipts, the fleet's waiting, interruption and failure
+states, and the existing supervision watchdog. It collapses repeated notices while a blocking
+episode is open. Observed progress allows a later blocking episode. Unassigned tasks can produce
+unscoped signals through `review_unassigned_tasks`. App input in assistant conversations and
+outside one current authorized task produces an unscoped signal. Captured events that lose their
+project authorization before send also become unscoped. No conversation text is copied. An
+unscoped prompt contains an opaque event ID and asks for acknowledgment without looking up a
+project or changing state. The target has its usual runtime permissions, so enable these sources
+only for a dedicated review session you trust.
+
+The manager keeps one persistent queue for the dedicated target. It checks the target's runtime
+and model before sending and advances when the matching transcript has a successful response in
+that model. It saves the transcript position before sending. Each send has its own client message
+ID: the hub refuses to send an ID again once it lost track of that ID's outcome, so a send that
+timed out or lost its connection is retried under a new ID. A send the hub confirmed is awaited, not
+repeated, unless its echo is still missing from the transcript ten minutes after the confirmation
+while the target is idle; then it is sent again under a new ID. A later turn does not overwrite the original receipt. The queue requires the receipt's
+exact event ID and the originating turn's end marker. A review turn that closes without a valid
+receipt (stopped, interrupted by another message, or a reply without the receipt line) is sent
+again after that turn. After five sends the event is settled as `send_unconfirmed`,
+`send_echo_missing` or `review_receipt_missing`, so one event cannot hold the queue; the row keeps the outcome and its
+`sends` count for inspection. A `facts_recorded` receipt is the Agent's statement of
+the outcome. Delivery does not verify a ledger write or change task acceptance. Keep the dedicated
+session available by its original ID.
+
+The hub and manager both need binaries that include project review and their respective Postgres
+migrations. Apply changes with the manager's service restart. To pause intake and delivery, set
+`enabled` to `false` and let the restarted manager connect to the hub. Applying that setting leaves
+the delivery history and outstanding rows in Postgres. Turning App input off (or disabling the
+section) drops the App inputs the hub has not yet passed to that manager, so turning it back on
+does not replay them. Changes to project authorization are rechecked before delivery. An event
+whose authorization ends after its scoped attempt was reserved is resent as triage only; its row's
+`scope_downgraded` records that, and either receipt then settles it, since the scoped attempt may
+have landed first.
+For an audit, use the manager's `project_review_deliveries` table. Its event ID, attempts, sends, last
+outcome and settlement timestamp show what was queued, retried or processed.
+
+Boundaries of this version:
+
+- Scheduled routines and follow-ups are not owner input: they start or wake conversations inside the manager, not
+  through the authenticated App paths. A follow-up that wakes a task's Agent still produces that task's usual
+  completion or blocking event once its turn ends, like any other turn of a reviewed task.
+- The review target never reviews its own messages or turns, and messages the manager sends to it are not owner input.
+- Messages and Agent starts the App marks with `via` (Siri, Shortcuts, an App Intent, the share sheet) are
+  delivered as usual but are not owner input.
+- Terminal input typed straight into an Agent, generic extension channels, guest, health and meeting conversations,
+  and App clients that send a message without a stable client message ID are not captured.
+- A hub restart while a start's `session.start` call to the node is still in flight can lose that start's first
+  prompt, because the hub learns the session ID only from the node's answer; the record is written as soon as the
+  answer arrives, before the hub waits for the listing or links the to-do. Later messages in that session are captured.
+- The target must be a Codex session in the configured model; other runtimes are not supported as targets yet.
 
 <a id="ddnspublicddns"></a>
 

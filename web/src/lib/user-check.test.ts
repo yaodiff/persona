@@ -24,7 +24,8 @@ describe("personal verification is open work, not completion", () => {
     expect(triage(pending, undefined, now)).toMatchObject({ section: "waiting", rule: "owner_decides" });
     expect(countsAsOpen(pending, triage(pending, undefined, now))).toBe(true);
     const entries = assistantEntries({ conversation: "main", main: "main", todos: [pending], sessions: [], interactions: [], plans: {}, feed: [], now });
-    expect(entries.needsYou.map((item) => item.key)).toEqual(["task:personal-check"]);
+    expect(entries.needsYou).toEqual([]);
+    expect(entries.verify.map((item) => item.key)).toEqual(["task:personal-check"]);
     expect(entries.running).toEqual([]);
     expect(entries.shelved).toEqual([]);
   });

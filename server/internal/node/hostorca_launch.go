@@ -19,25 +19,60 @@ import (
 type orcaLaunch struct {
 	terminal orcart.Terminal
 	cwd      string
+	// adopted: a terminal the node did not open but was told to start in (AdoptPane); Run types into it only after
+	// Orca reads it with just its shell in front.
+	adopted bool
 }
 
 // Orca owns the project's worktrees: opening a space means opening a new terminal in the registered directory,
 // without making another git worktree or changing an existing terminal.
 func (h *orcaHost) CreateSpace(ctx context.Context, cwd, label string) (*host.Created, error) {
-	return h.createTerminal(ctx, "", cwd, label)
+	return h.createTerminal(ctx, "", cwd, label, orcaOpen{})
 }
 
 func (h *orcaHost) CreateSlot(ctx context.Context, space, cwd, label string) (*host.Created, error) {
-	return h.createTerminal(ctx, space, cwd, label)
+	return h.createTerminal(ctx, space, cwd, label, orcaOpen{})
 }
 
-func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string) (*host.Created, error) {
+// CreateSpaceEnv is CreateSpace whose shell starts with env added (host.EnvLauncher: terminal.create's env; an Orca
+// that refuses the field opens the terminal without it, orcart.WithEnv).
+func (h *orcaHost) CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*host.Created, error) {
+	return h.createTerminal(ctx, "", cwd, label, orcaOpen{env: env})
+}
+
+// CreateSlotEnv is CreateSlot whose shell starts with env added (host.EnvLauncher), as CreateSpaceEnv.
+func (h *orcaHost) CreateSlotEnv(ctx context.Context, space, cwd, label string, env []string) (*host.Created, error) {
+	return h.createTerminal(ctx, space, cwd, label, orcaOpen{env: env})
+}
+
+// OpenShell opens a terminal for the user's own shell (New Terminal, Open Terminal Here: shellOpener) in space, or in
+// the worktree that holds cwd when space is "", with the shell in cwd. terminal.create does not take the directory
+// for a create like this one (its cwd is not honoured, Orca 1.4.277), so a folder deeper than the worktree's, or
+// outside every worktree, is reached with terminal.create's command (`cd <folder>`, which Orca types into that new
+// shell once it is ready): it is part of the request that makes the terminal, so it never reaches any other shell.
+// The terminal gets no launch grant: Run never types into the user's shell.
+func (h *orcaHost) OpenShell(ctx context.Context, space, cwd, label string) (*host.Created, error) {
+	return h.createTerminal(ctx, space, cwd, label, orcaOpen{shell: true})
+}
+
+// orcaOpen is how createTerminal opens a terminal: a start's with env added to its shell's environment and a launch
+// grant for its one start line (Run); the user's own shell (OpenShell) put in its folder, with no grant.
+type orcaOpen struct {
+	env   []string
+	shell bool
+}
+
+func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string, how orcaOpen) (*host.Created, error) {
 	// Run types `cd -- <cwd>` into the shell's line editor, which acts on a control character even inside the quotes
-	// (a tab completes and closes the quoted word, a line break runs the line): such a directory gets no terminal.
+	// (a tab completes and closes the quoted word, a line break runs the line), and OpenShell has Orca type
+	// `cd <cwd>`: such a directory gets no terminal.
 	if strings.ContainsFunc(cwd, unicode.IsControl) {
 		return nil, host.Mark(refusal(proto.CodeDirectoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
 	}
 	trees, _, _, err := h.c.Worktrees(ctx, "")
+	if err != nil && orcaUnreachable(err) {
+		return nil, host.Mark(orcaMissing(err), host.ErrNotDelivered) // Orca's words for a start (orcaengine.go)
+	}
 	if err != nil {
 		return nil, orcaErr(err)
 	}
@@ -48,16 +83,25 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string)
 	}
 
 	shell, typed := h.launchShell(ctx)
-	t, err := h.c.CreateTerminal(ctx, "id:"+wt.WorktreeID, label, newUUID(), shell)
+	var opts []orcart.CreateOption
+	if env := orcaEnv(how.env); env != nil {
+		opts = append(opts, orcart.WithEnv(env))
+	}
+	if line := orcaCdLine(cwd, wt.Path); how.shell && line != "" {
+		opts = append(opts, orcart.WithCommand(line))
+	}
+	t, err := h.c.CreateTerminal(ctx, "id:"+wt.WorktreeID, label, newUUID(), shell, opts...)
 	if err != nil {
 		return nil, orcaErr(err)
 	}
 
 	h.mu.Lock()
-	if h.launches == nil {
-		h.launches = map[string]orcaLaunch{}
+	if !how.shell {
+		if h.launches == nil {
+			h.launches = map[string]orcaLaunch{}
+		}
+		h.launches[t.PaneKey()] = orcaLaunch{terminal: *t, cwd: cwd}
 	}
-	h.launches[t.PaneKey()] = orcaLaunch{terminal: *t, cwd: cwd}
 	h.track(*t)
 	h.mu.Unlock()
 
@@ -67,6 +111,30 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string)
 		Pane:    host.PaneRef{Kind: host.Orca, ID: t.PaneKey()},
 		Shell:   typed,
 	}, nil
+}
+
+// orcaEnv is env ("KEY=VALUE") as terminal.create's env object; nil for none.
+func orcaEnv(env []string) map[string]string {
+	var out map[string]string
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// orcaCdLine is the line that puts a new shell of the worktree at root in cwd: "" when cwd is the worktree's own
+// directory (where Orca starts the shell) or not an absolute path. An absolute path needs no `--`, so the line is one
+// every shell Orca may run reads (the sh family, fish, PowerShell).
+func orcaCdLine(cwd, root string) string {
+	if !filepath.IsAbs(cwd) || orcaLaunchPath(cwd) == orcaLaunchPath(root) {
+		return ""
+	}
+	return "cd " + shellQuote(cwd)
 }
 
 // orcaOnWindows: the node and its Orca run on Windows. A var for tests.
@@ -89,7 +157,7 @@ func (h *orcaHost) launchShell(ctx context.Context) (shell, typed string) {
 }
 
 // resolveWorktree locates the best-matching local Orca worktree for cwd.
-// A non-empty space is an explicit target and must contain cwd. Without one, if cwd is inside a worktree (including subdirectories),
+// A non-empty space is an explicit target and must contain cwd outside a task workspace. Without one, if cwd is inside a worktree (including subdirectories),
 // it chooses the deepest enclosing worktree.
 // If not found in any existing worktree, it checks whether cwd can be safely registered via repo.add (if git repo).
 func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree, spaceHint, cwd string) (*orcart.Worktree, error) {
@@ -104,12 +172,15 @@ func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree,
 			}
 			if w.WorktreeID == spaceHint {
 				wPath := orcaLaunchPath(w.Path)
-				if isInsideOrEqual(path, wPath) {
+				// A task uses the worktree as its tab container. Run enters the worker's own checkout.
+				ts := taskSpaceIn(ctx, h)
+				if isInsideOrEqual(path, wPath) || ts != nil && ts.id == spaceHint {
 					return w, nil
 				}
 			}
 		}
-		return nil, host.Mark(refusal("orca_workspace_unavailable", "The selected Orca workspace is unavailable or does not contain this directory", nil), host.ErrNotDelivered)
+		// English, as it always was for a hub that does not word the code (apierr does, #17057)
+		return nil, host.Mark(refusal("orca_workspace_unavailable", i18n.T(i18n.En, "rpc-errors.orca_workspace_unavailable"), nil), host.ErrNotDelivered)
 	}
 
 	// 2. Search all local worktrees for the deepest enclosing worktree.
@@ -180,12 +251,16 @@ func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree,
 	}
 
 	return nil, host.Mark(
-		refusal("orca_not_registered", "Orca 当前没有任何打开的项目，请先在电脑上打开一个项目再新建 Agent。", nil),
+		refusal("orca_not_registered", i18n.T(i18n.From(ctx), "rpc-errors.orca_not_registered"), nil),
 		host.ErrNotDelivered,
 	)
 }
 
-func (h *orcaHost) canAutoRegister(path string) bool {
+func (h *orcaHost) canAutoRegister(path string) bool { return orcaCanAutoRegister(path) }
+
+// orcaCanAutoRegister: a start in path may add the Git repository holding it to Orca (repo.add): not the root, the
+// home folder or a temporary folder.
+func orcaCanAutoRegister(path string) bool {
 	clean := filepath.Clean(path)
 	if clean == "/" {
 		return false
@@ -238,9 +313,11 @@ func orcaLaunchPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// Run may write shell commands only to a pane created by this host instance, once. Consuming the grant before the
-// send prevents a timeout or duplicate call from launching twice. Unlike normal sends it never refreshes a stale
-// handle: replacing that shell revokes the grant rather than redirecting the command to a different process.
+// Run may write shell commands only to a pane created by this host instance, once, or to one the node adopted for a
+// start (AdoptPane), once. Consuming the grant before the send prevents a timeout or duplicate call from launching
+// twice. Unlike normal sends it never refreshes a stale handle: replacing that shell revokes the grant rather than
+// redirecting the command to a different process. An adopted terminal is read again right before the send: only its
+// shell may be in front (Orca keeps an exited agent's identity on the terminal, so that is not asked there).
 func (h *orcaHost) Run(ctx context.Context, pane host.PaneRef, command string) error {
 	h.mu.Lock()
 	launch, ok := h.launches[pane.ID]
@@ -260,21 +337,54 @@ func (h *orcaHost) Run(ctx context.Context, pane host.PaneRef, command string) e
 		if t.Handle != launch.terminal.Handle {
 			continue
 		}
-		if t.IncarnationID != launch.terminal.IncarnationID || !t.IsLocal() || !t.Writable || t.AgentIdentity != "" ||
-			t.Orphaned && t.PaneKey() == launch.terminal.PaneKey() {
+		if t.IncarnationID != launch.terminal.IncarnationID || !t.IsLocal() || !t.Writable ||
+			t.AgentIdentity != "" && !launch.adopted || t.Orphaned && t.PaneKey() == launch.terminal.PaneKey() {
 			break
+		}
+		if launch.adopted {
+			if err := h.shellInFront(ctx, launch.terminal); err != nil {
+				return err
+			}
 		}
 		return orcaInputErr(h.c.Send(ctx, launch.terminal.Target(), "cd -- "+shellQuote(launch.cwd)+" && "+command+"\r"))
 	}
 	return host.Mark(fmt.Errorf("orca: the newly created shell was replaced or is no longer writable"), host.ErrNotDelivered)
 }
 
+// AdoptPane grants one Run into a terminal the node did not open, picked for a start (Run Agent Here, a Resume in the
+// shell its Agent left): the pane's terminal as Orca lists it now, its process fenced (incarnation). The start's
+// command then goes in with a `cd` to cwd, as in a terminal the node opened, and only if Orca still reads the same
+// process with just its shell in front. A terminal on another machine, not writable, or one Orca's UI orphaned that is
+// not one this host made gets no grant.
+func (h *orcaHost) AdoptPane(ctx context.Context, pane host.PaneRef, cwd string) error {
+	if pane.Kind != host.Orca {
+		return host.Mark(fmt.Errorf("orca: %s is not an Orca terminal", pane), host.ErrNotDelivered)
+	}
+	if strings.ContainsFunc(cwd, unicode.IsControl) {
+		return host.Mark(refusal(proto.CodeDirectoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
+	}
+	t, err := h.terminal(ctx, pane.ID, true)
+	if err != nil {
+		return orcaInputErr(err)
+	}
+	if !t.IsLocal() || !t.Writable || t.IncarnationID == "" || t.Orphaned && !h.rekeyedKey(pane.ID) {
+		return host.Mark(fmt.Errorf("orca: the terminal in %s cannot take a start", pane.ID), host.ErrNotDelivered)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.launches == nil {
+		h.launches = map[string]orcaLaunch{}
+	}
+	h.launches[pane.ID] = orcaLaunch{terminal: t, cwd: cwd, adopted: true}
+	return nil
+}
+
 // launchable: Run would still take a command in pane, a terminal this host made whose one launch is unused.
 func (h *orcaHost) launchable(pane host.PaneRef) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, ok := h.launches[pane.ID]
-	return ok
+	l, ok := h.launches[pane.ID]
+	return ok && !l.adopted
 }
 
 func (h *orcaHost) NameAgent(ctx context.Context, pane host.PaneRef, name string) error {
@@ -282,6 +392,7 @@ func (h *orcaHost) NameAgent(ctx context.Context, pane host.PaneRef, name string
 	if err != nil {
 		return orcaErr(err)
 	}
+	defer h.renamedTab() // the next listing reads the tab's new name (namedTabs)
 	return orcaErr(h.onTerminal(ctx, t, true, func(target orcart.Target) error {
 		return h.c.RenameTerminal(ctx, target, name)
 	}))

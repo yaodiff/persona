@@ -1,7 +1,7 @@
 // Pure presentation helpers for server-computed Target Repo weakest-link ("barrel rule")
 // delivery gates under todos_v2 (#15757, backed by PR #15729 + #15750).
 import { t } from "../../i18n";
-import type { TodoRepoGate } from "../../lib/todos";
+import type { TodoRepoGate, TodoTone } from "../../lib/todos";
 
 export type RepoGateTone = "green" | "red" | "orange" | "muted";
 
@@ -83,4 +83,25 @@ export function repoGatePRLabel(url: string): string {
   const gl = url.match(/\/merge_requests\/(\d+)/i);
   if (gl) return t("todos.stage_mr_n", { n: gl[1] });
   return t("todos.repo_gate_open_pr");
+}
+
+export function repoGatePRLook(gate: TodoRepoGate | undefined): { label: string; tone: TodoTone } | undefined {
+  if (!gate || gate.target_count <= 0 || gate.reason === "draft_pr") return undefined;
+  switch (gate.state) {
+    case "blocked_conflict":
+      return { label: t("todos.status_pr_conflicts"), tone: "red" };
+    case "blocked_changes":
+      return { label: t("todos.status_pr_changes_requested"), tone: "amber" };
+    case "blocked_ci":
+      return { label: t("todos.status_pr_checks_failed"), tone: "red" };
+    case "awaiting_review":
+      return { label: t("todos.status_pr_in_review"), tone: "idle" };
+    case "checks_pending":
+      return {
+        label: gate.reason === "checks_pending" ? t("todos.status_pr_checks_pending") : t("todos.status_pr_waiting_merge"),
+        tone: "idle",
+      };
+    default:
+      return undefined;
+  }
 }

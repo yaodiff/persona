@@ -2,7 +2,8 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { t } from "../../i18n";
-import { api, errorText } from "../../lib/api";
+import { errorText } from "../../lib/api";
+import { followHinted } from "../../lib/hinted-read";
 import { onShownHint } from "../../lib/shown-hints";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { boundedCounts } from "../../lib/sessions";
@@ -48,6 +49,8 @@ export interface PagedSessionListProps<T> {
   /** The personal list's Browse by account: the mark drawn before an account's name (its provider's), in its group's
    *  heading and in the account picker. The id `label` replaces stays the name's tooltip there. */
   accountMark?: (account: string) => ReactNode;
+  /** The personal list's provider choices: the products its loaded sessions actually use, by display name. */
+  providerOptions?: { key: string; label: string }[];
   /** The hub's computer order, shared with the complete list; count maps alone cannot carry it (#11801). */
   machineOrder?: readonly string[];
   /** The hub names this collection's projects and spaces (`sessions_catalog`): a repository checked out on several
@@ -135,7 +138,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, accountMark, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText, holdCounts }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, accountMark, providerOptions = [], machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText, holdCounts }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -150,11 +153,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const chosen = grouping?.dimension;
   useEffect(() => { setPicked(null); setMachine(""); }, [chosen]);
   const [provider, setProvider] = useState("");
-  const [providerQuery, setProviderQuery] = useState("");
   useEffect(() => {
-    const timer = setTimeout(() => { setTyped(query.trim()); setProvider(providerQuery.trim()); }, SESSION_LIST_METRICS.searchDelay);
+    const timer = setTimeout(() => setTyped(query.trim()), SESSION_LIST_METRICS.searchDelay);
     return () => clearTimeout(timer);
-  }, [query, providerQuery]);
+  }, [query]);
   // the hub's catalog names projects and spaces; computers, and every group of a hub without it, come from the counts
   const cataloged = catalog && !personal && (dimension === "project" || dimension === "group");
   // a space id is one computer's: without the catalog a second pill picks the computer it is read on
@@ -197,23 +199,23 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const sidebarList = Boolean(grouping);
   useLayoutEffect(() => { if (presentation || sidebarList) root.setPresentation(presentation); }, [root, presentation, sidebarList]);
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
-  const [facets, setFacets] = useState<ListCounts | null>(null);
-  const [facetError, setFacetError] = useState("");
-  // Retry on a failed scoped facets read: read it again now
-  const [facetAttempt, setFacetAttempt] = useState(0);
-  const [scopeCounts, setScopeCounts] = useState<ListCounts | null>(null);
-  const [scopeError, setScopeError] = useState("");
+  const rootPage = useSyncExternalStore(root.subscribe, root.getSnapshot, root.getSnapshot);
   const scopeQuery = useMemo(() => {
     const scope = { ...filters };
     for (const key of CHIP_KEYS) delete scope[key];
     return countsQuery(scope);
   }, [filters]);
-  const rootPage = useSyncExternalStore(root.subscribe, root.getSnapshot, root.getSnapshot);
   // Counts without state keep other state tabs reachable; machine scopes disambiguate computer-local groups.
   const facetFilters = useMemo(() => ({ ...(q ? { q } : {}), ...(provider ? { provider } : {}), ...(spaceMachine ? { machine_id: spaceMachine } : {}), ...narrowed, ...exclude }), [q, provider, spaceMachine, narrowed, exclude]);
-  // Unscoped counts are the root's own: follow them. Scoped counts are read on their own, now and once per hint; they
-  // do not follow the root's counts, which land for that same hint (a second read of the same counts every time).
+  // Unscoped counts are the root's own: follow them. Scoped counts are read on their own, now and after hints (one read
+  // per hint window, lib/hinted-read.ts); they do not follow the root's counts, which land for that same hint.
   const facetScoped = Object.keys(facetFilters).length > 0;
+  const [facets, setFacets] = useState<ListCounts | null>(() => (facetScoped ? null : rootPage.counts));
+  const [facetError, setFacetError] = useState("");
+  // Retry on a failed scoped facets read: read it again now
+  const [facetAttempt, setFacetAttempt] = useState(0);
+  const [scopeCounts, setScopeCounts] = useState<ListCounts | null>(() => (scopeQuery === "counts=1" ? rootPage.counts : null));
+  const [scopeError, setScopeError] = useState("");
   const facetQuery = useMemo(() => countsQuery(facetFilters), [facetFilters]);
   // With no state tab and no browsed value the filtered list's own per-hint counts read is the facet query: follow it.
   // Drawn as groups the filtered list is not read, so the facets are read on their own.
@@ -231,18 +233,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   }, [facetsFromList, page.counts]);
   useEffect(() => {
     if (!facetScoped || facetsFromList) return;
-    let live = true;
-    let sequence = 0;
-    const controller = new AbortController();
-    const read = () => {
-      const request = ++sequence;
-      void api<ListCounts>(`${countsPath}${facetQuery}`, { signal: controller.signal }).then((counts) => {
-        if (live && request === sequence && counts.state && counts.group && counts.project && counts.machine) { setFacets(counts); setFacetError(""); }
-      }, (e) => { if (live && request === sequence) setFacetError(errorText(e)); });
-    };
-    read();
-    const off = onShownHint(event, read);
-    return () => { live = false; controller.abort(); off(); };
+    // read now and after hints, one read per window for every list in the page that follows the same counts (#15910)
+    return followHinted<ListCounts>(event, `${countsPath}${facetQuery}`, (counts) => {
+      if (counts?.state && counts.group && counts.project && counts.machine) { setFacets(counts); setFacetError(""); }
+    }, (e) => setFacetError(errorText(e)));
   }, [countsPath, event, facetScoped, facetsFromList, facetQuery, facetAttempt]);
   useEffect(() => {
     // Keep the last counts while a refresh or a new scope is loading, including a root rebaseline.
@@ -259,17 +253,9 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   }, [scopeFromFacets, facets]);
   useEffect(() => {
     if (scopeQuery === "counts=1" || scopeFromFacets) return;
-    let sequence = 0;
-    const abort = new AbortController();
-    const read = () => {
-      const request = ++sequence;
-      void api<ListCounts>(`${countsPath}${scopeQuery}`, { signal: abort.signal }).then((counts) => {
-        if (request === sequence && counts.state) { setScopeCounts(counts); setScopeError(""); }
-      }, (e) => { if (request === sequence) setScopeError(errorText(e)); });
-    };
-    read();
-    const off = onShownHint(event, read);
-    return () => { sequence++; abort.abort(); off(); };
+    return followHinted<ListCounts>(event, `${countsPath}${scopeQuery}`, (counts) => {
+      if (counts?.state) { setScopeCounts(counts); setScopeError(""); }
+    }, (e) => setScopeError(errorText(e)));
   }, [scopeQuery, scopeFromFacets, countsPath, event]);
   useEffect(() => {
     // Even a grouped, filtered list needs the root counts for the unfiltered chips.
@@ -297,8 +283,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // The scope's counts as the page shows them (holdCounts): only against the rows the same answer brought (the root's,
   // or the filtered list's own page, on a hub that sends a page's counts with it), so a newer count is never taken for
   // an older row's or the other way round. Counts read on their own (a scope only the hub can count, such as hidden
-  // botmux sessions in a grouping) are the hub's: they are read again on every hint, the one after the hub records a
-  // seen too.
+  // botmux sessions in a grouping) are the hub's: they are read again after hints (lib/hinted-read.ts), the one after
+  // the hub records a seen too.
   const coupled = !root.usesPageCounts() ? undefined
     : scopeQuery === "counts=1" ? (rootPage.counts ? { counts: rootPage.counts, rows: rootPage.rows } : undefined)
     : scopeFromFacets && facetsFromList && page.counts ? { counts: page.counts, rows: page.rows } : undefined;
@@ -471,6 +457,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     return picked && !listed.some((g) => g.key === picked.key) ? [...listed, allGroups?.find((g) => g.key === picked.key) ?? { ...picked, count: 0, needs: 0 }] : listed;
   }, [allGroups, picked]);
   const machines = useMemo(() => Object.entries(rootPage.counts?.machine ?? {}).filter(([id]) => id).sort(([a], [b]) => a.localeCompare(b)), [rootPage.counts]);
+  // By space with sessions on more than one computer: each computer's spaces under its heading (#13522, as iOS's By
+  // Project). The whole list's computers decide it, so a chip that leaves one computer's sessions moves no level.
+  const computers = rootPage.counts ? machines.filter(([, n]) => n > 0).length : groupMachines(allGroups ?? []);
+  const byComputer = cataloged && dimension === "group" && computers > 1;
   const dimensions: { key: typeof dimension; label: string }[] = personal
     ? [{ key: "", label: t("paged-agents.recent") }, { key: "group", label: t("paged-agents.account") }]
     : [{ key: "", label: t("paged-agents.recent") }, { key: "machine", label: t("paged-agents.machine") }, { key: "project", label: t("paged-agents.project") }, { key: "group", label: t("paged-agents.group") }];
@@ -558,9 +548,17 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           {dimension && <PickChip label={t("paged-agents.group_filter")} header={dimensionLabel} value={value} shown={picked ? groupName(picked) : allOf} lead={picked ? groupLead?.(picked) : undefined} grow
             items={[{ key: "", label: allOf }, ...groups.map((g) => ({ key: g.key, label: groupName(g), hint: String(g.count), detail: groupDetail(g), lead: groupLead?.(g), tip: groupTip?.(g) }))]}
             onChoose={chooseGroup} />}
-          {personal && <SearchField value={providerQuery} onChange={setProviderQuery} placeholder={t("paged-agents.provider")} tone="inset" icon={false} className="min-w-0 flex-1" />}
+          {personal && providerOptions.length > 0 && <PickChip
+            label={t("paged-agents.provider")}
+            header={t("paged-agents.provider")}
+            value={provider}
+            shown={provider ? (providerOptions.find((p) => p.key === provider)?.label ?? provider) : t("paged-agents.all_providers")}
+            items={[{ key: "", label: t("paged-agents.all_providers") }, ...providerOptions]}
+            onChoose={(id) => { setProvider(id); setPicked(null); }}
+            grow
+          />}
         </div>}
-        <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="-mx-1 flex min-w-0 items-center justify-between gap-2 px-2">
           <p className="min-w-0 truncate text-xs text-ink-3" data-session-total>{shownTotal === null ? "\u00a0" : t("paged-agents.count", { count: shownTotal })}</p>
           {/* a display choice of the one flat list: its groups are sections of their own */}
           {activeAt && !sections && <ActiveWindowMenu value={win} onChange={chooseWindow} />}
@@ -571,7 +569,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {sections && <>
         {allGroups && (allGroups.length > 0 || (dimension === "state" && Boolean(heldSeen?.rows.length) && (chipless || chip.state === "unread"))) && <Suspense fallback={loadingLine}>
           <GroupedSessions groups={allGroups} dimension={dimension as GroupDimension} kind={personal ? "personal" : "runtime"} scope={groupScope} source={source}
-            renderRow={renderRow} groupName={groupName} groupLead={groupLead} groupTip={groupTip} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} heldSeen={heldSeen} placeOf={placeOf} justFinished={justFinished} chipless={chipless} />
+            renderRow={renderRow} groupName={groupName} groupLead={groupLead} groupTip={groupTip} machineName={machineName} open={openPlace} foldScope={grouping?.foldScope} heldSeen={heldSeen} placeOf={placeOf} justFinished={justFinished} chipless={chipless} byComputer={byComputer} machineOrder={machineOrder} />
         </Suspense>}
         {!allGroups && !grouped.error && loadingLine}
         {grouped.error && <ListError text={failureText(grouped.error)} onRetry={grouped.retry} />}

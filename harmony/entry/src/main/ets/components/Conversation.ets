@@ -32,6 +32,7 @@ import { conversationImageEntries, conversationImageKey } from '../core/MessageI
 import type { MessageImageGalleryEntry, LoadedMessageImage } from '../core/MessageImageGallery';
 import { MarkdownText } from './MarkdownText';
 import { AssistantCards } from './AssistantCards';
+import { canDirectSendSuggestion, ComposerSuggestionChip, extractSessionSuggestions } from '../core/NextSuggestions';
 import { DecisionPager } from '../models/DecisionPager';
 import { QuestionWorkspace, QuestionSheet, questionPrompt } from '../models/QuestionWorkspace';
 import { InteractionDecisionForm } from './InteractionDecisionForm';
@@ -56,6 +57,35 @@ import type { ClientViewLease } from '../models/ClientModel';
 import { measuredReadingBoundary, parseReadingAnchor, readingAnchorIndex, readingSizeClassChanges } from '../core/ConversationReading';
 import type { ReadingAnchor, ReadingBoundary } from '../core/ConversationReading';
 import { workingTurnLabel } from '../core/PhoneDate';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
+import { Haptics } from '../platform/Haptics';
+import { WorkingArcSpinner } from './StatusMotionMarks';
+import {
+  extractTurnChangesFromRaw,
+  extractWorkNowFromRaw,
+  extractWorkStepsFromRaw
+} from '../core/WorkPresentation';
+import type { TurnChangeSet, WorkStepView } from '../core/WorkPresentation';
+import { WorkStepTimeline, TurnChangesCard } from './WorkStepsCard';
+import { evaluateBubbleFold } from '../core/BubbleFold';
+import type { BubbleFoldDecision } from '../core/BubbleFold';
+import { buildEdgeScrubMarks } from '../core/EdgeScrub';
+import type { EdgeScrubMark, EdgeScrubSourceLine } from '../core/EdgeScrub';
+import { ChatEdgeScrubOverlay } from './ChatEdgeScrubOverlay';
+import {
+  canMutateQueueIndex,
+  extractComposerQueue,
+  mergeQueuedTakeBackDraft,
+  queueKeepSwapped,
+  queueKeepWithout
+} from '../core/ComposerQueue';
+import type { ComposerQueueState } from '../core/ComposerQueue';
+import { ComposerTopStrip } from './ComposerTopStrip';
+import { isVerifiedStarSource } from '../core/StarredMessages';
+import type { StarredSnapshot, StarredSource } from '../core/StarredMessages';
+import { starredStore, StarredStore } from '../models/StarredStore';
+import { toastCenter } from '../models/ToastCenter';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -90,13 +120,28 @@ struct MessageSurface {
   @Param sourceId: string = '';
   @BuilderParam content: () => void;
   @Local fill: ResourceColor = Color.Transparent;
+  @Local private env: NativeEnvironment = nativeEnvironment;
   onWillApplyTheme(theme: Theme): void { this.fill = theme.colors.compBackgroundPrimary; }
+  private surfaceFill(): ResourceColor {
+    if (this.own) return this.fill;
+    if (this.personaReply) {
+      if (Colors.styleCard) return Colors.styleCard;
+      return this.env.dark ? '#2A2A2E' : '#F0F0F3';
+    }
+    return Color.Transparent;
+  }
   build() {
     Column() { this.content() }.width(this.own ? undefined : '100%').constraintSize({ maxWidth: this.maximum })
       .padding(this.agentPrompt ? { left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset } :
-        this.own || this.personaReply ? {left:14,right:14,top:9,bottom:9} : 0)
-      .backgroundColor(this.own ? this.fill : this.personaReply ? Colors.control : Color.Transparent)
-      .borderRadius(this.own || this.personaReply ? Tokens.bubble : 0).id(this.sourceId)
+        this.personaReply ? { left: 16, right: 16, top: 12, bottom: 12 } :
+          this.own ? { left: 14, right: 14, top: 10, bottom: 10 } : 0)
+      .backgroundColor(this.surfaceFill())
+      .borderRadius(this.own || this.personaReply ? Tokens.bubble : 0)
+      .border(this.own || this.personaReply
+        ? { width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.bubble }
+        : { width: 0 })
+      .shadow(this.personaReply ? PhoneStyle.cardElevation(this.env.dark) : { radius: 0, color: Color.Transparent })
+      .id(this.sourceId)
   }
 }
 
@@ -227,6 +272,7 @@ export struct Conversation {
   private feedKey: string = '';
   private feedTimer: number = -1;
   @Local expanded: string[] = [];
+  @Local private unfoldedBubbles: string[] = [];
   private scroller: Scroller = new Scroller();
   private readingLease: ClientViewLease | undefined;
   private readingKey: string = '';
@@ -737,6 +783,8 @@ export struct Conversation {
   }
   @Local atEnd: boolean = true;
   @Local jumpAvailable: boolean = false;
+  @Local private latestPressed: boolean = false;
+  @Local private sendPressed: boolean = false;
   private transcriptHeight: number = 0;
   private transcriptViewportChanged(height:number):void {
     if (!Number.isFinite(height) || height <= 0 || Math.abs(height-this.transcriptHeight) < 0.1) return;
@@ -769,6 +817,23 @@ export struct Conversation {
     this.anchor.atEnd = true;
     this.jumpAvailable = false;
     this.scroller.scrollEdge(Edge.Bottom);
+  }
+  private smoothJumpToLatest(): void {
+    Haptics.tap();
+    if (!this.environment.reduceMotion && this.lines.length > 0) {
+      if (this.readingHeader && this.headerOwner && this.admission()) this.readingHeader.jumped(this.headerOwner);
+      this.manuallyReading = false;
+      this.tailPosition = undefined;
+      this.readingMotion++; this.scrollingByHand = false; this.lastManualAnchor = undefined;
+      this.atEnd = true;
+      this.anchor.atEnd = true;
+      this.jumpAvailable = false;
+      try {
+        this.scroller.scrollToIndex(this.readingPrefix() + this.lines.length - 1, true, ScrollAlign.END);
+        return;
+      } catch (_) {}
+    }
+    this.jumpToLatest();
   }
   @Monitor('questions.shown','attachmentSheet','draftEditorOpen','modeMenuOpen','searchPresented','fieldFocused','headerOwner')
   readingOverlayChanged():void {
@@ -805,6 +870,8 @@ export struct Conversation {
   @Local composerWidth: number = 360;
   @Local composerFrameWidth: number = 0;
   @Local composerFrameHeight: number = 0;
+  @Local private queueSendNowTarget: string = '';
+  @Local private starred: StarredStore = starredStore;
   @Local decisionPager: DecisionPager = new DecisionPager();
   @Local questions: QuestionWorkspace = new QuestionWorkspace();
   @Local questionInset: number = 0;
@@ -1196,7 +1263,7 @@ export struct Conversation {
     }));
   }
   private syncFeed(): void {
-    if (!this.active || !this.model.connected || this.model.demo || this.model.selected.kind !== 'conversation') {
+    if (!this.active || !this.model.connected || this.model.selected.kind !== 'conversation') {
       if (this.feedTimer !== -1) clearTimeout(this.feedTimer); this.feedTimer = -1;
       this.feed.close(); this.feedKey = ''; this.syncTimeline(); return;
     }
@@ -1317,13 +1384,20 @@ export struct Conversation {
     if (!this.sendCurrent() || this.sending || this.attachments.busy || !this.model.canSend()) return;
     const owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target(), draft = owner.draft, context = owner.sourceContext;
     const current = (): boolean => this.sendCurrent() && this.model === owner && owner.owns(generation, scope) && owner.target() === target;
-    if (!this.attachments.attachments.length) { await owner.send(current); return; }
+    if (!this.attachments.attachments.length) {
+      const sent = await owner.send(current);
+      if (sent && owner.demo && current() && typeof owner.refresh === 'function') void owner.refresh();
+      return;
+    }
     this.sending = true;
     try {
       const hasImage=this.attachments.attachments.some((item:ChatAttachment)=>item.kind==='image');
       const attachmentNote=hasImage ? 'chat_context_image_note' : 'chat_context_files_note';
       const prepared = await this.attachments.prepareSend(owner.prepareMessageText(draft,attachmentNote), current);
-      await owner.sendPrepared(prepared, draft, context, current);
+      const sent = await owner.sendPrepared(prepared, draft, context, current);
+      if (sent && current() && prepared.overflowNoticeKey) {
+        this.getUIContext().getPromptAction().showToast({ message: tr(prepared.overflowNoticeKey) });
+      }
     } catch (error) { if (current()) this.attachments.errorKey = error instanceof Error && error.message.startsWith('chat_attachment_') ? error.message : 'chat_attachment_send_failed'; }
     finally { this.sending = false; }
   }
@@ -1333,6 +1407,7 @@ export struct Conversation {
     catch (_) { if (key === this.attachmentKey) this.attachments.errorKey = 'preview_unavailable'; }
   }
   private syncRevision(): void {
+    this.starred.configure(this.model);
     if (!this.active || !this.model.connected || !this.model.isChat() || this.model.demo) {
       if (this.revisionContextKey) this.invalidateRevisionMenuContext();
       this.revisionContextKey = '';
@@ -1444,10 +1519,86 @@ export struct Conversation {
   private messageMenuBuilder(entry: RepeatItem<ConversationLine>): CustomBuilder {
     return (): void => { const message = entry.item.message; if (message) this.messageMenu(message); };
   }
+  @Monitor('model', 'model.connected', 'model.features', 'model.starredRevision') syncStarredScope(): void {
+    this.starred.configure(this.model);
+  }
+  private starSourceFor(message: ChatMessage): StarredSource | undefined {
+    const row = this.model.selected;
+    const machine = row.machine;
+    const session = row.session || row.id;
+    const itemId = message.itemId || message.id;
+    if (!machine || !session || !itemId || message.ownerTarget !== this.model.target()) return undefined;
+    if (message.role !== 'user' && message.role !== 'assistant') return undefined;
+    if (message.held || message.failed || (message.localOperation && message.deliveryState !== 'done')) return undefined;
+    const conversation = row.kind === 'conversation' ? 'assistant' : 'agent';
+    const source: StarredSource = {
+      machine_id: machine,
+      session_id: session,
+      item_id: itemId,
+      conversation: conversation,
+      source_fingerprint: message.sourceFingerprint || undefined
+    };
+    return isVerifiedStarSource(source) ? source : undefined;
+  }
+  private canStarMessage(message: ChatMessage): boolean {
+    if (!this.active || !this.model.connected || !this.model.isChat()) return false;
+    if (!this.starred.canWriteFor(this.model)) return false;
+    if (!message.text.trim()) return false;
+    return this.starSourceFor(message) !== undefined;
+  }
+  private isMessageStarred(message: ChatMessage): boolean {
+    const _rev = this.starred.indexRevision;
+    const source = this.starSourceFor(message);
+    if (!source) return false;
+    return this.starred.isStarred(this.model, source);
+  }
+  private isStarPending(message: ChatMessage): boolean {
+    const _rev = this.starred.pendingRevision;
+    const source = this.starSourceFor(message);
+    if (!source) return false;
+    return this.starred.isPending(this.model, source);
+  }
+  private async toggleMessageStar(message: ChatMessage): Promise<void> {
+    if (!this.canStarMessage(message)) return;
+    const source = this.starSourceFor(message);
+    if (!source) return;
+    if (this.starred.isStarred(this.model, source)) {
+      await this.starred.remove(this.model, source);
+      return;
+    }
+    const speaker = message.role === 'user'
+      ? tr('chat_lift_me')
+      : (this.composerAgentName() || tr(this.model.selected.kind === 'conversation' ? 'persona' : 'assistant'));
+    const writtenAt = message.at > 0 ? new Date(message.at).toISOString() : undefined;
+    const draft: StarredSnapshot = {
+      id: '',
+      machine_id: source.machine_id,
+      session_id: source.session_id,
+      item_id: source.item_id,
+      conversation: source.conversation,
+      source_fingerprint: source.source_fingerprint,
+      role: message.role,
+      title: this.model.selected.title || tr('conversation'),
+      speaker: speaker,
+      source_manager: this.model.profile.manager || undefined,
+      written_at: writtenAt,
+      text: message.text
+    };
+    await this.starred.add(this.model, draft);
+  }
   @Builder messageMenu(message: ChatMessage) {
     Menu() {
       if (message.text) MenuItem({ content: tr('copy') }).onClick(() => this.copyMessage(message))
       if (message.text) MenuItem({ content: tr('use_as_context') }).onClick(() => this.model.useMessageContext(message))
+      if (this.canStarMessage(message)) {
+        MenuItem({
+          content: tr(this.isMessageStarred(message) ? 'unstar_message' : 'star_message'),
+          symbolStartIcon: new SymbolGlyphModifier(this.isMessageStarred(message) ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
+        })
+          .enabled(!this.isStarPending(message))
+          .onClick(() => { void this.toggleMessageStar(message); })
+          .id('chat.message.star')
+      }
       if (message.itemId && message.ownerTarget === this.model.target() && this.revisions.canFork(message.itemId))
         MenuItem({ content: tr('branch_chat') }).onClick(() => this.openForkConfirmation(message))
       if (message.itemId && message.ownerTarget === this.model.target() && this.revisions.canRewind(message.itemId)) {
@@ -1556,6 +1707,7 @@ export struct Conversation {
       this.liftOpen=false; this.liftMessage=undefined; this.liftFrame=undefined; this.ownedLift=undefined;
     }};
     this.liftHost.present(presentation); this.ownedLift=presentation; this.liftOpen=true;
+    Haptics.tap();
   }
   private closeOwnedLift(): void {
     if (this.ownedLift && this.liftHost.current===this.ownedLift) this.liftHost.dismiss();
@@ -1592,8 +1744,8 @@ export struct Conversation {
       PhoneMessageLift({text:this.liftMessage!.text,own:this.liftMessage!.role==='user',frame:this.liftFrame!,
         canForward:this.model.connected && this.forwardState.isEligible(this.model,this.liftMessage!),
         onForward:():void => this.forwardLiftedMessage(false),onSelectMessages:():void => this.forwardLiftedMessage(true),
-        selectOnOpen:this.liftSelectOnOpen,hasMore:!!this.liftMessage!.itemId &&
-          (this.revisions.canFork(this.liftMessage!.itemId) || this.revisions.canRewind(this.liftMessage!.itemId)),
+        selectOnOpen:this.liftSelectOnOpen,hasMore:this.canStarMessage(this.liftMessage!) || (!!this.liftMessage!.itemId &&
+          (this.revisions.canFork(this.liftMessage!.itemId) || this.revisions.canRewind(this.liftMessage!.itemId))),
         moreMenu:():void => this.liftMore(),onClose:():void => { this.closeOwnedLift(); },
         onCopyText:(text:string):void => { const message=this.currentLift(); if (message) void this.copyMessage(message,text); },
         onQuoteText:(text?:string):void => this.quoteLiftedText(text)})
@@ -1630,34 +1782,128 @@ export struct Conversation {
           onDisappear:() => { if (this.readingMenuLine===entry.item.id) this.readingMenuLine=''; }})
     }
   }
+  private isStreamingMessage(message: ChatMessage): boolean {
+    if (!this.active || message.role !== 'assistant' || !this.lines.length) return false;
+    const working = this.model.assistantReplyWorking() || this.model.canStop();
+    if (!working) return false;
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const candidate = this.lines[i].message;
+      if (candidate && candidate.role === 'assistant') return candidate.id === message.id;
+    }
+    return false;
+  }
+
+  private workNowText(message: ChatMessage): string {
+    if (!message.running) return '';
+    const live = extractWorkNowFromRaw(message.raw, true);
+    if (!live) return '';
+    return live.more > 0 ? live.text + ' +' + String(live.more) : live.text;
+  }
+
+  private workStepsFor(message: ChatMessage): WorkStepView[] {
+    return extractWorkStepsFromRaw(message.raw, message.running);
+  }
+
+  private turnChangesFor(message: ChatMessage): TurnChangeSet | undefined {
+    if (message.running) return undefined;
+    return extractTurnChangesFromRaw(message.raw);
+  }
+
+  private userBubbleFold(message: ChatMessage, maxBubbleWidth: number): BubbleFoldDecision {
+    if (message.role !== 'user' || !message.text) {
+      return { foldable: false, estimatedLines: 1, foldedText: message.text };
+    }
+    return evaluateBubbleFold(message.text, maxBubbleWidth, this.environment.fontScale);
+  }
+
+  private toggleBubbleFold(id: string): void {
+    Haptics.tap();
+    Motion.run(this.getUIContext(), Motion.layout(this.environment.reduceMotion), () => {
+      this.unfoldedBubbles = this.unfoldedBubbles.includes(id)
+        ? this.unfoldedBubbles.filter((entry: string) => entry !== id)
+        : this.unfoldedBubbles.concat([id]);
+    });
+  }
+
+  @Computed get edgeScrubMarks(): EdgeScrubMark[] {
+    const sources: EdgeScrubSourceLine[] = [];
+    for (let i = 0; i < this.lines.length; i++) {
+      const msg = this.lines[i].message;
+      if (!msg) continue;
+      sources.push({
+        id: this.lines[i].id,
+        role: msg.role,
+        text: msg.text,
+        hasImages: msg.imagePaths.length > 0 || !!msg.imageId || msg.localImageCount > 0
+      });
+    }
+    return buildEdgeScrubMarks(sources);
+  }
+
+  private jumpToEdgeMark(mark: EdgeScrubMark): void {
+    Haptics.tap();
+    try {
+      this.scroller.scrollToIndex(this.readingPrefix() + mark.lineIndex, !this.environment.reduceMotion, ScrollAlign.START);
+    } catch (_) {}
+  }
+
   @Builder messageBody(entry: RepeatItem<ConversationLine>) {
     Column({ space: Tokens.gap }) {
       if (entry.item.message!.role === 'work' && entry.item.message!.running && !entry.item.message!.work) {
-        Row({ space: 5 }) {
-          LoadingProgress().width(14).height(14).color(Colors.working)
+        Row({ space: 6 }) {
+          WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
+          if (this.workNowText(entry.item.message!)) {
+            Text(this.workNowText(entry.item.message!))
+              .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).flexShrink(1)
+          }
           RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
         }.id('chat.work.' + entry.item.message!.id)
       } else if (entry.item.message!.work) {
         Button({ type: ButtonType.Normal }) {
           Row({ space: 7 }) {
-            if (entry.item.message!.running) LoadingProgress().width(14).height(14).color(Colors.working)
+            if (entry.item.message!.running) WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
             else SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(15).fontColor([Colors.secondary])
-            if (entry.item.message!.running) RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
-            else Text(tr('work_summary')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+            if (entry.item.message!.running && this.workNowText(entry.item.message!)) {
+              Text(this.workNowText(entry.item.message!))
+                .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).flexShrink(1)
+              RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
+            } else if (entry.item.message!.running) {
+              RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
+            } else {
+              Text(tr('work_summary')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+            }
             if (entry.item.message!.toolCount > 0) Text(tr('tool') + ' ' + String(entry.item.message!.toolCount)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
             if (entry.item.message!.thoughtCount > 0) Text(tr('phone_chat_thoughts') + ' ' + String(entry.item.message!.thoughtCount)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
-            SymbolGlyph(this.expanded.includes(entry.item.message!.id) ? Symbols.down : Symbols.expand).fontSize(12).fontColor([Colors.secondary])
-          }.constraintSize({ minHeight: 32 })
-        }.padding({ left: 10, right: 10 }).borderRadius(12)
+            SymbolGlyph(Symbols.down).fontSize(12).fontColor([Colors.secondary])
+              .rotate({ angle: this.expanded.includes(entry.item.message!.id) ? 0 : -90 })
+              .animation(Motion.state(this.environment.reduceMotion))
+          }.constraintSize({ minHeight: 32, maxWidth: '100%' })
+        }.padding({ left: 10, right: 10 }).borderRadius(Tokens.radiusCard)
           .backgroundColor(this.model.style==='beautiful' ? this.composerSurface() : Colors.control)
-          .outline({width:this.model.style==='beautiful' ? 1 : 0,color:this.composerRim(),radius:12})
+          .outline({width:this.model.style==='beautiful' ? 1 : PhoneStyle.surfaceEdgeWidth(0.5),color:this.model.style==='beautiful' ? this.composerRim() : PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusCard})
           .accessibilityText(tr('work_summary') + ' · ' + tr(this.expanded.includes(entry.item.message!.id) ? 'agent_collapse' : 'agent_expand'))
-          .onClick(() => { this.toggle(entry.item.message!.id); if (this.expanded.includes(entry.item.message!.id)) this.model.expandWork(entry.item.message!); })
+          .onClick(() => {
+            Haptics.tap();
+            Motion.run(this.getUIContext(), Motion.layout(this.environment.reduceMotion), () => {
+              this.toggle(entry.item.message!.id);
+            });
+            if (this.expanded.includes(entry.item.message!.id)) this.model.expandWork(entry.item.message!);
+          })
           .id('chat.work.' + entry.item.message!.id)
         if (this.expanded.includes(entry.item.message!.id)) {
-          Text(entry.item.message!.work).fontFamily('monospace').fontSize(14).fontColor(Colors.secondary).lineHeight(21)
-            .copyOption(CopyOptions.LocalDevice).onTextSelectionChange((start: number, end: number) => this.selectReadingText(entry.item.id, end > start))
-            .padding(12).width('100%').backgroundColor(Colors.control).borderRadius(12)
+          WorkStepTimeline({
+            steps: this.workStepsFor(entry.item.message!),
+            fallbackText: entry.item.message!.work,
+            onOpenFile: (path: string) => this.onOpenFile(path)
+          }).transition(Motion.slideFade(this.environment.reduceMotion, -6))
+        }
+        if (this.turnChangesFor(entry.item.message!)) {
+          TurnChangesCard({
+            changes: this.turnChangesFor(entry.item.message!)!,
+            onOpenFile: (path: string) => this.onOpenFile(path)
+          })
         }
       }
       if (entry.item.message!.localImageCount > 0) Text(tr('photos') + ' · ' + entry.item.message!.localImageCount).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
@@ -1680,14 +1926,60 @@ export struct Conversation {
         WithTheme({ colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT, theme: nativeMessageTheme(this.look, this.model.style, entry.item.message!.role === 'user', this.environment.dark) }) {
         MessageSurface({ sourceId: 'chat.lift.source.'+entry.item.id, own: entry.item.message!.role === 'user', agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
           personaReply: this.model.selected.kind === 'conversation' && entry.item.message!.role === 'assistant', maximum: entry.item.message!.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
-          if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: entry.item.message!, active: this.active, onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
-          else MarkdownText({ text: entry.item.message!.text, chatReply: entry.item.message!.role === 'assistant',
-            agentReply: this.model.selected.kind === 'session' && entry.item.message!.role === 'assistant',
-            agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
-            agentFontScale: this.environment.fontScale, nativeTextSelection: !this.canLiftMessage(entry.item.message!), fitContent: entry.item.message!.role === 'user',
-            onSelectionChange: (selected: boolean) => this.selectReadingText(entry.item.id, selected), onLink: (address: string) => this.onLink(address) })
+          if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: entry.item.message!, active: this.active, streaming: this.isStreamingMessage(entry.item.message!), onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
+          else Column({ space: 6 }) {
+            MarkdownText({
+              text: this.userBubbleFold(entry.item.message!, Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch)).foldable &&
+                !this.unfoldedBubbles.includes(entry.item.message!.id)
+                ? this.userBubbleFold(entry.item.message!, Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch)).foldedText
+                : entry.item.message!.text,
+              chatReply: entry.item.message!.role === 'assistant',
+              streaming: this.isStreamingMessage(entry.item.message!),
+              agentReply: this.model.selected.kind === 'session' && entry.item.message!.role === 'assistant',
+              agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
+              agentFontScale: this.environment.fontScale, nativeTextSelection: !this.canLiftMessage(entry.item.message!), fitContent: entry.item.message!.role === 'user',
+              onSelectionChange: (selected: boolean) => this.selectReadingText(entry.item.id, selected), onLink: (address: string) => this.onLink(address)
+            })
+            if (this.userBubbleFold(entry.item.message!, Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch)).foldable) {
+              Button({ type: ButtonType.Normal }) {
+                Row({ space: 4 }) {
+                  Text(tr(this.unfoldedBubbles.includes(entry.item.message!.id) ? 'bubble_show_less' : 'bubble_show_more'))
+                    .fontSize(Tokens.interfaceFontVp(13, this.environment.fontScale))
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Colors.link)
+                  SymbolGlyph(Symbols.down)
+                    .fontSize('11vp')
+                    .fontColor([Colors.link])
+                    .rotate({ angle: this.unfoldedBubbles.includes(entry.item.message!.id) ? 180 : 0 })
+                    .animation(Motion.state(this.environment.reduceMotion))
+                }.padding({ top: 4, bottom: 2 })
+              }
+              .padding(0)
+              .backgroundColor(Color.Transparent)
+              .onClick(() => this.toggleBubbleFold(entry.item.message!.id))
+              .id('chat.bubble.fold.' + entry.item.message!.id)
+            }
+          }.alignItems(HorizontalAlign.Start)
         }
         }
+      }
+      if (this.isMessageStarred(entry.item.message!)) {
+        Row({ space: Tokens.spaceXs }) {
+          SymbolGlyph($r('sys.symbol.star_fill'))
+            .fontSize('11vp')
+            .fontColor([Colors.working])
+          Text(tr('starred_badge'))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.working)
+            .maxLines(1)
+        }
+        .padding({ left: Tokens.spaceS, right: Tokens.spaceS, top: Tokens.spaceXxs, bottom: Tokens.spaceXxs })
+        .backgroundColor(Colors.workingWash)
+        .borderRadius(Tokens.radiusCapsule)
+        .accessibilityText(tr('starred_badge'))
+        .id('chat.starred.badge.' + (entry.item.message!.itemId || entry.item.message!.id))
       }
       if (entry.item.message!.held) this.heldStatus(entry.item.message!)
       if (entry.item.message!.deliveryState && entry.item.message!.deliveryState !== 'done' && !entry.item.message!.failed &&
@@ -1760,6 +2052,28 @@ export struct Conversation {
       }
       Stack({ alignContent: Alignment.BottomEnd }) {
         this.transcriptList()
+        if (this.active && this.edgeScrubMarks.length >= 2) {
+          ChatEdgeScrubOverlay({
+            marks: this.edgeScrubMarks,
+            viewportHeight: this.transcriptHeight,
+            onJump: (mark: EdgeScrubMark) => this.jumpToEdgeMark(mark)
+          })
+        }
+        if (!this.legacyInterface && !Colors.stylePage) {
+          Row()
+            .width('100%')
+            .height(22)
+            .linearGradient({
+              direction: GradientDirection.Bottom,
+              colors: [
+                [Colors.canvasFogStart, 0],
+                [Colors.canvasFogEnd, 1]
+              ]
+            })
+            .hitTestBehavior(HitTestMode.None)
+            .accessibilityLevel('no')
+            .id('chat.footer.fog')
+        }
         if (this.jumpAvailable) {
           Button({ type: ButtonType.Normal }) {
             Stack() {
@@ -1767,12 +2081,21 @@ export struct Conversation {
                 .fontWeight(FontWeight.Medium).fontColor([Colors.link])
                 .width(this.latestArrowSize).height(this.latestArrowSize)
             }.width(this.latestDiameter).height(this.latestDiameter).borderRadius(this.latestDiameter/2).clip(true)
-              .backgroundColor(Colors.styleID==='glass' ? Color.Transparent : Colors.surface)
-              .backgroundBlurStyle(Colors.styleID==='glass' ? BlurStyle.COMPONENT_THIN : BlurStyle.NONE)
+              .backgroundColor(Colors.styleID==='glass' ? Colors.elevatedGlass : Colors.surface)
+              .backgroundBlurStyle(Colors.styleID==='glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.environment.dark), radius: this.latestDiameter / 2 })
+              .shadow(PhoneStyle.floatingElevation(this.environment.dark))
           }.width(this.latestDiameter+10).height(this.latestDiameter).padding(0).backgroundColor(Color.Transparent)
             .margin({ right: Tokens.page, bottom: 14 })
+            .scale({ x: this.latestPressed ? MotionTokens.pressScale : 1, y: this.latestPressed ? MotionTokens.pressScale : 1 })
+            .animation(Motion.release(this.environment.reduceMotion))
+            .transition(Motion.fadeScale(this.environment.reduceMotion, 0.85))
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) this.latestPressed = true;
+              else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.latestPressed = false;
+            })
             .accessibilityText(tr('latest')).bindTips(tr('latest')).id('chat.latest')
-            .onClick(() => this.jumpToLatest())
+            .onClick(() => this.smoothJumpToLatest())
         }
       }.width('100%').layoutWeight(1)
     }.width('100%').constraintSize({ maxWidth: Tokens.readingMax }).height('100%')
@@ -1802,7 +2125,7 @@ export struct Conversation {
             onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
           else if (entry.item.decision) this.questionCard(entry)
         }.padding({ left: entry.item.message ? 0 : Tokens.page, right: entry.item.message ? 0 : Tokens.page })
-          .backgroundColor(entry.item.id === this.highlightedLine ? Colors.selection : Color.Transparent).borderRadius(12)
+          .backgroundColor(entry.item.id === this.highlightedLine ? Colors.selection : Color.Transparent).borderRadius(Tokens.radiusCard)
           .id('chat.line.' + entry.item.id)
       }).key((line: ConversationLine) => line.id).virtualScroll({ totalCount: this.lines.length, reusable: false })
       if (this.active && this.model.sendFeedbackPhase()) ListItem() {
@@ -1875,11 +2198,20 @@ export struct Conversation {
   }
   private composerSurface(): ResourceColor {
     if(this.model.style==='beautiful') return this.environment.dark ? '#232427' : '#FFFFFF';
-    return this.legacyInterface ? Colors.surface : this.environment.dark ? '#1F1F21' : '#FFFFFF';
+    if(this.legacyInterface) return Colors.surface;
+    if(Colors.styleID==='glass') return Colors.elevatedGlass;
+    return Colors.surface;
   }
   private composerRim(): ResourceColor {
     if(this.model.style==='beautiful') return this.environment.dark ? '#21FFFFFF' : '#ECEDEF';
-    return this.legacyInterface ? Colors.divider : this.environment.dark ? '#3A3A3C' : '#E3E3E3';
+    return this.legacyInterface ? Colors.divider : PhoneStyle.floatingBorder(this.environment.dark);
+  }
+  @Builder moreDotsGlyph(tint: ResourceColor) {
+    Row({ space: 3.5 }) {
+      ForEach([0, 1, 2], (_dot: number) => {
+        Circle().width(4).height(4).fill(tint)
+      }, (dot: number) => String(dot))
+    }.accessibilityLevel('no')
   }
   @Builder composerRound(size: number = 44, inline: boolean = false) {
     Stack() {
@@ -2053,6 +2385,209 @@ export struct Conversation {
     }.width('100%').height('100%').backgroundColor(Colors.surface).id(this.pageSheetNodeId)
       .onAreaChange(() => this.measurePageSheet())
   }
+  @Computed get composerQueueState(): ComposerQueueState {
+    const selected = this.model.selected;
+    if (!selected || !selected.id) return extractComposerQueue({});
+    const targetSession = selected.session || selected.id;
+    const pool = selected.kind === 'conversation' ? this.model.conversations : this.model.sessions;
+    const matched = pool.find((row: ResourceRow) =>
+      (row.session || row.id) === targetSession &&
+      (!selected.machine || row.machine === selected.machine) &&
+      (!selected.manager || row.manager === selected.manager)
+    );
+    const source = matched || selected;
+    return extractComposerQueue(source.data());
+  }
+  @Computed get composerSuggestions(): ComposerSuggestionChip[] {
+    if (!this.active || !this.composerAvailable() || this.model.draftLoading || !!this.model.draft.trim() ||
+      this.sending || !!this.model.decision || this.model.canStop() || this.model.assistantReplyWorking()) {
+      return [];
+    }
+    if (this.model.demo && this.model.nextSuggestionsValue === false) return [];
+    const selected = this.model.selected;
+    if (!selected || !selected.id) return [];
+    const targetSession = selected.session || selected.id;
+    const pool = selected.kind === 'conversation' ? this.model.conversations : this.model.sessions;
+    const matched = pool.find((row: ResourceRow) =>
+      (row.session || row.id) === targetSession &&
+      (!selected.machine || row.machine === selected.machine) &&
+      (!selected.manager || row.manager === selected.manager)
+    );
+    const source = matched || selected;
+    return extractSessionSuggestions(source.data());
+  }
+  private fillSuggestion(chip: ComposerSuggestionChip): void {
+    if (!this.sendCurrent() || !this.composerAvailable() || this.sending) return;
+    Haptics.tap();
+    this.model.updateDraft(chip.text);
+    this.getUIContext().getFocusController().requestFocus('chat.input');
+  }
+  private sendSuggestionNow(chip: ComposerSuggestionChip): void {
+    if (!canDirectSendSuggestion(chip) || !this.sendCurrent() || !this.composerAvailable() || this.sending) return;
+    Haptics.success();
+    this.model.updateDraft(chip.text);
+    this.sendDraft().catch(() => undefined);
+  }
+  @Builder suggestionChipMenu(chip: ComposerSuggestionChip) {
+    Menu() {
+      if (canDirectSendSuggestion(chip)) {
+        MenuItem({ content: tr('suggestion_send_now') })
+          .onClick(() => this.sendSuggestionNow(chip))
+          .id('chat.suggestion.send_now')
+      }
+      MenuItem({ content: tr('suggestion_fill_in') })
+        .onClick(() => this.fillSuggestion(chip))
+        .id('chat.suggestion.fill_in')
+    }
+  }
+  @Builder suggestionChipsBar() {
+    if (this.composerSuggestions.length > 0) {
+      Scroll() {
+        Row({ space: Tokens.spaceS }) {
+          ForEach(this.composerSuggestions, (chip: ComposerSuggestionChip, index: number) => {
+            Button({ type: ButtonType.Capsule }) {
+              Row({ space: Tokens.spaceS }) {
+                SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                  .fontSize('14vp')
+                  .fontColor([Colors.ai])
+                Text(chip.text)
+                  .fontSize(Tokens.typeSecondary)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+                  .fontColor(Colors.ink)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .constraintSize({ maxWidth: 220 })
+                Text(tr('suggestion_use'))
+                  .fontSize(Tokens.typeLabel)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Colors.link)
+                  .maxLines(1)
+              }
+              .alignItems(VerticalAlign.Center)
+            }
+            .constraintSize({ minHeight: Tokens.controlBar })
+            .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
+            .backgroundColor(Colors.aiWash)
+            .border({
+              width: PhoneStyle.surfaceEdgeWidth(0.5),
+              color: PhoneStyle.cardBorder(this.environment.dark),
+              radius: Tokens.radiusCapsule
+            })
+            .accessibilityText(chip.text)
+            .accessibilityDescription(tr(canDirectSendSuggestion(chip) ? 'suggestion_hint_safe' : 'suggestion_hint_risky'))
+            .onClick(() => this.fillSuggestion(chip))
+            .bindContextMenu(this.suggestionChipMenu(chip), ResponseType.LongPress)
+            .id('chat.suggestion.' + String(index))
+          }, (chip: ComposerSuggestionChip, index: number) => String(index) + ':' + chip.text + ':' + String(chip.risky))
+        }
+        .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+      .id('chat.suggestions')
+    }
+  }
+  private queueSendNowKey(owner: ClientModel = this.model, row: ResourceRow = this.model.selected): string {
+    if (!row || !row.id) return '';
+    return JSON.stringify([owner.scope(), row.machine, row.session || row.id]);
+  }
+  private async sendQueuedNow(): Promise<void> {
+    if (!this.sendCurrent()) return;
+    const owner = this.model, row = owner.selected;
+    if (!row || !row.machine || !(row.session || row.id)) return;
+    const busyKey = this.queueSendNowKey(owner, row);
+    if (!busyKey || this.queueSendNowTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    const admit = (): boolean => this.active && owner === this.model && owner.owns(generation, scope) && owner.target() === target;
+    this.queueSendNowTarget = busyKey;
+    let sent = false;
+    try {
+      await owner.repo().call(
+        '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/queue/send-now',
+        'POST',
+        {},
+        '',
+        admit,
+        false,
+        undefined,
+        true
+      );
+      sent = true;
+    } catch (error) {
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        owner.reportError(error as Error);
+        toastCenter.error(tr(owner.error || 'failed'));
+      }
+    } finally {
+      if (this.queueSendNowTarget === busyKey) this.queueSendNowTarget = '';
+    }
+    if (sent && this.active && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+      try { await owner.refresh(); } catch (_) {}
+    }
+  }
+  private async mutateQueued(index: number, action: 'edit' | 'delete' | 'move', delta: -1 | 1 = -1): Promise<void> {
+    if (!this.sendCurrent()) return;
+    const owner = this.model, row = owner.selected;
+    if (!row || !row.machine || !(row.session || row.id)) return;
+    const queueState = this.composerQueueState;
+    if (!canMutateQueueIndex(queueState.ownCount, index)) return;
+    if (action === 'move' && (!queueState.steersQueue || queueState.ownCount <= 1)) return;
+    const keep = action === 'move'
+      ? queueKeepSwapped(queueState.ownCount, index, delta)
+      : queueKeepWithout(queueState.ownCount, index);
+    if (action === 'move' && !keep.length) return;
+    const path = '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/queue';
+    if (owner.operationBlocked(path)) {
+      toastCenter.error(tr('pending_action'));
+      return;
+    }
+    const busyKey = this.queueSendNowKey(owner, row);
+    if (!busyKey || this.queueSendNowTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    const admit = (): boolean => this.active && owner === this.model && owner.owns(generation, scope) && owner.target() === target;
+    this.queueSendNowTarget = busyKey;
+    let mutated = false;
+    try {
+      const response = await owner.repo().call(
+        path,
+        'POST',
+        Wire.payload(['keep'], [keep]),
+        '',
+        admit,
+        false,
+        undefined,
+        true
+      );
+      mutated = true;
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        if (action === 'edit') {
+          const pulled = Wire.strings(response, 'queue');
+          const taken = (index < pulled.length ? pulled[index] : '') || queueState.items[index]?.text || '';
+          owner.updateDraft(mergeQueuedTakeBackDraft(owner.draft, taken));
+          Haptics.success();
+          toastCenter.success(tr('composer_queue_taken_back'));
+        } else if (action === 'delete') {
+          Haptics.success();
+          toastCenter.success(tr('composer_queue_deleted'));
+        } else {
+          Haptics.tap();
+        }
+      }
+    } catch (error) {
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        owner.reportError(error as Error);
+        Haptics.error();
+        toastCenter.error(tr(owner.error || 'failed'));
+      }
+    } finally {
+      if (this.queueSendNowTarget === busyKey) this.queueSendNowTarget = '';
+    }
+    if (mutated && this.active && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+      try { await owner.refresh(); } catch (_) {}
+    }
+  }
   @Computed get quoteRemoveSize(): number { return Math.min(68,44*this.environment.fontScale); }
   @Builder composer() {
     // The shell measures the decorated editor. Its extra paint area never changes editing layout or hit targets.
@@ -2065,12 +2600,22 @@ export struct Conversation {
   }
   @Builder composerContent() {
     Column({ space: Tokens.gap }) {
+      if (this.composerQueueState.items.length > 0) {
+        ComposerTopStrip({
+          queue: this.composerQueueState,
+          busy: this.queueSendNowTarget !== '' && this.queueSendNowTarget === this.queueSendNowKey(),
+          onSendNow: () => { void this.sendQueuedNow(); },
+          onEditQueued: (index: number) => { void this.mutateQueued(index, 'edit'); },
+          onDeleteQueued: (index: number) => { void this.mutateQueued(index, 'delete'); },
+          onMoveQueued: (index: number, delta: -1 | 1) => { void this.mutateQueued(index, 'move', delta); }
+        })
+      }
       if (this.model.hasForwardContext()) PhoneChatForwardTray({model:this.model})
       AttachmentStrip({ attachments: this.attachments.attachments, errorKey: this.attachments.errorKey, actionsEnabled: !this.sending && !this.attachments.busy,
           onRemove: (id: string) => this.attachments.remove(id), onEdit: (id: string) => this.attachments.editPhoto(id), onPreview: (item: ChatAttachment) => this.preview(item) })
       ForEach(this.model.draftMessageQuotes(),(ref:Record<string,Object>) => {
         Row({space:Tokens.gap}) {
-          Rect().width(3).height(28).fill(Colors.ai).borderRadius(2)
+          Rect().width(3).height(28).fill(Colors.ai).borderRadius(Tokens.radiusCapsule)
           Column({space:2}) {
             Text(tr(Wire.text(ref,'part')==='selection' ? 'chat_lift_quote_part' : 'chat_lift_quote_whole').replace('{author}',Wire.text(ref,'title')))
               .fontSize(Tokens.caption).maxFontScale(Tokens.interfaceScaleFor(Tokens.caption)).fontColor(Colors.secondary).maxLines(1)
@@ -2147,8 +2692,10 @@ export struct Conversation {
               .bindMenu(this.nativeChooser('attachments'), this.attachmentNativeMenu, this.attachmentMenuOptions())
               .parallelGesture(LongPressGesture().onAction(() => { if (this.showContextMenu) this.requestComposerActions(false); }))
               .bindContextMenu(this.nativeChooser('actions'), this.attachmentNativeMenu, this.actionContextMenuOptions())
-            if (this.showContextMenu && this.model.demo) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-              .attributeModifier(ButtonStyles.quiet).width(this.composerActionSize()).height(this.composerActionSize()).padding(0).accessibilityText(tr('more')).onClick((event: ClickEvent) => this.openComposerActions(event))
+            if (this.showContextMenu && this.model.demo) Button({ type: ButtonType.Circle }) {
+              SymbolGlyph(Symbols.plus).fontSize(String(this.restingSize.plus) + 'vp').fontWeight(FontWeight.Regular).fontColor([this.toolInk()])
+            }
+              .attributeModifier(ButtonStyles.quiet).width(this.composerActionSize()).height(this.composerActionSize()).padding(0).accessibilityText(tr('more')).onClick((event: ClickEvent) => { Haptics.tap(); this.openComposerActions(event); })
               .parallelGesture(LongPressGesture().onAction(() => this.requestComposerActions(false)))
               .bindContextMenu(this.nativeChooser('actions'), this.attachmentNativeMenu, this.actionContextMenuOptions()).id('chat.more')
             if (this.expandedComposer() && this.inlineKeyboardAction()) this.hideKeyboard(false)
@@ -2182,15 +2729,30 @@ export struct Conversation {
             .responseRegion(ButtonStyles.touchRegion(this.expandedComposer() ? this.composerActionSize() : 44))
             .backgroundColor(Color.Transparent)
             .enabled(this.primaryEnabled())
-            .onClick(() => { if (!this.sendCurrent()) return; if (this.primaryStop()) this.model.stop(() => this.sendCurrent()); else this.sendDraft(); }).id('chat.send')
+            .scale({ x: this.sendPressed ? 0.90 : 1, y: this.sendPressed ? 0.90 : 1 })
+            .animation(Motion.release(this.environment.reduceMotion))
+            .transition(Motion.fadeScale(this.environment.reduceMotion, 0.8))
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) this.sendPressed = true;
+              else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.sendPressed = false;
+            })
+            .onClick(() => {
+              if (!this.sendCurrent()) return;
+              if (this.primaryStop()) { Haptics.attention(); this.model.stop(() => this.sendCurrent()); }
+              else { Haptics.tap(); this.sendDraft(); }
+            }).id('chat.send')
           }.width('100%').height(this.composerActionSize()).alignItems(VerticalAlign.Center).justifyContent(FlexAlign.End)
             .padding({ right: this.expandedComposer() ? Tokens.fine : 0 })
         }
       }.width('100%').onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.composerWidth = width; })
     }.padding(this.composerPadding()).backgroundColor(this.composerSurface())
+      .backgroundBlurStyle(Colors.styleID === 'glass' && !this.legacyInterface && this.model.style !== 'beautiful' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
       .border({width:this.restingComposer() ? String(this.restingStrokePx()) + 'px' : this.composerStroke,
         color:this.composerRim(),radius:25}).borderRadius(25).width('100%').id('chat.composer')
-      .shadow({radius:this.model.style==='beautiful' ? 8 : 0,color:this.environment.dark ? '#38000000' : '#0D000000',offsetY:5})
+      .animation(Motion.layout(this.environment.reduceMotion))
+      .shadow(this.model.style==='beautiful'
+        ? {radius:8,color:Colors.floatingShadow,offsetY:5}
+        : PhoneStyle.floatingElevation(this.environment.dark))
   }
 
   @Builder taskDock(horizontalInset: number = 0) {
@@ -2214,8 +2776,8 @@ export struct Conversation {
       } else {
         this.taskDock()
       }
-      if (this.showContextMenu && !this.composerAvailable()) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
+      if (this.showContextMenu && !this.composerAvailable()) Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.ink) }
+        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => { Haptics.tap(); this.openFallbackActions(); })
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
     }.width('100%').constraintSize({ maxWidth: Tokens.readingMax, maxHeight: this.maxControlsHeight() })
       .padding(this.model.selected.kind === 'session' ? 0 : { left: Tokens.inset, right: Tokens.inset, bottom: Tokens.footer, top: Tokens.gap })
@@ -2231,13 +2793,14 @@ export struct Conversation {
     if (this.model.decision) this.blockingContent()
     else Scroll(this.controlsScroller) {
       Column({ space: Tokens.gap }) {
-      if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
+      if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.ink) }
+        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => { Haptics.tap(); this.openFallbackActions(); })
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
       this.taskDock()
       Column({ space: Tokens.gap }) {
         if (this.model.canCompose()) {
           if (this.attachments.busy && !this.sending && (this.attachments.errorKey === 'chat_attachment_storage_unavailable' || this.model.error === 'cache_unavailable')) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => { this.attachmentKey = ''; this.syncAttachments(); })
+          this.suggestionChipsBar()
           this.composer()
         } else if (!this.model.canSend()) {
           if (this.model.canAttach()) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('attach_live')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('attach_live', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('attach_live')).bindTips(tr('attach_live')).onClick(() => this.model.attach())

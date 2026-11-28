@@ -243,15 +243,16 @@ func (n *Node) ternClaudeStatus(id, pane string, hasFile bool) string {
 	return s
 }
 
-// restingClaude: a Claude Code in a herdr or Tern pane whose host says its turn is over (or does not know), so a
+// restingClaude: a Claude Code in a herdr, Tern or Orca pane whose host says its turn is over (or does not know), so a
 // dialog on its screen is what it waits on (dialogstatus.go). herdr: where it was seen (#2553). Tern: a Claude Code
-// that does not mark a dialog of its own waiting (ternClaudeStatus) shows it only there. Orca reports its own
-// permission state, and botmux sessions have no screen of theirs to read.
+// that does not mark a dialog of its own waiting (ternClaudeStatus) shows it only there. Orca: it reports permission
+// dialogs and the dialogs it recognises as blocked, any other as the turn being over (#17042); its plain screen text
+// is enough to read a dialog. botmux sessions have no screen of theirs to read.
 func restingClaude(a host.Agent, status string) bool {
 	if a.Agent != "claude" || a.PaneID == "" {
 		return false
 	}
-	if k := host.ParsePane(a.PaneID).Kind; k != host.Herdr && k != host.Tern && k != host.Rex {
+	if k := host.ParsePane(a.PaneID).Kind; k != host.Herdr && k != host.Tern && k != host.Rex && k != host.Orca {
 		return false
 	}
 	return status == proto.StatusDone || status == proto.StatusIdle || status == proto.StatusUnknown

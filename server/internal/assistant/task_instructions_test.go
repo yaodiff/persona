@@ -21,9 +21,13 @@ func TestTaskAssignmentAndFrameworkInstructions(t *testing.T) {
 
 func TestStructuredDeliveryKeepsDispositionGateAndOwner(t *testing.T) {
 	for _, state := range []string{deliveryLive, deliveryPR, deliveryMerged, deliveryOff, deliveryNone} {
-		text := `<closeout status="blocked" merged="no" deployed="no">` + "\ndelivery: " + state + "\nmissing: deployment approval\nunblock: user\n</closeout>"
+		gate := "deployment approval"
+		if state == deliveryOff {
+			gate = "feature disabled by default; activation approval"
+		}
+		text := `<closeout status="blocked" merged="no" deployed="no">` + "\ndelivery: " + state + "\nmissing: " + gate + "\nunblock: user\n</closeout>"
 		d, ok := deliveryMark(text)
-		if !ok || d.State != state || !deliveryClosable(state) && (d.Gate != "deployment approval" || d.Unblock != unblockUser) {
+		if !ok || d.State != state || !deliveryClosable(state) && (d.Gate != gate || d.Unblock != unblockUser) {
 			t.Errorf("%s: %+v, %v", state, d, ok)
 		}
 	}

@@ -43,7 +43,7 @@ func taskInboxArgs(items ...string) json.RawMessage {
 	return raw
 }
 
-func TestTaskPlanInboxUsesTheActualHandoff(t *testing.T) {
+func TestTaskPlanInboxExplicitSourceUsesTheActualHandoff(t *testing.T) {
 	ctx := context.Background()
 	s, f := newTaskService(t)
 	f.inbox = newFakeInbox()
@@ -76,18 +76,18 @@ func TestTaskPlanInboxUsesTheActualHandoff(t *testing.T) {
 	}
 }
 
-func TestTaskPlanInboxSourcesPersistWithoutCrossItemInheritance(t *testing.T) {
+func TestTaskPlanInboxSourcesPersistWithExplicitItemChoices(t *testing.T) {
 	ctx := context.Background()
 	const conversation = "inbox-source-test"
 	st := todoTestDB(t)
 	s, _ := newTaskServiceOn(t, st)
 	a := taskInboxItem(t, s, "example:a", "box", conversation)
 	b := taskInboxItem(t, s, "example:b", "box", conversation)
-	if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, taskInboxArgs(a.ID, "", b.ID, a.ID)); err != nil {
+	if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, taskInboxArgs(a.ID, b.ID, a.ID)); err != nil {
 		t.Fatal(err)
 	}
 	p := planOf(t, s, conversation)
-	for i, want := range []string{a.ID, "", b.ID, a.ID} {
+	for i, want := range []string{a.ID, b.ID, a.ID} {
 		if p.Tasks[i].InboxItem != want || want != "" && p.Tasks[i].InboxHandoff != namedClientID(want) {
 			t.Fatalf("task %d lost its validated source: %+v", i, p.Tasks[i])
 		}
@@ -96,7 +96,7 @@ func TestTaskPlanInboxSourcesPersistWithoutCrossItemInheritance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, want := range []string{a.ID, "", b.ID, a.ID} {
+	for i, want := range []string{a.ID, b.ID, a.ID} {
 		task := started.Tasks[i]
 		if task.Error != "" || task.TodoID == "" {
 			t.Fatalf("task %d: %+v", i, task)
@@ -117,7 +117,7 @@ func TestTaskPlanInboxSourcesPersistWithoutCrossItemInheritance(t *testing.T) {
 	if err := reloaded.inboxReady(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for i, want := range []string{a.ID, "", b.ID, a.ID} {
+	for i, want := range []string{a.ID, b.ID, a.ID} {
 		td, ok := reloaded.todoNow(started.Tasks[i].TodoID)
 		if !ok || td.InboxItem != want || len(td.Agents) != 1 {
 			t.Fatalf("reloaded task %d: %+v, want source %q and its Agent", i, td, want)
@@ -125,7 +125,7 @@ func TestTaskPlanInboxSourcesPersistWithoutCrossItemInheritance(t *testing.T) {
 	}
 	reloaded.inbox.mu.Lock()
 	defer reloaded.inbox.mu.Unlock()
-	for id, want := range map[string]string{a.ID: started.Tasks[3].TodoID, b.ID: started.Tasks[2].TodoID} {
+	for id, want := range map[string]string{a.ID: started.Tasks[2].TodoID, b.ID: started.Tasks[1].TodoID} {
 		it := reloaded.inbox.items[id]
 		if !it.open() || it.Agent == nil || it.Agent.TodoID != want || it.Suggestion != nil || it.Handling != nil {
 			t.Fatalf("item %s: %+v", id, it)
@@ -563,6 +563,46 @@ func TestExistingTaskToolsCanDeclineInboxSource(t *testing.T) {
 			defer s.inbox.mu.Unlock()
 			for _, it := range []*InboxItem{a, b} {
 				if it.Agent != nil && it.Agent.TodoID != "" {
+					t.Fatalf("handoff %s was attached to %s", it.ID, it.Agent.TodoID)
+				}
+			}
+		})
+	}
+}
+
+func TestExistingTaskToolsOmittedSourceIgnoresUnrelatedHandoff(t *testing.T) {
+	for _, name := range []string{"agent_send", "agent_send with task", "task_scope"} {
+		t.Run(name, func(t *testing.T) {
+			s, f := newQuietService(t)
+			task := agentTask(t, s, f)
+			a := taskInboxItem(t, s, "example:first", "server", "conv1")
+			b := taskInboxItem(t, s, "example:second", "server", "conv1")
+			s.inbox.mu.Lock()
+			a.Agent = &InboxAgent{TodoID: "another-task"}
+			now := time.Now()
+			b.DoneAt = &now
+			s.inbox.mu.Unlock()
+			args := map[string]any{}
+			tool := name
+			if name == "task_scope" {
+				args["todo_id"], args["change"], args["why"] = task.ID, "Check the sample output", "It needs a second example"
+			} else {
+				tool = "agent_send"
+				args["machine"], args["session_id"], args["text"] = task.Agents[0].MachineID, task.Agents[0].SessionID, "Check the sample output"
+				if name == "agent_send with task" {
+					args["task"] = map[string]any{"title": task.Title, "done_when": []string{"Sample output checked"}}
+				}
+			}
+			if _, err := runJSON(t, s, "conv1", tool, args); err != nil {
+				t.Fatalf("unrelated action refused: %v", err)
+			}
+			if todo := todoNow(s, task.ID); todo.InboxItem != "" {
+				t.Fatalf("unrelated action changed the task source: %s", todo.InboxItem)
+			}
+			s.inbox.mu.Lock()
+			defer s.inbox.mu.Unlock()
+			for _, it := range []*InboxItem{a, b} {
+				if it.Agent != nil && it.Agent.TodoID != "another-task" {
 					t.Fatalf("handoff %s was attached to %s", it.ID, it.Agent.TodoID)
 				}
 			}

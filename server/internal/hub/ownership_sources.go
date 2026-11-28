@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -63,13 +64,11 @@ func (h *Hub) moveSource(ctx context.Context, source, from, to string) (string, 
 	if h.busConnOf(from) == nil || h.busConnOf(to) == nil {
 		return "", errMoveOffline
 	}
-	var bundle json.RawMessage
-	if err := h.callBus(ctx, from, extwire.MethodSourceExport, extwire.SourceRef{Source: source}, &bundle); err != nil {
+	ref, exported, err := forwardBusResult(ctx, h.managerCaller(from), h.managerCaller(to),
+		extwire.SourceExportMethod, extwire.SourceImportMethod, extwire.SourceRef{Source: source})
+	if !exported {
 		return "", fmt.Errorf("%s: export: %w", from, err)
 	}
-	var ref extwire.SourceRef
-	err := h.callBus(ctx, to, extwire.MethodSourceImport, bundle, &ref)
-	clear(bundle)
 	var coded *rpc.Error
 	switch {
 	case err == nil:
@@ -97,11 +96,26 @@ func (h *Hub) moveSource(ctx context.Context, source, from, to string) (string, 
 	// The new one has it: the release is asked for even when the caller stopped waiting.
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if err := h.callBus(rctx, from, extwire.MethodSourceRelease, extwire.SourceRef{Source: source}, nil); err != nil {
+	if _, err := buswire.Call(rctx, h.managerCaller(from), extwire.SourceReleaseMethod, extwire.SourceRef{Source: source}); err != nil {
 		return cmp.Or(ref.Source, source), fmt.Errorf("%s has it now, but %s did not let it go: %w", to, from, err)
 	}
 	h.logf("managers: source %s moved from %s to %s", clip(source, 80), from, to)
 	return cmp.Or(ref.Source, source), nil
+}
+
+// forwardBusResult ties the two methods to the same bundle type at compile time
+// and passes the original JSON through so a newer manager's fields survive.
+// exported reports which call failed. The hub clears the bundle after forwarding it.
+func forwardBusResult[P, B, R any](ctx context.Context, from, to buswire.Caller,
+	export buswire.Method[P, B], receive buswire.Method[B, R], params P,
+) (result R, exported bool, err error) {
+	bundle, err := buswire.Call(ctx, from, buswire.Method[P, json.RawMessage]{Name: export.Name}, params)
+	defer clear(bundle)
+	if err != nil {
+		return result, false, err
+	}
+	result, err = buswire.Call(ctx, to, buswire.Method[json.RawMessage, R]{Name: receive.Name}, bundle)
+	return result, true, err
 }
 
 // sourceAt: manager id has source (it exports it; what it exports is dropped at once).
@@ -112,8 +126,7 @@ func (h *Hub) sourceAt(ctx context.Context, id, source string) bool {
 
 // sourceKnownAt asks manager id whether it has source: has, and whether it answered.
 func (h *Hub) sourceKnownAt(ctx context.Context, id, source string) (has, known bool) {
-	var b extwire.SourceBundle
-	err := h.callBus(ctx, id, extwire.MethodSourceExport, extwire.SourceRef{Source: source}, &b)
+	b, err := buswire.Call(ctx, h.managerCaller(id), extwire.SourceExportMethod, extwire.SourceRef{Source: source})
 	clear(b.Data)
 	var coded *rpc.Error
 	switch {

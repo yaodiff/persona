@@ -7,8 +7,9 @@
 // Messages (iMessage) adds "Hand to Persona" and deleting what the hub kept (iOS MessagesConnectorView, /api/v1/imessage…).
 import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { errorText } from "../../lib/api";
-import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { errorText, invalidateInFlightGets } from "../../lib/api";
+import { safeLink } from "../../lib/extension-auth";
+import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
 import {
   canSendStep, CI_MODES, deleteIMessageData, imessageAIFooter, imessageStatus, setIMessageAI, connectorBrand, connectorLogin, connectorLogout, connectorState, connectorSummary, connectorTone, deleteConnectorArchive,
@@ -19,7 +20,7 @@ import {
 } from "../../lib/connectors";
 import { useChannels } from "../../lib/channels";
 import { ago } from "../../lib/format";
-import { useLarkOn } from "../../lib/store";
+import { useLarkOn, useStore } from "../../lib/store";
 import { latestRequest } from "../../lib/visible-poll";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
@@ -56,11 +57,12 @@ function Mark({ id, size }: { id: string; size: number }) {
 
 /** `openBeside`: the connector open beside the list (Settings' two columns): its row is marked current, and every row
  *  puts its state under its name, so the narrow column shows the name whole. */
-export function ConnectorList({ onOpen, onLarkCli, openBeside }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void; openBeside?: string | null }) {
+export function ConnectorList({ onOpen, onLarkCli, openBeside, manager }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void; openBeside?: string | null; manager?: string }) {
   const [all, setAll] = useState<HubConnector[] | null>(null);
   const [error, setError] = useState("");
   const lark = useLarkOn();
-  const picked = useChosenManager();
+  const chosen = useChosenManager();
+  const picked = manager ?? chosen;
   useEffect(() => {
     listConnectors()
       .then((l) => {
@@ -72,13 +74,15 @@ export function ConnectorList({ onOpen, onLarkCli, openBeside }: { onOpen: (id: 
   // the current assistant's connectors only (each assistant has its own built-ins, docs/assistant/managers.md "The current
   // assistant"); a row opens that assistant's copy. With one assistant, the list as it is.
   const scope = useScope();
-  const list = useMemo(() => all && scoped(otherConnectors(all, lark), scope), [all, lark, scope]);
+  const own = useMemo(() => all && (manager ? all.filter((c) => sameManager(c.manager, manager)) : scoped(all, scope)), [all, manager, scope]);
+  const list = useMemo(() => own && otherConnectors(own, lark), [own, lark]);
   // the chat connector's command-line sign-in the Feishu bot's dialog offers is the current assistant's copy
   useEffect(() => {
-    if (all) onLarkCli?.(scoped(all, scope).find((c) => c.id === "larkcli") ?? null);
-  }, [all, scope, onLarkCli]);
+    if (own) onLarkCli?.(own.find((c) => c.id === "larkcli") ?? null);
+  }, [own, onLarkCli]);
   // an offline current assistant: the hub's merged list leaves it out, so an empty list says it is offline (as the inbox does)
-  const offline = useShownOffline();
+  const shownOffline = useShownOffline();
+  const offline = manager && shownOffline?.manager.id !== manager ? null : shownOffline;
   if (list?.length === 0) {
     return offline ? (
       <Group title={t("settings-hubconnector.more_title")}>
@@ -326,22 +330,31 @@ export function FeedsGroup({ c, a }: { c: HubConnector; a: Actions }) {
  * (the same as on the connector's page), and the way to the connector's page for the rest (persona#3178). `manager`: whose
  * extension it is (each manager has its own connectors, docs/assistant/managers.md "Clients"); none: the default's.
  */
-export function ExtensionConnectorInbox({ ids, manager, onOpen }: { ids: string[]; manager?: string; onOpen?: (id: string, manager?: string) => void }) {
+export function ExtensionConnectorInbox({ ids, manager, onOpen, refreshKey = 0 }: { ids: string[]; manager?: string; onOpen?: (id: string, manager?: string) => void; refreshKey?: number }) {
   const [list, setList] = useState<HubConnector[]>([]);
+  const sequence = useRef(0);
   const key = ids.join(",");
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh = false) => {
+    const read = ++sequence.current;
     try {
+      if (fresh) invalidateInFlightGets("/connectors");
       const all = await listConnectors();
+      if (sequence.current !== read) return;
       // the merged list has each manager's copy: this extension's manager's
       setList(key.split(",").flatMap((id) => all.find((c) => c.id === id && sameManager(c.manager, manager)) ?? []));
     } catch {
-      setList([]); // the connector page says what is wrong; this group just stays away
+      if (sequence.current === read && !fresh) setList([]); // the connector page says what is wrong; this group just stays away
     }
   }, [key, manager]);
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    void load(refreshKey > 0);
+    return () => {
+      sequence.current++;
+    };
+  }, [load, refreshKey]);
   return (
     <>
-      {list.map((c) => (c.inbox === undefined ? null : <ExtensionConnectorGroup key={`${c.manager ?? ""}:${c.id}`} c={c} reload={load} onOpen={onOpen} />))}
+      {list.map((c) => (c.inbox === undefined ? null : <ExtensionConnectorGroup key={`${c.manager ?? ""}:${c.id}`} c={c} reload={() => load(true)} onOpen={onOpen} />))}
     </>
   );
 }
@@ -575,6 +588,8 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
     return () => void (live.current = false);
   }, []);
   // Also a channel (WeChat): a step this page cannot draw can be done in Settings › Channels instead.
+  const manager = useShownManager();
+  const integrationsV2 = useStore((s) => s.assistant?.integrations_v2 === true && sameManager(s.assistant.manager, manager));
   const isChannel = useChannels().some((x) => x.id === c.id);
 
   /** True when signing in is done. */
@@ -625,6 +640,7 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
       values={values}
       busy={busy}
       isChannel={isChannel}
+      integrationsV2={integrationsV2}
       onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
       onSubmit={() => void send(prompt.step ?? "", values)}
       onRestart={() => (cancel(), void send("", {}))}
@@ -640,12 +656,13 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
 }
 
 /** One sign-in step as the hub sent it: its hint and error, then fields, a device code, a QR code, or why it can't be drawn. */
-export function SignInStep({ name, prompt, values, busy, isChannel, onChange, onSubmit, onRestart, onCancel }: {
+export function SignInStep({ name, prompt, values, busy, isChannel, integrationsV2, onChange, onSubmit, onRestart, onCancel }: {
   name: string;
   prompt: ConnectorPrompt;
   values: Record<string, string>;
   busy: boolean;
   isChannel?: boolean;
+  integrationsV2?: boolean;
   onChange: (field: string, value: string) => void;
   onSubmit: () => void;
   onRestart: () => void;
@@ -653,6 +670,7 @@ export function SignInStep({ name, prompt, values, busy, isChannel, onChange, on
 }) {
   const view = stepView(prompt);
   const canSend = canSendStep(prompt, values) && !busy;
+  const deviceUrl = safeLink(prompt.url);
   return (
     <>
       {(prompt.hint || prompt.error) && (
@@ -680,9 +698,9 @@ export function SignInStep({ name, prompt, values, busy, isChannel, onChange, on
             />
           </div>
           <p className="flex items-center gap-2 text-[12.5px] text-ink-3"><Spinner size={11} />{t("settings-hubconnector.waiting_auth", { name })}</p>
-          {prompt.url && (
+          {deviceUrl && (
             <div>
-              <Button tone={prompt.qr?.rows.length ? "secondary" : "accent"} icon="external" onClick={() => window.open(prompt.url, "_blank", "noopener,noreferrer")}>{t("settings-hubconnector.open_to_enter_code", { name })}</Button>
+              <Button tone={prompt.qr?.rows.length ? "secondary" : "accent"} icon="external" onClick={() => window.open(deviceUrl, "_blank", "noopener,noreferrer")}>{t("settings-hubconnector.open_to_enter_code", { name })}</Button>
             </div>
           )}
         </div>
@@ -691,7 +709,7 @@ export function SignInStep({ name, prompt, values, busy, isChannel, onChange, on
       ) : view === "qr_link" ? (
         <QRLinkStep url={prompt.url!} app={name} onCancel={onCancel} />
       ) : view === "unsupported" ? (
-        <UnsupportedStep elsewhere={isChannel ? t("settings-hubconnector.bind_in_channels", { name }) : undefined} onRestart={onRestart} onCancel={onCancel} />
+        <UnsupportedStep elsewhere={isChannel ? t(integrationsV2 ? "settings-hubconnector.bind_in_integrations" : "settings-hubconnector.bind_in_channels", { name }) : undefined} onRestart={onRestart} onCancel={onCancel} />
       ) : (
         <form
           className="flex flex-col"

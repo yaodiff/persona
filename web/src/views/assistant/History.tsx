@@ -10,7 +10,7 @@ import { conversationChannel, useChannels } from "../../lib/channels";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { ago, stateOf } from "../../lib/format";
+import { ago, activityOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
@@ -116,7 +116,13 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   // read again after a reconnect (#4954's rule, as the scheduled tasks are): always when the read failed while the hub
   // was away, else when the hub could not resume, as the pushes missed meanwhile are not replayed
   const failed = error !== "";
-  useEffect(() => onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load()), [load, failed]);
+  useEffect(() => {
+    const offHello = onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load());
+    const offDirs = onHubEvent("directions", () => document.visibilityState === "visible" && void load());
+    const onVis = () => { if (document.visibilityState === "visible") void load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { offHello(); offDirs(); document.removeEventListener("visibilitychange", onVis); };
+  }, [load, failed]);
   const [retrying, setRetrying] = useState(false);
   const [retried, setRetried] = useState(0);
   const retry = () => {
@@ -254,7 +260,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("assistant-history.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{t("sidebar.all_chats")}</h1>
+          <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{filter === "external" ? t("shellswitch.external") : t("sidebar.all_chats")}</h1>
           {total > 0 && (
             <GroupCount n={total} label={t("sidebar.unarchived_chat_count", { count: total })} className="shrink-0" />
           )}
@@ -285,10 +291,11 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
 
           {(sources.length > 0 || filter !== "all") && (
             <div role="group" aria-label={t("assistant-conversations.origin_filter")} className="-mt-2 mb-5 flex flex-wrap gap-1.5">
-              {(["all", "mine", ...sources.map((g) => g.origin)] as OriginFilter[]).map((f) => (
+              {/* External (the phone tab bar's, lib/phone-nav.ts) is a chip only while it is the filter, so the default list is unchanged */}
+              {(["all", "mine", ...(filter === "external" ? ["external"] : []), ...sources.map((g) => g.origin)] as OriginFilter[]).map((f) => (
                 <Chip key={f} on={filter === f} onClick={() => navigate({ name: "history", origin: f === "all" ? undefined : f }, true)}>
-                  {f === "all" ? t("assistant-conversations.origin_all") : f === "mine" ? t("assistant-conversations.origin_mine") : originLabel(f)}
-                  {f !== "all" && f !== "mine" && <span className="ml-1 tabular-nums opacity-60">{sources.find((g) => g.origin === f)?.count}</span>}
+                  {f === "all" ? t("assistant-conversations.origin_all") : f === "mine" ? t("assistant-conversations.origin_mine") : f === "external" ? t("shellswitch.external") : originLabel(f)}
+                  {f !== "all" && f !== "mine" && f !== "external" && <span className="ml-1 tabular-nums opacity-60">{sources.find((g) => g.origin === f)?.count}</span>}
                 </Chip>
               ))}
             </div>
@@ -331,6 +338,11 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
           )}
           {searching && said.answer?.partial && <p className="-mt-3 mb-4 px-1 text-[12px] text-ink-3" role="status">{t("assistant-history.search_partial")}</p>}
           {!loading && searching && hits.length === 0 && all.length > 0 && <Empty icon="search" title={t("assistant-history.no_results", { query: query.trim() })} />}
+          {!loading && !error && !searching && !activeTag && filter === "external" && all.length > 0 && visible.length === 0 && (
+            <Empty icon="at" title={t("assistant-history.external_empty_title")}>
+              {t("assistant-history.external_empty_body")}
+            </Empty>
+          )}
           {!loading && !searching && activeTag && visible.length === 0 && (
             <Empty icon="tag" title={t("assistant-history.tag_empty", { tag: activeTag })} action={<Button tone="quiet" onClick={() => setActiveTag("")}>{t("assistant-history.tag_clear")}</Button>} />
           )}
@@ -446,7 +458,7 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive, onEditTags }: {
   const builtIn = useStore((x) => isBackgroundSupervisor(x.assistant, s.session_id));
   const title = main ? t("sidebar.main_chat") : builtIn ? backgroundSupervisorTitle(s) : conversationTitle(s);
   const split = builtIn ? null : splitTitle(title);
-  const st = stateOf(s);
+  const st = activityOf(s);
   const flagged = st === "needs_you" || st === "working" || st === "unread";
   const last = plainMarkdown(s.last_text);
   // opened by the hub itself (#3758, #5195): what opened it, in the channel's place, as on its sidebar row; decided as the

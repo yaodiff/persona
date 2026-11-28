@@ -26,9 +26,7 @@ func (m *Machine) setInitialSessions(peer *rpc.Peer, revision uint64, list []pro
 	if m.peer != peer || m.sessionRevision != revision {
 		return false
 	}
-	for i := range list {
-		list[i].MachineID = m.cfg.ID
-	}
+	m.takeRows(list)
 	m.sessions = list
 	m.sessionsListed = true
 	m.lastSeen = time.Now().UTC()

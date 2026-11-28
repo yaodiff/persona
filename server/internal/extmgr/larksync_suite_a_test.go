@@ -15,40 +15,37 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/botport"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/larksyncwire"
-	_ "github.com/nwverse/persona/server/internal/modules/all" // the lark module's real readers (botport.NewSyncer)
+	_ "github.com/nwverse/persona/server/internal/modules/all" // the lark module's real service and readers
 )
 
 // Mock suite A, end to end: dedup, revisions and alignment with the Lark gateway's content.
 //
 // Two bindings (the primary bot × account A, a sync-only bot × account B) read the same chat message and the same
-// docx, through the manager's real run path (larkSyncRun → the lark module's real Syncer → the manager's commit), from
-// a fake open platform on httptest. Then the knowledge base takes what the connector hands over, next to what the
+// docx, through the manager's real sync route and connector (extmgr → internal/modules/lark/larksync → manager commit),
+// from a fake open platform on httptest. Then the knowledge base takes what the connector hands over, next to what the
 // gateway archived before: the document is merged into the gateway's item, the message the gateway already has is not
 // written a second time.
 
-// suiteAView is what one binding's token sees on the fake platform.
 type suiteAView struct {
-	docRev int64 // the docx revision its reads get (a replica may lag behind: a late, older revision)
-	drive  bool  // doxP is in its Drive
-	wiki   bool  // doxP is a node (wikP) of its wiki space sp1
+	docRev int64
+	drive  bool
+	wiki   bool
 }
 
-// suiteAOpen is the fake open platform. The binding a request is for is told by its bearer token.
 type suiteAOpen struct {
 	t     *testing.T
 	srv   *httptest.Server
 	now   func() time.Time
-	msgAt time.Time // om_1's time; om_2 is 20 s later
+	msgAt time.Time
 
 	mu    sync.Mutex
-	views map[string]*suiteAView // access token → its view
-	calls []string               // "<token> <method> <path>"
+	views map[string]*suiteAView
+	calls []string
 }
 
 const (
@@ -59,7 +56,6 @@ const (
 	suiteAText2    = "Thanks, I will read it this afternoon"
 )
 
-// suiteABody is the docx body at revision rev, as the blocks give it.
 func suiteABody(rev int64) string { return "Plan body at revision " + strconv.FormatInt(rev, 10) }
 
 func newSuiteAOpen(t *testing.T, now func() time.Time, msgAt time.Time) *suiteAOpen {
@@ -76,7 +72,6 @@ func (f *suiteAOpen) view(token string, v suiteAView) {
 	f.views[token] = &v
 }
 
-// count is how many calls token made to path.
 func (f *suiteAOpen) count(token, path string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -103,7 +98,6 @@ func suiteAMessage(id, sender, text string, at time.Time) map[string]any {
 }
 
 func (f *suiteAOpen) serve(w http.ResponseWriter, r *http.Request) {
-	// A local node's port probe: never an open-platform call.
 	if r.URL.Path == "/" || r.Header.Get("User-Agent") == "persona-ports" {
 		http.NotFound(w, r)
 		return
@@ -171,7 +165,6 @@ func (f *suiteAOpen) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// suiteASource is a knowledge-base archive source by name (the connector adapter's shape: Name and ConnectorID).
 type suiteASource struct{ name string }
 
 func (s suiteASource) Name() string        { return s.name }
@@ -186,8 +179,7 @@ func (suiteASource) Download(context.Context, string, string) error {
 	return errors.New("no attachments")
 }
 
-// suiteAChanges are every chat batch the connector hands over from the start, page by page.
-func suiteAChanges(t *testing.T, c larkSyncConnector) []connector.ChatBatch {
+func suiteAChanges(t *testing.T, c connector.Archive) []connector.ChatBatch {
 	t.Helper()
 	var out []connector.ChatBatch
 	cursor := ""
@@ -206,7 +198,6 @@ func suiteAChanges(t *testing.T, c larkSyncConnector) []connector.ChatBatch {
 	return nil
 }
 
-// suiteABindings are the bindings of refs, sorted, as "<binding>/<entry>".
 func suiteABindings(refs []kbwire.SourceRef) []string {
 	var out []string
 	for _, r := range refs {
@@ -219,54 +210,125 @@ func suiteABindings(refs []kbwire.SourceRef) []string {
 func TestLarkSyncSuiteA(t *testing.T) {
 	needsLarkModule(t)
 	ctx := context.Background()
-	w := newLarkWorld(t)
-	// The world's clock starts at the real time: the knowledge base keeps (and drops) chat text by the real clock.
-	w.mu.Lock()
-	w.clock = time.Now().UTC().Truncate(time.Minute)
-	w.mu.Unlock()
-	// om_1 at 10 s past a minute: an even second, so the gateway's copy one second later is in the same 2 s bucket.
-	msgAt := w.now().Add(-30 * time.Minute).Add(10 * time.Second)
-	open := newSuiteAOpen(t, w.now, msgAt)
+	h := newTestManager(t)
+	store := newLarkSyncMemStore(time.Now)
+	h.store = store
 
-	// The real readers, one per binding, on the world's clock, talking to the fake platform (each app's domain).
-	readers := 0
-	w.h.bots.sync.newSyncer = func() larksyncwire.Syncer {
-		readers++
-		return botport.NewSyncer(nil, w.now)
+	var clockMu sync.Mutex
+	clock := time.Now().UTC().Truncate(time.Minute)
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return clock
 	}
-	w.h.cfg.Bots.Feishu.Domain = open.srv.URL
-	sealed, err := w.h.larkSyncSeal("syncb-secret")
-	if err != nil {
-		t.Fatal(err)
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		clock = clock.Add(d)
+		clockMu.Unlock()
 	}
-	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
-		st.bots = append(st.bots, larkSyncBot{BotID: "syncb", Label: "Sync B", AppID: "cli_syncb", SecretEnc: sealed, Domain: open.srv.URL,
-			Role: larksyncwire.RoleSyncOnly, Tier: larksyncwire.TierFull, Approval: larksyncwire.ApprovalReady, CreatedAt: w.now()})
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	keyA, accA := w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "tok-a", "ref-a", 30*24*time.Hour)
-	keyB, _ := w.adopt(t, "syncb", "ou_b", "tok-b", "ref-b", 30*24*time.Hour)
-	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
-		for _, k := range []string{keyA, keyB} {
-			st.binding(k).Tier = larksyncwire.TierFull // chats too, not only the documents
+
+	// om_1 at 10 s past a minute: an even second, so the gateway's copy one second later is in the same 2 s bucket.
+	msgAt := now().Add(-30 * time.Minute).Add(10 * time.Second)
+	open := newSuiteAOpen(t, now, msgAt)
+	h.cfg.Bots.Feishu = FeishuBotConfig{AppID: "cli_primary", AppSecret: "primary-secret", Domain: open.srv.URL}
+
+	seal := func(plain string) string {
+		s, err := h.sealKey(plain)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return nil
+		return s
+	}
+	accA, accB := "feishu:t1:ou_a", "feishu:t1:ou_b"
+	keyA, keyB := "primary~acct_a", "syncb~acct_b"
+	authAt := now()
+	expAt := authAt.Add(30 * 24 * time.Hour)
+
+	if err := store.PutSetting(ctx, larksyncwire.SettingBots, []map[string]any{{
+		"bot_id":     "syncb",
+		"label":      "Sync B",
+		"app_id":     "cli_syncb",
+		"secret_enc": seal("syncb-secret"),
+		"domain":     open.srv.URL,
+		"role":       larksyncwire.RoleSyncOnly,
+		"tier":       larksyncwire.TierFull,
+		"approval":   larksyncwire.ApprovalReady,
+		"created_at": authAt,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSetting(ctx, larksyncwire.SettingAccounts, []map[string]any{
+		{"account_id": accA, "label": "Account ou_a", "brand": "feishu", "tenant_key": "t1", "open_id": "ou_a", "name": "Account ou_a"},
+		{"account_id": accB, "label": "Account ou_b", "brand": "feishu", "tenant_key": "t1", "open_id": "ou_b", "name": "Account ou_b"},
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.PutSetting(ctx, larksyncwire.SettingBindings, []map[string]any{
+		{
+			"key": keyA, "bot_id": larksyncwire.PrimaryBot, "account_id": accA,
+			"tier": larksyncwire.TierFull, "enabled": true,
+			"access_token_enc": seal("tok-a"), "refresh_token_enc": seal("ref-a"),
+			"token_expires_at": expAt, "authorized_at": authAt,
+			"granted_scopes": larksyncwire.ScopesFor(larksyncwire.TierFull),
+			"health":         larksyncwire.HealthOK,
+		},
+		{
+			"key": keyB, "bot_id": "syncb", "account_id": accB,
+			"tier": larksyncwire.TierFull, "enabled": true,
+			"access_token_enc": seal("tok-b"), "refresh_token_enc": seal("ref-b"),
+			"token_expires_at": expAt, "authorized_at": authAt,
+			"granted_scopes": larksyncwire.ScopesFor(larksyncwire.TierFull),
+			"health":         larksyncwire.HealthOK,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	h.botRoutes(mux)
+
 	run := func(key string) {
 		t.Helper()
-		if err := w.h.larkSyncRun(ctx, key); err != nil {
-			t.Fatalf("run %s: %v", key, err)
+		if code, body := doSyncReq(t, mux, http.MethodPost, "/api/v1/bots/feishu/sync/bindings/"+key+"/run", ""); code != 200 {
+			t.Fatalf("start run %s: %d %v", key, code, body)
 		}
-		if b := w.binding(t, key); b.Health != larksyncwire.HealthOK {
-			t.Fatalf("run %s: health %s (%s)", key, b.Health, b.LastError)
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		deadline := time.After(15 * time.Second)
+		for {
+			_, view := doSyncReq(t, mux, http.MethodGet, "/api/v1/bots/feishu/sync", "")
+			var found map[string]any
+			for _, raw := range view["bindings"].([]any) {
+				m := raw.(map[string]any)
+				if m["key"] == key {
+					found = m
+					break
+				}
+			}
+			if found == nil {
+				t.Fatalf("binding %s missing from view", key)
+			}
+			if running, _ := found["running"].(bool); !running {
+				if health, _ := found["health"].(string); health != larksyncwire.HealthOK {
+					t.Fatalf("run %s: health %s (%v)", key, health, found["error"])
+				}
+				break
+			}
+			select {
+			case <-tick.C:
+			case <-deadline:
+				t.Fatalf("run %s did not finish", key)
+			}
 		}
-		w.advance(time.Hour) // the readers' rate limits refill between runs
+		advance(time.Hour)
 	}
-	c := larkSyncConnector{w.h}
+
+	conn := h.larkSyncConnector()
+	if conn == nil {
+		t.Fatal("larkSyncConnector returned nil with lark module in build")
+	}
+	arch := conn.(connector.Archive)
+	itemsSrc := conn.(connector.Items)
 	const msgKey, docKey = larksyncwire.KeyMessage + "om_1", larksyncwire.KeyDoc + "doxP"
 
 	// 1. Dedup across bindings. A finds the docx in its Drive, B as the wiki node wikP; both read om_1 in the chat.
@@ -274,21 +336,16 @@ func TestLarkSyncSuiteA(t *testing.T) {
 	open.view("tok-b", suiteAView{docRev: 1, wiki: true})
 	run(keyA)
 	run(keyB)
-	if readers != 2 {
-		t.Fatalf("%d readers made, want one per binding", readers)
-	}
-	// One index record per canonical key, with both bindings among its sources.
-	if got, want := suiteABindings(w.store.index[msgKey].Sources), []string{keyA + "/chat", keyB + "/chat"}; !slices.Equal(got, want) {
+	if got, want := suiteABindings(store.index[msgKey].Sources), []string{keyA + "/chat", keyB + "/chat"}; !slices.Equal(got, want) {
 		t.Fatalf("om_1's sources %v, want %v", got, want)
 	}
-	if got, want := suiteABindings(w.store.index[docKey].Sources), []string{keyA + "/drive", keyB + "/wiki"}; !slices.Equal(got, want) {
+	if got, want := suiteABindings(store.index[docKey].Sources), []string{keyA + "/drive", keyB + "/wiki"}; !slices.Equal(got, want) {
 		t.Fatalf("doxP's sources %v, want %v", got, want)
 	}
-	if rec := w.store.index[docKey]; rec.Revision != 1 || rec.Kind != "doc" {
+	if rec := store.index[docKey]; rec.Revision != 1 || rec.Kind != "doc" {
 		t.Fatalf("doxP's record: %+v", rec)
 	}
-	// om_1 and om_2 are handed over once, in one batch (B's run found nothing new in the chat).
-	batches := suiteAChanges(t, c)
+	batches := suiteAChanges(t, arch)
 	if len(batches) != 1 || batches[0].Chat.ID != suiteAChat || batches[0].Chat.Name != suiteAChatName {
 		t.Fatalf("batches: %+v", batches)
 	}
@@ -302,8 +359,7 @@ func TestLarkSyncSuiteA(t *testing.T) {
 	if m := batches[0].Messages[0]; m.SenderName != "Example Sender" || m.Text != suiteAText1 || !m.At.Equal(msgAt) || m.Mine {
 		t.Fatalf("om_1 handed over as %+v", m)
 	}
-	// The document is one item; B never read its body (the index said it had the revision already).
-	items, err := c.ItemSource().Items(ctx)
+	items, err := itemsSrc.ItemSource().Items(ctx)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("items %+v, %v", items, err)
 	}
@@ -317,22 +373,20 @@ func TestLarkSyncSuiteA(t *testing.T) {
 	// 2. Revisions. The document moves to rev2 and A reads it: handed over again, the newer body, still one item.
 	open.view("tok-a", suiteAView{docRev: 2, drive: true})
 	run(keyA)
-	if rec := w.store.index[docKey]; rec.Revision != 2 || rec.BodyHash == "" {
+	if rec := store.index[docKey]; rec.Revision != 2 || rec.BodyHash == "" {
 		t.Fatalf("doxP's record after rev2: %+v", rec)
 	}
-	hash2 := w.store.index[docKey].BodyHash
-	items, err = c.ItemSource().Items(ctx)
+	hash2 := store.index[docKey].BodyHash
+	items, err = itemsSrc.ItemSource().Items(ctx)
 	if err != nil || len(items) != 1 || items[0].Revision != 2 || items[0].Content != suiteABody(2) || items[0].BodyHash != hash2 {
 		t.Fatalf("items after rev2: %+v, %v", items, err)
 	}
-	// Then B, through a replica that lags, reads rev1 late, now through its Drive as well: stale. Its body is not read
-	// or handed over; the record keeps rev2 and gains only the new source.
 	open.view("tok-b", suiteAView{docRev: 1, drive: true, wiki: true})
 	docRows := func() int {
-		w.store.lmu.Lock()
-		defer w.store.lmu.Unlock()
+		store.lmu.Lock()
+		defer store.lmu.Unlock()
 		n := 0
-		for _, o := range w.store.outbox {
+		for _, o := range store.outbox {
 			if o.Kind == db.LarkSyncDoc {
 				n++
 			}
@@ -341,7 +395,7 @@ func TestLarkSyncSuiteA(t *testing.T) {
 	}
 	before := docRows()
 	run(keyB)
-	rec := w.store.index[docKey]
+	rec := store.index[docKey]
 	if rec.Revision != 2 || rec.BodyHash != hash2 {
 		t.Fatalf("the late rev1 moved the record: %+v", rec)
 	}
@@ -357,16 +411,15 @@ func TestLarkSyncSuiteA(t *testing.T) {
 	if n := open.count("tok-a", "/open-apis/docx/v1/documents/doxP/blocks"); n != 2 {
 		t.Fatalf("A read the body %d times, want twice (rev1, rev2)", n)
 	}
-	items, err = c.ItemSource().Items(ctx)
+	items, err = itemsSrc.ItemSource().Items(ctx)
 	if err != nil || len(items) != 1 || items[0].Revision != 2 || items[0].Content != suiteABody(2) {
 		t.Fatalf("items after the late rev1: %+v, %v", items, err)
 	}
-	if batches := suiteAChanges(t, c); len(batches) != 1 {
+	if batches := suiteAChanges(t, arch); len(batches) != 1 {
 		t.Fatalf("the later runs handed messages over again: %+v", batches)
 	}
 
-	// 3. Alignment with the gateway. A knowledge base where the Lark gateway ("lark") already has the document (by its
-	// link, under its own ID, without a canonical key) and om_1 (same chat name, sender and text, a second later).
+	// 3. Alignment with the gateway.
 	st, err := kb.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -378,14 +431,13 @@ func TestLarkSyncSuiteA(t *testing.T) {
 	}); err != nil || n != 1 {
 		t.Fatalf("gateway ingest: %d, %v", n, err)
 	}
-	if err := st.PutItem(&kb.Item{Kind: kb.KindDoc, Source: "lark", ID: "gw_plan", Title: "Plan", URL: suiteADocURL, Seen: w.now()}); err != nil {
+	if err := st.PutItem(&kb.Item{Kind: kb.KindDoc, Source: "lark", ID: "gw_plan", Title: "Plan", URL: suiteADocURL, Seen: now()}); err != nil {
 		t.Fatal(err)
 	}
 	e.Align = kb.NewGatewayAligner(e.Store)
 
-	// The connector's chat batches go to Ingest as the assistant's archive round hands them (source "larksync").
 	written := 0
-	for _, b := range suiteAChanges(t, c) {
+	for _, b := range suiteAChanges(t, arch) {
 		n, err := e.Ingest(ctx, suiteASource{larksyncwire.ConnectorID}, b.Chat, b.Messages)
 		if err != nil {
 			t.Fatal(err)
@@ -413,10 +465,8 @@ func TestLarkSyncSuiteA(t *testing.T) {
 		t.Fatalf("crosswalk %s (%v)", raw, err)
 	}
 
-	// The connector's items go to CollectItems: the gateway's item takes the synced body in place and lists both
-	// sources; there is no second item. Collected again, nothing changes.
 	for range 2 {
-		if err := e.CollectItems(ctx, c.ItemSource(), larksyncwire.ConnectorID); err != nil {
+		if err := e.CollectItems(ctx, itemsSrc.ItemSource(), larksyncwire.ConnectorID); err != nil {
 			t.Fatal(err)
 		}
 		docs := st.Items(kb.KindDoc)

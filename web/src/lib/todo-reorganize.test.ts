@@ -336,5 +336,68 @@ describe("todo-reorganize helpers (#14758)", () => {
         ["dir-raw-id", "dir-raw-id", ["t-orphan"]],
       ]);
     });
+
+    it("respects effective_direction_id and effective_direction_name when direction_id is empty under todosV2=true, and ignores them under todosV2=false (#17181)", () => {
+      const umbrellaTree: DirectionTree = {
+        directions: [
+          ...tree.directions.slice(0, 3),
+          {
+            id: "main",
+            name: "",
+            secretary: true,
+            counts,
+            running: false,
+            tasks: [
+              { id: "t4", title: "Uncategorized Task", state: "working" },
+              { id: "t-umbrella", title: "Umbrella Goal", state: "working" },
+              { id: "t-synth", title: "Inferred Stream Goal", state: "working" },
+            ],
+          },
+        ],
+      };
+      const openTodos = [
+        makeTodo("t1", "Infra A"),
+        makeTodo("t2", "Moved Explicit Wins", {
+          direction_id: "dir-product",
+          effective_direction_id: "dir-infra",
+          effective_direction_name: "Infrastructure",
+        }),
+        makeTodo("t3", "Product Native"),
+        makeTodo("t4", "Uncategorized Task"),
+        makeTodo("t-umbrella", "Umbrella Goal", {
+          effective_direction_id: "dir-product",
+          effective_direction_name: "Product",
+        }),
+        makeTodo("t-synth", "Inferred Stream Goal", {
+          effective_direction_id: "dir-inferred",
+          effective_direction_name: "Inferred Stream",
+        }),
+      ];
+
+      const legacySections = resolveDirectionSections({
+        tree: umbrellaTree,
+        openTodos,
+        todosV2: false,
+        resolveDirectionName: resolveName,
+      });
+      expect(legacySections.map((s) => [s.d.id, s.title, s.todos.map((td) => td.id)])).toEqual([
+        ["dir-infra", "Infrastructure", ["t1", "t2"]],
+        ["dir-product", "Product", ["t3"]],
+        ["main", "Secretary", ["t4", "t-umbrella", "t-synth"]],
+      ]);
+
+      const v2Sections = resolveDirectionSections({
+        tree: umbrellaTree,
+        openTodos,
+        todosV2: true,
+        resolveDirectionName: (d) => (d.secretary ? "Uncategorized" : d.name || d.id),
+      });
+      expect(v2Sections.map((s) => [s.d.id, s.title, s.todos.map((td) => td.id)])).toEqual([
+        ["dir-infra", "Infrastructure", ["t1"]],
+        ["dir-product", "Product", ["t3", "t2", "t-umbrella"]],
+        ["dir-inferred", "Inferred Stream", ["t-synth"]],
+        ["main", "Uncategorized", ["t4"]],
+      ]);
+    });
   });
 });

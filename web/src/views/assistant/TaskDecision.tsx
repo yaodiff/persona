@@ -10,7 +10,7 @@ import { later } from "../../lib/feed";
 import { defaultManager, MANAGER_HEADER, shownManager } from "../../lib/manager-choice";
 import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { latestReview, reviewState } from "../../lib/supervision";
-import { askOptions, openAsk, personalVerificationAsk, type Todo, type TodoStatus } from "../../lib/todos";
+import { askOptions, openAsk, personalVerificationAsk, type Todo, type TodoAsk, type TodoStatus } from "../../lib/todos";
 import { StatusMark } from "../../ui/StatusMark";
 import { Button, toast } from "../../ui/atoms";
 import { AcceptRow } from "./Brief";
@@ -21,10 +21,11 @@ import WaitingTaskRow from "./WaitingTaskRow";
 import { FailedTaskRow } from "./FailedTaskRow";
 import RuleSuggestionLine from "./RuleSuggestionLine";
 import type { RuleCard } from "../../lib/rule-suggestion";
+import { AskAboutDecision } from "./AskAboutDecision";
 
 type Review = NonNullable<Todo["decision_review"]>;
 
-export function TaskDecision({ todo, rowKey, hideTitle = false }: { todo: Todo; rowKey?: string; hideTitle?: boolean }) {
+export function TaskDecision({ todo, rowKey, hideTitle = false, onOpenChat }: { todo: Todo; rowKey?: string; hideTitle?: boolean; onOpenChat?: () => void }) {
   const ask = openAsk(todo);
   const review = latestReview(todo.supervision);
   const round = decisionRound(todo);
@@ -90,7 +91,10 @@ export function TaskDecision({ todo, rowKey, hideTitle = false }: { todo: Todo; 
     <Button className="min-h-11" disabled={busy} onClick={defer}>{t("assistant-task-actions.later")}</Button>
     <Button className="min-h-11" disabled={busy || !round} busy={dismissing} onClick={dismiss}>{t("assistant-task-actions.dismiss_draft")}</Button>
   </>;
-  const controls = <div data-decision-actions className={`${ask && askOptions(ask).length ? "" : "sticky -bottom-2.5 "}-mx-3 -mb-2.5 mt-1 flex items-center gap-2 border-t border-line bg-field px-3 py-2.5`}>{buttons}</div>;
+  const controls = <div data-decision-actions className={`${ask && askOptions(ask).length ? "" : "sticky -bottom-2.5 "}-mx-3 -mb-2.5 mt-1 flex flex-wrap items-center gap-2 border-t border-line bg-field px-3 py-2.5`}>
+    {buttons}
+    {ask && askOptions(ask).length > 0 && <AskAboutDecision key={ask.asked_at} todo={todo} ask={ask} disabled={busy} onOpenChat={onOpenChat} />}
+  </div>;
   // a decision that offers a go-ahead the owner gave three times carries a suggested rule: its line goes under the
   // row (#5802; always mounted here), answered through the to-do's manager as the row's own answers are
   // (kept by the decision's round: what Always made is not said under the to-do's next decision)
@@ -111,8 +115,14 @@ export function TaskDecision({ todo, rowKey, hideTitle = false }: { todo: Todo; 
 }
 
 export type NeedsYouPartProps =
-  | { decision: Todo; rowKey?: string }
-  | { task: Todo; status: TodoStatus; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string } }
+  /** A task's decision in the tray. */
+  | { decision: Todo; rowKey?: string; hideTitle?: boolean; onOpenChat?: () => void }
+  /** A task's open acceptance ask in the tray. */
+  | { accept: Todo; ask: TodoAsk; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string } }
+  /** A task's decision, acceptance ask, personal verification, or other waiting state in the tray. */
+  | { task: Todo; status: TodoStatus; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string }; onOpenChat?: () => void }
+  /** A task whose Agent did not start, in the tray (#10365). */
+  | { failed: Todo; rowKey: string; countsOpenAttr: { "data-counts-open"?: string } }
   /** The suggested rule of a plan card or a passed-up question, under it. */
   | { rule: RuleCard };
 
@@ -120,9 +130,14 @@ export type NeedsYouPartProps =
  *  (startup-preload's budget): a decision's row, an open acceptance ask's row, a failed start's row (#10365), or a
  *  suggested rule's line (#5802). One chunk behind one component, so the first screen names one file for all. */
 export default function NeedsYouParts(props: NeedsYouPartProps) {
-  if ("decision" in props) return <TaskDecision todo={props.decision} rowKey={props.rowKey} />;
+  if ("decision" in props) return <TaskDecision todo={props.decision} rowKey={props.rowKey} hideTitle={props.hideTitle} onOpenChat={props.onOpenChat} />;
+  if ("accept" in props) return (
+    <div data-needs-row={props.rowKey} {...props.countsOpenAttr} className="min-w-0 rounded-control bg-field px-3 py-2.5">
+      <AcceptRow stacked hideTitle={props.hideTitle} key={props.accept.id + props.ask.asked_at} verification={props.accept} row={askRow(props.accept, props.ask)} />
+    </div>
+  );
   if ("task" in props) {
-    const { task, rowKey, hideTitle, countsOpenAttr } = props;
+    const { task, rowKey, hideTitle, countsOpenAttr, onOpenChat } = props;
     const verifying = reviewState(task) === "user_check";
     const ask = verifying ? personalVerificationAsk(task) : openAsk(task);
     if (verifying && !ask) return (
@@ -134,7 +149,7 @@ export default function NeedsYouParts(props: NeedsYouPartProps) {
     );
     if (!verifying && (task.supervision?.state === "needs_user" || ask?.outcome === "decide")) {
       const round = task.supervision?.reviews?.at(-1)?.at || task.decision_review?.review_at || ask?.asked_at;
-      return <TaskDecision key={task.id + round} todo={task} rowKey={rowKey} hideTitle={hideTitle} />;
+      return <TaskDecision key={task.id + round} todo={task} rowKey={rowKey} hideTitle={hideTitle} onOpenChat={onOpenChat} />;
     }
     if (ask) return (
       <div data-needs-row={rowKey} {...countsOpenAttr} className="min-w-0 rounded-control bg-field px-3 py-2.5">
@@ -144,5 +159,6 @@ export default function NeedsYouParts(props: NeedsYouPartProps) {
     if (props.status === "failed") return <FailedTaskRow todo={task} rowKey={rowKey ?? `task:${task.id}`} countsOpenAttr={countsOpenAttr} />;
     return <WaitingTaskRow todo={task} status={props.status} rowKey={rowKey} countsOpenAttr={countsOpenAttr} />;
   }
+  if ("failed" in props) return <FailedTaskRow todo={props.failed} rowKey={props.rowKey} countsOpenAttr={props.countsOpenAttr} />;
   return <RuleSuggestionLine of={props.rule} />;
 }

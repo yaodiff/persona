@@ -32,7 +32,8 @@ func (s core) feishuInteraction(ix proto.Interaction) {
 }
 
 // feishuCardWanted: the bot posts a card for ix (feishuInteraction): it is on with the cards switch, and the chat
-// drives the conversation or "all cards" is on (not for a card that says something sensitive).
+// drives the conversation, it is an eligible non-main assistant write approval, or "all cards" is on. A card the chat
+// does not drive itself never crosses the channel boundary when its words or track are sensitive (health.go, info_use.go).
 func (s core) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
 	f, ready := s.feishuFeatures(ctx)
 	if !ready || !f.Cards {
@@ -41,12 +42,15 @@ func (s core) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
 	if ix.Private {
 		return false // a Just me turn's card: never on Lark (meeting_justme.go)
 	}
-	// "All cards" does not take a card that says something sensitive (its words and its track's default categories):
-	// only one the chat drives itself (health.go, info_use.go).
-	if drives := s.botDrives(ctx, ix); !drives && (!f.AllCards || s.h.AskSensitive(ctx, ix)) {
+	if s.botDrives(ctx, ix) {
+		return true
+	}
+	eligible := s.h.AskDirect(ctx, ix)
+	if !eligible && !f.AllCards {
 		return false
 	}
-	return true
+	// The direct write-approval route is independent of all_cards, but not of the sensitive-content boundary.
+	return !s.h.AskSensitive(ctx, ix)
 }
 
 // botCardLook is interaction id as the hub's queue and its history say (InteractionsGet): waiting, still up, with the
@@ -79,26 +83,40 @@ func finalStatus(status string) bool {
 	return false
 }
 
-// interactionEnded: the card ended (interaction.ended came), maybe while it was being sent (the core's record).
-func (s core) interactionEnded(id string) bool {
-	ended, _ := s.h.AskState(id)
+// interactionEnded: the card's exact occurrence ended (interaction.ended came), maybe while it was being sent.
+func (s core) interactionEnded(ix proto.Interaction) bool {
+	ended, _ := s.h.AskStateFor(ix)
 	return ended
 }
 
 // postInteractionCard posts ix's card once, unless it ended meanwhile.
 func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
-	if s.interactionEnded(ix.ID) { // ended while this looked at the bot: not asked (the core's record before the chat, never in it)
+	if s.interactionEnded(ix) { // ended while this looked at the bot: not asked (the core's record before the chat, never in it)
 		return
 	}
+	if hook, ok := s.h.(interface{ AskPostHook(proto.Interaction) }); ok {
+		hook.AskPostHook(ix)
+	}
 	claimed := false
-	post := &botCardPost{done: make(chan struct{})}
+	var replaced *botCard
+	post := &botCardPost{done: make(chan struct{}), card: botCard{Ix: ix}}
 	dc := &s.t.detached
 	dc.mu.Lock()
 	s.book(ctx, func(b chatBook) {
-		if _, ok := b.Card(ix.ID); !ok {
-			b.KeepCard(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
-			claimed = true
+		if current, ok := b.Card(ix.ID); ok {
+			if !current.Ix.CreatedAt.IsZero() && !ix.CreatedAt.IsZero() && ix.CreatedAt.Before(current.Ix.CreatedAt) {
+				return // a newer post won while this older occurrence was in flight
+			}
+			if !differentBotCardOccurrence(current.Ix, ix) {
+				return
+			}
+			old := current
+			replaced = &old
 		}
+		// The in-flight claim carries the occurrence too. An old terminal event or
+		// callback can no longer delete a replacement's placeholder by ID alone.
+		b.KeepCard(ix.ID, &botCard{Ix: ix})
+		claimed = true
 	})
 	if claimed {
 		if dc.posting == nil {
@@ -109,6 +127,13 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 	dc.mu.Unlock()
 	if !claimed {
 		return
+	}
+	if replaced != nil && replaced.MessageID != "" {
+		go func(old botCard) {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			s.botCardDone(closeCtx, old.MessageID, old.Ix, i18n.T(s.botLang(closeCtx), "assistant-feishu_cards.handled"))
+		}(*replaced)
 	}
 	defer func() {
 		dc.mu.Lock()
@@ -137,9 +162,9 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 		}
 	}
 	card := interactionCard(l, ix, v)
-	if s.interactionEnded(ix.ID) {
+	if s.interactionEnded(ix) {
 		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
-		// so nothing is posted and the claim goes (#5430). One that ends during the post is closed after it, below.
+		// so nothing is posted and only this occurrence's claim goes (#5430). One that ends during the post is closed after it, below.
 		s.dropClaim(ctx, ix.ID, post)
 		return
 	}
@@ -158,7 +183,7 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 		reply, to = "", feishuTarget{}
 		mid, err = s.botPostTo(ctx, to, "", card, fallback, "")
 	}
-	ended := s.interactionEnded(ix.ID)
+	ended := s.interactionEnded(ix)
 	if err != nil {
 		s.logf("bots: card for %s: %v", ix.ID, err)
 		s.dropClaim(ctx, ix.ID, post)
@@ -172,8 +197,12 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 			detached = true
 			return
 		}
-		if _, still := b.Card(ix.ID); !still || ended { // answered while it was being posted
-			b.KeepCard(ix.ID, nil)
+		current, still := b.Card(ix.ID)
+		same := still && !differentBotCardOccurrence(current.Ix, ix)
+		if !same || ended { // answered or replaced while this occurrence was being posted
+			if same {
+				b.KeepCard(ix.ID, nil)
+			}
 			return
 		}
 		card := post.card
@@ -195,7 +224,7 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 }
 
 // dropClaim forgets card id's claim when its first post ends without a card to keep, unless feishuDetach took the card
-// meanwhile: what is kept under id then is the detached card's, or a reconnect's.
+// meanwhile: what is kept under id then is the detached card's, or a reconnect's. A same-ID replacement's claim stays.
 func (s core) dropClaim(ctx context.Context, id string, post *botCardPost) {
 	dc := &s.t.detached
 	dc.mu.Lock()
@@ -203,7 +232,12 @@ func (s core) dropClaim(ctx context.Context, id string, post *botCardPost) {
 	if post.detached {
 		return
 	}
-	s.book(ctx, func(b chatBook) { b.KeepCard(id, nil) })
+	s.book(ctx, func(b chatBook) {
+		current, still := b.Card(id)
+		if still && !differentBotCardOccurrence(current.Ix, post.card.Ix) {
+			b.KeepCard(id, nil)
+		}
+	})
 }
 
 // chatRefused: the hub or Feishu refused the send into a chat outright, so nothing went out: the hub's own refusal
@@ -224,6 +258,11 @@ func chatRefused(err error) bool {
 func (s core) interactionPlace(ctx context.Context, ix proto.Interaction) (reply string, to feishuTarget, note *topicNote) {
 	r := s.h.AskRoute(ctx, ix)
 	private, topic := r.Private, r.Topic
+	// An eligible Assistant approval always goes to the owner directly, even
+	// when its only existing run is in a topic.
+	if private == nil && topic != nil && s.h.AskDirect(ctx, ix) {
+		return "", feishuTarget{}, &topicNote{reply: topic.ReplyTo, to: topic.To}
+	}
 	switch {
 	case private != nil && topic != nil:
 		// The card is not in the topic that asked: a short line there says it went to the DM.
@@ -277,8 +316,14 @@ func (s core) feishuInteractionEnded(ix proto.Interaction, how string, inChat bo
 	// A card posted before a restart is in the chat's state, which book reads first.
 	s.book(context.Background(), func(b chatBook) {
 		c, ok = b.Card(ix.ID)
+		if ok && differentBotCardOccurrence(c.Ix, ix) {
+			// The terminal event belongs to an earlier same-ID occurrence. Its old
+			// message must not remove or close the replacement's ledger entry.
+			ok = false
+			return
+		}
 		b.KeepCard(ix.ID, nil)
-		if ok && !inChat {
+		if ok && typedAnswerable(c) && !inChat {
 			b.NoteEnded(c) // a question a plain message could have answered: an option typed for it late is no new message
 		}
 	})
@@ -452,17 +497,30 @@ func (s core) botCardDone(ctx context.Context, messageID string, ix proto.Intera
 // after a restart the manager's table is empty or partial (interactions are restored, screen and Codex cards rebuilt,
 // after this runs), so each is closed only once the history says it ended for good (botCardLook). One that may still
 // be waiting is looked at again a little later, once (again).
-func (s core) closeEndedBotCards(ctx context.Context, pending map[string]bool, again bool) {
-	var maybe []botCard
+func (s core) closeEndedBotCards(ctx context.Context, pending map[string]proto.Interaction, again bool) {
+	type candidate struct {
+		card     botCard
+		replaced bool
+	}
+	var maybe []candidate
 	s.book(ctx, func(b chatBook) { // cards posted before a restart are in the chat's state
 		for id, card := range b.Cards() {
-			if !pending[id] && card.MessageID != "" {
-				maybe = append(maybe, card)
+			current, ok := pending[id]
+			replaced := ok && !card.Ix.CreatedAt.IsZero() && !current.CreatedAt.IsZero() && card.Ix.CreatedAt.Before(current.CreatedAt)
+			if (!ok || replaced) && card.MessageID != "" {
+				maybe = append(maybe, candidate{card: card, replaced: replaced})
 			}
 		}
 	})
 	var unsure []botCard
-	for _, card := range maybe {
+	for _, candidate := range maybe {
+		card := candidate.card
+		if candidate.replaced {
+			// A live same-ID replacement proves this older posted occurrence is over;
+			// its history can be pending under the replacement's occurrence instead.
+			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
+			continue
+		}
 		switch _, waiting, over := s.botCardLook(ctx, card.Ix.ID); {
 		case over:
 			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))

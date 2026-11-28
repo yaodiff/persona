@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -284,6 +285,7 @@ func TestA2ALaunchAndDispatchStartExecutable(t *testing.T) {
 	cases := []struct {
 		name     string
 		launcher string
+		mode     string // the a2a_send launch's permission mode; "" is plan, which a terminal agy start cannot hold
 		setup    func(t *testing.T, s *Service, h *a2aExecTestHub) context.Context
 		wantExec bool
 		wantInfo bool
@@ -305,6 +307,7 @@ func TestA2ALaunchAndDispatchStartExecutable(t *testing.T) {
 		{
 			name:     "explicit agy terminal launcher",
 			launcher: "agy",
+			mode:     "bypassPermissions",
 			setup: func(_ *testing.T, _ *Service, h *a2aExecTestHub) context.Context {
 				h.launcherList = []proto.Launcher{{Name: "agy", Agent: "agy", Source: "zshrc"}}
 				return t.Context()
@@ -314,6 +317,7 @@ func TestA2ALaunchAndDispatchStartExecutable(t *testing.T) {
 		{
 			name:     "explicit agy legacy empty-agent list entry",
 			launcher: "agy",
+			mode:     "bypassPermissions",
 			setup: func(_ *testing.T, _ *Service, h *a2aExecTestHub) context.Context {
 				h.launcherList = []proto.Launcher{{Name: "agy", Source: "zshrc"}}
 				return t.Context()
@@ -481,8 +485,12 @@ func TestA2ALaunchAndDispatchStartExecutable(t *testing.T) {
 						}
 					}
 					cfg := s.a2aConfig(ctx)
+					if tc.mode != "plan" && tc.mode != "" {
+						// A mode above plan needs the caller's live attestation, as a2a_send checks it (#9671).
+						ctx = devicewire.WithSourcePermission(ctx, testSourcePermission("caller-0001", "a2a_send", nil, "bypass"))
+					}
 					tk, err := s.a2aStart(ctx, st, cfg, a2aSessionCaller(a2aRef{"mac", "caller-0001"}), a2aRef{Machine: "box"}, "launch-1", "", "Run checks.", true,
-						&a2aLaunch{CWD: "/code/app", Launcher: tc.launcher, Pending: true})
+						&a2aLaunch{CWD: "/code/app", Launcher: tc.launcher, PermissionMode: tc.mode, Pending: true})
 					if err != nil {
 						t.Fatal(err)
 					}

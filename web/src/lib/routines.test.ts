@@ -73,8 +73,8 @@ describe("words", () => {
     expect(ruleText(task({ repeat: "daily", time: "22:00", weekdays: [] }))).toBe("每天 22:00");
     expect(ruleText(task({ repeat: "daily", time: "17:00", weekdays: [5] }))).toBe("每周五 17:00");
     expect(ruleText(task({ repeat: "interval", every_minutes: 30 }))).toBe("每 30 分钟");
-    expect(ruleText(task({ repeat: "once", session_id: "s1" }))).toBe("一次 · 接着原来的对话");
-    expect(ruleText(task({ repeat: "once" }))).toBe("一次 · 新对话");
+    expect(ruleText(task({ repeat: "once", session_id: "s1" }))).toBe("单次 · 继续原对话");
+    expect(ruleText(task({ repeat: "once" }))).toBe("单次 · 新对话");
   });
 
   it("titles a follow-up without one by its prompt", () => {
@@ -109,13 +109,13 @@ describe("words", () => {
   it("says what it runs with when not the default", () => {
     expect(runsWith({})).toBeNull();
     expect(runsWith({ permission_mode: "default" })).toBeNull();
-    expect(runsWith({ launcher: "claude-fast", permission_mode: "auto", effort: "low" })).toEqual({ text: "claude-fast · 自动审批 · 思考Low", danger: false });
+    expect(runsWith({ launcher: "claude-fast", permission_mode: "auto", effort: "low" })).toEqual({ text: "claude-fast · 自动审批 · 思考 Low", danger: false });
     expect(runsWith({ permission_mode: "bypassPermissions" })).toEqual({ text: "完全访问", danger: true });
   });
 
   it("names its launcher by the provider's display name; an rc alias by its ID (#5029)", () => {
     const names = [{ name: "relay-example-com", display_name: "我的中转 站" }, { name: "cc_glm" }];
-    expect(runsWith({ launcher: "relay-example-com", effort: "low" }, names)).toEqual({ text: "我的中转 站 · 思考Low", danger: false });
+    expect(runsWith({ launcher: "relay-example-com", effort: "low" }, names)).toEqual({ text: "我的中转 站 · 思考 Low", danger: false });
     expect(runsWith({ launcher: "cc_glm" }, names)).toEqual({ text: "cc_glm", danger: false });
     expect(runsWith({ launcher: "gone" }, names)).toEqual({ text: "gone", danger: false });
   });
@@ -123,22 +123,22 @@ describe("words", () => {
 
 describe("the editor", () => {
   it("checks a task before saving", () => {
-    expect(validateTask(task({ title: " " }), now)).toBe("要有标题");
+    expect(validateTask(task({ title: " " }), now)).toBe("请填写标题");
     expect(validateTask(task({ repeat: "once", title: "", at: iso(at(2, 15)) }), now)).toBeNull(); // a one-off needs no title
     expect(validateTask(task({ prompt: "  " }), now)).toBe("提示词不能为空");
-    expect(validateTask(task({ time: "9:00" }), now)).toBe("时间要写成 HH:MM，比如 09:00");
-    expect(validateTask(task({ time: "24:00" }), now)).toBe("时间要写成 HH:MM，比如 09:00");
-    expect(validateTask(task({ time: "" }), now)).toBe("时间要写成 HH:MM，比如 09:00");
+    expect(validateTask(task({ time: "9:00" }), now)).toBe("时间格式须为 HH:MM，例如 09:00");
+    expect(validateTask(task({ time: "24:00" }), now)).toBe("时间格式须为 HH:MM，例如 09:00");
+    expect(validateTask(task({ time: "" }), now)).toBe("时间格式须为 HH:MM，例如 09:00");
     expect(validateTask(task({ time: "23:59" }), now)).toBeNull();
-    expect(validateTask(task({ repeat: "interval", every_minutes: 4 }), now)).toBe("间隔要在 5 分钟到 7 天之间");
-    expect(validateTask(task({ repeat: "interval", every_minutes: 7 * 1440 + 1 }), now)).toBe("间隔要在 5 分钟到 7 天之间");
-    expect(validateTask(task({ repeat: "interval", every_minutes: 7.5 }), now)).toBe("间隔要在 5 分钟到 7 天之间");
+    expect(validateTask(task({ repeat: "interval", every_minutes: 4 }), now)).toBe("运行间隔须在 5 分钟至 7 天之间");
+    expect(validateTask(task({ repeat: "interval", every_minutes: 7 * 1440 + 1 }), now)).toBe("运行间隔须在 5 分钟至 7 天之间");
+    expect(validateTask(task({ repeat: "interval", every_minutes: 7.5 }), now)).toBe("运行间隔须在 5 分钟至 7 天之间");
     expect(validateTask(task({ repeat: "interval", every_minutes: 5 }), now)).toBeNull();
     expect(validateTask(task({ repeat: "interval", every_minutes: 7 * 1440 }), now)).toBeNull();
-    expect(validateTask(task({ repeat: "once", at: undefined }), now)).toBe("要选一个运行时间");
-    expect(validateTask(task({ repeat: "once", at: iso(at(2, 9)) }), now)).toBe("这个时间已经过了，选一个以后的时间");
+    expect(validateTask(task({ repeat: "once", at: undefined }), now)).toBe("请选择运行时间");
+    expect(validateTask(task({ repeat: "once", at: iso(at(2, 9)) }), now)).toBe("所选时间已过，请选择更晚的时间");
     expect(validateTask(task({ repeat: "once", at: iso(at(2, 9)), enabled: false }), now)).toBeNull();
-    const passed = "截止时间已经过了。请改晚一点，或清掉。";
+    const passed = "截止时间已过，请选择更晚的时间，或将其清空。";
     expect(validateTask(task({ repeat: "daily", until: iso(at(2, 9)) }), now)).toBe(passed);
     expect(validateTask(task({ repeat: "interval", every_minutes: 30, until: iso(new Date(now.getTime() - 61_000)) }), now)).toBe(passed);
     expect(validateTask(task({ repeat: "daily", until: iso(new Date(now.getTime() - 60_000)) }), now)).toBeNull();
@@ -227,7 +227,7 @@ describe("the editor", () => {
     expect(ruleText(cron)).toBe("*/30 9-18 * * 1-5 · 每隔 30 分钟, 在 09:00 和 18:59 之间, 星期一至星期五");
     expect(ruleText({ ...cron, cron_text: "" })).toBe("Cron */30 9-18 * * 1-5"); // the hub has no words for it
     expect(validateTask(cron, now)).toBeNull();
-    expect(validateTask({ ...cron, cron: "  " }, now)).toBe("请写一个 cron 表达式，比如 0 9 * * 1-5");
+    expect(validateTask({ ...cron, cron: "  " }, now)).toBe("请输入 cron 表达式，例如 0 9 * * 1-5");
     expect(validateTask({ ...cron, until: iso(at(1, 9)) }, now)).not.toBeNull(); // a past end time, as a daily task's
     expect(sameTask(cron, { ...cron, cron: " */30 9-18 * * 1-5 " })).toBe(true);
     expect(sameTask(cron, { ...cron, cron: "0 9 * * *" })).toBe(false);
@@ -273,7 +273,7 @@ describe("the editor", () => {
     expect(t).toMatchObject({ id: "", title: "Agent 巡检", repeat: "interval", every_minutes: 30, enabled: true });
     expect(validateTask(t, now)).toBeNull();
     for (const tpl of TEMPLATES) expect(validateTask(fromTemplate(tpl), now)).toBeNull();
-    expect(validateTask(blankTask(), now)).toBe("要有标题");
+    expect(validateTask(blankTask(), now)).toBe("请填写标题");
   });
 });
 
@@ -305,9 +305,9 @@ describe("lists", () => {
   it("says how a run went and groups runs by day", () => {
     const r = (p: Partial<Run>): Run => ({ id: "r", kind: "routine", ref_id: "t1", title: "早报", due: iso(at(2, 9)), at: iso(at(2, 9)), status: "ok", ...p });
     expect(runDetail(r({}))).toBe("准时");
-    expect(runDetail(r({ at: iso(new Date(at(2, 9).getTime() + 21_000)) }))).toBe("晚了 21 秒");
-    expect(runDetail(r({ at: iso(at(2, 9, 3)) }))).toBe("晚了 3 分钟");
-    expect(runDetail(r({ at: iso(at(2, 11)) }))).toBe("晚了 2 小时");
+    expect(runDetail(r({ at: iso(new Date(at(2, 9).getTime() + 21_000)) }))).toBe("延迟 21 秒");
+    expect(runDetail(r({ at: iso(at(2, 9, 3)) }))).toBe("延迟 3 分钟");
+    expect(runDetail(r({ at: iso(at(2, 11)) }))).toBe("延迟 2 小时");
     expect(runDetail(r({ manual: true }))).toBe("手动运行");
     expect(runDetail(r({ status: "failed", error: "assistant machine is offline" }))).toBe("assistant machine is offline");
     expect(runDetail(r({ status: "skipped" }))).toBe("已跳过");

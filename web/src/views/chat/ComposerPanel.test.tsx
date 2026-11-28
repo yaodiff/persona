@@ -246,7 +246,7 @@ describe("the + (#5324)", () => {
 describe("Back with the + panel open (#11442)", () => {
   // jsdom's Back lands as a popstate on a real timer, after back-close's own 0 ms one
   beforeEach(() => void vi.useRealTimers());
-  const settleBack = () => act(async () => void (await new Promise((r) => setTimeout(r, 30))));
+  const settleBack = () => act(async () => void (await vi.waitFor(() => expect(onOverlayEntry()).toBe(false), { timeout: 1000, interval: 10 })));
   const goBack = () => act(async () => {
     const popped = new Promise((r) => addEventListener("popstate", r, { once: true }));
     history.back();

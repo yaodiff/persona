@@ -35,12 +35,12 @@ var creationLogSession = sync.OnceValue(func() *regexp.Regexp {
 
 var creationLogCodes = map[string]map[string]bool{
 	"manager_prepare": {
-		"intent_created": true, "store_unavailable": true, "caller_unbound": true,
+		"intent_created": true, "store_unavailable": true, "caller_unbound": true, "caller_not_device": true,
 		"authority_missing": true, "authority_stale": true, "resume_skipped": true,
 		"capability_missing": true, "prepare_error": true,
 	},
-	"node_reply":      {"receipt_match": true, "receipt_mismatch": true, "receipt_missing": true, "start_failed": true},
-	"node_receipt":    {"state_updated": true, "start_failed": true, "resume_skipped": true, "identity_missing": true, "identity_conflict": true, "persist_unavailable": true},
+	"node_reply":      {"receipt_match": true, "receipt_mismatch": true, "receipt_missing": true, "receipt_not_requested": true, "start_failed": true},
+	"node_receipt":    {"state_updated": true, "start_failed": true, "resume_skipped": true, "receipt_not_requested": true, "identity_missing": true, "identity_conflict": true, "persist_unavailable": true},
 	"node_notify":     {"sent_unacknowledged": true, "peer_unavailable": true, "send_error": true},
 	"manager_persist": {"received_with_receipt": true, "received_without_receipt": true, "committed_with_receipt": true, "committed_without_receipt": true, "store_error": true, "store_unavailable": true, "invalid_state": true},
 }

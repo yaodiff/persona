@@ -124,7 +124,7 @@ func validModes(mode, effort string) error {
 }
 
 // validModesFor validates a start's mode / effort against the launcher it runs on: a Codex start takes Codex's own
-// effort list (ultra included, proto.CodexEffortLevels), and agy takes native levels without Claude's auto.
+// effort list (ultra included, proto.CodexEffortLevels). TRAE CLI uses the same vocabulary without auto.
 func validModesFor(launcher, mode, effort string) error {
 	if mode != "" && !slices.Contains(permissionModes, mode) {
 		return fmt.Errorf("unknown permission mode %q", mode)
@@ -133,6 +133,8 @@ func validModesFor(launcher, mode, effort string) error {
 	switch launcherAgentType(launcher) {
 	case "codex":
 		levels = append([]string{effortAuto}, proto.CodexEffortLevels...)
+	case traexAgent:
+		levels = proto.CodexEffortLevels
 	case agyAgent:
 		levels = proto.EffortLevels
 	}
@@ -212,10 +214,10 @@ func (n *Node) persistModes(id, mode, effort string, explicit ...bool) {
 
 // currentModes is the session's mode and effort: from its transcript, or what the app set since.
 func (n *Node) currentModes(id string, m quickMeta) (mode, effort string) {
-	return n.currentModesWithEffort(id, m, terminalEffort{})
+	return n.currentModesWithEffort(id, m, "", time.Time{})
 }
 
-func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed terminalEffort) (mode, effort string) {
+func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed string, observedAt time.Time) (mode, effort string) {
 	mode, effort = m.mode, m.effort
 	if mode != "" && !slices.Contains(permissionModes, mode) && n.isAssistantSession(id) {
 		mode = modeFromCodex(mode, m.sandbox) // a Codex rollout records its approval policy and sandbox
@@ -243,8 +245,8 @@ func (n *Node) currentModesWithEffort(id string, m quickMeta, confirmed terminal
 			effort, m.effortAt = set.Effort, set.EffortAt
 		}
 	}
-	if confirmed.at.After(m.effortAt) {
-		effort = confirmed.value
+	if observedAt.After(m.effortAt) {
+		effort = confirmed
 	}
 	return mode, effort
 }
@@ -278,7 +280,13 @@ func (n *Node) modesOf(id string) (mode, effort string) {
 	if a.Agent == "claude" && a.PaneID != "" {
 		_, confirmed := n.switches().terminalEfforts(id)
 		if confirmed.pane == a.PaneID {
-			return n.currentModesWithEffort(id, m, confirmed)
+			return n.currentModesWithEffort(id, m, confirmed.value, confirmed.at)
+		}
+		return n.currentModes(id, m)
+	}
+	if observed, pid := n.ccPlugins.observedEffort(id); pid != 0 {
+		if c, ok := n.outsideClaude(id); ok && c.pid == pid && n.outsideSource(c) == proto.SourceClaudeDesktop {
+			return n.currentModesWithEffort(id, m, observed.Level, time.UnixMilli(observed.AtMS))
 		}
 	}
 	return n.currentModes(id, m)
@@ -321,6 +329,9 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 		return err
 	}
 	if n.isAssistantSession(id) {
+		if mode == proto.ModePlan && n.conversationAgent(id) == traexAgent {
+			return fmt.Errorf("TRAE CLI Inbox does not support plan mode")
+		}
 		n.mu.Lock()
 		p := n.procs[id]
 		n.mu.Unlock()
@@ -384,9 +395,25 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 				if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(id, "", st), id); env != nil {
 					params["env"] = env
 				}
+				var res struct {
+					PermissionMode string `json:"permission_mode"`
+				}
 				cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
-				_ = h.peer.Call(cctx, "session.modes", params, nil)
+				err := h.peer.Call(cctx, "session.modes", params, &res)
 				cancel()
+				if err != nil && mode == "auto" && h.agent() == agyAgent && isAgyAutoModeUnavailableErr(err) {
+					params["permission_mode"] = proto.ModeBypass
+					rctx, rcancel := context.WithTimeout(ctx, runtimeCallTimeout)
+					if rerr := h.peer.Call(rctx, "session.modes", params, &res); rerr == nil && res.PermissionMode == "" {
+						res.PermissionMode = proto.ModeBypass
+					}
+					rcancel()
+				}
+				if res.PermissionMode != "" && res.PermissionMode != mode && slices.Contains(permissionModes, res.PermissionMode) {
+					mode = res.PermissionMode
+					n.noteModes(id, mode, effort)
+					n.persistModes(id, mode, effort, true)
+				}
 			}
 		}
 		if p != nil && p.alive() {
@@ -651,43 +678,82 @@ func (n *Node) tuiSetMode(ctx context.Context, pane, mode string) (bool, error) 
 // tuiPromptEmpty reports whether nothing is typed in the TUI's input box (the hint text on a fresh session counts as
 // empty), so the /effort command is not appended to someone's draft.
 func tuiPromptEmpty(screen string) bool {
+	text, ok := tuiPromptText(screen)
+	return ok && (text == "" || strings.HasPrefix(text, `Try "`))
+}
+
+// tuiPromptText is the text of the last `❯` row of a plain screen, with the rows under it when a rule closes them (the
+// box's bottom rule: a draft that wraps or has several lines), trimmed; ok is false when no row starts with `❯`.
+func tuiPromptText(screen string) (string, bool) {
 	lines := strings.Split(screen, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		t := strings.TrimSpace(lines[i])
-		if rest, ok := strings.CutPrefix(t, "❯"); ok {
-			rest = strings.TrimSpace(rest)
-			return rest == "" || strings.HasPrefix(rest, `Try "`)
+		rest, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), "❯")
+		if !ok {
+			continue
 		}
+		rows := []string{strings.TrimSpace(rest)}
+		for j, l := range lines[i+1:] {
+			if strings.HasPrefix(strings.TrimSpace(l), "──") {
+				for _, r := range lines[i+1 : i+1+j] {
+					rows = append(rows, strings.TrimSpace(r))
+				}
+				break
+			}
+		}
+		return strings.TrimSpace(strings.Join(rows, "\n")), true
 	}
-	return false
+	return "", false
 }
 
 // promptHasDraft: something the user typed sits in Claude's input box. Read with colors where the host can, so the
 // grey next-message suggestion Claude Code shows after a turn (and its new-session tip) count as empty; a plain read
 // can only tell the tip apart (tuiPromptEmpty).
 func (n *Node) promptHasDraft(ctx context.Context, pane string) (bool, error) {
+	_, draft, err := n.promptDraft(ctx, pane)
+	return draft, err
+}
+
+// promptDraft is promptHasDraft with the box's text as shown, for telling the user what is there. A plain screen
+// (host.PlainScreen: Orca) has no colors, so any text in the box is a draft, Claude's grey suggestion too: Orca's
+// screen read gives the box's text without telling which part is grey (orcart.Screen.Draft).
+func (n *Node) promptDraft(ctx context.Context, pane string) (string, bool, error) {
 	if !n.plainScreen(pane) {
 		if s, err := n.readPaneANSI(ctx, pane, "visible", 60); err == nil {
 			if in := screen.ClaudeInput(s); in.Box {
-				return in.Draft, nil
+				return in.Text, in.Draft, nil
 			}
 		}
 	}
 	plain, err := n.readPane(ctx, pane, "visible", 60)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return !tuiPromptEmpty(plain), nil
+	text, _ := tuiPromptText(plain)
+	return text, !tuiPromptEmpty(plain), nil
+}
+
+// inputDraftRefusal refuses an effort or speed change while the box holds text, nothing typed: the text is named so
+// the user can find it, and on a plain screen the message says Claude's grey suggestion counts too (key is
+// rpc-errors.<what>_input_draft, with _plain for that variant).
+func (n *Node) inputDraftRefusal(pane, what, text string) error {
+	key := "rpc-errors." + what + "_input_draft"
+	if n.plainScreen(pane) {
+		key += "_plain"
+	}
+	if r := []rune(text); len(r) > 200 {
+		text = string(r[:200]) + "…"
+	}
+	return refusal(screen.InputDraft, i18n.T(i18n.Default, key, i18n.Args{"draft": text}), map[string]any{"draft": text})
 }
 
 // tuiSetEffort opens /effort, moves to the requested level and follows the picker's confirmation hints.
 func (n *Node) tuiSetEffort(ctx context.Context, pane, effort string) error {
-	draft, err := n.promptHasDraft(ctx, pane)
+	text, draft, err := n.promptDraft(ctx, pane)
 	if err != nil {
 		return err
 	}
 	if draft {
-		return fmt.Errorf("终端的输入框里有还没发出的文字，先在电脑上处理掉再改思考强度")
+		return n.inputDraftRefusal(pane, "effort", text)
 	}
 	if !n.canTypeText(pane) { // a host that types only whole submissions (herdr-core): the command is one
 		if err := n.hostPrompt(ctx, pane, "/effort"); err != nil {
@@ -866,8 +932,8 @@ func effortOutcome(screen, effort string) error {
 
 // syncAssistantModes applies the settings for a new or resumed process before its next message.
 func (n *Node) syncAssistantModes(ctx context.Context, p *assistantProc) error {
-	if p.agent == "codex" {
-		return nil // Codex gets them with each turn (codexPolicy).
+	if p.cx != nil {
+		return nil // App-server launchers get their settings with each turn (codexPolicy).
 	}
 	p.settingsMu.Lock()
 	defer p.settingsMu.Unlock()

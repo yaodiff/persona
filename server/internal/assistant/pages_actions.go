@@ -251,6 +251,7 @@ func (s *Service) pageTapParams(ctx context.Context, machine, conversation strin
 	}
 	params["interject_background"] = false // sendModel set it when the owner moves work aside for their messages
 	s.UserSpoke(ctx, SessionRef{MachineID: machine, SessionID: conversation})
+	s.detachPendingApprovalsOnOwnerMessage(machine, conversation)
 	return params, nil
 }
 

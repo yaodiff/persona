@@ -39,13 +39,13 @@ afterEach(() => {
 describe("ConnectionPill", () => {
   it("says the phase; a click opens the details with the facts, a second click closes them", () => {
     act(() => root.render(<ConnectionPill />));
-    expect(pill().textContent).toBe("连不上 hub，正在重试…");
+    expect(pill().textContent).toBe("无法连接 hub，正在重试…");
     expect(pill().getAttribute("aria-expanded")).toBe("false");
     expect(details()).toBeNull();
     act(() => pill().click());
     expect(pill().getAttribute("aria-expanded")).toBe("true");
     expect(details()?.textContent).toContain("秒后重试");
-    expect(details()?.textContent).toContain("上次连上：1 分钟前");
+    expect(details()?.textContent).toContain("上次连接：1 分钟前");
     act(() => pill().click());
     expect(details()).toBeNull();
   });
@@ -81,7 +81,7 @@ describe("ConnectionDetails", () => {
     fake.reconnect = reconnect;
     render("offline", { ...NO_LINK, nextTry: now + 4_200, lastOnline: now - 12_000 });
     expect(details()?.textContent).toContain("5 秒后重试");
-    expect(details()?.textContent).toContain("上次连上：12 秒前");
+    expect(details()?.textContent).toContain("上次连接：12 秒前");
     const button = details()!.querySelector("button")!;
     expect(button.textContent).toContain("立即重试");
     act(() => button.click());

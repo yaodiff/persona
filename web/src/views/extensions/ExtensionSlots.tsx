@@ -2,18 +2,19 @@
 // its entry is on the sidebar), the cards on "Overview" (overview_card, as the user arranged them: lib/overview-cards.ts,
 // laid out among Overview's own sections by views/OverviewBody.tsx) and the sections on a machine's page (machine_section). Each draws the extension's declarative View with ExtensionUI;
 // the list comes from lib/extension-slots.ts.
-import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { PAGES_INDEX, PAGES_UI, uiIcon, type UIIcon, type UIPlace, type UIPush, type UITone } from "../../lib/extension-ui";
 import { useExtensionPlace, useExtensionSlot } from "../../lib/extension-slots";
 import { halvesPaired, type ArrangedCard, type ArrangedItem, type CardSpan, type SectionId } from "../../lib/overview-cards";
+import { credentialOwner, subscribeCredentialOwner } from "../../lib/api";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
-import { useKnownDefault } from "../../lib/manager-choice";
+import { defaultManager, onDefaultManager, useKnownDefault } from "../../lib/manager-choice";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
 import { cx, EASE, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { lazyPage } from "../../lib/lazy-page";
-import { NEW_ICON_GLYPH } from "./icon-map";
+import { ROW_ICON } from "./icon-map";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 
 // The extension page is its own chunk (#1794): App.tsx reaches this file for the sidebar's and the nav page's icons and
@@ -31,9 +32,9 @@ const OwnerScope = ({ extension, children }: { extension: string; children: Reac
   <ExtensionOwnerScope owner={extension}>{children}</ExtensionOwnerScope>
 );
 
-/** A nav_page's icon from the fixed vocabulary, as one of the web's icons (unknown: the extension's). */
-const NAV_ICON: Record<UIIcon, IconName> = { extension: "extension", plugin: "extension", chart: "chart", gauge: "gauge", list: "list", bell: "bell", doc: "read", calendar: "calendar", money: "money",
-  branch: "branch", code: "code", pull_request: "pullRequest", merge: "merge", map: "map", ...NEW_ICON_GLYPH };
+/** A nav_page's icon from the fixed vocabulary, as one of the web's icons: the glyph a row draws for the name (#16281),
+ *  and `map`; unknown: the extension's. */
+const NAV_ICON: Record<UIIcon, IconName> = { ...ROW_ICON, map: "map" };
 export const navIcon = (icon?: string): IconName => NAV_ICON[uiIcon(icon)];
 
 /** A badge's tone as the sidebar's badge colors. */
@@ -52,7 +53,14 @@ export function nameBesideTitle(name: string | undefined, title: string): string
 /** An extension's page, full size (a nav_page opened from the sidebar, or what a card opens). */
 export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension: string; ui: string; onToggleSidebar: () => void }) {
   const place = useExtensionPlace(extension, ui);
+  const manager = useKnownDefault();
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, () => "offline");
   const [n, setN] = useState(0);
+  // A new default owns a different installation. Learning the initial default while editing a
+  // healthy page only names the installation that already drew it.
+  useEffect(() => onDefaultManager((was) => {
+    if (was.settled && was.id !== defaultManager()) setN((v) => v + 1);
+  }), []);
   // a page a card or a section pushed opens here with the state it was pushed with (?state=)
   const state = useMemo(() => new URLSearchParams(location.search).get("state") ?? undefined, [extension, ui]);
   // Dashboards (#15017): a page is titled by its own view (the hub writes the page's title there), since only a pinned
@@ -106,7 +114,7 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div data-extension-page-container className={cx("mx-auto flex flex-col px-4 py-6 sm:px-8", wide ? "max-w-[1680px]" : "max-w-[880px]")}>
           <Suspense fallback={<Loading />}>
-            <OwnerScope extension={extension}><ExtensionUI key={`${extension}/${ui}/${n}`} extension={extension} ui={ui} title={title} bare state={state} onWide={onWide} remember {...(pages ? { onTitle, openPage } : {})} /></OwnerScope>
+            <OwnerScope extension={extension}><ExtensionUI key={JSON.stringify([extension, ui, owner, n])} setupOwner={manager} extension={extension} ui={ui} title={title} bare state={state} onWide={onWide} remember {...(pages ? { onTitle, openPage } : {})} /></OwnerScope>
           </Suspense>
         </div>
       </div>

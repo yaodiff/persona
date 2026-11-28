@@ -1,13 +1,13 @@
 {
-  "copied": "已拷贝图片",
-  "copy_failed": "没能拷贝图片",
+  "copied": "已复制图片",
+  "copy_failed": "无法复制图片",
   "copy_image": "复制图片",
   "download": "下载 PNG",
   "download_n": "下载 {count} 张",
-  "failed": "没能生成图片",
-  "retry": "再试一次",
+  "failed": "无法生成图片",
+  "retry": "重试",
   "page_of": "第 {n} 张，共 {count} 张",
   "page_alt": "第 {n} 张",
-  "include_detail": "把每条回答前面的提问一起带上",
+  "include_detail": "将每条回答对应的提问一并包含在内",
   "title_and_date": "标题和日期"
 }

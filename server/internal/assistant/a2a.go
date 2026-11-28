@@ -93,6 +93,8 @@ type a2aLaunch struct {
 	CWD            string `json:"cwd"`
 	Worktree       string `json:"worktree,omitempty"`
 	Launcher       string `json:"launcher,omitempty"`
+	Tier           string `json:"tier,omitempty"` // the Agent preset the caller named; a retry by message_id names it too
+	Run            a2aRun `json:"run,omitzero"`   // what Tier resolved to when the launch was accepted (agent_presets.go)
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Pending        bool   `json:"pending"`
 	Dispatch       bool   `json:"dispatch,omitempty"`
@@ -471,6 +473,7 @@ func a2aCheckRetry(t *a2aTask, err error, to a2aRef, contextID, text string, wak
 	if t.Launch != nil && launch != nil {
 		targetMatches = t.TargetMachine == to.Machine && t.Launch.CWD == launch.CWD && t.Launch.Launcher == launch.Launcher &&
 			t.Launch.PermissionMode == launch.PermissionMode && t.Launch.Dispatch == launch.Dispatch && t.Launch.Branch == launch.Branch
+		targetMatches = targetMatches && t.Launch.Tier == launch.Tier // the tier as named, not what it resolved to
 		if t.Launch.Dispatch {
 			textMatches = t.Launch.PromptHash == launch.PromptHash
 		}

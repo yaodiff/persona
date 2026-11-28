@@ -169,3 +169,53 @@ test('OpencodeAcpClient preserves --cwd= flag and settles stopChild immediately 
   assert.ok(Date.now() - t0 < 500, 'stopChild must not wait STOP_GRACE_MS for an already signal-exited child')
   assert.deepEqual(sigChild.kills, [])
 })
+
+test('OpencodeAcpClient.prompt aborts before sending session/prompt if signal aborts during ensureStarted', async () => {
+  let child
+  let finishInit
+  let initReceivedResolve
+  const initReceived = new Promise((r) => { initReceivedResolve = r })
+  const client = new OpencodeAcpClient({
+    spawn: () => {
+      child = makeFakeChild()
+      child.stdin.on('data', (buf) => {
+        for (const line of String(buf).split('\n').filter(Boolean)) {
+          const msg = JSON.parse(line)
+          if (msg.method === 'initialize') {
+            initReceivedResolve()
+            finishInit = () => child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { agentCapabilities: {} } })}\n`)
+          }
+        }
+      })
+      return child
+    },
+  })
+
+  const ac = new AbortController()
+  const promptPromise = client.prompt('ses_abort', [{ type: 'text', text: 'do not send' }], 0, ac.signal)
+  await initReceived
+  ac.abort()
+  finishInit()
+  await assert.rejects(promptPromise, (err) => err.name === 'AbortError')
+  const methods = child.written
+    .flatMap((chunk) => chunk.split('\n').filter(Boolean))
+    .map((line) => JSON.parse(line).method)
+  assert.deepEqual(methods, ['initialize'], 'session/prompt must never be written once signal is aborted')
+  await client.stop()
+
+  // Already-aborted signal before call() must not even spawn a child process.
+  let spawnedCount = 0
+  const freshClient = new OpencodeAcpClient({
+    spawn: () => {
+      spawnedCount++
+      return makeFakeChild()
+    },
+  })
+  const preAborted = new AbortController()
+  preAborted.abort()
+  await assert.rejects(
+    freshClient.prompt('ses_pre_abort', [{ type: 'text', text: 'nope' }], 0, preAborted.signal),
+    (err) => err.name === 'AbortError',
+  )
+  assert.equal(spawnedCount, 0, 'pre-aborted signal must not spawn a child process')
+})

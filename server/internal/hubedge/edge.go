@@ -70,6 +70,9 @@ type edge struct {
 	failures    int
 	retry       <-chan time.Time
 	retryBinary string
+
+	// onGateWait is an optional test hook invoked right before dialActive blocks on <-gate.
+	onGateWait func()
 }
 
 // Run serves until ctx ends: it starts the first slot on o.Binary, relays the listeners' connections to the active

@@ -1,7 +1,7 @@
 {
-  "saved": "引擎已改为 {engine}",
+  "saved": "引擎已切换为 {engine}",
   "label": "引擎",
   "current": "当前",
-  "change_to": "改为 {engine}",
+  "change_to": "切换为 {engine}",
   "revert": "还原"
 }

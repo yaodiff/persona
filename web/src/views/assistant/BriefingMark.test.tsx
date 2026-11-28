@@ -103,7 +103,7 @@ describe("on the decision's card in Needs you", () => {
     await initI18n("zh-Hans");
     await render(<TaskDecision todo={todo(held)} rowKey="task:t1" />);
     expect(marks()[0].textContent).toContain("随下次简报送达");
-    expect(marks()[0].textContent).toContain("没有推送提醒");
+    expect(marks()[0].textContent).toContain("未发送推送提醒");
     act(() => root.unmount());
     root = createRoot(host);
     await initI18n("ja");

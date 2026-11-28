@@ -209,7 +209,7 @@ func TestTaskEstimateCalibrationAfterProcessRestart(t *testing.T) {
 	}
 
 	var reopen string
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	if !t.Run("seed", func(t *testing.T) {
 		database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 		if err != nil {
@@ -316,7 +316,7 @@ func TestTaskEstimateCalibrationAfterProcessRestart(t *testing.T) {
 	}
 
 	t.Run("another manager starts without this history", func(t *testing.T) {
-		isolated, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+		isolated, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -332,7 +332,7 @@ func TestTaskEstimateCalibrationAfterProcessRestart(t *testing.T) {
 }
 
 func TestTaskPlanEstimateProvenanceSurvivesOwnerStart(t *testing.T) {
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

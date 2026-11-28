@@ -53,6 +53,9 @@ func (s *Service) askAcceptanceRound(t Todo, machine, session, reply string, aga
 		t = cur // read any delivery update written just before askAcceptance (advanceTaskReply / deploy_check)
 	}
 	a := s.acceptLines(ctx, t, machine, session, reply)
+	if r := triageLatestReview(t.Supervision); r != nil && again && r.UserCheck && r.DeferredScope != "" {
+		a.How = clip(r.DeferredScope, 120)
+	}
 	a.MachineID, a.SessionID, a.AskedAt, a.Earlier = machine, session, time.Now().UTC(), earlier
 	if !s.ownerVerifies(t) {
 		s.assistantAccepts(ctx, t, a)

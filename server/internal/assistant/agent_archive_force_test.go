@@ -16,7 +16,7 @@ import (
 
 func TestForceArchiveConfirmationDatabase(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func (s *forceArchiveWindowStore) PutSetting(ctx context.Context, key string, va
 
 func TestForceArchiveCloseWriteWindowDatabase(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestForceArchiveCloseWriteWindowDatabase(t *testing.T) {
 func TestForceArchiveCloseFailureClearsFenceDatabase(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

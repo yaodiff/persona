@@ -20,12 +20,13 @@ async function fixture(t, options = {}, startParams = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'agy-stream-'))
   writeFileSync(join(directory, 'updates.jsonl'), '')
   writeFileSync(join(directory, 'calls.jsonl'), '')
+  const win = process.platform === 'win32'
   const binary = join(directory, 'agy')
   writeFileSync(binary, `#!/bin/sh\nexec '${process.execPath}' '${FAKE}' '${directory}' "$@"\n`)
   chmodSync(binary, 0o700)
   mkdirSync(join(directory, 'config/brain', RAW), { recursive: true })
   const node = await startFakeNode(t)
-  const runtime = createAgyRuntime({ agyBin: binary, agyDir: join(directory, 'config'), home: directory, socketPath: node.path, log: () => {}, ...options })
+  const runtime = createAgyRuntime({ ...(win ? { agyBin: process.execPath, agyArgs: [FAKE, directory, 'acp'] } : { agyBin: binary }), agyDir: join(directory, 'config'), home: directory, socketPath: node.path, log: () => {}, ...options })
   t.after(async () => { await runtime.stop(); rmSync(directory, { recursive: true, force: true }) })
   runtime.start()
   await node.ready
@@ -41,6 +42,105 @@ async function fixture(t, options = {}, startParams = {}) {
   const promptCount = (count) => until(`${count} prompts started`, () => calls().filter((r) => r.method === 'session/prompt').length === count, 15_000)
   return { node, directory, calls, update, chunk, promptCount, runtime }
 }
+
+test('AGY companion publishes background lifecycles and clears running work when ACP exits', { timeout: 20_000 }, async (t) => {
+  const { node, directory, update } = await fixture(t)
+  const logs = join(directory, 'config', 'brain', RAW, '.system_generated', 'logs')
+  mkdirSync(logs, { recursive: true })
+  const file = join(logs, 'transcript.jsonl')
+  const row = () => node.last('runtime.sessions')?.sessions.find(session => session.session_id === SESSION)
+  const started = new Date(Date.now() - 60_000).toISOString()
+  const ended = new Date().toISOString()
+  const taskID = n => `${RAW}/task-${n}`
+  const step = (step_index, type, data) => ({ step_index, type, created_at: started, ...data })
+  const start = (index, n, description) => step(index, 'GENERIC', {
+    status: 'RUNNING',
+    content: `Created At: ${started}\nTool is running as a background task with task id: ${taskID(n)}\nTask Description: ${description}`,
+  })
+  const append = (...steps) => appendFileSync(file, steps.map(record => JSON.stringify(record)).join('\n') + '\n')
+  append(step(0, 'PLANNER_RESPONSE', { tool_calls: [
+    { name: 'run_command', args: { CommandLine: JSON.stringify('echo ready') } },
+    { name: 'schedule', args: { CronExpression: JSON.stringify('*/30 * * * *') } },
+    { name: 'run_workflow' },
+    { name: 'invoke_subagent' },
+  ] }),
+  start(2, 2, 'Cron: */30 * * * * Check status'), start(1, 1, 'Wait for ready'),
+  start(3, 3, 'Run checks'), start(4, 4, 'Review changes'))
+  const running = await until('background tasks on the companion row', () => row()?.background?.length === 4 && row(), 5000)
+  assert.deepEqual(running.background.map(task => [task.id, task.kind, task.started_at]), [
+    [taskID(1), 'shell', started], [taskID(2), 'monitor', started],
+    [taskID(3), 'workflow', started], [taskID(4), 'agent', started],
+  ])
+  assert.equal(running.background[0].command, 'echo ready')
+  assert.equal(running.background[1].description, 'Cron: */30 * * * * Check status')
+  assert.equal(running.loop, undefined)
+
+  append(step(5, 'SYSTEM_MESSAGE', { created_at: ended, content: `Task id "${taskID(1)}" finished with result: Ready` }),
+    step(6, 'PLANNER_RESPONSE', { created_at: ended, tool_calls: [
+      { name: 'manage_task', args: { Action: JSON.stringify('kill'), TaskId: JSON.stringify(taskID(2)) } },
+      { name: 'manage_task', args: { Action: 'status', TaskId: taskID(4) } },
+    ] }))
+  await until('completion and kill are reported', () => row()?.background_ended?.length === 2, 5000)
+  // The native export updates an earlier step in place, without increasing the transcript sequence.
+  append(step(3, 'GENERIC', { status: 'ERROR', updated_at: ended, content: 'Workflow failed' }))
+  const finished = await until('same-sequence outcome is published', () => row()?.background_ended?.length === 3 && row(), 5000)
+  assert.deepEqual(finished.background_ended.map(task => [task.id, task.kind, task.status, task.ended_at]), [
+    [taskID(1), 'shell', 'completed', ended], [taskID(2), 'monitor', 'killed', ended],
+    [taskID(3), 'workflow', 'failed', ended],
+  ])
+  assert.equal(finished.background_ended[2].description, 'Run checks')
+  assert.deepEqual(finished.background.map(task => task.id), [taskID(4)])
+
+  update({ exit: true })
+  const stopped = await until('exit clears the running task', () => row() && !row().background && row(), 5000)
+  assert.deepEqual(stopped.background_ended, finished.background_ended)
+  assert.deepEqual(stopped.agy_pane_background, finished.background)
+})
+
+test('AGY companion clears TimerCondition-cancelled and expired one-shot timers on quiet sessions', { timeout: 20_000 }, async (t) => {
+  const { node, directory } = await fixture(t)
+  const logs = join(directory, 'config', 'brain', RAW, '.system_generated', 'logs')
+  mkdirSync(logs, { recursive: true })
+  const file = join(logs, 'transcript.jsonl')
+  const row = () => node.last('runtime.sessions')?.sessions.find(session => session.session_id === SESSION)
+  const taskID = n => `${RAW}/task-${n}`
+  const append = (...steps) => appendFileSync(file, steps.map(record => JSON.stringify(record)).join('\n') + '\n')
+
+  // 1) TimerCondition="any" cancelled silently by another task's completion notice.
+  const started = new Date(Date.now() - 5_000).toISOString()
+  const finishedAt = new Date(Date.now() - 2_000).toISOString()
+  append(
+    { step_index: 0, type: 'PLANNER_RESPONSE', created_at: started, tool_calls: [
+      { name: 'run_command', args: { CommandLine: 'npm test' } },
+      { name: 'schedule', args: { DurationSeconds: '180', TimerCondition: JSON.stringify('any') } },
+    ] },
+    { step_index: 1, type: 'GENERIC', status: 'RUNNING', created_at: started, content: `Created At: ${started}\nTool is running as a background task with task id: ${taskID(1)}\nTask Description: Run tests` },
+    { step_index: 2, type: 'GENERIC', status: 'RUNNING', created_at: started, content: `Created At: ${started}\nTool is running as a background task with task id: ${taskID(2)}\nTask Description: Timer: 3m, Prompt: Recheck` },
+  )
+  await until('two tasks initially running', () => row()?.background?.length === 2, 5000)
+
+  append({
+    step_index: 3,
+    type: 'SYSTEM_MESSAGE',
+    created_at: finishedAt,
+    content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${finishedAt} sender=${taskID(1)} priority=MESSAGE_PRIORITY_HIGH content=Task id "${taskID(1)}" finished with result: ok\n</SYSTEM_MESSAGE>`,
+  })
+  const afterCancel = await until('TimerCondition timer cleared without manage_task(list)', () => row() && !row().background && row().background_ended?.length === 2 && row(), 5000)
+  assert.deepEqual(afterCancel.background_ended.map(task => [task.id, task.status]), [
+    [taskID(1), 'completed'],
+    [taskID(2), 'killed'],
+  ])
+
+  // 2) One-shot timer whose deadline + 60s grace passes with NO further transcript writes clears automatically.
+  const soonStart = new Date(Date.now() - 60_600).toISOString()
+  append(
+    { step_index: 4, type: 'PLANNER_RESPONSE', created_at: soonStart, tool_calls: [{ name: 'schedule', args: { DurationSeconds: 1 } }] },
+    { step_index: 5, type: 'GENERIC', status: 'RUNNING', created_at: soonStart, content: `Created At: ${soonStart}\nTool is running as a background task with task id: ${taskID(3)}\nTask Description: Timer: 1s, Prompt: Quiet expiry` },
+  )
+  await until('one-shot timer listed while inside grace window', () => row()?.background?.some(task => task.id === taskID(3)), 5000)
+  const afterExpiry = await until('expired one-shot timer clears without transcript update', () => row() && !row().background && row().background_ended?.some(task => task.id === taskID(3)) && row(), 5000)
+  assert.equal(afterExpiry.background_ended.find(task => task.id === taskID(3))?.status, 'completed')
+})
 
 test('AGY streams one assistant message at a time across tool calls', { timeout: 20_000 }, async (t) => {
   const { node, update, chunk, promptCount } = await fixture(t)
@@ -150,12 +250,12 @@ function transcripts(directory, compact, complete) {
 const userStep = (index, text) => ({ step_index: index, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: text })
 const replyStep = (index, text) => ({ step_index: index, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', content: text })
 
-function nativeState(directory, status, stepCount) {
+function nativeState(directory, status, stepCount, notFullyIdle = 0) {
   const db = new DatabaseSync(join(directory, 'config/conversation_summaries.db'))
   try {
     db.exec('CREATE TABLE IF NOT EXISTS conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT, not_fully_idle INTEGER, killed INTEGER, step_count INTEGER, title TEXT, workspace_uris TEXT, last_modified_time TEXT)')
-    db.prepare("INSERT OR REPLACE INTO conversation_summaries VALUES (?, ?, 0, 0, ?, '', '[]', '')")
-      .run(RAW, `CASCADE_RUN_STATUS_${status}`, stepCount)
+    db.prepare("INSERT OR REPLACE INTO conversation_summaries VALUES (?, ?, ?, 0, ?, '', '[]', '')")
+      .run(RAW, `CASCADE_RUN_STATUS_${status}`, notFullyIdle ? 1 : 0, stepCount)
   } finally {
     db.close()
   }
@@ -201,6 +301,183 @@ test('autonomous wakes stream work and settle only once native work is idle and 
   const final = await node.peer.call('session.items', { session_id: SESSION })
   assert.equal(final.items.filter((item) => item.kind === 'tool_use').length, 1)
   assert.equal(final.items.filter((item) => item.text === 'Workflow finished.').length, 1)
+})
+
+test('autonomous wake retires when idle with background work so a follow-up wake preserves the prior reply', { timeout: 20_000 }, async (t) => {
+  const { node, directory, update, chunk, runtime } = await fixture(t, { exportPollMs: 20, autonomousIdleMs: 5000 })
+  const prior = [userStep(0, 'Start background jobs.'), replyStep(1, 'Both jobs launched.')]
+  transcripts(directory, prior, prior)
+  nativeState(directory, 'IDLE', 2, 1)
+
+  await chunk('First job completed with full report.')
+  const afterFirst = [
+    ...prior,
+    { step_index: 2, type: 'SYSTEM_MESSAGE', content: 'Job 1 completed.' },
+    replyStep(3, 'First job completed with full report.'),
+  ]
+  transcripts(directory, afterFirst, afterFirst)
+  nativeState(directory, 'IDLE', 4, 1)
+  await until('first autonomous wake retires while background work remains active', () => runtime.idle() && node.last('session.delta')?.text === '', 1000)
+  assert.equal(sessionStatus(node), 'working', 'not_fully_idle still keeps session status working')
+
+  // Second background task finishes shortly after, well inside autonomousIdleMs.
+  update({ sessionUpdate: 'agent_thought_chunk', content: { text: 'Inspecting job 2 output.' } })
+  await until('second wake emits its own boundary before resumed thinking', () => {
+    const page = node.last('session.items')
+    return page?.items?.some((item) => item.kind === 'thinking' && item.text === 'Inspecting job 2 output.')
+  }, 2000)
+  await chunk('Checking job 2 logs now.')
+
+  const live = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(
+    live.items.map((item) => item.wake ? 'wake' : [item.role, item.kind, item.text]),
+    [
+      ['user', 'text', 'Start background jobs.'],
+      ['assistant', 'text', 'Both jobs launched.'],
+      ['system', 'turn_duration', undefined],
+      'wake',
+      ['assistant', 'text', 'First job completed with full report.'],
+      ['system', 'turn_duration', undefined],
+      'wake',
+      ['assistant', 'thinking', 'Inspecting job 2 output.'],
+    ],
+  )
+  assert.equal(node.last('session.delta').text, 'Checking job 2 logs now.')
+})
+
+for (const mode of ['thought-then-progress', 'direct-progress', 'late-flush-race']) {
+  test(`an active prompt spanning a background wake preserves the prior reply (${mode})`, { timeout: 20_000 }, async (t) => {
+    const { node, directory, update, chunk, promptCount, runtime } = await fixture(t, { exportPollMs: 20 }, { assistant: true })
+    await node.peer.call('session.send', { session_id: SESSION, text: 'Run checks and report back.', assistant: true })
+    await promptCount(1)
+
+    // First complete reply delivered during the turn.
+    const firstReply = 'Here is the complete first report with all findings.'
+    await chunk(firstReply)
+    const withFirstReply = [
+      userStep(0, 'Run checks and report back.'),
+      { ...replyStep(1, ''), tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }] },
+      { step_index: 2, type: 'GENERIC', status: 'RUNNING', content: 'Background task started.' },
+      replyStep(3, firstReply),
+    ]
+    const withSystemWake = [
+      ...withFirstReply,
+      { step_index: 4, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', status: 'DONE', content: 'Background task finished.' },
+    ]
+
+    if (mode === 'late-flush-race') {
+      // Export only has the completed reply when the woken thought arrives; SYSTEM_MESSAGE lands right after.
+      transcripts(directory, withFirstReply, withFirstReply)
+      update({ sessionUpdate: 'agent_thought_chunk', content: { text: 'Reviewing completed task.' } })
+      await until('resumed thought pushed before SYSTEM_MESSAGE flush', () =>
+        node.all('session.items').some((batch) => batch.items.some((item) => item.kind === 'thinking' && item.text === 'Reviewing completed task.')),
+      )
+      await chunk('Analyzing background output now.')
+      transcripts(directory, withSystemWake, withSystemWake)
+      await until('late-flushed SYSTEM_MESSAGE retroactively inserts wake boundary', async () => {
+        const page = await node.peer.call('session.items', { session_id: SESSION })
+        return page.items.some((item) => item.wake === true)
+      }, 2000)
+    } else {
+      transcripts(directory, withSystemWake, withSystemWake)
+      // An idle SYSTEM_MESSAGE alone must not emit a wake before resumed model work.
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      const beforeResume = await node.peer.call('session.items', { session_id: SESSION })
+      assert.equal(beforeResume.items.some((item) => item.wake === true), false)
+
+      if (mode === 'thought-then-progress') {
+        update({ sessionUpdate: 'agent_thought_chunk', content: { text: 'Reviewing completed task.' } })
+        await until('wake and resumed thought pushed', () =>
+          node.all('session.items').some((batch) => batch.items.some((item) => item.kind === 'thinking' && item.text === 'Reviewing completed task.')),
+        )
+      }
+      await chunk('Analyzing background output now.')
+    }
+
+    const live = await node.peer.call('session.items', { session_id: SESSION })
+    const summary = live.items.map((item) => item.wake ? 'wake' : [item.role, item.kind, item.text])
+    assert.deepEqual(summary, [
+      ['user', 'text', 'Run checks and report back.'],
+      ['assistant', 'text', firstReply],
+      'wake',
+      ...(mode === 'direct-progress' ? [] : [['assistant', 'thinking', 'Reviewing completed task.']]),
+    ])
+    assert.equal(node.last('session.delta').text, 'Analyzing background output now.')
+
+    // Verify order on the wire: wake notice is delivered before the new live progress delta (for non-race modes).
+    if (mode !== 'late-flush-race') {
+      const relevant = node.events.filter((entry) =>
+        (entry.event === 'session.items' && entry.params.items?.some((item) => item.wake === true)) ||
+        (entry.event === 'session.delta' && entry.params.text === 'Analyzing background output now.'),
+      )
+      assert.equal(relevant[0]?.event, 'session.items', 'wake notice must reach watcher before new progress delta')
+    }
+
+    // Complete the prompt and ensure both replies survive unexported settle and final native export.
+    update({ end: true })
+    await until('prompt settles with both replies preserved', () => runtime.idle() && node.last('session.delta')?.text === '', 2000)
+    const settled = await node.peer.call('session.items', { session_id: SESSION })
+    assert.deepEqual(
+      settled.items.filter((item) => item.wake || item.kind === 'text').map((item) => item.wake ? 'wake' : item.text),
+      ['Run checks and report back.', firstReply, 'wake', 'Analyzing background output now.'],
+    )
+
+    const finalExport = [...withSystemWake, replyStep(5, 'Analyzing background output now.')]
+    transcripts(directory, finalExport, finalExport)
+    await until('native export replaces projected turn cleanly', async () => {
+      const page = await node.peer.call('session.items', { session_id: SESSION })
+      return page.history !== settled.history
+    }, 2000)
+    const nativePage = await node.peer.call('session.items', { session_id: SESSION })
+    assert.deepEqual(
+      nativePage.items.filter((item) => item.wake || item.kind === 'text').map((item) => item.wake ? 'wake' : item.text),
+      ['Run checks and report back.', firstReply, 'wake', 'Analyzing background output now.'],
+    )
+  })
+}
+
+test('mid-turn narration without SYSTEM_MESSAGE does not emit a wake, while chained wakes keep every prior reply visible', { timeout: 20_000 }, async (t) => {
+  const { node, directory, update, chunk, promptCount, runtime } = await fixture(t, { exportPollMs: 20 }, { assistant: true })
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Run multi-stage workflow.', assistant: true })
+  await promptCount(1)
+
+  // Normal mid-turn narration before a tool call (no SYSTEM_MESSAGE) must NOT emit a wake boundary.
+  await chunk('Starting stage 1.')
+  const narrationSteps = [userStep(0, 'Run multi-stage workflow.'), replyStep(1, 'Starting stage 1.')]
+  transcripts(directory, narrationSteps, narrationSteps)
+  update({ sessionUpdate: 'tool_call', toolCallId: 'bg-1', name: 'run_command' })
+  await until('tool call pushed', () => node.all('session.items').some((b) => b.items.some((i) => i.kind === 'tool_use')))
+  assert.equal((await node.peer.call('session.items', { session_id: SESSION })).items.some((i) => i.wake === true), false)
+
+  // Stage 1 completes with a full reply, then wake #1 arrives -> reply 2 -> wake #2 -> progress 3.
+  await chunk('Stage 1 report complete.')
+  const wake1Steps = [
+    ...narrationSteps,
+    { ...replyStep(2, ''), tool_calls: [{ name: 'run_command', args: {} }] },
+    { step_index: 3, type: 'GENERIC', status: 'RUNNING', content: 'running' },
+    replyStep(4, 'Stage 1 report complete.'),
+    { step_index: 5, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', status: 'DONE', content: 'Stage 1 task finished.' },
+  ]
+  transcripts(directory, wake1Steps, wake1Steps)
+  await chunk('Stage 2 report complete.')
+
+  const wake2Steps = [
+    ...wake1Steps,
+    replyStep(6, 'Stage 2 report complete.'),
+    { step_index: 7, type: 'SYSTEM_MESSAGE', source: 'SYSTEM', status: 'DONE', content: 'Stage 2 task finished.' },
+  ]
+  transcripts(directory, wake2Steps, wake2Steps)
+  update({ sessionUpdate: 'agent_thought_chunk', content: { text: 'Finishing stage 3.' } })
+  await chunk('Wrapping up stage 3.')
+
+  const live = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(
+    live.items.filter((i) => i.wake || i.kind === 'text').map((i) => i.wake ? 'wake' : i.text),
+    ['Run multi-stage workflow.', 'Starting stage 1.', 'Stage 1 report complete.', 'wake', 'Stage 2 report complete.', 'wake'],
+  )
+  assert.equal(node.last('session.delta').text, 'Wrapping up stage 3.')
+  update({ end: true })
+  await until('prompt settles', () => runtime.idle() && node.last('session.delta')?.text === '', 2000)
 })
 
 test('autonomous wakes retire after inactivity without native export', async (t) => {

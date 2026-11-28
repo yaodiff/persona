@@ -101,6 +101,8 @@ export function worktreeProblem(e: unknown, what: string): { text: string; needs
   const old =
     e instanceof ApiError
       ? e.status === 404 || e.status === 405 || e.status === 501 || e.code === "unknown_method" || /unknown method|^unsupported/i.test(e.message)
+        // a newer hub words the engine's "unsupported" in the reader's language; its code and reason still say so
+        || (e.code === "unsupported" && e.body.reason === "engine_unsupported")
       : false;
   if (old) return { text: WORKTREE_COPY.needsUpdate, needsUpdate: true };
   return { text: message ? tr("worktree.failed_with", { what, message }) : what, needsUpdate: false };

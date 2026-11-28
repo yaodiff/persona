@@ -7,12 +7,15 @@ import { api, errorText } from "../../lib/api";
 import { filterQuery, type ListCounts, type ListFilters } from "../../lib/session-list";
 import { catalogGroups, countGroups, validCatalog, type GroupDimension, type SessionCatalog, type SessionGroup, type TodoNames } from "../../lib/session-groups";
 import { onShownHint } from "../../lib/shown-hints";
+import { onHubEvent } from "../../lib/store";
+import { isResumed } from "../../lib/reconnect";
 import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 
 /** How soon a catalog whose computers were still answering is read again: a second after the first answer, then
  * half as long again each time up to ten seconds, for as long as it says so. A hub with many directories to ask takes
  * a while, and nothing else tells the page when it is done. */
 const PENDING_RETRY = { first: 1000, grow: 1.5, most: 10_000 } as const;
+const ERROR_RETRY_MS = 5_000;
 
 const validCounts = (v: unknown): v is ListCounts => typeof v === "object" && v !== null &&
   ["state", "group", "project", "machine"].every((key) => typeof (v as Record<string, unknown>)[key] === "object" && (v as Record<string, unknown>)[key] !== null);
@@ -31,6 +34,7 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
     let sequence = 0;
     let retries = 0;
     let started = 0;
+    let failed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const abort = new AbortController();
     const load = () => {
@@ -41,10 +45,16 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
       void api<unknown>(path, { signal: abort.signal }).then((value) => {
         if (!live || request !== sequence) return;
         // only a hub that says it has the answer is asked: anything else in its place is a broken answer
-        if (!check.current.valid(value)) { setRead({ path, error: t("paged-agents.invalid_page") }); return; }
+        if (!check.current.valid(value)) { failed = true; setRead({ path, error: t("paged-agents.invalid_page") }); return; }
+        failed = false;
         setRead({ path, value });
         if (check.current.pending?.(value) && !timer) timer = setTimeout(load, Math.min(PENDING_RETRY.first * PENDING_RETRY.grow ** retries++, PENDING_RETRY.most));
-      }, (e) => { if (live && request === sequence) setRead((was) => ({ path, value: was?.path === path ? was.value : undefined, error: errorText(e) })); });
+      }, (e) => {
+        if (!live || request !== sequence) return;
+        failed = true;
+        setRead((was) => ({ path, value: was?.path === path ? was.value : undefined, error: errorText(e) }));
+        if (document.visibilityState === "visible" && !timer) timer = setTimeout(load, ERROR_RETRY_MS);
+      });
     };
     load();
     const off = onShownHint(event, () => {
@@ -53,7 +63,12 @@ function useHinted<T>(path: string | null, valid: (v: unknown) => v is T, event:
       if (wait <= 0) load();
       else if (!timer) timer = setTimeout(load, wait); // one read for the hints of this stretch
     });
-    return () => { live = false; clearTimeout(timer); abort.abort(); off(); };
+    const offHello = onHubEvent("hello", (msg) => {
+      if ((failed || !isResumed(msg)) && document.visibilityState === "visible") load();
+    });
+    const onVis = () => { if (failed && document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { live = false; clearTimeout(timer); abort.abort(); off(); offHello(); document.removeEventListener("visibilitychange", onVis); };
   }, [path, event, attempt]);
   return { value: read?.value, error: read?.error, retry: () => setAttempt((n) => n + 1) };
 }

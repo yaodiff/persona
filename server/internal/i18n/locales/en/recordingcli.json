@@ -1,0 +1,13 @@
+{
+  "usage": "Usage:\n  {command} list --hub <URL> [--token-file <file>] [--query <text>] [--json]\n  {command} export --hub <URL> [--token-file <file>] [--format markdown|vtt] [--output <new file>] <recording-id>\n\nUse a paired-device token in --token-file or PERSONA_RECORDINGS_TOKEN. Search returns up to 80 matches in titles and stored text. Export writes to standard output when --output is omitted.",
+  "invalid_id": "Provide a recording UUID from the list.",
+  "invalid_format": "Choose markdown or vtt for --format.",
+  "token": "Provide a paired-device token in --token-file or PERSONA_RECORDINGS_TOKEN.",
+  "bad_response": "The hub returned an invalid recording response.",
+  "read_failed": "Couldn't reach the hub to read recordings.",
+  "http_error": "The hub returned HTTP {status} while reading recordings.",
+  "output_failed": "Couldn't save the recording. Check the destination folder and its permissions.",
+  "empty": "No recordings found.",
+  "untitled": "Untitled recording",
+  "saved": "Saved the recording to {path}."
+}

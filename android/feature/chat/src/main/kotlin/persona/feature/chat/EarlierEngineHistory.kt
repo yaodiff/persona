@@ -264,6 +264,7 @@ internal fun LazyListScope.earlierEngineHistory(
     style: ChatRenderStyle,
     onReadFullText: (SessionKey, Item) -> Unit,
 ) {
+    val workGroups = history.lines.mapNotNull { (window, line) -> (line as? ChatLine.Work)?.let { window to it.id } }.toSet()
     for ((window, line) in history.lines) {
         item(key = EarlierEngineLine(window, line).key, contentType = line.contentType()) {
             CompositionLocalProvider(LocalChatRowActions provides null, LocalChatChildren provides null,
@@ -279,7 +280,8 @@ internal fun LazyListScope.earlierEngineHistory(
                             ?.forEach { expand(it.item.item) }
                     },
                     onFold = ::expand, folding = folding, foldErrors = errors, style = style,
-                    onFullText = { item -> onReadFullText(window.session, item) })
+                    onFullText = { item -> onReadFullText(window.session, item) },
+                    showToolViews = line !is ChatLine.Step || (window to line.groupId) !in workGroups)
             }
         }
     }

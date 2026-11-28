@@ -1,0 +1,9 @@
+{
+  "name": "model_profile_deactivate",
+  "description": "With owner approval, turn off the active profile and keep current model settings.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

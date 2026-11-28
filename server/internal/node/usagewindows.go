@@ -26,11 +26,12 @@ import (
 //
 //   - Codex app-server can return the limits together with the account ID. The node sends only a digest of that ID.
 //     When the app-server cannot supply windows, read the newest rollout's token_count event without an account ID.
-//   - Claude Code hands the limits to a status line command (the rate_limits field of its JSON input), and in
-//     stream-json to the process that runs it (a rate_limit_event after each reply, usagewindows_claudestream.go,
-//     read for the node's own Claude assistant conversations). It keeps them nowhere else; the API that has them
-//     needs the OAuth token, so it is skipped too. For interactive sessions the way in is opt-in: a status line
-//     wrapper drops the JSON into <node dir>/usage/claude*.json, which is read here.
+//   - Claude Code: in Persona's own Claude assistant conversations, stream-json emits a rate_limit_event after each
+//     reply (usagewindows_claudestream.go, #12855) with no extra process; in addition, a bounded background poll
+//     (usagewindows_claude.go, #12412) invokes the built-in `claude` launcher through the login shell via stream-json
+//     `get_usage` (falling back to `-p /usage` when unsupported or when `get_usage` returns no windows) without
+//     touching credentials or making a model request. An opt-in status line drop (<node dir>/usage/claude*.json)
+//     keeps working and wins when fresh.
 //
 // The node polls every usageWindowsEvery, keeps the last sample of every source (a source that goes quiet keeps its
 // number for three days), and answers usage.windows from that. hub.json machines[].usage_windows false turns it off.
@@ -44,11 +45,12 @@ const (
 )
 
 type usageWindowsState struct {
-	mu       sync.Mutex
-	off      bool // the hub said usage_windows false
-	cancel   context.CancelFunc
-	at       time.Time
-	accounts map[string]proto.UsageNodeAccount // by source ("codex:<source digest>", "claude:<file>")
+	mu           sync.Mutex
+	off          bool // the hub said usage_windows false
+	cancel       context.CancelFunc
+	at           time.Time
+	accounts     map[string]proto.UsageNodeAccount // by source ("codex:<source digest>", "claude:<file>", "claude-cli:<dir digest>", "claude-stream:<launcher+dir digest>")
+	claudeProbes map[string]claudeUsageProbe       // by realPath(configDir): last probe time and next reset
 }
 
 // setUsageWindows is the hub's word (node.configure usage_windows): whether the node reads the windows at all. Off
@@ -62,7 +64,7 @@ func (n *Node) setUsageWindows(on bool) {
 		if st.cancel != nil {
 			st.cancel()
 		}
-		st.at, st.accounts = time.Time{}, nil
+		st.at, st.accounts, st.claudeProbes = time.Time{}, nil, nil
 	}
 }
 
@@ -81,8 +83,8 @@ func (n *Node) runUsageWindows(ctx context.Context) {
 	}
 }
 
-// refreshUsageWindows keeps app-server calls outside the lock, so an RPC can still read local files or return the
-// last sample while Codex checks the account. Disabling polling also cancels and discards an in-flight round.
+// refreshUsageWindows keeps CLI / app-server calls outside the lock, so an RPC can still read local files or return the
+// last sample while Codex or Claude checks the account. Disabling polling also cancels and discards an in-flight round.
 func (n *Node) refreshUsageWindows(ctx context.Context) {
 	st := &n.usageWin
 	st.mu.Lock()
@@ -92,18 +94,32 @@ func (n *Node) refreshUsageWindows(ctx context.Context) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	st.cancel = cancel
+	prevProbes := make(map[string]claudeUsageProbe, len(st.claudeProbes))
+	for k, v := range st.claudeProbes {
+		prevProbes[k] = v
+	}
 	st.mu.Unlock()
 	defer cancel()
 
 	homes := n.usageWindowCodexHomes()
+	claudeDirs := n.usageWindowClaudeDirs()
 	found := n.collectUsageWindows(time.Now(), homes)
 	collectCodexAppUsage(ctx, homes, found)
+	probeUpdates := n.collectClaudeCLIUsage(ctx, claudeDirs, prevProbes, found)
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.cancel = nil
 	if ctx.Err() == nil {
 		st.at = time.Now()
+		if len(probeUpdates) > 0 {
+			if st.claudeProbes == nil {
+				st.claudeProbes = map[string]claudeUsageProbe{}
+			}
+			for k, v := range probeUpdates {
+				st.claudeProbes[k] = v
+			}
+		}
 		st.accounts = mergeUsage(st.accounts, found, st.at)
 	}
 }
@@ -120,14 +136,19 @@ func (n *Node) usageSnapshot() proto.UsageSnapshot {
 		st.at = time.Now()
 		st.accounts = n.collectUsageWindows(st.at, n.usageWindowCodexHomes())
 	}
-	keys := make([]string, 0, len(st.accounts))
-	for k := range st.accounts {
+	view := make(map[string]proto.UsageNodeAccount, len(st.accounts))
+	for k, a := range st.accounts {
+		view[k] = a
+	}
+	dedupeClaudeUsage(view, claudeUsageNow().UTC())
+	keys := make([]string, 0, len(view))
+	for k := range view {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	out := proto.UsageSnapshot{Enabled: true, CollectedAt: st.at, Accounts: []proto.UsageNodeAccount{}}
 	for _, k := range keys {
-		out.Accounts = append(out.Accounts, st.accounts[k])
+		out.Accounts = append(out.Accounts, view[k])
 	}
 	return out
 }
@@ -161,7 +182,8 @@ func (n *Node) runtimeUsageWindows(h *runtimeConn, params json.RawMessage, now t
 		return
 	}
 	var required struct {
-		Windows []struct {
+		AccountKey string `json:"account_key"`
+		Windows    []struct {
 			UsedPercent *float64 `json:"used_percent"`
 		} `json:"windows"`
 	}
@@ -169,10 +191,11 @@ func (n *Node) runtimeUsageWindows(h *runtimeConn, params json.RawMessage, now t
 	if json.Unmarshal(params, &required) != nil || len(required.Windows) != len(a.Windows) {
 		return
 	}
+	accountKey := strings.TrimSpace(required.AccountKey)
 	a.Provider = strings.TrimSpace(a.Provider)
 	a.Name = strings.TrimSpace(a.Name)
 	a.Plan = strings.TrimSpace(a.Plan)
-	if a.Provider == "" || len(a.Provider) > 64 || a.Name == "" || len(a.Name) > 128 || len(a.Plan) > 128 ||
+	if a.Provider == "" || len(a.Provider) > 64 || a.Name == "" || len(a.Name) > 128 || len(a.Plan) > 128 || len(accountKey) > 128 ||
 		a.SampledAt.IsZero() || now.Sub(a.SampledAt) > usageWindowsMaxAge || a.SampledAt.After(now.Add(5*time.Minute)) ||
 		a.Windows == nil || len(a.Windows) > 32 {
 		return
@@ -190,8 +213,10 @@ func (n *Node) runtimeUsageWindows(h *runtimeConn, params json.RawMessage, now t
 		}
 		windows = append(windows, w)
 	}
+	a.ReadingSource = "" // A runtime event is independent of this node's rollout reader.
 	a.Windows = liveWindows(windows, now)
 	a.SampledAt = a.SampledAt.UTC()
+	enrichLegacyAgyUsage(&a, &accountKey, now)
 
 	h.mu.Lock()
 	source := "runtime:" + h.hello.Runtime
@@ -211,7 +236,7 @@ func (n *Node) runtimeUsageWindows(h *runtimeConn, params json.RawMessage, now t
 	if len(a.Windows) == 0 {
 		delete(st.accounts, source)
 	} else {
-		st.accounts[source] = proto.UsageNodeAccount{UsageAccount: a, SourceKey: source}
+		st.accounts[source] = proto.UsageNodeAccount{UsageAccount: a, AccountKey: accountKey, SourceKey: source}
 	}
 	st.at = now
 }
@@ -297,7 +322,8 @@ func codexUsageAccount(home string, now time.Time) (proto.UsageAccount, bool) {
 		if len(wins) == 0 {
 			continue
 		}
-		return proto.UsageAccount{Provider: "codex", Name: codexAccountName(s.plan), Plan: s.plan, Windows: wins, SampledAt: s.at}, true
+		return proto.UsageAccount{Provider: "codex", Name: codexAccountName(s.plan), Plan: s.plan,
+			Windows: wins, SampledAt: s.at, ReadingSource: proto.UsageReadingRollout}, true
 	}
 	return proto.UsageAccount{}, false
 }

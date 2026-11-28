@@ -5,14 +5,42 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
 
 // Handler exposes the project member API. Operator grants and revocations are local CLI operations.
 func Handler(s *Store) http.Handler {
-	const base = "/v1/projects/{project}/documents/{document}"
+	const documents = "/v1/projects/{project}/documents"
+	const base = documents + "/{document}"
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+documents, func(w http.ResponseWriter, r *http.Request) {
+		after, limit, err := pageQuery(r.URL.RawQuery, "after")
+		if err != nil {
+			reply(w, 0, nil, err)
+			return
+		}
+		page, err := s.approvedDocuments(r.Context(), bearer(r), r.PathValue("project"), after, limit)
+		reply(w, http.StatusOK, page, err)
+	})
+	mux.HandleFunc("GET "+base+"/approvals", func(w http.ResponseWriter, r *http.Request) {
+		cursor, limit, err := pageQuery(r.URL.RawQuery, "before")
+		if err != nil {
+			reply(w, 0, nil, err)
+			return
+		}
+		var before int64
+		if cursor != "" {
+			before, err = strconv.ParseInt(cursor, 10, 64)
+			if err != nil || before <= 0 {
+				reply(w, 0, nil, ErrInvalid)
+				return
+			}
+		}
+		page, err := s.approvalHistory(r.Context(), bearer(r), r.PathValue("project"), r.PathValue("document"), before, limit)
+		reply(w, http.StatusOK, page, err)
+	})
 	mux.HandleFunc("POST "+base+"/revisions", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Expected *int64  `json:"expected_revision"`
@@ -78,11 +106,36 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	return jsonv2.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxWireBytes), dst, jsonv2.RejectUnknownMembers(true))
 }
 
-func reply(w http.ResponseWriter, success int, rev Revision, err error) {
+func pageQuery(raw, cursorKey string) (cursor string, limit int, err error) {
+	params, err := url.ParseQuery(raw)
+	if err != nil {
+		return "", 0, ErrInvalid
+	}
+	limit = defaultPageSize
+	for key, values := range params {
+		if len(values) != 1 || values[0] == "" {
+			return "", 0, ErrInvalid
+		}
+		switch key {
+		case cursorKey:
+			cursor = values[0]
+		case "limit":
+			limit, err = strconv.Atoi(values[0])
+			if err != nil || limit < 1 || limit > maxPageSize {
+				return "", 0, ErrInvalid
+			}
+		default:
+			return "", 0, ErrInvalid
+		}
+	}
+	return cursor, limit, nil
+}
+
+func reply(w http.ResponseWriter, success int, body any, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	if err == nil {
 		w.WriteHeader(success)
-		_ = json.NewEncoder(w).Encode(rev)
+		_ = json.NewEncoder(w).Encode(body)
 		return
 	}
 	var status int

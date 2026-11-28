@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -113,8 +115,14 @@ func (s *Service) recordTaskOutcome(t Todo, doneAt time.Time) {
 	if s.outcomeRecorded(rctx, t.ID, key) {
 		return // another assistant on the same store got there first
 	}
-	agents := s.outcomeAgents(rctx, t)
+	agents, unlinked := s.outcomeAgents(rctx, t)
 	if len(agents) == 0 {
+		if len(unlinked) > 0 {
+			recipient := cmp.Or(supervisorOf(t), t.Origin)
+			machine := s.conversationMachine(rctx, recipient, "")
+			s.logf("task %s: outcome: no agent reply to read: agy_unlinked %s", t.ID, s.agyUnlinkedDetail(rctx, t, unlinked, machine, recipient))
+			return
+		}
 		s.logf("task %s: outcome: no agent reply to read", t.ID)
 		return
 	}
@@ -173,8 +181,8 @@ func (s *Service) outcomeRecorded(ctx context.Context, todoID, key string) bool 
 
 // outcomeAgents are t's agents that said something last, the most recently linked first: their whole last reply
 // from the transcript, else the session list's clipped last_text.
-func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
-	var out []outcomeAgent
+func (s *Service) outcomeAgents(ctx context.Context, t Todo) (out []outcomeAgent, unlinked []unlinkedPane) {
+	awaitingAnswer := false
 	for i := len(t.Agents) - 1; i >= 0; i-- {
 		a := t.Agents[i]
 		if a.ReleasedAt != nil || a.DismissedAt != nil {
@@ -185,7 +193,13 @@ func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
 			name = m.Name
 		}
 		resolved, sid, listed := s.resolveTaskSession(ctx, a.MachineID, a.SessionID)
-		_, text := s.lastTurn(ctx, a.MachineID, sid)
+		items, _ := s.lastTurnItems(ctx, a.MachineID, sid)
+		if listed && isUnlinkedAgyPane(resolved, items) {
+			unlinked = append(unlinked, unlinkedPane{MachineID: a.MachineID, SessionID: a.SessionID, LinkedAt: a.LinkedAt})
+			continue
+		}
+		awaitingAnswer = awaitingAnswer || taskTurnAwaitingAnswer(items)
+		_, text := turnExchange(items)
 		cwd := a.Cwd
 		if listed {
 			if text == "" {
@@ -200,7 +214,10 @@ func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
 		}
 		out = append(out, outcomeAgent{MachineID: a.MachineID, Machine: name, SessionID: a.SessionID, Cwd: cwd, Text: text})
 	}
-	return out
+	if awaitingAnswer {
+		unlinked = nil // an unfinished turn also explains why the task has no outcome yet
+	}
+	return out, unlinked
 }
 
 // pullOutcome asks the model what the task came to (the kb.project purpose: it writes the projects' timelines).
@@ -630,19 +647,30 @@ func (s *Service) withProjectContext(ctx context.Context, machine, dir, lead, pr
 }
 
 func (s *Service) withProjectContextForTodo(ctx context.Context, machine, dir, lead string, t Todo, prompt string) string {
+	return s.withProjectContextForTodoAgent(ctx, machine, dir, lead, t, "", prompt)
+}
+
+// withProjectContextForAgent is withProjectContext for a known agent kind. An agy workflow
+// command keeps its body at byte 0 and receives the project context after it.
+func (s *Service) withProjectContextForAgent(ctx context.Context, machine, dir, lead, agent, prompt string) string {
+	return s.withProjectContextForTodoAgent(ctx, machine, dir, lead, Todo{}, agent, prompt)
+}
+
+func (s *Service) withProjectContextForTodoAgent(ctx context.Context, machine, dir, lead string, t Todo, agent, prompt string) string {
 	if strings.TrimSpace(prompt) == "" {
 		return prompt
 	}
+	return agentprompt.WithContext(agent, prompt, s.projectBackgroundForTodo(ctx, machine, dir, lead, t, prompt))
+}
+
+func (s *Service) projectBackgroundForTodo(ctx context.Context, machine, dir, lead string, t Todo, prompt string) string {
 	background := s.projectHandoffContextForTodo(ctx, machine, dir, lead, t)
 	// The memory extension's entries the work bears on (memory_extension_source.go); a planned task's carry them in
 	// handOffMemory instead.
 	if memory := s.agentStartMemory(ctx, machine, strings.TrimSpace(t.Title+"\n"+prompt)); memory != "" {
 		background = strings.TrimSpace(background + "\n\n" + memory)
 	}
-	if background != "" {
-		return background + "\n\n" + prompt
-	}
-	return prompt
+	return background
 }
 
 func (s *Service) projectHandoffContext(ctx context.Context, machine, dir, lead string) string {

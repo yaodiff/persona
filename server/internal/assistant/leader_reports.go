@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -162,11 +163,77 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	slices.SortFunc(tasks, func(a, b Todo) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	var asks map[string]todoAsk
 	look, reached := triageLookup(nil), map[string]bool{}
+	var projByID map[string]todoTriage
+	l, loc := s.lang(ctx), s.location(ctx)
 	if stuckToo {
 		asks = s.todoAsks(ctx)
-		look, reached = s.leaderSessions(ctx, tasks)
+		lists, r := s.agentSessionLists(ctx, tasks)
+		reached = r
+		look = func(machine, id string) (proto.Session, bool) {
+			for _, c := range lists[machine] {
+				if c.SessionID == id {
+					return c, true
+				}
+			}
+			return proto.Session{}, false
+		}
+		if cfg.todosV2On() && len(tasks) > 0 {
+			listed := make([]listedTodo, len(tasks))
+			sessions := map[[2]string]proto.Session{}
+			for machine, list := range lists {
+				for _, c := range list {
+					c.MachineID = machine
+					sessions[[2]string{machine, c.SessionID}] = c
+				}
+			}
+			wantCards := map[string]map[string]bool{}
+			for i, t := range tasks {
+				listed[i] = listedTodo{Todo: t}
+				if a, ok := asks[t.ID]; ok {
+					listed[i].Ask = &a
+				}
+				if t.DoneAt == nil || t.StartError != "" {
+					linked := hasParkInteractionLink(t.Supervision)
+					for _, a := range t.Agents {
+						if a.ReleasedAt != nil && !linked || a.DismissedAt != nil {
+							continue
+						}
+						m := s.canonical(a.MachineID)
+						if wantCards[m] == nil {
+							wantCards[m] = map[string]bool{}
+						}
+						wantCards[m][a.SessionID] = true
+					}
+				}
+			}
+			if err := s.listDecisionReviews(ctx, listed); err != nil {
+				s.logf("leader reports decision reviews: %v", err)
+			}
+			s.populateTodoActiveBlockers(ctx, listed)
+			cards := s.todoRunCards(wantCards)
+			facts := make([]projection.Facts, len(listed))
+			for i := range listed {
+				f := projectionFacts(listed[i], sessions, loc)
+				applyTodosV2FactsConfig(&f, cfg)
+				if listed[i].DoneAt == nil || listed[i].StartError != "" {
+					f.Unreached = !reached[listed[i].ID]
+					linked := hasParkInteractionLink(listed[i].Supervision)
+					for _, a := range listed[i].Agents {
+						if a.ReleasedAt != nil && !linked || a.DismissedAt != nil {
+							continue
+						}
+						f.Interactions = append(f.Interactions, cards[[2]string{s.canonical(a.MachineID), a.SessionID}]...)
+					}
+				}
+				facts[i] = f
+			}
+			views := projection.Views(facts, now)
+			projByID = make(map[string]todoTriage, len(listed))
+			for i := range listed {
+				projByID[listed[i].ID] = todoTriageFromProjectionView(listed[i], views[i], look)
+			}
+		}
 	}
-	l, loc := s.lang(ctx), s.location(ctx)
 	names := s.leaderNames(ctx, leads) // before the book's lock: it reads the titles and the knowledge base
 
 	b.mu.Lock()
@@ -196,11 +263,16 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		if !reached[t.ID] {
 			continue // an agent's machine could not be asked: it may be running, not stuck
 		}
-		lt := listedTodo{Todo: t}
-		if a, ok := asks[t.ID]; ok {
-			lt.Ask = &a
+		var tr todoTriage
+		if projByID != nil {
+			tr = projByID[t.ID]
+		} else {
+			lt := listedTodo{Todo: t}
+			if a, ok := asks[t.ID]; ok {
+				lt.Ask = &a
+			}
+			tr = triageTodo(lt, look, now, time.Time{}, loc, false) // a failed start is closed: never stuck
 		}
-		tr := triageTodo(lt, look, now, time.Time{}, loc, false) // a failed start is closed: never stuck
 		stuck := taskStuck(t, tr, reached[t.ID], now)
 		if last, ok := told.Stuck[t.ID]; stuck && (!ok || now.Sub(last) >= leaderStuckRepeat) {
 			told.Stuck[t.ID] = now

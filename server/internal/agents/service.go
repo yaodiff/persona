@@ -227,14 +227,22 @@ func (s *Service) sessionsOf(ctx context.Context, src Source, fresh bool) ([]Ses
 	return s.listNow(ctx, src, s.cache.generation(src.Name()))
 }
 
+// callerEnded reports whether the caller's own context ended (canceled or past its deadline)
+// or the error is a direct cancellation, so the failure belongs to the caller rather than the source.
+func callerEnded(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, context.Canceled)
+}
+
 // listNow asks src for its sessions and caches the answer unless the cache was invalidated since gen.
 func (s *Service) listNow(ctx context.Context, src Source, gen int) ([]Session, error) {
 	list, err := src.Sessions(ctx)
 	if err != nil {
-		if ctx.Err() == nil && timedOut(err) { // the source's own timeout, not the asker's going away
-			s.cache.putTimeout(src.Name(), gen, err)
+		if !callerEnded(ctx, err) {
+			if timedOut(err) { // the source's own timeout, not the asker's going away
+				s.cache.putTimeout(src.Name(), gen, err)
+			}
+			s.noteListing(src, err)
 		}
-		s.noteListing(src, err)
 		return nil, err
 	}
 	s.cache.putSessions(src.Name(), gen, list)
@@ -263,10 +271,10 @@ func (s *Service) listed(ctx context.Context, source, provider string) ([]Sessio
 			continue
 		}
 		list, err := s.sessionsOf(ctx, src, false)
-		if errors.Is(err, context.Canceled) {
-			return nil, err
-		}
 		if err != nil {
+			if callerEnded(ctx, err) {
+				return nil, err
+			}
 			s.logf("agents: %s: sessions: %v", src.Name(), err)
 			if source == "" && s.skipsFailed(src.Name()) {
 				continue
@@ -289,10 +297,10 @@ func (s *Service) Search(ctx context.Context, source, q string) ([]SearchHit, er
 			continue
 		}
 		hits, err := src.Search(ctx, q)
-		if errors.Is(err, context.Canceled) {
-			return nil, err
-		}
 		if err != nil {
+			if callerEnded(ctx, err) {
+				return nil, err
+			}
 			s.logf("agents: %s: search: %v", src.Name(), err)
 			if source == "" && s.skipsFailed(src.Name()) {
 				continue
@@ -565,7 +573,13 @@ func (s *Service) PollOnce(ctx context.Context) {
 		gen := s.cache.generation(n)
 		list, err := src.Sessions(ctx)
 		if err != nil {
-			if ctx.Err() == nil && timedOut(err) {
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, context.Canceled) {
+				continue
+			}
+			if timedOut(err) {
 				s.cache.putTimeout(n, gen, err)
 			}
 			s.noteListing(src, err)

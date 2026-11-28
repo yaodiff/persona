@@ -34,8 +34,8 @@ describe("extension sign-in words", () => {
     expect(authStateText(auth("signed_in", { account: "me@example.com" }))).toBe("已登录：me@example.com");
     expect(authStateText(auth("signed_in"))).toBe("已登录");
     expect(authStateText(auth("expired"))).toBe("已过期");
-    expect(authStateText(auth("error", { message: "网络不通" }))).toBe("出错：网络不通");
-    expect(authStateText(auth("unknown"))).toBe("扩展没在运行");
+    expect(authStateText(auth("error", { message: "网络不通" }))).toBe("错误：网络不通");
+    expect(authStateText(auth("unknown"))).toBe("扩展未运行");
     expect(authStateText(auth("weird"))).toBe("weird");
   });
 
@@ -87,6 +87,14 @@ describe("extension sign-in steps", () => {
 
   it("opens https links only", () => {
     expect(safeLink("https://example.com/x")).toBe("https://example.com/x");
+    expect(safeLink("https://example.com/x?hint=me@example.com")).toBe("https://example.com/x?hint=me@example.com");
+    expect(safeLink("https://good.example@evil.example/x")).toBe("");
+    expect(safeLink("https://me:pw@example.com/x")).toBe("");
+    expect(safeLink("https:/admin")).toBe("");
+    expect(safeLink("https://@evil.example/x")).toBe("");
+    expect(safeLink("https://good.example\\@evil.example/x")).toBe("");
+    expect(safeLink("https://example.com/\x00x")).toBe("");
+    expect(safeLink("  https://example.com/x  ")).toBe("https://example.com/x");
     expect(safeLink("http://example.com/x")).toBe("");
     expect(safeLink("not a url")).toBe("");
     expect(safeLink(undefined)).toBe("");

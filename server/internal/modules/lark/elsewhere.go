@@ -77,7 +77,7 @@ func (s core) openFromElsewhere(ctx context.Context, src Source) (string, error)
 	if !st.Ready || st.Owner == "" {
 		return "", errors.New(i18n.T(l, "assistant-feishu.elsewhere_not_ready"))
 	}
-	if _, _, why := s.h.OpenTarget(ctx, st); why != "" {
+	if _, _, why := s.openTarget(ctx, st); why != "" {
 		return "", errors.New(why) // before anything is posted: no stray topic when there is no one to take it
 	}
 
@@ -126,7 +126,7 @@ func (s core) openFromElsewhere(ctx context.Context, src Source) (string, error)
 	ev.Message.Content = string(c)
 	ev.Sender.SenderType, ev.Sender.SenderID.OpenID = "app", ""
 	todo, fail := s.openTodoIn(ctx, ev, st, botcard.Content{Text: text}, text, quote, topic,
-		&assistantwire.ChatTodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID})
+		&assistantwire.ChatTodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID}, nil)
 	if fail != "" {
 		s.botNoteTo(ctx, topic.target(), posted.MessageID, fail) // the topic was opened: it says why nothing came of it
 		return "", errors.New(fail)
@@ -160,7 +160,7 @@ func (s core) openInOwnerChat(ctx context.Context, st FeishuStatus, src Source, 
 	ev.Message.Content = string(c)
 	ev.Sender.SenderType = "app"
 	todo, fail := s.openTodoIn(ctx, ev, st, botcard.Content{Text: text}, text, quote, nil,
-		&assistantwire.ChatTodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID, Anchor: posted.MessageID})
+		&assistantwire.ChatTodoSource{Channel: src.Channel, ChatID: src.ChatID, MessageID: src.MessageID, Anchor: posted.MessageID}, nil)
 	if fail != "" {
 		s.botNoteTo(ctx, feishuTarget{}, posted.MessageID, fail) // the first message was posted: it says why nothing came of it
 		return "", errors.New(fail)

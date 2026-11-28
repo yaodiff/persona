@@ -52,10 +52,12 @@ test('usage window reports are optional, validated and stored without a connecte
   assert.equal(rt.usageWindows(p), true, 'the node keeps local snapshots while its hub is away')
   await until('usage windows', () => n.last('usage.windows'))
   assert.deepEqual(n.last('usage.windows'), p)
+  assert.equal(rt.usageWindows({ ...p, account_key: 'acct-digest-1' }), true)
+  await until('account_key usage windows', () => n.last('usage.windows')?.account_key === 'acct-digest-1')
   assert.equal(rt.usageWindows({ ...p, windows: [] }), true, 'an empty snapshot clears the previous account')
   await until('empty usage windows', () => n.last('usage.windows')?.windows?.length === 0)
   for (const invalid of [
-    { provider: '' }, { name: '' }, { sampled_at: 'invalid' }, { windows: {} },
+    { provider: '' }, { name: '' }, { account_key: '' }, { account_key: 'x'.repeat(129) }, { sampled_at: 'invalid' }, { windows: {} },
     { windows: [{ ...p.windows[0], window_minutes: 0 }] },
     { windows: [{ ...p.windows[0], used_percent: -1 }] },
     { windows: [{ ...p.windows[0], used_percent: Number.NaN }] },

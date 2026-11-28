@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/herdrcore"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rexcli"
@@ -45,6 +47,8 @@ type engineState struct {
 	// listed sessions without saying. botmuxSaid is the same "not nil", read without the lock (botmuxPending).
 	botmux     *bool
 	botmuxSaid atomic.Bool
+	// botmuxOwner is the BotMux Owner Union ID the hub handed (setBotmuxOwner), "" for none.
+	botmuxOwner proto.BotmuxOwnerUnionID
 }
 
 // configWait is how long a new connection waits for the hub to say which engine before it starts on herdr: a hub
@@ -168,10 +172,10 @@ func (n *Node) hostEnabled(kind string) bool { return slices.Contains(n.engineCh
 // defaultKind is the default host of the set in use: where pane-less operations go; "" when the set is empty.
 func (n *Node) defaultKind() string { return n.engineChoice().Default }
 
-// noEngineRefusal is why nothing can start on a machine that enables no terminal engine (the empty set).
+// noEngineRefusal is why nothing can start on a machine that enables no terminal engine (the empty set); the hub words
+// it by its reason (apierr's engineMissingWords, #17057).
 func noEngineRefusal() error {
-	return refusal(engineMissing, "这台电脑没启用终端引擎，不能从手机新开或接着会话，这次没有发送。"+
-		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca、Paseo、Cindy 或 T3 Code）再试。", nil)
+	return refusal(engineMissing, i18n.T(i18n.Default, "rpc-errors.engine_none"), map[string]any{"reason": engineNone})
 }
 
 // watchEngine starts watching the engine in use for as long as ctx lasts (Serve); engine.use moves it to the new one.
@@ -247,12 +251,14 @@ func (n *Node) useEngineChoice(ctx context.Context, c proto.EngineChoice) error 
 	n.eng.mu.Lock()
 	n.hosts.Set(nodeHostsFor(c, n.eng.botmux != nil && *n.eng.botmux, n.logf)...)
 	n.syncHerdrHostBlocked()
+	n.syncBotmuxOwner()
 	n.resetSignals()
 	n.eng.name, n.eng.set = engine, &c
 	n.mu.Lock()
 	n.engEpoch++
 	epoch := n.engEpoch
-	n.hostAgents, n.layouts, n.agents, n.panePIDs, n.codexPanePIDs, n.lastList = nil, nil, map[string]host.Agent{}, map[string]panePID{}, nil, ""
+	n.agentsGen++
+	n.hostAgents, n.hostLayoutSeq, n.hostAgentsSeq, n.layouts, n.agents, n.panePIDs, n.codexPanePIDs, n.lastList = nil, nil, nil, nil, map[string]host.Agent{}, map[string]panePID{}, nil, ""
 	n.lastPanes, n.onAgentsList, n.agyBound, n.agyReports = nil, nil, nil, nil
 	n.mu.Unlock()
 	n.sent.forget() // the new engine's list goes once even when the old one's was the same (sessions_sent.go)
@@ -385,7 +391,14 @@ func rexEngine(ctx context.Context, c *rexcli.Client) proto.Engine {
 // orcaClient is the Orca runtime node.info asks; tests point it at a fake one.
 var orcaClient = orcart.New
 
-// orcaEngine is Orca as found on this machine: available when its runtime answers with a protocol Persona speaks.
+// orcaInstalled says whether Orca is on this machine though it may not run, and the version its install says
+// (orcart.Installed); tests point it elsewhere.
+var orcaInstalled = orcart.Installed
+
+// orcaEngine is Orca as found on this machine (#17037): available, and running, when its runtime answers with a
+// protocol Persona speaks; incompatible, with its version and a note the hub words in each reader's language
+// (node-engine.orca_incompatible), when it answers with another; stopped when it does not answer but is installed
+// (orcaInstalled: its app or a data directory a runtime used), with the version its install says; else missing.
 func orcaEngine(ctx context.Context, c *orcart.Client) proto.Engine {
 	e := proto.Engine{ID: proto.EngineOrca, Name: proto.EngineNames[proto.EngineOrca]}
 	st, err := c.Probe(ctx)
@@ -394,9 +407,14 @@ func orcaEngine(ctx context.Context, c *orcart.Client) proto.Engine {
 	}
 	switch {
 	case err == nil:
-		e.Available = true
+		e.Available, e.State = true, proto.EngineRunning
 	case errors.Is(err, orcart.ErrIncompatible):
-		e.Note = "这个版本的 Orca 和 Persona 不兼容，请把两边都更新到最新版"
+		e.State, e.Note = proto.EngineIncompatible, i18n.T(i18n.Default, "node-engine.orca_incompatible")
+	default:
+		e.State = proto.EngineMissing
+		if found, v := orcaInstalled(); found {
+			e.State, e.Version = proto.EngineStopped, cmp.Or(e.Version, v)
+		}
 	}
 	return e
 }

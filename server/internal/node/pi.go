@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -18,8 +19,8 @@ import (
 // terminal and the keys are herdr's. Its conversation and its control (send, interrupt, cards, live text) come from
 // the Persona extension in that same pi process, a runtime (runtimes.go) that lists the session with the pane it runs
 // in; the node joins the two into one row. pi run elsewhere — pi-web, a terminal outside herdr — is only the runtime's.
-// A pi session that ran in herdr and has stopped is resumed in herdr (`pi --session`, the runtime's resume_argv),
-// never in pi-web.
+// A pi session that ran in a terminal and has stopped is resumed in the machine's engine, herdr or Orca (`pi --session`,
+// the runtime's resume_argv), never in pi-web.
 
 // piResumeWait is how long a resume in the engine waits for the pi it started to list the session (its extension).
 var piResumeWait = 30 * time.Second
@@ -59,7 +60,7 @@ func (n *Node) mergePiRow(s *proto.Session) {
 	if r.Title != "" {
 		s.Title, s.TitleManual, s.TitleSource = r.Title, r.TitleManual, r.TitleSource
 	}
-	s.OutputTokens = r.OutputTokens
+	s.SetOutputTokens(int(r.OutputTokensValue()))
 	if r.ContextTokens > 0 {
 		s.ContextTokens = r.ContextTokens
 	}
@@ -90,18 +91,18 @@ func (n *Node) resumeInEngine(ctx context.Context, h *runtimeConn, id string, ar
 
 // resumeInTerminal resumes a stopped session in a new tab of the engine, running argv there, waits until a runtime
 // other than isNewOwner's owns the session, and sends the phone's message there. The pi family (pi.go, ompdisk.go)
-// uses it: a pi from its runtime's resume_argv, an omp from the session file on disk.
+// uses it: a pi from its runtime's resume_argv, an omp from the session file on disk. The default engine's tab: herdr's,
+// or Orca's for a pi (#17044), a new terminal in the Orca worktree holding the directory that `cd`s there and runs argv
+// (Orca's Run); an omp is not resumed in Orca (resumeOmp).
 func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, id string, params json.RawMessage, isNewOwner func(*runtimeConn) bool) (any, error) {
-	if n.defaultKind() == proto.EngineOrca { // it would start in the default host: Orca cannot reopen one
-		return nil, refusal("orca_resume", "Orca 会话请在电脑上恢复：这次没有启动，也没有发送。", nil)
-	}
 	if st, err := os.Stat(cwd); cwd == "" || err != nil || !st.IsDir() {
-		return nil, refusal("not_running", "这个会话的目录不在了，没法在终端里接着它，这次没有发送。", nil)
+		return nil, refusal(notRunning, i18n.T(i18n.From(ctx), "rpc-errors.not_running_directory_gone"),
+			map[string]any{"reason": notRunningDirectoryGone})
 	}
 	launch, err := hostCap[host.Launcher](n)
 	if err != nil {
-		name := n.defaultEngineName()
-		return nil, refusal(engineMissing, fmt.Sprintf("这个会话是在 %s 里跑的，要在 %s 里接着它，可这台电脑上的 %s 没在运行（或没装），这次没有发送。", name, name, name), nil)
+		return nil, refusal(engineMissing, i18n.T(i18n.From(ctx), "rpc-errors.engine_resume_unavailable", i18n.Args{"engine": n.defaultEngineName()}),
+			map[string]any{"engine": n.defaultKind(), "reason": engineResumeUnavailable})
 	}
 	ws, err := n.workspaceFor(ctx, launch, cwd)
 	if err != nil {
@@ -126,9 +127,10 @@ func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, 
 		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel("", n.tabLabels(ctx, launch, ws)))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
+		return nil, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	pane := created.Pane.String()
+	n.forgetPane(pane)                 // a new tab, as newTab's: no older session's binding of its id stays
 	n.bindPane(pane, id)               // the pane is this session's before herdr or the extension says so
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
 	shells := n.startPaneShells(ctx, launch, created)
@@ -157,8 +159,9 @@ func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, 
 		}
 		if time.Now().After(deadline) {
 			screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
-			return nil, refusal("not_running", fmt.Sprintf("在新标签里接着这个会话，%s 秒内没等到它起来，这次没有发送。\n%s",
-				fmt.Sprint(int(piResumeWait.Seconds())), lastLines(screen, 12)), nil)
+			seconds, tail := int(piResumeWait.Seconds()), lastLines(screen, 12)
+			return nil, refusal(notRunning, i18n.T(i18n.From(ctx), "rpc-errors.not_running_resume_timeout", i18n.Args{"seconds": seconds})+"\n"+tail,
+				map[string]any{"reason": notRunningResumeTimeout, "seconds": seconds, "detail": tail})
 		}
 		select {
 		case <-ctx.Done():

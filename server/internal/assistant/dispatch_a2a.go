@@ -56,7 +56,10 @@ type dispatchA2AStart struct {
 	task  *a2aTask
 }
 
-func (s *Service) admitDispatchA2A(ctx context.Context, from a2aRef, target, requestID, prompt string, launch a2aLaunch, now time.Time) (*dispatchA2AStart, bool, error) {
+// admitDispatchA2A answers a retry by requestID with its task, or admits a new dispatch and records it: one within the
+// caller's limits, to a computer that is online, which dispatchStartRefusal did not refuse (refused, worked out before
+// the lock so that no launcher list is read under it).
+func (s *Service) admitDispatchA2A(ctx context.Context, from a2aRef, target, requestID, prompt string, launch a2aLaunch, now time.Time, refused error) (*dispatchA2AStart, bool, error) {
 	s.dispatch.admit.Lock()
 	defer s.dispatch.admit.Unlock()
 	digest := sha256.Sum256([]byte(prompt))
@@ -81,6 +84,9 @@ func (s *Service) admitDispatchA2A(ctx context.Context, from a2aRef, target, req
 	}
 	if dev, ok := s.machineByName(ctx, target); !ok || !dev.Online && !dev.Reachable {
 		return nil, false, fmt.Errorf("%s is offline; nothing was started", target)
+	}
+	if refused != nil {
+		return nil, false, refused
 	}
 	return s.prepareDispatchA2A(ctx, from, target, requestID, prompt, launch)
 }
@@ -163,10 +169,14 @@ func (s *Service) finishDispatchA2A(ctx context.Context, start *dispatchA2AStart
 		}
 		return
 	}
+	why := session.StartError // a definite failure's reason, on the A2A task as the caller was told it
+	if launchErr != nil {
+		why = launchErr.Error()
+	}
 	for range 5 {
 		task, err := decodeA2A(start.store.A2AGet(ctx, start.task.ID))
 		if err == nil && task != nil && task.Launch.Pending {
-			err = s.a2aLaunched(ctx, start.store, task, session, launchErr != nil || session.StartError != "")
+			err = s.a2aLaunched(ctx, start.store, task, session, launchErr != nil || session.StartError != "", why)
 		}
 		if errors.Is(err, errA2AConflict) {
 			continue

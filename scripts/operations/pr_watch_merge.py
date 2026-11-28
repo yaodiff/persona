@@ -60,7 +60,8 @@ def merge_lock(root):
     return handle
 
 
-def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, expected_base=None):
+def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, expected_base=None,
+          require_issue_link=True):
     """Do not read or merge PR metadata outside one exact-head decision."""
     repo = repository(repo)
     pr = pr_snapshot(repo, number)
@@ -74,7 +75,7 @@ def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, exp
         raise WatchError("PR is not mergeable; update its branch or resolve conflicts")
     if pr.get("reviewDecision") == "CHANGES_REQUESTED":
         raise WatchError("PR has an outstanding changes request")
-    if not linked_issue(pr["body"], repo):
+    if require_issue_link and not linked_issue(pr["body"], repo):
         raise WatchError("PR does not link an issue in its own repository")
     head, base = pr["headRefOid"], pr["baseRefOid"]
     with tempfile.TemporaryDirectory(prefix="pr-watch-merge-") as temporary:

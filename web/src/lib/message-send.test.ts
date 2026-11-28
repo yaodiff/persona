@@ -7,7 +7,7 @@ const fake = vi.hoisted(() => ({
   changes: [] as (() => void)[], credentials: [] as (() => void)[], managers: [] as (() => void)[], send: vi.fn(),
 }));
 vi.mock("./api", () => ({ credentialOwner: () => fake.owner, getToken: () => "synthetic-token", onCredentialChange: (f: () => void) => fake.credentials.push(f), sessionPath: (mid: string, sid: string) => `/sessions/${mid}/${sid}` }));
-vi.mock("./format", () => ({ stateOf: (s: Session) => s.state ?? s.status }));
+vi.mock("./format", () => ({ activityOf: (s: Session) => s.state ?? s.status }));
 vi.mock("./manager-choice", () => ({ MANAGER_HEADER: "X-Persona-Manager", managerHeaderFor: () => fake.manager, shownManager: () => fake.manager, onManagerChoice: (f: () => void) => fake.managers.push(f) }));
 vi.mock("./store", () => ({ getSession: () => fake.row, onHubEvent: (name: string, f: (event: Record<string, unknown>) => void) => fake.events.set(name, f), send: fake.send, subscribe: (f: () => void) => fake.changes.push(f) }));
 import { beginMessageSend, configureMessageFeedback, messageFeedback, observeMessageItems, receiveMessageSend, resetMessageFeedback, settleMessageEcho, stopMessageFeedback } from "./message-send";
@@ -121,6 +121,12 @@ describe("per-message hub feedback", () => {
     receiveMessageSend(event("failed", "2026-11-12T10:00:00.000000008Z"));
     receiveMessageSend(event("failed", "not a timestamp"));
     receiveMessageSend(event("invented", "2026-11-12T10:00:01Z"));
+    expect(feedback()).toBe("processing");
+  });
+  it("keeps normalized UTC ordering when Date.parse normalizes a noncanonical day", () => {
+    beginMessageSend("example", "chat", "message");
+    receiveMessageSend(event("processing", "2026-03-01T12:00:00Z"));
+    receiveMessageSend(event("failed", "2026-02-30T00:00:00Z"));
     expect(feedback()).toBe("processing");
   });
   it("ignores a late processing frame once that attempt ended", () => {

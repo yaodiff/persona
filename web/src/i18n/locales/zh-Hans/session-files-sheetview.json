@@ -1,8 +1,8 @@
 {
-  "truncated": "表格太大，只显示了前 {count} 行",
+  "truncated": "表格过大，仅显示前 {count} 行。",
   "sheets": "工作表",
   "sheet_n": "工作表 {n}",
-  "empty": "空表格",
+  "empty": "空工作表",
   "size": "{rows} 行 × {cols} 列",
   "count": "计数 {n}",
   "sum": "求和 {n}",

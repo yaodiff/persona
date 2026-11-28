@@ -211,7 +211,7 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(at(td)).toMatchObject({ section: "other", rule: "rest" });
     expect(status).toBe("not_started");
     expect(shownStatus(td, status)).toBe("not_started");
-    expect(todoStatusLabel(td, status)).toBe("未开始");
+    expect(todoStatusLabel(td, status)).toBe("跟进中");
   });
 
   it("an accepted task whose agent runs again is Working", () => {

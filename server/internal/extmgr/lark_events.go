@@ -54,7 +54,7 @@ func larkMessageEventPages(binding string, msgs []larksyncwire.Message, pageSize
 			ChatID:       larksyncwire.ChatID(chatID),
 			MessageID:    larksyncwire.MessageID(msgID),
 			SenderOpenID: larksyncwire.OpenID(strings.TrimSpace(m.SenderID)),
-			Type:         strings.TrimSpace(m.Type),
+			Type:         larksyncwire.MessageType(strings.TrimSpace(m.Type)),
 		}
 		if !m.At.IsZero() {
 			item.At = m.At.UTC()

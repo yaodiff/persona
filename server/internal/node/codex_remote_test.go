@@ -149,6 +149,9 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		switch m.Method {
+		case "thread/queue/add":
+			f.push(map[string]any{"id": m.ID, "error": &codexError{Code: -32601, Message: "method not found"}})
+			continue
 		case "initialize":
 			result = map[string]any{"codexHome": f.home}
 		case "thread/loaded/list":
@@ -239,6 +242,7 @@ func remoteTestNode(t *testing.T) *Node {
 	n, home := testNode(t)
 	n.codices = newCodexRegistry()
 	n.codices.scan = func() []codexProcess { return nil }
+	n.codices.checked = func() ([]codexProcess, bool) { return n.codices.scan(), true }
 	fixtureCodexIndex(n.codices)
 	n.logger = log.New(io.Discard, "", 0)
 	n.metas = map[string]quickMeta{}
@@ -328,7 +332,51 @@ func TestCodexRemoteIdentityAndOnlyReadDiscovery(t *testing.T) {
 	}
 }
 
-func TestCodexRemoteSendAndSteerNeverFallback(t *testing.T) {
+func TestCodexSharedOriginKeepsTheLiveOwnerRoute(t *testing.T) {
+	n := remoteTestNode(t)
+	home, bus := startFakeCodexBus(t, remoteRaw)
+	state := fmt.Sprintf(`{"projectless-thread-ids":[%q]}`, remoteRaw)
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(home, "rollout-"+remoteRaw+".jsonl")
+	meta := `{"type":"session_meta","payload":{"originator":"persona","source":"vscode"}}` + "\n"
+	if err := os.WriteFile(rollout, []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id := n.registerCodex(home, remoteRaw, rollout)
+	if err := n.send(context.Background(), id, "App fallback", nil, sendOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-bus.turns:
+	default:
+		t.Fatal("the App window did not take the fallback send")
+	}
+
+	remote, _ := connectRemoteFixture(t, n, home, "shared", remoteRaw)
+	if err := n.send(context.Background(), id, "Live owner", nil, sendOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if remote.count("turn/start") != 1 {
+		t.Fatal("the live owner did not take the send")
+	}
+	select {
+	case <-bus.turns:
+		t.Fatal("a send with a live owner went through the App fallback")
+	default:
+	}
+
+	other, _ := connectRemoteFixture(t, n, home, "other", remoteRaw)
+	if err := modesCall(t, n, id, map[string]any{"model": "gpt-y"}); refusalCode(err) != "codex_read_only" {
+		t.Fatalf("settings with conflicting owners = %v, want codex_read_only", err)
+	}
+	if len(bus.settings) != 0 || remote.count("thread/settings/update") != 0 || other.count("thread/settings/update") != 0 {
+		t.Fatal("settings reached an endpoint despite the owner conflict")
+	}
+}
+
+func TestCodexRemoteQueuesBeforeSteering(t *testing.T) {
 	n := remoteTestNode(t)
 	home := t.TempDir()
 	f, c := connectRemoteFixture(t, n, home, "one", remoteRaw)
@@ -340,10 +388,32 @@ func TestCodexRemoteSendAndSteerNeverFallback(t *testing.T) {
 		t.Fatal("first message routing")
 	}
 	f.mu.Lock()
+	f.response = func(method string, _ map[string]any) (any, bool) {
+		return map[string]any{"queuedSubmission": map[string]any{"id": "accepted"}}, method == "thread/queue/add"
+	}
+	f.mu.Unlock()
+	for i, status := range []string{proto.StatusWorking, proto.StatusBlocked} {
+		c.mu.Lock()
+		thread := c.threads[remoteRaw]
+		thread.status = status
+		c.threads[remoteRaw] = thread
+		c.mu.Unlock()
+		ctx, queued := withSendQueued(context.WithValue(t.Context(), sendTraceKey{}, "message-id"))
+		if err := n.send(ctx, id, "follow up", nil, sendOpts{}); err != nil || !*queued {
+			t.Fatalf("%s send = %v, queued = %v", status, err, *queued)
+		}
+		adds := f.sent("thread/queue/add")
+		if len(adds) != i+1 || inputText(adds[i]) != "follow up" || adds[i]["threadId"] != remoteRaw ||
+			adds[i]["clientUserMessageId"] != "message-id" || f.count("turn/steer") != 0 {
+			t.Fatalf("%s queue requests = %v", status, adds)
+		}
+	}
+	f.mu.Lock()
+	f.response = nil // older server rejects the queue method
 	f.reject = "turn/steer"
 	f.mu.Unlock()
 	err := n.send(context.Background(), id, "合成插话", nil, sendOpts{})
-	if err == nil || f.count("turn/start") != 1 || f.count("turn/steer") != 1 {
+	if err == nil || f.count("thread/queue/add") != 3 || f.count("turn/start") != 1 || f.count("turn/steer") != 1 {
 		t.Fatalf("steer fallback: %v", err)
 	}
 	if err := n.interruptCodex(context.Background(), id); err != nil {

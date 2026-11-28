@@ -102,6 +102,7 @@ func TestSendRefusesALauncherOfAnotherAgentKind(t *testing.T) {
 		t.Fatal("an unidentified runtime was allowed to resume another connection")
 	}
 	f.launcherList = nil // the machine's list can't be read: its Codex alias isn't known to be one
+	s.invalidateLauncherListCache("server")
 	if _, err := send("claude-side", "cx", "en"); err != nil && strings.Contains(err.Error(), "wasn't sent") && strings.Contains(err.Error(), "Codex") {
 		t.Fatalf("refused without the list: %v", err)
 	}

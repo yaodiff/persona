@@ -13,7 +13,7 @@ vi.mock("./store", () => ({ getSession: () => session, endInteraction: (...a: un
 const { answerCard } = await import("./card-answer");
 const { allowBody, denyBody } = await import("./quick-answers");
 
-const ix: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash" };
+const ix: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", created_at: "2026-01-02T03:04:05.000000001Z" };
 
 beforeEach(() => {
   session = { machine_id: "m", session_id: "a" } as Session;
@@ -51,14 +51,14 @@ describe("answerCard", () => {
   it("答上：发到卡片的 resolve，卡片记下答了什么", async () => {
     apiOp.mockResolvedValue({});
     expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: false });
-    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { allow: false, message: "用户拒绝了" } });
-    expect(ended).toEqual([["p1", { ix, resolution: { allow: false, message: "用户拒绝了" }, already: false, handedBack: false }]]);
+    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { allow: false, message: "用户已拒绝" }, headers: { "X-Persona-Interaction-Created-At": ix.created_at } });
+    expect(ended).toEqual([["p1", { ix, resolution: { allow: false, message: "用户已拒绝" }, already: false, handedBack: false }]]);
   });
 
   it("leaves a handed-back receipt for a fresh hand back, as for an answer", async () => {
     apiOp.mockResolvedValue({ ok: true });
     expect(await answerCard(ix, { dismiss: true })).toEqual({ ok: true, already: false });
-    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { dismiss: true } });
+    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { dismiss: true }, headers: { "X-Persona-Interaction-Created-At": ix.created_at } });
     expect(ended).toEqual([["p1", { ix, resolution: { dismiss: true }, already: false, handedBack: true }]]);
   });
 
@@ -72,14 +72,14 @@ describe("answerCard", () => {
     apiOp.mockRejectedValue(new ApiError(410, "gone", { status: "expired" }));
     const r = await answerCard(ix, allowBody());
     expect(r.ok).toBe(false);
-    expect(ended).toEqual([["p1"]]);
+    expect(ended).toEqual([["p1", undefined, ix.created_at]]);
   });
 
   it("prompt_changed 和别的错误：不收卡，说原因", async () => {
     apiOp.mockRejectedValue(new ApiError(409, "changed", { code: "prompt_changed" }));
-    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: "电脑上的对话框变了，已按新的屏幕重新生成" });
+    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: "电脑上的对话框内容已更新，已根据当前屏幕重新生成卡片。" });
     apiOp.mockRejectedValue(new ApiError(500, "boom", {}));
-    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: expect.stringMatching(/^没送到：.+（HTTP 500: boom）$/) });
+    expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: expect.stringMatching(/^未能送达：.+（HTTP 500: boom）$/) });
     expect(ended).toEqual([]);
   });
 });
@@ -89,13 +89,38 @@ it("keeps one answer per card on its way: the same one shares it, another is ref
   apiOp.mockReturnValueOnce(new Promise((_, no) => { finish = no; }));
   const first = answerCard(ix, allowBody());
   expect(answerCard(ix, allowBody())).toBe(first);
-  expect(await answerCard(ix, denyBody())).toEqual({ ok: false, error: "这张卡已有一个答案在发送中" });
+  expect(await answerCard(ix, denyBody())).toEqual({ ok: false, error: "此卡片的回复正在发送中" });
   expect(apiOp).toHaveBeenCalledOnce();
   finish(new TypeError("Failed to fetch"));
-  expect(await first).toEqual({ ok: false, error: expect.stringMatching(/^没送到：/) });
+  expect(await first).toEqual({ ok: false, error: expect.stringMatching(/^未能送达：/) });
   apiOp.mockResolvedValueOnce({});
   expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: false });
   expect(apiOp).toHaveBeenCalledTimes(2);
+});
+
+it("keeps same-ID occurrences separate and sends the displayed occurrence", async () => {
+  let finishFirst!: (value: Record<string, unknown>) => void;
+  let finishReplacement!: (value: Record<string, unknown>) => void;
+  apiOp.mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }))
+    .mockReturnValueOnce(new Promise((resolve) => { finishReplacement = resolve; }));
+  const replacement = { ...ix, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+  const firstAnswer = answerCard(ix, allowBody());
+  const replacementAnswer = answerCard(replacement, denyBody());
+  const calls = [...apiOp.mock.calls];
+  finishFirst({});
+  if (calls.length === 2) finishReplacement({});
+  const firstResult = await firstAnswer;
+  const replacementResult = await replacementAnswer;
+  expect(replacementResult).not.toBe(firstResult);
+  expect(calls).toHaveLength(2);
+  expect(calls[0]).toEqual(["/interactions/p1/resolve", {
+    method: "POST", json: allowBody(), headers: { "X-Persona-Interaction-Created-At": ix.created_at },
+  }]);
+  expect(calls[1]).toEqual(["/interactions/p1/resolve", {
+    method: "POST", json: denyBody(), headers: { "X-Persona-Interaction-Created-At": replacement.created_at },
+  }]);
+  expect(firstResult.ok).toBe(true);
+  expect(replacementResult.ok).toBe(true);
 });
 
 it("sends secret text unchanged and stores only a redacted receipt", async () => {
@@ -103,7 +128,7 @@ it("sends secret text unchanged and stores only a redacted receipt", async () =>
   const body = Object.freeze({ text: "synthetic-secret" });
   apiOp.mockResolvedValue({});
   expect(await answerCard(card, body)).toEqual({ ok: true, already: false });
-  expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: body });
+  expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: body, headers: { "X-Persona-Interaction-Created-At": card.created_at } });
   expect(ended[0]?.[1]).toMatchObject({ resolution: { text: "<redacted>" } });
   expect(body.text).toBe("synthetic-secret");
 });
@@ -120,7 +145,7 @@ it("redacts field and elicitation secrets by schema and name without mutating th
   const body = Object.freeze({ action: "accept", values, content });
   apiOp.mockResolvedValue({});
   expect(await answerCard(card, body)).toEqual({ ok: true, already: false });
-  expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: body });
+  expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: body, headers: { "X-Persona-Interaction-Created-At": card.created_at } });
   expect(ended[0]?.[1]).toMatchObject({ resolution: {
     action: "accept", values: { hidden: "<redacted>", api_key: "<redacted>", visible: "<redacted>" },
     content: { hidden: "<redacted>", write: "<redacted>", TOKEN: "<redacted>", visible: "keep", count: 3, enabled: false },
@@ -144,5 +169,5 @@ it("answers an explicitly sessionless script card without a session lookup resul
   apiOp.mockResolvedValue({});
   const script = { ...ix, id: "script-request", session_id: "", tool_name: "personad_ask", agent: "script" };
   expect(await answerCard(script, allowBody())).toEqual({ ok: true, already: false });
-  expect(apiOp).toHaveBeenCalledWith("/interactions/script-request/resolve", { method: "POST", json: { allow: true } });
+  expect(apiOp).toHaveBeenCalledWith("/interactions/script-request/resolve", { method: "POST", json: { allow: true }, headers: { "X-Persona-Interaction-Created-At": script.created_at } });
 });

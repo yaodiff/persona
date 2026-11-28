@@ -13,7 +13,7 @@ describe("a message card", () => {
 
   it("offers the draft to send while it is not sent", () => {
     const html = renderToStaticMarkup(<MessageDraft tasks={draftTasks} item={card()} />);
-    expect(html).toContain("按任务进度起草的回复");
+    expect(html).toContain("根据任务进度起草的回复");
     expect(html).toContain("<textarea");
     expect(html).toContain("发送");
   });
@@ -24,7 +24,7 @@ describe("a message card", () => {
     expect(by).toBeTruthy();
     const at = html.indexOf(`<span id="${by}"`);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(html.slice(at, html.indexOf("</span>", at))).toContain("按任务进度起草的回复");
+    expect(html.slice(at, html.indexOf("</span>", at))).toContain("根据任务进度起草的回复");
   });
 
   it("draws a token focus ring on the draft's editor, since the global ring covers only buttons and links", () => {
@@ -43,24 +43,25 @@ describe("a message card", () => {
     expect(html).not.toContain("稍后");
   });
 
-  it("says a card sent before the hub recorded it is sent, with its draft", () => {
+  it("keeps a recorded send without showing the draft as the sent text", () => {
     const html = renderToStaticMarkup(<MessageDraft tasks={draftTasks} item={card({ sent_at: "2026-11-04T10:23:00Z" })} />);
     expect(html).toContain("已以你的名义回复");
-    expect(html).toContain("确实是 bug，谢谢指出");
+    expect(html).not.toContain("确实是 bug，谢谢指出");
     expect(html).not.toContain("发送");
   });
 
   it("offers no 发送 or editor once the thing was handled elsewhere, and says nothing went out (#4797)", () => {
     const html = renderToStaticMarkup(<MessageDraft tasks={draftTasks} item={card({ filed_at: "2026-11-05T09:00:00Z", draft: "确实是 bug，【预计几点前】修好" })} />);
-    expect(html).toContain("这件事已经处理过了，没有发出去");
+    expect(html).toContain("该事项此前已处理，未发送任何消息");
+    expect(html).not.toContain("已以你的名义回复");
     expect(html).not.toContain("<textarea");
     expect(html).not.toContain("<button");
-    expect(html).not.toContain("草稿里还有没填的");
+    expect(html).not.toContain("草稿中仍有未填写的");
   });
 
   it("draws a handled card plainly, not as a draft waiting on you (#5095)", () => {
     const html = renderToStaticMarkup(<MessageDraft tasks={draftTasks} item={card({ filed_at: "2026-11-05T09:00:00Z" })} />);
-    expect(html).not.toContain("按任务进度起草的回复");
+    expect(html).not.toContain("根据任务进度起草的回复");
     expect(html).not.toContain("bg-accent-tint");
     expect(html).toContain("已处理");
     expect(html).toContain("确实是 bug，谢谢指出");
@@ -68,7 +69,7 @@ describe("a message card", () => {
 
   it("holds a draft with a blank to fill in", () => {
     const html = renderToStaticMarkup(<MessageDraft tasks={draftTasks} item={card({ draft: "确实是 bug，【预计今晚 / 几点前】修好" })} />);
-    expect(html).toContain("草稿里还有没填的「【预计今晚 / 几点前】」");
+    expect(html).toContain("草稿中仍有未填写的「【预计今晚 / 几点前】」");
     expect(html).toMatch(/<button[^>]*disabled[^>]*>(?:(?!<\/button>).)*发送/);
   });
 });

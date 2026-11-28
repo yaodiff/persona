@@ -228,6 +228,7 @@ type legacyMarketView struct {
 	AddedAt            time.Time           `json:"added_at"`
 	Official           bool                `json:"official,omitempty"`
 	Signature          MarketSignatureView `json:"signature"`
+	TrustedKeys        map[string]string   `json:"trusted_keys,omitempty"`
 }
 
 // marketOut is v for r: the old keys under an old path.

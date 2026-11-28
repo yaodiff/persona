@@ -10,7 +10,7 @@ const gaugeOf = (raw: unknown) => tiles(readView({ sections: [{ items: [{ type: 
 
 describe("UI 9: reading a tile's gauge", () => {
   it("is the version the web sends", () => {
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
   });
 
   it("keeps every gauge of the examples, and no gauge on the other tiles", () => {

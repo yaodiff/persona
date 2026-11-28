@@ -45,3 +45,12 @@ type NodeUpdatePreflightFailure struct {
 	ID    string `json:"id"`
 	Error string `json:"error"`
 }
+
+// NodeUpdateID identifies a node update transaction.
+type NodeUpdateID string
+
+// NodeUpdateDraining identifies a committed update waiting for active work to drain before handover.
+type NodeUpdateDraining struct {
+	ID     NodeUpdateID `json:"id"`
+	Target string       `json:"target,omitempty"`
+}

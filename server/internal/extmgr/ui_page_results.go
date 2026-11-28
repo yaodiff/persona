@@ -30,7 +30,7 @@ func pageResult(s *pageSession, raw json.RawMessage) (json.RawMessage, error) {
 		if err != nil || target.User != nil {
 			return nil, pageError("invalid")
 		}
-		if err := checkOpenURL(s.extension, s.item, "", result.OpenURL); err != nil {
+		if err := checkOpenURL(s.extension, s.manifest, s.item, "", result.OpenURL); err != nil {
 			return nil, err
 		}
 	}

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { CardConversation, CardItem, LiveCard, VIEWS_FEATURE } from "./AssistantCard";
-import { applyAction, applyBlock, applyView, resetCards, updateDraft } from "../lib/assistant-views";
+import { applyAction, applyBlock, applySnapshot, applyView, resetCards, updateDraft } from "../lib/assistant-views";
 import { getState } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { UserBubble } from "../views/chat/SegmentView";
@@ -41,17 +41,34 @@ describe("正文卡片", () => {
     const text = "结论\n" + fence(decision);
     const before = draw(text);
     expect(before).toContain('data-card-key="item-1/0"');
-    expect(before).toContain("回复完成并经 hub 确认后可以回答");
+    expect(before).toContain("待回复完成并经 hub 确认后即可回复");
     applyBlock("c1", "item-1/0");
     const after = draw(text);
-    expect(after).not.toContain("回复完成并经 hub 确认后可以回答");
+    expect(after).not.toContain("待回复完成并经 hub 确认后即可回复");
+    expect(enabledButtons(after)).toBeGreaterThan(enabledButtons(before));
+  });
+
+  it("unlocks an Antigravity reply when the feed acknowledges its exported item ID", () => {
+    const conversation = "agy-fixture";
+    const item = "8@0123456789abcdef0123#1";
+    const previous = "8@abcdef0123456789abcd#0/0";
+    const text = fence(decision);
+    applySnapshot(conversation, { view_blocks: [previous] });
+    applySnapshot("other-conversation", { view_blocks: [`${item}/0`] });
+    const before = draw(text, { conversation, item });
+    expect(before).toContain(`data-card-key="${item}/0"`);
+    expect(before).toContain("待回复完成并经 hub 确认后即可回复");
+
+    applySnapshot(conversation, { view_blocks: [previous, `${item}/0`] });
+    const after = draw(text, { conversation, item });
+    expect(after).not.toContain("待回复完成并经 hub 确认后即可回复");
     expect(enabledButtons(after)).toBeGreaterThan(enabledButtons(before));
   });
 
   it("a hub without assistant_views takes no answer", () => {
     Object.assign(getState(), { features: ["lark"] });
     applyBlock("c1", "item-1/0");
-    expect(draw(fence(decision))).toContain("这个 hub 还不支持在卡片上回答");
+    expect(draw(fence(decision))).toContain("当前 hub 暂不支持在卡片上直接回复");
   });
 
   it("an agent's chat (no assistant conversation) draws the card, nothing answers", () => {
@@ -86,7 +103,7 @@ describe("正文卡片", () => {
   it("a card with html shows its fallback in the assistant's frame; nothing runs", () => {
     const html = draw(fence(example("html")));
     expect(html).toContain('data-assistant-card="html-fallback"');
-    expect(html).toContain("助手画的页面");
+    expect(html).toContain("助手生成的页面");
     expect(html).toContain(example("html").fallback);
     expect(html).not.toMatch(/<iframe|<script|onclick=/i);
   });

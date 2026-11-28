@@ -4,14 +4,14 @@
 // The count is the sidebar's own red "Needs you" count (stateCounts().badge in lib/sessions.ts: quiet tasks' agents are told
 // about in the main conversation, not counted), so the tab and the sidebar never disagree.
 import { useSyncExternalStore } from "react";
-import { stateOf } from "./format";
+import { activityOf, stateOf } from "./format";
 import { agentKey } from "./pins";
 import { homeKey } from "./folded-rows";
 import { isDelegating } from "./delegate";
 import { supervisorHeld, supervisorHeldOnly } from "./supervisor-held";
 import { isMuted } from "./session-actions";
 import type { AgentMutes } from "./agent-groups";
-import { byTime } from "./times";
+import { byTime, timeOrNaN } from "./times";
 import type { AgentState, Interaction, Session } from "./types";
 
 const SITE = "Persona";
@@ -78,7 +78,7 @@ export function detectTransitions(prev: ReadonlyMap<string, AgentState>, session
   for (const s of sessions) {
     if (s.hidden_by_directory) continue;
     const key = agentKey(s);
-    const state = stateOf(s);
+    const state = activityOf(s);
     const now = state === "needs_you" && looking.has(key) ? "working" : state;
     next.set(key, now);
     const was = prev.get(key);
@@ -124,11 +124,16 @@ export type CardEvent = { kind: "needs"; key: string; card: Interaction; follows
  *  screen re-read) is not new. */
 export const FORGET_CARD_MS = 10 * 60_000;
 
+/** One pending arrival's identity; a timestamp-less legacy card retains its ID-only key. */
+export function cardArrivalKey(ix: Pick<Interaction, "id" | "created_at">): string {
+  return ix.created_at ? `${ix.id}\n${ix.created_at}` : ix.id;
+}
+
 /**
  * The cards that arrived between two snapshots for a session that stayed "Needs you" (`was` the states of the last snapshot,
  * `next` this one's, as detectTransitions works them out). A session that only now becomes "Needs you" is detectTransitions'
  * (its notification is about its oldest card), so a card is announced once: by the transition or here; `bare` is the
- * sessions whose transition had no card yet, whose first card follows it (CardEvent.follows). `known` is the card ids
+ * sessions whose transition had no card yet, whose first card follows it (CardEvent.follows). `known` is the card occurrence keys
  * seen pending, with when they last were, undefined before the first snapshot (opening the page announces nothing).
  * Quiet tasks' sessions are left out, as detectTransitions does; several new cards for one session make one event, the oldest.
  * A question the assistant is still looking at, or a card a task's supervisor holds, is neither announced nor
@@ -137,13 +142,13 @@ export const FORGET_CARD_MS = 10 * 60_000;
 export function detectNewCards(known: ReadonlyMap<string, number> | undefined, interactions: readonly Interaction[], was: ReadonlyMap<string, AgentState>, next: ReadonlyMap<string, AgentState>, sessions: readonly Session[], bare: ReadonlySet<string>, now: number, grading = false): { ids: Map<string, number>; events: CardEvent[] } {
   const ids = new Map<string, number>();
   for (const [id, at] of known ?? []) if (now - at < FORGET_CARD_MS) ids.set(id, at);
-  const waiting = interactions.filter((ix) => !notYetTheUsers(ix));
-  for (const ix of waiting) ids.set(ix.id, now);
+  const waiting = interactions.filter((ix) => !ix.mirror_of && !notYetTheUsers(ix));
+  for (const ix of waiting) ids.set(cardArrivalKey(ix), now);
   if (!known) return { ids, events: [] };
   const quiet = new Set(sessions.filter((s) => s.quiet).map(agentKey));
   const first = new Map<string, Interaction>();
   for (const ix of waiting) {
-    if (known.has(ix.id) || (grading && isHeldLevel(ix.push_level))) continue;
+    if (known.has(cardArrivalKey(ix)) || (grading && isHeldLevel(ix.push_level))) continue;
     // a child session's card is announced for its parent (#5120), the session the lists show and its link opens
     const key = ix.session_id === "" ? `card:${ix.id}` : homeKey(ix);
     if (ix.session_id === "") { first.set(key, ix); continue; }
@@ -185,7 +190,7 @@ export function trackTurns(prev: ReadonlyMap<string, Turn>, sessions: Session[],
     if (stateOf(s) === "working") {
       if (was && (was.endedAt === undefined || now - was.endedAt < SETTLE_MS)) next.set(key, { start: was.start });
       else {
-        const since = s.state_since ? Date.parse(s.state_since) : NaN;
+        const since = timeOrNaN(s.state_since);
         next.set(key, { start: Number.isNaN(since) ? now : Math.min(since, now) });
       }
     } else if (was) next.set(key, was.endedAt === undefined ? { start: was.start, endedAt: now } : was);

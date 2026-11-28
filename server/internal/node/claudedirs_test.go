@@ -97,6 +97,149 @@ func TestMatchLauncher(t *testing.T) {
 	}
 }
 
+func TestInferLauncherByConfigDir(t *testing.T) {
+	t.Run("PATH wrappers and alias", func(t *testing.T) {
+		home, bin := t.TempDir(), t.TempDir()
+		t.Setenv("HOME", home)
+		wrappers := []struct {
+			name, setting, want string
+		}{
+			{"claude-work", `"$HOME/.claude-work"`, filepath.Join(home, ".claude-work")},
+			{"claude-play", "~/.claude-play", filepath.Join(home, ".claude-play")},
+			{"claude-dynamic", `"$XDG_CONFIG_HOME/claude"`, ""},
+		}
+		for _, wrapper := range wrappers {
+			body := "#!/bin/sh\nexport CLAUDE_CONFIG_DIR=" + wrapper.setting + "\nexec claude \"$@\"\n"
+			writeScript(t, filepath.Join(bin, wrapper.name), body, 0o755)
+		}
+		list, _, _ := scanPath(bin, nil).result(nil)
+		dirs := make(map[string]string, len(list))
+		for _, l := range list {
+			dirs[l.Name] = l.ConfigDir
+		}
+		for _, wrapper := range wrappers {
+			if got, ok := dirs[wrapper.name]; !ok || got != wrapper.want {
+				t.Errorf("%s: config dir = %q (found %t), want %q", wrapper.name, got, ok, wrapper.want)
+			}
+		}
+		alias, _, ok := aliasLauncher([]string{"CLAUDE_CONFIG_DIR=$HOME/.claude-alias", "claude"})
+		if want := filepath.Join(home, ".claude-alias"); !ok || alias.ConfigDir != want {
+			t.Errorf("alias: config dir = %q (found %t), want %q", alias.ConfigDir, ok, want)
+		}
+	})
+
+	t.Run("empty base URL", func(t *testing.T) {
+		root, work := t.TempDir(), t.TempDir()
+		link := filepath.Join(root, "work-link")
+		if err := os.Symlink(work, link); err != nil {
+			t.Fatal(err)
+		}
+		list := []proto.Launcher{
+			{Name: "claude"},
+			{Name: "claude-work", ConfigDir: work},
+		}
+		twins := append(slices.Clone(list), proto.Launcher{Name: "claude-work-twin", ConfigDir: link})
+		for _, tc := range []struct {
+			name, dir, want string
+			list            []proto.Launcher
+		}{
+			{"matching dir", work, "claude-work", list},
+			{"symlinked dir", link, "claude-work", list},
+			{"unknown dir", filepath.Join(root, "other"), "", list},
+			{"no dir", "", "", list},
+			{"shared dir", work, "", twins},
+		} {
+			if got := matchLauncher(tc.list, "", "", tc.dir); got != tc.want {
+				t.Errorf("%s: launcher = %q, want %q", tc.name, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("shared base URL", func(t *testing.T) {
+		const gateway = "https://gw.example.com"
+		root := t.TempDir()
+		dirA, dirB, dirC := filepath.Join(root, "a"), filepath.Join(root, "b"), filepath.Join(root, "c")
+		list := []proto.Launcher{
+			{Name: "gw-a", BaseURL: gateway, Model: "model-a", ConfigDir: dirA},
+			{Name: "gw-b", BaseURL: gateway, Model: "model-a", ConfigDir: dirB},
+			{Name: "gw-c", BaseURL: gateway, ConfigDir: dirC},
+		}
+		for _, tc := range []struct {
+			name, model, dir, want string
+		}{
+			{"dir breaks model tie", "model-a", dirB, "gw-b"},
+			{"dir points outside model matches", "model-a", dirC, ""},
+			{"unique dir with unknown model", "", dirC, "gw-c"},
+			{"model tie with no dir", "model-a", "", ""},
+		} {
+			if got := matchLauncher(list, gateway, tc.model, tc.dir); got != tc.want {
+				t.Errorf("%s: launcher = %q, want %q", tc.name, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("scanned session with only a config dir", func(t *testing.T) {
+		n, profile := claudeHome(t)
+		const id = "bbbbbbbb-0000-0000-0000-000000000002"
+		file := filepath.Join(profile, "sessions", "4242.json")
+		if err := os.WriteFile(file, []byte(`{"pid":4242,"sessionId":"`+id+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		launcherCache.Lock()
+		oldAt, oldList := launcherCache.at, launcherCache.list
+		launcherCache.at, launcherCache.list = time.Now(), []proto.Launcher{
+			{Name: "claude"},
+			{Name: "claude-profile", ConfigDir: profile},
+			{Name: "claude-other", ConfigDir: filepath.Join(n.home, "other")},
+		}
+		launcherCache.Unlock()
+		t.Cleanup(func() {
+			launcherCache.Lock()
+			launcherCache.at, launcherCache.list = oldAt, oldList
+			launcherCache.Unlock()
+		})
+		if env, ok := n.sessionEnv(id); !ok || env != (procEnv{ConfigDir: profile}) {
+			t.Fatalf("sessionEnv = %+v (found %t), want only the profile directory", env, ok)
+		}
+		if got := n.inferLauncher(id); got != "claude-profile" {
+			t.Errorf("inferLauncher = %q, want claude-profile", got)
+		}
+	})
+}
+
+func TestInferLauncherPrefersManagedMatchOverCachedConfigDir(t *testing.T) {
+	const (
+		id      = "example-session"
+		gateway = "https://gw.example.com"
+		model   = "managed-model"
+	)
+	profile := t.TempDir()
+	n := &Node{cdirs: &claudeDirs{
+		bySession: map[string]procEnv{id: {BaseURL: gateway, Model: model, ConfigDir: profile}},
+		scanned:   time.Now(),
+	}}
+	n.managed.byID = map[string]proto.ManagedLauncher{
+		"managed": {Name: "managed", BaseURL: gateway, Model: model},
+	}
+
+	launcherCache.Lock()
+	oldAt, oldList := launcherCache.at, launcherCache.list
+	launcherCache.at, launcherCache.list = time.Now(), []proto.Launcher{
+		{Name: "shell-profile", BaseURL: gateway, Model: "shell-model", ConfigDir: profile},
+		{Name: "shell-other", BaseURL: gateway, Model: "other-model"},
+	}
+	launcherCache.Unlock()
+	t.Cleanup(func() {
+		launcherCache.Lock()
+		launcherCache.at, launcherCache.list = oldAt, oldList
+		launcherCache.Unlock()
+	})
+
+	if got := n.inferLauncher(id); got != "managed" {
+		t.Errorf("inferLauncher = %q, want managed", got)
+	}
+}
+
 // claudeHome lays out a home with the default ~/.claude and a profile directory, each with a transcript.
 func claudeHome(t *testing.T) (*Node, string) {
 	t.Helper()

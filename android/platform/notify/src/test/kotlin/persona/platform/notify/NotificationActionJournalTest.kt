@@ -33,8 +33,8 @@ class NotificationActionJournalTest {
             override suspend fun resolve(id: String, resolution: Resolution) { writes++; pending.value = emptyList() }
         }
         var claims = 0
-        suspend fun tap(journal: NotificationActionJournal, id: String = request.id) =
-            NotificationActionExecutor(center, journal, session = { null }, onClaimed = { claims++ }).execute(id, "allow", null, { false })
+        suspend fun tap(journal: NotificationActionJournal, id: String = request.id, createdAt: String? = null) =
+            NotificationActionExecutor(center, journal, session = { null }, onClaimed = { claims++ }).execute(id, "allow", null, { false }, createdAt = createdAt)
         val journal = NotificationActionJournal(app)
         assertFalse(journal.claimed(request.id))
         assertEquals(NotificationActionResult.Submitted, tap(journal))
@@ -44,5 +44,27 @@ class NotificationActionJournalTest {
         assertEquals(NotificationActionResult.Gone, tap(journal, "other"))
         assertEquals(1, writes)
         assertEquals(1, claims)
+    }
+
+    @Test fun aSameIDReplacementHasItsOwnDurableClaim() = runBlocking {
+        val original = request.copy(createdAt = "2030-01-01T00:00:00.000000001Z")
+        val replacement = request.copy(createdAt = "2030-01-01T00:00:00.000000002Z")
+        var current = original
+        var available = true
+        var writes = 0
+        val center = object : InteractionCenter {
+            override val pending = MutableStateFlow(listOf(current))
+            override suspend fun refresh() { pending.value = if (available) listOf(current) else emptyList() }
+            override suspend fun resolve(id: String, resolution: Resolution) { writes++; available = false; pending.value = emptyList() }
+        }
+        val journal = NotificationActionJournal(app)
+        suspend fun tap(card: Interaction) = NotificationActionExecutor(center, journal, session = { null })
+            .execute(card.id, "allow", null, { false }, createdAt = card.createdAt)
+        assertEquals(NotificationActionResult.Submitted, tap(original))
+        current = replacement
+        available = true
+        assertEquals(NotificationActionResult.Submitted, tap(replacement))
+        assertEquals(NotificationActionResult.AnsweredHere, tap(replacement))
+        assertEquals(2, writes)
     }
 }

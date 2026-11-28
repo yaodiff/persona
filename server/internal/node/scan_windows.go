@@ -90,7 +90,8 @@ func envListing(env map[string]string) string {
 func scanClaudeProcessesOS() map[int]procEnv {
 	out := map[int]procEnv{}
 	procs, _, err := listWinProcs(func(name string) bool { return agentImages[name] },
-		"CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL")
+		"CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+		"CLAUDE_CODE_DISABLE_FAST_MODE", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX")
 	if err != nil {
 		return out
 	}
@@ -98,7 +99,11 @@ func scanClaudeProcessesOS() map[int]procEnv {
 		if !isClaudeCmd(p.argv) {
 			continue
 		}
-		pe := procEnv{ConfigDir: p.env["CLAUDE_CONFIG_DIR"], BaseURL: p.env["ANTHROPIC_BASE_URL"], Model: p.env["ANTHROPIC_MODEL"]}
+		pe := procEnv{
+			ConfigDir: p.env["CLAUDE_CONFIG_DIR"], BaseURL: p.env["ANTHROPIC_BASE_URL"], Model: p.env["ANTHROPIC_MODEL"],
+			FastUnavailable: claudeEnvFlag(p.env["CLAUDE_CODE_DISABLE_FAST_MODE"]) || claudeEnvFlag(p.env["CLAUDE_CODE_USE_BEDROCK"]) || claudeEnvFlag(p.env["CLAUDE_CODE_USE_FOUNDRY"]),
+			Vertex:          claudeEnvFlag(p.env["CLAUDE_CODE_USE_VERTEX"]),
+		}
 		if pe != (procEnv{}) {
 			out[p.pid] = pe
 		}

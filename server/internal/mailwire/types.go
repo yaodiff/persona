@@ -171,6 +171,21 @@ type SetFlagsRequest struct {
 	Flagged *bool  `json:"flagged,omitempty"`
 }
 
+// MoveRequest identifies the source mailbox generation and one destination in the same account.
+type MoveRequest struct {
+	Mailbox     string `json:"mailbox"`
+	UIDValidity uint32 `json:"uid_validity"`
+	To          string `json:"to,omitempty"`
+	ToMailbox   string `json:"to_mailbox,omitempty"`
+}
+
+// MoveResult gives the destination and, when the server supplied COPYUID, the identity needed to move back.
+type MoveResult struct {
+	Mailbox     string `json:"mailbox"`
+	UID         uint32 `json:"uid,omitempty"`
+	UIDValidity uint32 `json:"uid_validity,omitempty"`
+}
+
 // SendRequest is a message to send.
 type SendRequest struct {
 	AccountID  string     `json:"account_id"`

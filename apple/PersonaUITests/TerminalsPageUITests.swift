@@ -27,12 +27,12 @@ final class TerminalsPageUITests: XCTestCase {
         // The menu is taller than the screen with this many computers: Terminals is its last item, below the fold.
         let anchor = app.buttons["Expand All"].exists ? app.buttons["Expand All"] : app.buttons["全部展开"]
         XCTAssertTrue(anchor.waitForExistence(timeout: 5), "the menu did not open")
-        let terminals = app.buttons.matching(NSPredicate(format: "label IN {'终端', 'Terminals'} AND identifier != 'agents.filter.terminal'")).firstMatch
+        let terminals = app.buttons.matching(NSPredicate(format: "label IN {'标签页', 'Tabs'} AND identifier != 'agents.filter.terminal'")).firstMatch
         let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.55))
         for _ in 0..<8 where !(terminals.exists && terminals.isHittable) {
             from.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.15)))
         }
-        XCTAssertTrue(terminals.exists, "no Terminals item in the menu")
+        XCTAssertTrue(terminals.exists, "no Tabs item in the menu")
         terminals.tap()
         let rows = app.buttons.matching(identifier: "terminals.row")
         if !rows.firstMatch.waitForExistence(timeout: 25) { print("TREE2:", app.state.rawValue, app.debugDescription) }

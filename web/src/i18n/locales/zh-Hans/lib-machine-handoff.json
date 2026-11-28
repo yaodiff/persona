@@ -1,9 +1,9 @@
 {
-  "request": "请把 {source}（电脑 ID：{source_id}）上的这些工作交接到 {target}（电脑 ID：{target_id}）继续：",
+  "request": "请将 {source}（电脑 ID：{source_id}）上的以下工作交接至 {target}（电脑 ID：{target_id}）继续处理：",
   "line_todo": "- 待办「{todo}」（待办 ID：{todo_id}），Agent「{title}」（会话 ID：{sid}）",
-  "line_agent": "- Agent「{title}」（会话 ID：{sid}，没有关联待办）",
-  "how": "做法：每一项都在 {target} 上开一个新任务，任务计划用 continues 接上原来的待办，带上简短的进展说明；新的 Agent 在 {target} 上开始工作之后，再停掉 {source} 上原来的 Agent。完成后在这里告诉我结果。",
+  "line_agent": "- Agent「{title}」（会话 ID：{sid}，无关联待办）",
+  "how": "处理方式：请为每一项在 {target} 上新建任务，在任务计划中使用 continues 衔接原待办并附简短进展说明。待新的 Agent 在 {target} 上启动后，再停止 {source} 上原有的 Agent。完成后请在此告知我。",
   "open_chat": "打开对话",
-  "sent": "已发给 Persona",
-  "not_sent": "没发出去，打开对话看看原因"
+  "sent": "已发送给 Persona",
+  "not_sent": "发送失败，请打开对话查看原因"
 }

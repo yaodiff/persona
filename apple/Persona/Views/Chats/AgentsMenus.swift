@@ -471,30 +471,60 @@ struct AgentsGroupingMenu: View, Equatable {
     }
 }
 
-/// The personal agents page, one tap away beside the grouping (#140): on a phone the shell has no other way there (the
-/// iPad and Mac use the toolbar's button).
-struct AgentsPersonalPill: View {
+/// The personal agents page as one of the list's top-level groups (#140, #16769): on a phone the shell has no other way
+/// there (the iPad and Mac use the toolbar's button). Drawn as a computer's heading is (`HostHeading`): the mark in a
+/// tile, the name a level above the headers under it, how many there are, and a forward chevron, since it opens a page
+/// rather than folding. A lone capsule under the quick filters read as left over once the grouping joined the filter bar.
+struct AgentsPersonalHeading: View {
+    /// How many personal agent conversations there are; nil while unknown.
+    var count: Int?
     var open: () -> Void
+    @Environment(\.compactList) private var compact
 
     var body: some View {
         Button {
             Haptics.tap()
             open()
         } label: {
-            HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(Theme.Icon.personalAgents)
-                Text("Personal Agents")
-                ThemedIcon(Theme.Icon.forward).font(Theme.Font.label)
+            HStack(spacing: Theme.Space.sm) {
+                CountsHeading {
+                    ThemedIcon(Theme.Icon.personalAgents)
+                        .font(Theme.Font.secondaryStrong)
+                        .foregroundStyle(Color.primary)
+                        .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                        .background(Theme.Fill.chip, in: .rect(cornerRadius: Theme.Radius.badge))
+                    Text("Personal Agents")
+                        .font(compact ? Theme.Font.title : Theme.Font.heading)
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                } counts: {
+                    if let count {
+                        Text("\(count)")
+                            .font((compact ? CompactList.metaStrong : Theme.Font.labelHeavy).monospacedDigit())
+                            .foregroundStyle(Color.secondary)
+                            .contentTransition(.numericText(value: Double(count)))
+                    }
+                }
+                Spacer(minLength: Theme.Space.xs)
+                ThemedIcon(Theme.Icon.forward)
+                    .font(Theme.Font.labelHeavy)
+                    .foregroundStyle(.tertiary)
             }
-            .agentsPill()
+            // A finger's height, the room above its words, as a computer's heading (`FoldButton`).
+            .modifier(TouchHeight(alignment: .bottom))
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "Personal Agents"))
+        .accessibilityValue(count.map { String(localized: "\($0) agents") } ?? "")
+        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("agents.personal")
     }
 }
 
 private extension View {
-    /// The look of the pills under the quick filters: the grouping and Personal Agents.
+    /// The look of the grouping's pill under the quick filters.
     func agentsPill() -> some View {
         font(Theme.Font.secondaryMedium)
             .lineLimit(1)

@@ -322,7 +322,7 @@ func TestResolutionFixturesIOS(t *testing.T) {
 	chat := read("apple/Shared/ChatStore.swift")
 	notification := read("apple/Persona/App/NotificationActions.swift")
 	source := "import Foundation\n" + read("apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift") + "\n"
-	for _, marker := range []string{"nonisolated struct SessionKey", "nonisolated struct MachineRef", "nonisolated enum InteractionKind", "nonisolated struct QuestionOption", "nonisolated struct Question:", "nonisolated struct Interaction:", "nonisolated struct Delegate:", "nonisolated struct InteractionField:", "nonisolated struct LenientText:", "nonisolated struct Resolution:", "nonisolated struct ScreenDialog:"} {
+	for _, marker := range []string{"nonisolated struct SessionKey", "nonisolated struct MachineRef", "nonisolated enum InteractionKind", "nonisolated struct QuestionOption", "nonisolated struct Question:", "@propertyWrapper\nnonisolated struct InteractionOccurrenceDate:", "nonisolated struct Interaction:", "extension Interaction {", "nonisolated struct Delegate:", "nonisolated struct InteractionField:", "nonisolated struct LenientText:", "nonisolated struct Resolution:", "nonisolated struct ScreenDialog:"} {
 		source += swiftBlock(t, models, marker) + "\n"
 	}
 	rules := read("apple/Shared/RuleSuggestion.swift")
@@ -462,7 +462,9 @@ func transportSource(t *testing.T, read func(string) string, interactionText str
 	b.WriteString("}\n")
 	b.WriteString(swiftResolveSupport + "\n@MainActor final class ResolveProbe {\n" + swiftResolveFields)
 	app := read("apple/Persona/App/AppModel.swift")
-	add(app, "func canAnswer(_ ix: Interaction) -> Bool {", "func resolve(_ ix:", "private func putBack(_ ix: Interaction) {", "private func keepDelegated(_ ix: Interaction, _ answer: AssistantAnswer) {")
+	add(app, "func canAnswer(_ ix: Interaction) -> Bool {", "func resolve(_ ix:", "private struct InteractionOccurrence {",
+		"private func occurrence(", "private func laterOccurrence(", "private func markEndedInteraction(", "private func markEndedOccurrence(",
+		"private func hasLaterOccurrence(", "private func putBack(_ ix: Interaction) {", "private func forgetEndedInteraction(", "private func keepDelegated(_ ix: Interaction, _ answer: AssistantAnswer) {")
 	// The app's handling of the hub's interaction_resolved event, a case of its event switch, as written there.
 	const resolvedCase = "case .interactionResolved(let id, let assistant):"
 	start := strings.Index(app, resolvedCase)
@@ -750,6 +752,8 @@ var client: ProbeAPI?
 var connection = ProbeConnection()
 var interactions: [String: Interaction] = [:]
 var endedInteractionIDs: Set<String> = []
+private var endedInteractionOccurrences: [String: InteractionOccurrence] = [:]
+static let endedInteractionOccurrenceLimit = 500
 var answering = AnsweringInteractions()
 var answerAttempts = AnswerAttempts()
 var delegatedAnswers: [DelegatedAnswer] = []
@@ -798,7 +802,7 @@ func TestResolutionFixtureSourceEvidence(t *testing.T) {
 			"#expect(ApproveFirstIntent.authenticationPolicy == .requiresAuthentication)",
 		},
 		"apple/PersonaWidgets/FleetLiveActivity.swift": {
-			"Button(intent: ApprovePlanIntent(interactionID: id))", "Link(destination: FleetLink.url(item)!)", ".widgetURL(FleetLink.whole(state))",
+			"Button(intent: ApprovePlanIntent(interactionID: id, interactionCreatedAt: item.interactionCreatedAt))", "Link(destination: FleetLink.url(item)!)", ".widgetURL(FleetLink.whole(state))",
 		},
 	}
 	for path, snippets := range evidence {

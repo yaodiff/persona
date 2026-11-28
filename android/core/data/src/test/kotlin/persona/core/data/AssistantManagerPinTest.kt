@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Test
 import persona.core.contracts.Machine
@@ -78,6 +79,26 @@ class AssistantManagerPinTest {
         transport.failFor = "m-3"; transport.asked.clear()
         try { repository.mainConversationOf("m-3"); fail("expected a failure") } catch (_: java.io.IOException) { }
         assertEquals(listOf("get m-3"), transport.asked)
+    }
+
+    @Test fun anExistingManagersMainCanBeReadWithoutCreatingOne() = runTest {
+        val transport = Transport(mutableMapOf(null to "d-main", "m-3" to "x-main"))
+        val connection = object : InboxAssistantConnection { override val current = MutableStateFlow<InboxAssistantTransport?>(transport) }
+        val repository = RealAssistantRepository(connection, Sessions(), backgroundScope)
+        AssistantManagerChoice.choose("hub", null, "assistant")
+
+        assertNull(repository.mainConversationOrNull("assistant"))
+        assertEquals(emptyList<String>(), transport.asked)
+
+        assertEquals(SessionKey("mac", "x-main"), repository.mainConversationOrNull("m-3"))
+        assertEquals(listOf("get m-3"), transport.asked)
+        assertEquals(emptyList<String>(), transport.asked.filter { it.startsWith("create") })
+
+        transport.mains.remove("m-3")
+        transport.asked.clear()
+        assertNull(repository.mainConversationOrNull("m-3"))
+        assertEquals(listOf("get m-3"), transport.asked)
+        assertEquals(emptyList<String>(), transport.asked.filter { it.startsWith("create") })
     }
 
     @Test fun theMainQueueIsTheDefaultsWhateverThePageShows() = runTest {

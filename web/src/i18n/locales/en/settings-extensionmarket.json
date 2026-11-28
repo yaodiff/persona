@@ -137,5 +137,7 @@
   "market_unread": "Extensions show up here once the market can be read.",
   "token_create_hint": "No token yet? Create one on GitHub: the name, purpose and a one-year expiry are filled in and no permissions are needed. Click Generate token, then paste it above.",
   "token_create": "Create on GitHub",
-  "for_manager": "For the assistant “{name}”: only its copy changes (each assistant has its own extensions)."
+  "for_manager": "For the assistant “{name}”: only its copy changes (each assistant has its own extensions).",
+  "newer_incompatible_title": "Newer version {version} isn't compatible with this Persona",
+  "newer_incompatible_inline": "Version {version} isn't compatible: {reason}"
 }

@@ -2,7 +2,8 @@
 // The Files panel's changes (#4883, the interface of #4858): the requests each one sends, an upload's progress, abort
 // and the hub's codes, what a name may be, and the words a failure is told in.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "./api";
+import { t } from "../i18n";
+import { ApiError, errorText, HubUnreachableError, isTransient } from "./api";
 import { isNameTaken, moveEntries, nameProblem, opErrorText, parentOf, renameEntry, restoreEntries, trashEntries, uploadToDir, within } from "./file-ops";
 
 /** A stand-in for XMLHttpRequest: what was sent, and the test answers it. */
@@ -81,6 +82,18 @@ describe("uploadToDir", () => {
     expect(e).toBeInstanceOf(ApiError);
     expect(isNameTaken(e)).toBe(true);
     expect(opErrorText(e)).toContain("a.txt");
+  });
+
+  it("says a dropped connection is \"Can't reach the hub\", and may be retried", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXHR);
+    const p = uploadToDir("m", file("a.txt"), { dir: "/d" });
+    FakeXHR.last.onerror?.();
+    const e = await p.catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(HubUnreachableError);
+    expect(e).toBeInstanceOf(TypeError); // code that counts a TypeError as a gap keeps working
+    expect(errorText(e)).toBe(t("lib-api.cant_reach_hub"));
+    expect(opErrorText(e)).toBe(t("lib-api.cant_reach_hub"));
+    expect(isTransient(e)).toBe(true);
   });
 
   it("aborts with the caller's signal, as an AbortError", async () => {

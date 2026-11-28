@@ -46,6 +46,7 @@ type searchJSON struct {
 	NextBeforeUID uint32 `json:"next_before_uid,omitempty"`
 	// HeadersOnly: the server's search found nothing, so subjects, senders and recipients were matched instead.
 	HeadersOnly bool          `json:"headers_only,omitempty"`
+	UIDValidity uint32        `json:"uid_validity,omitempty"`
 	Messages    []messageJSON `json:"messages"`
 }
 
@@ -71,7 +72,7 @@ func (s *Service) CallJSON(ctx context.Context, name string, args json.RawMessag
 		if err != nil {
 			return nil, true, err
 		}
-		out := searchJSON{More: res.HasMore, NextBeforeUID: res.NextBeforeUID, HeadersOnly: res.HeadersOnly,
+		out := searchJSON{More: res.HasMore, NextBeforeUID: res.NextBeforeUID, HeadersOnly: res.HeadersOnly, UIDValidity: res.UIDValidity,
 			Messages: make([]messageJSON, 0, len(res.Messages))}
 		for _, m := range res.Messages {
 			out.Messages = append(out.Messages, messageData(m))

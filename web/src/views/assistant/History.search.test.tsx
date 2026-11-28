@@ -125,7 +125,7 @@ describe("All chats' search with the manager's (#6283)", () => {
     expect(row("keep")).toBeDefined(); // its title, matched here
     expect(row("keep")?.getAttribute("href")).not.toContain("at=");
     expect(row("trip")?.querySelector("mark")).not.toBeNull();
-    expect(host.textContent).toContain("较早的对话还在整理");
+    expect(host.textContent).toContain("正在索引较早的对话");
   });
 
   it("filters titles and last messages as before on a hub without it", async () => {
@@ -134,7 +134,7 @@ describe("All chats' search with the manager's (#6283)", () => {
     root = createRoot(host);
     act(() => root.render(<History onToggleSidebar={() => {}} />));
     await flush();
-    expect((host.querySelector("input") as HTMLInputElement).placeholder).toBe("搜索标题或最后一句");
+    expect((host.querySelector("input") as HTMLInputElement).placeholder).toBe("搜索标题或最新消息");
     await type("路线");
     expect(hub.searched).toEqual([]);
     expect(row("trip")?.textContent).toContain("路线已发你。");

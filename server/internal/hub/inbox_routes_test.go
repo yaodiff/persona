@@ -281,3 +281,39 @@ func TestInboxHandoffReceipt(t *testing.T) {
 		t.Fatalf("another client id: %d, the manager asked %d times", code, asked.Load())
 	}
 }
+
+// #13360: a hand-off whose main conversation's computer is away (the manager answers 503 node_unreachable, delivered
+// "none", retryable) sent nothing and keeps no receipt, so the same client_id sends it once the computer is back.
+func TestInboxHandoffNodeUnreachableKeepsNoReceipt(t *testing.T) {
+	h := newTestHub(t)
+	store := &receiptStore{memStore: newMemStore(), ops: &clientOpsStore{ops: map[string]db.ClientOp{}}}
+	h.store = store
+	fm, _ := connectInboxManager(t, h)
+	var asked atomic.Int32
+	fm.mu.Lock()
+	fm.http = func(_ context.Context, r assistantwire.HTTPRequest) (any, error) {
+		if asked.Add(1) == 1 {
+			return assistantwire.HTTPResponse{Status: http.StatusServiceUnavailable,
+				Body: []byte(`{"code":"node_unreachable","delivered":"none","retryable":true,"error":"machine is offline"}`)}, nil
+		}
+		return assistantwire.HTTPResponse{Status: http.StatusOK, Body: []byte(`{"item":{"id":"x"},"session":{"machine_id":"server","session_id":"m1"}}`)}, nil
+	}
+	fm.mu.Unlock()
+	mux := h.routes()
+	body := `{"text":"看下这件事","client_id":"5d0c7a1e-2b3f-4c6d-8e9f-13360a1b2c3d"}`
+	if code, out := call(t, mux, "POST", "/api/v1/inbox/x/handoff", h.cfg.Token, body); code != http.StatusServiceUnavailable || out["delivered"] != "none" {
+		t.Fatalf("node away: %d %v", code, out)
+	}
+	store.ops.mu.Lock()
+	kept := len(store.ops.ops)
+	store.ops.mu.Unlock()
+	if kept != 0 {
+		t.Fatal("the receipt of a hand-off its node got nothing of was kept")
+	}
+	for i := range 2 {
+		code, out := call(t, mux, "POST", "/api/v1/inbox/x/handoff", h.cfg.Token, body)
+		if session, _ := out["session"].(map[string]any); code != http.StatusOK || session["session_id"] != "m1" || asked.Load() != 2 {
+			t.Fatalf("node back, hand-off %d: %d %v, the manager asked %d times", i+1, code, out, asked.Load())
+		}
+	}
+}

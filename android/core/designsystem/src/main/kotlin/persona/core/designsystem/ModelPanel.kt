@@ -103,7 +103,7 @@ fun JModelPanel(
     JSheet(onDismiss = onDismiss, showDragHandle = true, contentPadding = Tokens.Space.flush) {
         val open = customizing?.let { key -> rows.firstOrNull { it.key == key } }
         if (open != null) {
-            SetupPage(open, state, prefs, onPrefs, words, live = onApplyCurrent != null && open.current, onApplyCurrent = onApplyCurrent,
+            SetupPage(open, prefs, onPrefs, words, live = onApplyCurrent != null && open.current, onApplyCurrent = onApplyCurrent,
                 extra = if (open.current) currentExtra else null, onBack = { customizing = null })
             return@JSheet
         }
@@ -270,8 +270,12 @@ private fun ModelRow(
     val palette = PersonaTheme.palette
     val off = block != null || picking
     val name = if (row.kind == PanelRow.Kind.Typed) stringResource(R.string.designsystem_modelpanel_use_typed, row.model.id) else row.model.name
-    val effort = row.model.efforts.takeIf { it.isNotEmpty() }?.let { ModelPanel.shownEffort(row.setup, row.model) }?.takeIf(String::isNotEmpty)
-    val setupWords = listOfNotNull(words.engine(row.provider.engine), effort?.let(words.effort)).joinToString(" · ")
+    val effort = when {
+        row.reportsSessionEffort && row.shownEffort.isEmpty() -> stringResource(R.string.designsystem_status_unknown)
+        row.reportsSessionEffort || row.model.efforts.isNotEmpty() -> row.shownEffort.takeIf(String::isNotEmpty)?.let(words.effort)
+        else -> null
+    }
+    val setupWords = listOfNotNull(words.engine(row.provider.engine), effort).joinToString(" · ")
     Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.xs).clip(RoundedCornerShape(Tokens.Radius.control))
         .then(if (row.current) Modifier.background(palette.surfaceStrong) else Modifier)
         .clickable(enabled = !off, role = Role.Button, onClick = onPick)
@@ -288,7 +292,7 @@ private fun ModelRow(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
             modifier = Modifier.semantics { contentDescription = setupWords }) {
             words.mark(row.provider.engine)?.let { JAgentMark(it, size = Tokens.Size.markXS) }
-            effort?.let { Text(words.effort(it), style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1, softWrap = false) }
+            effort?.let { Text(it, style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1, softWrap = false) }
         }
         if (row.kind != PanelRow.Kind.Typed) JIconButton(PhIcons.Star,
             stringResource(if (starred) R.string.designsystem_modelpanel_remove_favorite else R.string.designsystem_modelpanel_save_favorite),
@@ -308,13 +312,13 @@ private const val DIMMED = 0.5f
  */
 @Composable
 private fun SetupPage(
-    row: PanelRow, state: PanelState, prefs: PanelPrefs, onPrefs: (PanelPrefs) -> Unit, words: ModelPanelWords, live: Boolean,
+    row: PanelRow, prefs: PanelPrefs, onPrefs: (PanelPrefs) -> Unit, words: ModelPanelWords, live: Boolean,
     onApplyCurrent: ((String) -> Unit)?, extra: (@Composable () -> Unit)?, onBack: () -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val model: PanelModel = row.model
-    val override = prefs.overrides[PanelPrefs.overrideKey(row.provider.id, model.id)]
-    val shown = ModelPanel.shownEffort(row.setup, model)
+    val shown = row.shownEffort
+    val edit = row.effortEdit(live)
     Column(Modifier.padding(horizontal = pagePadding).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             JIconButton(PhIcons.CaretLeft, stringResource(R.string.designsystem_back), onBack)
@@ -325,6 +329,13 @@ private fun SetupPage(
             JProviderTile(row.provider.name)
             Text(listOf(row.provider.name, words.engine(row.provider.engine)).joinToString(" · "), style = PersonaTheme.type.caption, color = palette.ink2)
         }
+        if (edit == PanelRow.EffortEdit.ReadOnly) {
+            val label = shown.takeIf(String::isNotEmpty)?.let(words.effort) ?: stringResource(R.string.designsystem_status_unknown)
+            Text(stringResource(R.string.designsystem_modelpanel_effort) + " · " + label,
+                style = PersonaTheme.type.callout, color = palette.ink)
+            extra?.invoke()
+            return@Column
+        }
         if (model.efforts.isNotEmpty()) {
             val index = model.efforts.indexOf(shown).coerceAtLeast(0)
             Text(stringResource(R.string.designsystem_modelpanel_effort) + " · " + words.effort(model.efforts[index]) +
@@ -334,7 +345,7 @@ private fun SetupPage(
                 JSlider(index.toFloat(), { value ->
                     val effort = model.efforts[value.toInt().coerceIn(0, model.efforts.lastIndex)]
                     if (effort == shown) return@JSlider
-                    if (live) onApplyCurrent?.invoke(effort)
+                    if (edit == PanelRow.EffortEdit.Live) onApplyCurrent?.invoke(effort)
                     else onPrefs(prefs.setOverride(row.provider.id, model.id, PanelOverride(effort = effort)))
                 }, valueRange = 0f..model.efforts.lastIndex.toFloat(), step = 1f,
                     contentDescription = stringResource(R.string.designsystem_modelpanel_effort))
@@ -346,13 +357,14 @@ private fun SetupPage(
         }
         extra?.invoke()
         JDivider()
+        val override = prefs.overrides[PanelPrefs.overrideKey(row.provider.id, model.id)]
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(when {
                 row.kind == PanelRow.Kind.Favorite -> R.string.designsystem_modelpanel_setup_saved
                 override != null -> R.string.designsystem_modelpanel_setup_customized
                 else -> R.string.designsystem_modelpanel_setup_recommended
             }), Modifier.weight(1f), style = PersonaTheme.type.caption, color = palette.ink2)
-            if (override != null && !live) JTextButton(stringResource(R.string.designsystem_modelpanel_reset),
+            if (override != null && edit == PanelRow.EffortEdit.Preference) JTextButton(stringResource(R.string.designsystem_modelpanel_reset),
                 { onPrefs(prefs.resetOverride(row.provider.id, model.id)) })
         }
         Spacer(Modifier.height(Tokens.Space.s))

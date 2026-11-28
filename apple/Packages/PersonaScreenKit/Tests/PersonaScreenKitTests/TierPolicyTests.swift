@@ -300,4 +300,101 @@ final class TierPolicyTests: XCTestCase {
         XCTAssertEqual(c?.targetKbps, 6_408, "inside the new band")
         XCTAssertEqual(p.setBudget(capKbps: 1_500, maxFps: 15, now: 2)?.reason, .networkChanged)
     }
+
+    func testExtremeValuesAndNonFiniteInputsDoNotTrapOrPoison() {
+        // Huge finite bursts clamp instead of trapping Int(b / 1.5); non-finite bursts are ignored.
+        var burst = policy(LinkStats(kind: .relay, via: .wifi))
+        XCTAssertNil(burst.tick(signals(queue: 5, bursts: [.infinity, .nan, .infinity]), now: 0.25))
+        XCTAssertNil(burst.tick(signals(queue: 5, bursts: [1e30, 1e30, 1e30]), now: 0.5))
+        let steppedUp = burst.tick(signals(queue: 5), now: 3.5)
+        XCTAssertEqual(steppedUp?.index, 0)
+        XCTAssertEqual(steppedUp?.targetKbps, burst.ladder[0].maxKbps)
+
+        // Decode-behind step-down with non-finite or extreme deliveredKbps never traps Int(0.85 * delivered).
+        for (delivered, expectMax) in [(.nan, false), (.infinity, false), (-.infinity, false), (1e30, true)] {
+            var behind = policy(LinkStats(kind: .lan, via: .wifi))
+            XCTAssertNil(behind.tick(signals(queue: 5, delivered: delivered, decode: 30), now: 1))
+            let down = behind.tick(signals(queue: 5, delivered: delivered, decode: 30), now: 3)
+            XCTAssertEqual(down?.reason, .phoneBehind)
+            XCTAssertEqual(down?.targetKbps, expectMax ? down?.tier.maxKbps : down?.tier.minKbps)
+        }
+
+        // Link-slowed step-down with negative-infinity or NaN deliveredKbps treats rate as unknown instead of trapping or stalling.
+        for badDelivered in [-Double.infinity, .nan] {
+            var slow = policy(LinkStats(kind: .lan, via: .wifi))
+            XCTAssertNil(slow.tick(signals(queue: 500, delivered: badDelivered), now: 1))
+            let down = slow.tick(signals(queue: 500, delivered: badDelivered), now: 1.25)
+            XCTAssertEqual(down?.reason, .linkSlowed)
+            XCTAssertEqual(down?.index, 1)
+            XCTAssertEqual(down?.targetKbps, slow.ladder[1].minKbps)
+        }
+
+        // Non-finite `now` is ignored in tick without poisoning subsequent decisions.
+        var clock = policy(LinkStats(kind: .lan, via: .wifi))
+        XCTAssertNil(clock.tick(signals(queue: 500, delivered: 3_000), now: .nan))
+        XCTAssertNil(clock.tick(signals(queue: 500, delivered: 3_000), now: .infinity))
+        XCTAssertNil(clock.tick(signals(queue: 500, delivered: 3_000), now: 1))
+        XCTAssertEqual(clock.tick(signals(queue: 500, delivered: 3_000), now: 1.25)?.reason, .linkSlowed)
+
+        // Huge display dimensions never overflow pixelRate inside TierPolicy.index(rung:...).
+        let huge = TierPolicy.Display(points: [Int.max, Int.max], pixels: [Int.max, Int.max], maxSize: 0)
+        let hugePolicy = TierPolicy(display: huge, bias: .auto, capKbps: 12_000, maxFps: 60,
+                                    link: LinkStats(kind: .relay, via: .wifi), now: 0)
+        XCTAssertFalse(hugePolicy.ladder.isEmpty)
+        XCTAssertLessThan(hugePolicy.index, hugePolicy.ladder.count)
+
+        // Negative minRttMs on Tailscale falls back to finite non-negative srttMs instead of picking rung 0.
+        let badRtt = LinkStats(kind: .tailscale, via: .wifi, srttMs: 60, minRttMs: -5)
+        XCTAssertEqual(policy(badRtt).index, 1)
+
+        // Non-finite or negative queueP95Ms breaks calm window and never steps up.
+        for badP95 in [Double.nan, .infinity, -.infinity, -1] {
+            var p = policy(LinkStats(kind: .relay, via: .wifi))
+            p.helper(timing(target: 12_000, sent: 11_500))
+            XCTAssertNil(p.tick(signals(queue: 5, p95: 5), now: 0.25))
+            XCTAssertNil(p.tick(signals(queue: 5, p95: badP95), now: 3.5), "bad queueP95Ms \(badP95) must not step up")
+            XCTAssertEqual(p.index, 1)
+        }
+
+        // Non-finite decodeP95Ms / replacedShare do not trigger false phoneBehind step-downs.
+        var badDecode = policy(LinkStats(kind: .lan, via: .wifi))
+        var infDecode = signals(queue: 5, decode: .infinity)
+        infDecode.replacedShare = .infinity
+        XCTAssertNil(badDecode.tick(infDecode, now: 1))
+        XCTAssertNil(badDecode.tick(infDecode, now: 4))
+        XCTAssertEqual(badDecode.index, 0)
+
+        // Non-finite maxScale normalizes to nil in init & setBudget (idempotent); <= 0 maxScale stays non-empty & idempotent.
+        for badScale in [Double.nan, .infinity, -.infinity] {
+            var p = TierPolicy(display: display, bias: .auto, capKbps: 12_000, maxFps: 60, maxScale: badScale,
+                               link: LinkStats(kind: .lan, via: .wifi), now: 0)
+            XCTAssertNil(p.maxScale)
+            XCTAssertNil(p.setBudget(capKbps: 12_000, maxFps: 60, maxScale: badScale, now: 1))
+            XCTAssertNil(p.setBudget(capKbps: 12_000, maxFps: 60, maxScale: nil, now: 2))
+        }
+        for tinyScale in [0.0, -1.0] {
+            var p = TierPolicy(display: display, bias: .auto, capKbps: 12_000, maxFps: 60, maxScale: tinyScale,
+                               link: LinkStats(kind: .lan, via: .wifi), now: 0)
+            XCTAssertEqual(p.ladder.count, 1)
+            XCTAssertNil(p.setBudget(capKbps: 12_000, maxFps: 60, maxScale: tinyScale, now: 1))
+        }
+
+        // Non-finite timestamps in init, path, setBias, and setBudget preserve finite internal clock state.
+        for badNow in [-Double.infinity, .nan, .infinity] {
+            var p = TierPolicy(display: display, bias: .auto, capKbps: 12_000, maxFps: 60,
+                               link: LinkStats(kind: .lan, via: .wifi), now: badNow)
+            let relay = PathChange(from: LinkStats(kind: .lan, via: .wifi), to: LinkStats(kind: .relay, via: .cellular), reason: .lost)
+            XCTAssertNotNil(p.path(relay, now: badNow))
+            XCTAssertNotNil(p.setBias(.sharper, now: badNow))
+            XCTAssertNotNil(p.setBudget(capKbps: 6_000, maxFps: 30, now: badNow))
+            // Subsequent finite ticks still step up cleanly once calm + proven.
+            p.helper(timing(target: 5_000, sent: 5_000))
+            XCTAssertNil(p.tick(signals(queue: 5), now: 0.25))
+            var climbed = false
+            for step in 1 ... 40 {
+                if p.tick(signals(queue: 5), now: 0.25 + Double(step) * 0.25) != nil { climbed = true; break }
+            }
+            XCTAssertTrue(climbed, "non-finite now \(badNow) must not poison tierSince/shortUntil")
+        }
+    }
 }

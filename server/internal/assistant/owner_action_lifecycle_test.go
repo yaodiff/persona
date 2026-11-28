@@ -30,7 +30,7 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 			name = "Allow executes at most once"
 		}
 		t.Run(name, func(t *testing.T) {
-			url := newDatabase(t)
+			url := newMigratedDatabase(t, db.AllSets)
 			database, err := db.Open(t.Context(), url, db.AllSets)
 			if err != nil {
 				t.Fatal(err)
@@ -82,11 +82,11 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 			}
 			assertPersistentOwnerSurfaces(t, s, book, batchIX.ApprovalBatchID, ids)
 
-			created := time.Now().Add(-3 * time.Minute).UTC()
+			created := time.Now().Add(-3 * time.Minute).UTC().Truncate(time.Microsecond)
 			formerDeadline := created.Add(time.Minute)
 			wallClock := os.Getenv("PERSONA_OWNER_APPROVAL_WALL_CLOCK") == "1"
 			if wallClock {
-				created = time.Now().UTC()
+				created = time.Now().UTC().Truncate(time.Microsecond)
 				formerDeadline = created.Add(time.Minute)
 			}
 			conn, err := pgx.Connect(t.Context(), url)
@@ -94,7 +94,7 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 				t.Fatal(err)
 			}
 			for _, id := range ids {
-				_, err = conn.Exec(t.Context(), `UPDATE interactions SET payload = jsonb_set(
+				_, err = conn.Exec(t.Context(), `UPDATE interactions SET created_at = $2, payload = jsonb_set(
 					jsonb_set(payload, '{created_at}', to_jsonb($2::timestamptz), true),
 					'{expires_at}', to_jsonb($3::timestamptz), true) WHERE id = $1`, id, created, formerDeadline)
 				if err != nil {
@@ -104,6 +104,28 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 			}
 			if err := conn.Close(context.Background()); err != nil {
 				t.Fatal(err)
+			}
+			// Keep every durable representation of this occurrence consistent:
+			// strict terminal writes use both the SQL column and payload, while
+			// projection uses the owner book's creation time.
+			doc, err := book.read(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range doc.Batches {
+				if doc.Batches[i].ID == batchIX.ApprovalBatchID {
+					doc.Batches[i].CreatedAt = created
+				}
+			}
+			doc.Revision++
+			saved, err := database.CompareSetting(t.Context(), ownerActionBookKey, doc.Revision-1, doc)
+			if err != nil || !saved {
+				t.Fatalf("backdate the durable owner occurrence: saved=%v err=%v", saved, err)
+			}
+			for _, id := range ids {
+				updateChatCard(s, id, func(card *botCard) {
+					card.Ix.CreatedAt, card.Ix.ExpiresAt = created, formerDeadline
+				})
 			}
 
 			restarted := newServiceOn(t, f, database)
@@ -234,7 +256,7 @@ func TestPersistentOwnerActionSurvivesFormerDeadlineCallerAndRestart(t *testing.
 }
 
 func TestOwnerActionConcurrentConsumersPostgres(t *testing.T) {
-	url := newDatabase(t)
+	url := newMigratedDatabase(t, db.AllSets)
 	first, err := db.Open(t.Context(), url, db.AllSets)
 	if err != nil {
 		t.Fatal(err)

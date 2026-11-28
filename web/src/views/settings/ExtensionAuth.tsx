@@ -210,7 +210,7 @@ function SignInFlow({ id, title, onClose, onDone }: Parameters<typeof SignInDial
       {prompt && view === "qr_link" && (
         <div className="flex flex-col gap-3">
           <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-extensionauth.qr_link")}</p>
-          <Link url={prompt.url!} />
+          <Link url={safeLink(prompt.url)} />
           <Waiting text={t("settings-extensionauth.waiting")} />
         </div>
       )}

@@ -9,6 +9,7 @@ declare module "@novnc/novnc" {
     resizeSession: boolean;
     focusOnClick: boolean;
     background: string;
+    showDotCursor: boolean;
     qualityLevel: number;
     compressionLevel: number;
     sendCredentials(credentials: { username?: string; password?: string }): void;

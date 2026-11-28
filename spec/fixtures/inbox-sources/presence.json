@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "offered_and_stored",
+      "input": {
+        "offers": {"lark": true, "mail": true},
+        "stored_sources": {"lark": true, "mail": true}
+      },
+      "expected": {"lark": true, "mail": true}
+    },
+    {
+      "name": "offered_without_stored_items",
+      "input": {
+        "offers": {"lark": true, "mail": true},
+        "stored_sources": {"lark": false, "mail": false}
+      },
+      "expected": {"lark": true, "mail": true}
+    },
+    {
+      "name": "stored_without_lark_capability",
+      "input": {
+        "offers": {"lark": false, "mail": false},
+        "stored_sources": {"lark": true, "mail": false}
+      },
+      "expected": {"lark": true, "mail": false}
+    },
+    {
+      "name": "stored_without_mail_capability",
+      "input": {
+        "offers": {"lark": false, "mail": false},
+        "stored_sources": {"lark": false, "mail": true}
+      },
+      "expected": {"lark": false, "mail": true}
+    },
+    {
+      "name": "neither_capability_nor_stored_items",
+      "input": {
+        "offers": {"lark": false, "mail": false},
+        "stored_sources": {"lark": false, "mail": false}
+      },
+      "expected": {"lark": false, "mail": false}
+    },
+    {
+      "name": "old_hub_stored_sources_unknown",
+      "input": {
+        "offers": {"lark": false, "mail": false}
+      },
+      "expected": {"lark": true, "mail": true}
+    }
+  ]
+}

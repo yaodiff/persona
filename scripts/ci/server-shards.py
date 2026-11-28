@@ -44,6 +44,16 @@ def list_patterns(package, database_file):
     return go_partitions.list_patterns(ROOT / "server", package, prefix=server_test_env(database_file))
 
 
+def warm_packages(packages, shard, database_file):
+    """Pre-compile a large non-partitioned package set with go test -list ^$ through server_test_env.py so
+    cold-GOCACHE runs do not duplicate dependency builds or thrash parallel compilers across concurrent rest batches."""
+    workers = {"node": 1, "managers": 3, "other": 4, AFFECTED: 3}[shard]
+    subprocess.run(
+        server_test_env(database_file) + ["go", "test", "-p", str(workers), "-list", "^$", *packages],
+        cwd=ROOT / "server", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=600,
+    )
+
+
 def go_test(shard, database_file):
     """The go test command line a shard's processes start with, before their packages."""
     workers = {"node": 1, "managers": 3, "other": 4, AFFECTED: 3}[shard]
@@ -51,21 +61,38 @@ def go_test(shard, database_file):
             "--", "go", "test", "-json", "-p", str(workers), "-count=1", "-timeout=10m"]
 
 
+REST_BATCHES = 4
+REST_BATCH_MIN = 24
+
+
+def rest_batches(packages):
+    """Split a large non-partitioned package list round-robin so slow rest packages run across concurrent go test
+    processes instead of serializing behind one -p queue."""
+    if not packages:
+        return []
+    if len(packages) < REST_BATCH_MIN:
+        return [packages]
+    return [packages[i::REST_BATCHES] for i in range(REST_BATCHES)]
+
+
 def commands(packages, shard, database_file, partitions=None):
-    """The go test processes a shard runs at once: one for its other packages, and one more per partition of each
-    partitioned package it has (go_partitions: internal/node in the node shard, internal/assistant and internal/hub in the
-    managers shard, internal/devices and internal/extmgr in the other shard; the same split as the release build). partitions maps such a package to its -run patterns. Each process
-    keeps -p and -timeout."""
+    """The go test processes a shard runs at once: one or more batches for its other packages, and one more per
+    partition of each partitioned package it has (go_partitions: internal/node in the node shard, internal/assistant
+    and internal/hub in the managers shard, internal/devices, internal/extmgr and internal/db in the other shard; the
+    same split as the release build). partitions maps such a package to its -run patterns. Each process keeps -p and
+    -timeout."""
     prefix = go_test(shard, database_file)
     rest, parts = go_partitions.split(packages)
     if not parts:
-        return [prefix + packages]
+        return [prefix + batch for batch in rest_batches(packages)]
     partitions = partitions or {}
     for package in parts:
         if not partitions.get(package):
             raise ValueError(f"{package} needs its partitions")
-    return ([prefix + rest] if rest else []) + [prefix + ["-run", pattern, package]
-                                                 for package in parts for pattern in partitions[package]]
+    return [prefix + batch for batch in rest_batches(rest)] + [
+        prefix + ["-run", pattern, package]
+        for package in parts for pattern in partitions[package]
+    ]
 
 
 class Results:
@@ -195,11 +222,13 @@ def main():
         packages = select_packages(listed.splitlines(), args.shard)
     if not packages and args.shard != AFFECTED:
         parser.error(f"No packages in server shard {args.shard}")
+    rest, listed = go_partitions.split(packages)
+    if len(rest) >= REST_BATCH_MIN:
+        warm_packages(packages, args.shard, args.database_file)
     try:
         # Listing compiles each partitioned package's tests; after a change most of them compile from scratch, so they
         # are listed at once rather than one after another (an affected run reaching five of them: 161 s in turn, 113 s
         # at once, on a busy CI machine).
-        listed = go_partitions.split(packages)[1]
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(listed), 1)) as pool:
             patterns = list(pool.map(lambda package: list_patterns(package, args.database_file), listed))
         partitions = dict(zip(listed, patterns))

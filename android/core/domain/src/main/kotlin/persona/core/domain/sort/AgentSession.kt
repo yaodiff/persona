@@ -8,6 +8,8 @@ import persona.core.contracts.parseTime
 import java.time.Instant
 import kotlinx.serialization.json.*
 
+enum class AgentSeenPlace(val wire: String) { Unread("unread"), JustFinished("just_finished") }
+
 /** Additional list fields are kept here until the wire model exposes them. */
 data class AgentSession(
     val session: Session,
@@ -19,6 +21,8 @@ data class AgentSession(
     val hierarchyKnown: Boolean = false,
     /** The open chat that was Just finished when opened ([heldAsFinished], #9786), until its chat is left: drawn seen. */
     val heldFinished: Boolean = false,
+    /** The position of a row seen during this visit. A real new turn takes its usual position again. */
+    val seenPlace: AgentSeenPlace? = null,
 ) {
     val id: String get() = session.key.path
     val state: AgentState get() = session.foldedState
@@ -62,6 +66,17 @@ data class AgentSession(
      * `unseen`). Seeing it on this phone takes it out at once (`listSession` in feature:agents).
      */
     val unseen: Boolean get() = state == AgentState.Unread || showsJustFinished
+
+    fun placingSeenRow(place: AgentSeenPlace?, mutes: AgentPreferences): AgentSession {
+        if (!isQuiet || unseen) return this
+        return when (place) {
+            AgentSeenPlace.Unread -> copy(heldInList = true, seenPlace = place)
+            AgentSeenPlace.JustFinished -> if (state == AgentState.Idle && !mutes.mutes(this)) {
+                heldAsFinished().copy(seenPlace = place)
+            } else this
+            null -> this
+        }
+    }
 
     /**
      * The open chat that was Just finished when opened (#9786), as the list keeps it until the chat is left: this phone's

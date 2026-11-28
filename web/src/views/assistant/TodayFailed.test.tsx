@@ -21,24 +21,24 @@ describe("the 今天 card's row for what did not go through", () => {
     expect(todayFailedRow(plain)).toBeUndefined();
     expect(todayFailedRow({ ...plain, failed: [], failed_total: 0 })).toBeUndefined();
     expect(card({ ...plain, failed: [], failed_total: 0 })).toBe(card(plain));
-    expect(card(plain)).not.toContain("没成");
+    expect(card(plain)).not.toContain("未成功");
   });
 
   it("says one by its title, how it ended and why", () => {
-    expect(todayFailedRow({ date: now, failed: [task], failed_total: 1 })).toMatchObject({ title: "没成：设置页按钮对齐", detail: `没开起来 · ${time} — rpc: connection closed` });
+    expect(todayFailedRow({ date: now, failed: [task], failed_total: 1 })).toMatchObject({ title: "未成功：设置页按钮对齐", detail: `未能启动 · ${time} — rpc: connection closed` });
     expect(todayFailedRow({ date: now, failed: [run] })?.detail).toBe(`运行失败 · ${time}`);
-    expect(todayFailedRow({ date: now, failed: [skipped] })?.detail).toBe(`被跳过 · ${time}`);
+    expect(todayFailedRow({ date: now, failed: [skipped] })?.detail).toBe(`已跳过 · ${time}`);
     const html = card({ date: now, failed: [task], failed_total: 1 });
-    expect(html).toContain("没成：设置页按钮对齐");
-    expect(html).toContain(`没开起来 · ${time} — rpc: connection closed`);
-    expect(html).toContain("去看");
+    expect(html).toContain("未成功：设置页按钮对齐");
+    expect(html).toContain(`未能启动 · ${time} — rpc: connection closed`);
+    expect(html).toContain("查看");
   });
 
   it("says several by how many in all and the first titles", () => {
     const row = todayFailedRow({ date: now, failed: [run, skipped, task], failed_total: 5 });
-    expect(row).toMatchObject({ title: "5 件没成", detail: "周报、晚间回顾、设置页按钮对齐 · 还有 2 件" });
+    expect(row).toMatchObject({ title: "5 项未成功", detail: "周报、晚间回顾、设置页按钮对齐 · 还有 2 项" });
     expect(row?.first).toBe(run);
-    expect(todayFailedRow({ date: now, failed: [run, task] })).toMatchObject({ title: "2 件没成", detail: "周报、设置页按钮对齐" });
-    expect(card({ date: now, failed: [run, skipped, task], failed_total: 5 })).toContain("5 件没成");
+    expect(todayFailedRow({ date: now, failed: [run, task] })).toMatchObject({ title: "2 项未成功", detail: "周报、设置页按钮对齐" });
+    expect(card({ date: now, failed: [run, skipped, task], failed_total: 5 })).toContain("5 项未成功");
   });
 });

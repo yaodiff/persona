@@ -11,5 +11,5 @@
     <string name="agents_projects_summary">%1$s · %2$s</string>
     <string name="agents_projects_empty_title">No agents running</string>
     <string name="agents_projects_empty_offline">This machine is offline.</string>
-    <string name="agents_projects_empty_hint">Start Claude, Codex, or TRAE CLI in herdr on this machine and it shows up here.</string>
+    <string name="agents_projects_empty_hint">Start Claude, Codex, or TRAE CLI in %1$s on this machine and it shows up here.</string>
 </resources>

@@ -3,7 +3,7 @@
 import { formatDate, t } from "../i18n";
 import { normalizeTraeCliName } from "./agent-kind";
 import type { HostWorkspace } from "./workspace-catalog";
-import { stateOf, tabLabel } from "./format";
+import { activityOf, tabLabel } from "./format";
 import type { AgentState, Machine, Session } from "./types";
 import type { MachineComputer } from "./computer";
 import { stateCount } from "./state-labels";
@@ -311,7 +311,7 @@ export interface SpaceGroup {
 /** A machine's live agents (not the assistant's conversations), by herdr space in herdr's order (space, then tab),
  * agents outside any space last. */
 export function agentsBySpace(sessions: Session[], workspaceOf?: (s: Session) => HostWorkspace | undefined): SpaceGroup[] {
-  const live = sessions.filter((s) => !s.assistant && stateOf(s) !== "offline");
+  const live = sessions.filter((s) => !s.assistant && activityOf(s) !== "offline");
   const map = new Map<string, SpaceGroup & { index: number }>();
   for (const s of live) {
     const workspace = workspaceOf?.(s);
@@ -323,8 +323,8 @@ export function agentsBySpace(sessions: Session[], workspaceOf?: (s: Session) =>
     }
     const g = map.get(key)!;
     g.sessions.push(s);
-    const st = stateOf(s);
-    if (st === "needs_you") g.counts.needs++;
+    const st = activityOf(s);
+    if (s.view ? s.view.counted : st === "needs_you") g.counts.needs++;
     else if (st === "working") g.counts.working++;
     else if (st === "unread") g.counts.unread++;
   }

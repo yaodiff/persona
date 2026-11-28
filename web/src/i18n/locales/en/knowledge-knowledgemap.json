@@ -52,5 +52,12 @@
   "goal": "Goal",
   "no_summary": "No curated summary yet; the background curation writes one when the project has news.",
   "main_chat_notes": "Main chat notes",
-  "no_notes": "No main chat notes in the latest timeline."
+  "no_notes": "No main chat notes in the latest timeline.",
+  "view_tree": "Project tree",
+  "subtitle_tree": "Drag a project onto another to nest it; right-click for more",
+  "arrange": "Arrange",
+  "by_hierarchy": "By hierarchy",
+  "by_tag": "By tag",
+  "drop_top": "Drop here: top level",
+  "close": "Close"
 }

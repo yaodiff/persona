@@ -173,8 +173,8 @@ fun assistantEntries(
     val folded = mutableSetOf<SessionKey>()
     // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
     val superseded = supersededFailedStarts(todos)
-    // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched
-    val listed = todos.filter { isMain || it.origin == conversation }
+    // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched or supervises
+    val listed = todos.filter { isMain || it.origin == conversation || it.supervision?.supervisor == conversation }
     // One home per request: prefer the task the hub ties the session to, else the first current task listing it.
     // Other tasks neither repeat its cards nor wait on the user for them (web `assistantEntries`, #7531).
     val listing = mutableMapOf<SessionKey, MutableSet<String>>()

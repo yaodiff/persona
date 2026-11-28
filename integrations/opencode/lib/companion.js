@@ -16,11 +16,12 @@
 import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, relative, resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { createRuntime, interactionId, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { OpencodeAcpClient, privateAcpArgs } from './acp.js'
 import { createAssistantWorkers } from './assistant-workers.js'
+import { isMemoryWritePath } from './memory-write.js'
 import { createSupervisionStore, policyEnvironment, supportsSystemPrompt } from './supervision.js'
 import { defaultDbPath, openReadOnly } from './db.js'
 import {
@@ -110,6 +111,7 @@ export function buildAcpEnv(baseEnv = process.env) {
  *   now?: () => number,
  *   acp?: OpencodeAcpClient,
  *   acpIdleMs?: number,
+ *   mcpProxy?: ReturnType<typeof createMcpProxy>,
  *   assistantAcpFactory?: (options: object) => OpencodeAcpClient,
  *   policyStore?: ReturnType<typeof createSupervisionStore>,
  *   policyDir?: string,
@@ -224,7 +226,7 @@ export function createOpencodeCompanion(options = {}) {
     acpIdleTimer.unref?.()
   }
 
-  const mcpProxy = createMcpProxy({
+  const mcpProxy = options.mcpProxy || createMcpProxy({
     tools: async (binding) => {
       const asst = binding?.assistant === true
       const list = await rt.tools({ assistant: asst })
@@ -694,6 +696,7 @@ export function createOpencodeCompanion(options = {}) {
   }
 
   function pushLiveUpdate(s, item) {
+    if (stopped || closedSessions.has(s.id)) return
     if (!rt.watching(s.id) || !item) return
     if (item.seq <= s.pushedSeq) {
       rt.append(s.id, { items: [light(item)], toSeq: s.pushedSeq, history: `${s.history}:live`, update: true })
@@ -831,6 +834,7 @@ export function createOpencodeCompanion(options = {}) {
   }
 
   function pushLiveSnapshot(s) {
+    if (stopped || closedSessions.has(s.id)) return
     if (!rt.watching(s.id)) return
     if (s.liveSeq <= s.pushedSeq) return
     const fresh = s.liveItems
@@ -1007,22 +1011,88 @@ export function createOpencodeCompanion(options = {}) {
 
   // ---- permissions ----
 
-  function isMemoryWrite(s, rawName, input, rawInput) {
+  const MEMORY_RAW_INPUT_KEYS = new Set([
+    'filePath', 'path', 'file_path',
+    'content', 'oldString', 'old_string', 'newString', 'new_string',
+    'replaceAll', 'replace_all', 'edits', 'tool',
+  ])
+  const MEMORY_EDIT_ITEM_KEYS = new Set([
+    'filePath', 'path', 'file_path',
+    'oldString', 'old_string', 'newString', 'new_string',
+    'replaceAll', 'replace_all',
+  ])
+  const MEMORY_PATH_KEYS = ['filePath', 'path', 'file_path']
+  const MEMORY_ALLOWED_TITLES = new Set(['', 'write', 'edit', 'write_file', 'edit_file'])
+
+  function isMemoryWrite(s, rawName, toolCall) {
     if (!s?.assistant || !s.memoryDir || s.mode === 'plan') return false
     if (rawName !== 'write' && rawName !== 'edit') return false
-    const file = typeof rawInput?.filePath === 'string' && rawInput.filePath
-      ? rawInput.filePath
-      : (typeof rawInput?.path === 'string' && rawInput.path
-        ? rawInput.path
-        : (typeof rawInput?.file_path === 'string' && rawInput.file_path
-          ? rawInput.file_path
-          : (typeof input?.file_path === 'string' ? input.file_path : '')))
-    if (!file) return false
-    const baseDir = s.cwd || s.memoryDir
-    const target = isAbsolute(file) ? resolve(file) : resolve(baseDir, file)
-    const memRoot = resolve(s.memoryDir)
-    const rel = relative(memRoot, target)
-    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+    if (!toolCall || typeof toolCall !== 'object' || Array.isArray(toolCall)) return false
+    if (Object.prototype.hasOwnProperty.call(toolCall, 'title') && toolCall.title !== undefined) {
+      if (typeof toolCall.title !== 'string') return false
+      const titleWord = (toolCall.title.trim().split(/\s+/)[0] || '').toLowerCase()
+      if (!MEMORY_ALLOWED_TITLES.has(titleWord)) return false
+    }
+    const rawInput = toolCall.rawInput
+    if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) return false
+    for (const key of Object.keys(rawInput)) {
+      if (!MEMORY_RAW_INPUT_KEYS.has(key)) return false
+    }
+    if (Object.prototype.hasOwnProperty.call(rawInput, 'tool') && rawInput.tool !== undefined) {
+      if (typeof rawInput.tool !== 'string') return false
+      const explicit = rawInput.tool.trim().toLowerCase()
+      if (explicit !== 'write' && explicit !== 'edit') return false
+    }
+    const files = []
+    for (let i = 0; i < MEMORY_PATH_KEYS.length; i++) {
+      const key = MEMORY_PATH_KEYS[i]
+      if (!Object.prototype.hasOwnProperty.call(rawInput, key) || rawInput[key] === undefined) continue
+      if (typeof rawInput[key] !== 'string' || !rawInput[key]) return false
+      files.push(rawInput[key])
+    }
+    if (files.length === 0) return false
+    if (Object.prototype.hasOwnProperty.call(rawInput, 'edits') && rawInput.edits !== undefined) {
+      if (!Array.isArray(rawInput.edits)) return false
+      for (let i = 0; i < rawInput.edits.length; i++) {
+        if (!(i in rawInput.edits)) return false
+        const edit = rawInput.edits[i]
+        if (!edit || typeof edit !== 'object' || Array.isArray(edit)) return false
+        for (const key of Object.keys(edit)) {
+          if (!MEMORY_EDIT_ITEM_KEYS.has(key)) return false
+        }
+        for (let j = 0; j < MEMORY_PATH_KEYS.length; j++) {
+          const key = MEMORY_PATH_KEYS[j]
+          if (!Object.prototype.hasOwnProperty.call(edit, key) || edit[key] === undefined) continue
+          if (typeof edit[key] !== 'string' || !edit[key]) return false
+          files.push(edit[key])
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(toolCall, 'locations') && toolCall.locations !== undefined) {
+      if (!Array.isArray(toolCall.locations)) return false
+      for (let i = 0; i < toolCall.locations.length; i++) {
+        if (!(i in toolCall.locations)) return false
+        const loc = toolCall.locations[i]
+        if (!loc || typeof loc !== 'object' || Array.isArray(loc) || typeof loc.path !== 'string' || !loc.path) return false
+        files.push(loc.path)
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(toolCall, 'content') && toolCall.content !== undefined) {
+      if (!Array.isArray(toolCall.content)) return false
+      for (let i = 0; i < toolCall.content.length; i++) {
+        if (!(i in toolCall.content)) return false
+        const item = toolCall.content[i]
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+        if (item.type === 'diff' || (Object.prototype.hasOwnProperty.call(item, 'path') && item.path !== undefined)) {
+          if (typeof item.path !== 'string' || !item.path) return false
+          files.push(item.path)
+        }
+      }
+    }
+    for (let i = 0; i < files.length; i++) {
+      if (!isMemoryWritePath(files[i], s.memoryDir, s.cwd)) return false
+    }
+    return true
   }
 
   function pickOption(options, kind) {
@@ -1073,7 +1143,7 @@ export function createOpencodeCompanion(options = {}) {
 
     // 3. Auto-approve: assistant memory writes (outside plan), acceptEdits (write/edit), or bypassPermissions.
     const acceptEditAuto = s.mode === 'acceptEdits' && (card.raw_name === 'write' || card.raw_name === 'edit')
-    if (isMemoryWrite(s, card.raw_name, card.tool_input, rawInput) || acceptEditAuto || s.mode === 'bypassPermissions') {
+    if (isMemoryWrite(s, card.raw_name, params?.toolCall) || acceptEditAuto || s.mode === 'bypassPermissions') {
       return allowOnce
         ? { outcome: { outcome: 'selected', optionId: allowOnce.optionId } }
         : { outcome: { outcome: 'cancelled' } }
@@ -1117,25 +1187,60 @@ export function createOpencodeCompanion(options = {}) {
 
   // ---- session lifecycle & control ----
 
-  async function ensureLoaded(s, acp) {
+  function assertSessionOpen(id) {
+    if (stopped || closedSessions.has(id)) throw new RpcError('opencode 会话已关闭', 'closed')
+  }
+
+  async function ensureLoaded(s, acp, { isCancelled } = {}) {
     if (acp === sharedAcp) cancelAcpIdleStop()
     const initialized = await acp.ensureStarted()
+    assertSessionOpen(s.id)
+    if (isCancelled?.()) return
     verifyWorkerPolicy(s, initialized)
     if (s.loadedGeneration === acp.generation && acp.loadedSessions.has(s.id)) return
     const desiredMode = s.mode
-    if (!s.mcpRoute) s.mcpRoute = s.assistant
-      ? await mcpProxy.allocate({ session: s, sessionId: s.id, assistant: true })
-      : await mcpProxy.forSession(s)
+    if (!s.mcpRoute) {
+      const route = s.assistant
+        ? await mcpProxy.allocate({ session: s, sessionId: s.id, assistant: true })
+        : await mcpProxy.forSession(s)
+      if (stopped || closedSessions.has(s.id)) {
+        route?.release()
+        throw new RpcError('opencode 会话已关闭', 'closed')
+      }
+      if (s.mcpRoute && s.mcpRoute !== route) {
+        if (!route?.path || route.path !== s.mcpRoute.path) route?.release()
+      } else {
+        s.mcpRoute = route
+      }
+      if (isCancelled?.()) return
+    }
     const desired = { model: s.model, effort: s.effort, permission_mode: desiredMode }
     const res = await (s.assistant ? acp.resumeSession({
       sessionId: s.id, cwd: s.cwd, mcpServers: [s.mcpRoute.acpServer], ...nativePolicy(s),
     }) : acp.loadSession({
       sessionId: s.id, cwd: s.cwd, mcpServers: [s.mcpRoute.acpServer],
     }))
+    if (stopped || closedSessions.has(s.id)) {
+      s.mcpRoute?.release()
+      s.mcpRoute = null
+      if (!stopped && !s.assistant) void acp.closeSession(s.id).catch(() => {}).finally(() => { if (!stopped) scheduleAcpIdleStop() })
+      throw new RpcError('opencode 会话已关闭', 'closed')
+    }
+    if (isCancelled?.()) return
     applyConfigOptions(s, res?.configOptions, { preserveMode: desiredMode !== 'default' })
     if (s.assistant) {
       try {
-        await applySessionConfig(s, { ...desired, forceModel: Boolean(desired.model), forceEffort: Boolean(desired.effort), forceMode: true }, acp)
+        await applySessionConfig(s, {
+          ...desired, forceModel: Boolean(desired.model), forceEffort: Boolean(desired.effort), forceMode: true, isCancelled,
+        }, acp)
+        assertSessionOpen(s.id)
+        if (isCancelled?.()) {
+          s.model = desired.model
+          s.effort = desired.effort
+          s.mode = desiredMode
+          s.loadedGeneration = 0
+          return
+        }
         s.loadedGeneration = acp.generation
         rt.assistantPid(s.id, acp.pid)
         return
@@ -1147,70 +1252,93 @@ export function createOpencodeCompanion(options = {}) {
         throw err
       }
     }
-    s.loadedGeneration = acp.generation
     // Never silently downgrade a user-requested plan mode after an ACP child restart.
     if (desiredMode === 'plan') {
+      let modeRes
       try {
-        const modeRes = await acp.setConfigOption(s.id, 'mode', 'plan')
-        applyConfigOptions(s, modeRes?.configOptions, { preserveMode: true })
-        s.mode = 'plan'
+        modeRes = await acp.setConfigOption(s.id, 'mode', 'plan')
       } catch (err) {
+        assertSessionOpen(s.id)
         throw new RpcError(`opencode 无法恢复只读模式（plan）：${err.message}`, 'readonly_unsupported')
       }
+      assertSessionOpen(s.id)
+      if (isCancelled?.()) return
+      applyConfigOptions(s, modeRes?.configOptions, { preserveMode: true })
+      s.mode = 'plan'
     } else if (desiredMode && desiredMode !== 'default') {
       s.mode = desiredMode
     }
+    s.loadedGeneration = acp.generation
   }
 
-  async function applySessionConfig(s, { model, effort, permission_mode, forceModel = false, forceEffort = false, forceMode = false }, acp = s.worker?.acp || sharedAcp) {
+  async function applySessionConfig(s, { model, effort, permission_mode, forceModel = false, forceEffort = false, forceMode = false, isCancelled }, acp = s.worker?.acp || sharedAcp) {
     if (permission_mode) {
+      assertSessionOpen(s.id)
+      if (isCancelled?.()) return
       if (!VALID_MODES.has(permission_mode)) {
         throw new RpcError(`不支持的权限模式 "${permission_mode}"`, 'bad_request')
       }
       const targetNative = permission_mode === 'plan' ? 'plan' : 'build'
       const prevNative = s.mode === 'plan' ? 'plan' : 'build'
       if (forceMode || targetNative !== prevNative || permission_mode === 'plan') {
+        let res
         try {
-          const res = await acp.setConfigOption(s.id, 'mode', targetNative)
-          applyConfigOptions(s, res?.configOptions, { preserveMode: true })
+          res = await acp.setConfigOption(s.id, 'mode', targetNative)
         } catch (err) {
+          assertSessionOpen(s.id)
           if (permission_mode === 'plan') {
             throw new RpcError(`opencode 无法切换到只读模式（plan）：${err.message}`, 'readonly_unsupported')
           }
           throw new RpcError(`opencode 模式切换失败：${err.message}`, 'opencode')
         }
+        assertSessionOpen(s.id)
+        applyConfigOptions(s, res?.configOptions, { preserveMode: true })
       }
       s.mode = permission_mode
+      if (isCancelled?.()) return
     }
     if (model) {
+      assertSessionOpen(s.id)
+      if (isCancelled?.()) return
       if (catalog.length === 0) {
         try { await models() } catch {}
+        assertSessionOpen(s.id)
+        if (isCancelled?.()) return
       }
       const resolved = resolveModel(model, catalog)
       if (resolved && (forceModel || resolved.id !== s.model)) {
+        let res
         try {
-          const res = await acp.setConfigOption(s.id, 'model', resolved.id)
-          applyConfigOptions(s, res?.configOptions, { preserveMode: true })
-          s.model = resolved.id
+          res = await acp.setConfigOption(s.id, 'model', resolved.id)
         } catch (err) {
+          assertSessionOpen(s.id)
           throw new RpcError(`opencode 切换模型失败（${resolved.id}）：${err.message}`, 'opencode')
         }
+        assertSessionOpen(s.id)
+        applyConfigOptions(s, res?.configOptions, { preserveMode: true })
+        s.model = resolved.id
       }
+      if (isCancelled?.()) return
     }
     if (typeof effort === 'string' && effort.trim()) {
+      assertSessionOpen(s.id)
+      if (isCancelled?.()) return
       const normalizedEffort = effort.trim().toLowerCase()
       if (!VALID_EFFORTS.has(normalizedEffort)) {
         throw new RpcError(`不支持的思考深度 "${effort}"`, 'bad_request')
       }
       if (forceEffort || normalizedEffort !== s.effort) {
         const configId = s.effortConfigId || 'variant'
+        let res
         try {
-          const res = await acp.setConfigOption(s.id, configId, normalizedEffort)
-          applyConfigOptions(s, res?.configOptions, { preserveMode: true })
-          s.effort = normalizedEffort
+          res = await acp.setConfigOption(s.id, configId, normalizedEffort)
         } catch (err) {
+          assertSessionOpen(s.id)
           throw new RpcError(`opencode 切换思考深度失败（${normalizedEffort}）：${err.message}`, 'opencode')
         }
+        assertSessionOpen(s.id)
+        applyConfigOptions(s, res?.configOptions, { preserveMode: true })
+        s.effort = normalizedEffort
       }
     }
   }
@@ -1439,12 +1567,17 @@ export function createOpencodeCompanion(options = {}) {
       }
 
       await transition?.retireOldFile()
-      if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) {
+      if (stopped || closedSessions.has(id) || interruptVersion !== s.interruptVersion) {
         throw new RpcError('Input was interrupted before delivery', 'busy', { delivered: 'none' })
       }
       const turnDone = s.tail.catch(() => {}).then(async () => {
         s.queued = Math.max(0, s.queued - 1)
-        if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) return
+        if (stopped || closedSessions.has(id) || interruptVersion !== s.interruptVersion) {
+          listCache.at = 0
+          if (!stopped) rt.sessionsChanged(0)
+          if (!worker) scheduleAcpIdleStop()
+          return
+        }
         s.running = true
         s.turnError = ''
         s.processFailure = false
@@ -1477,10 +1610,37 @@ export function createOpencodeCompanion(options = {}) {
         pushLiveSnapshot(s)
         rt.sessionsChanged(0)
 
+        const cancelledBeforePrompt = () => (
+          stopped || closedSessions.has(id) || interruptVersion !== s.interruptVersion || Boolean(s.abort?.signal.aborted)
+        )
+        const finishPrePromptCancel = () => {
+          if (stopped || closedSessions.has(id)) return
+          if (s.processFailure) {
+            const msg = s.turnError || 'OpenCode execution process exited unexpectedly'
+            s.turnError = msg
+            appendLiveItem(s, { role: 'system', kind: 'notice', text: `出错了：${msg}` })
+          } else {
+            appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
+          }
+        }
         try {
           if (isAsst) await ensureGateRules()
-          await ensureLoaded(s, acp)
-          await applySessionConfig(s, { model: params.model, effort: reqEffort, permission_mode: reqMode })
+          if (cancelledBeforePrompt()) {
+            finishPrePromptCancel()
+            return
+          }
+          await ensureLoaded(s, acp, { isCancelled: cancelledBeforePrompt })
+          if (cancelledBeforePrompt()) {
+            finishPrePromptCancel()
+            return
+          }
+          await applySessionConfig(s, {
+            model: params.model, effort: reqEffort, permission_mode: reqMode, isCancelled: cancelledBeforePrompt,
+          }, acp)
+          if (cancelledBeforePrompt()) {
+            finishPrePromptCancel()
+            return
+          }
           const promptBlocks = []
           if (promptText) promptBlocks.push({ type: 'text', text: promptText })
           for (const img of images) {
@@ -1490,22 +1650,24 @@ export function createOpencodeCompanion(options = {}) {
               mimeType: img.mime || img.media_type || 'image/png',
             })
           }
-          const res = await acp.prompt(id, promptBlocks, 0)
+          const res = await acp.prompt(id, promptBlocks, 0, s.abort?.signal)
           flushLiveText(s)
-          if (res?.stopReason === 'cancelled') {
+          if (res?.stopReason === 'cancelled' && !stopped && !closedSessions.has(id)) {
             appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
           }
         } catch (err) {
           flushLiveText(s)
-          if (s.abort?.signal.aborted && !s.processFailure) {
+          if (stopped || closedSessions.has(id)) {
+            // Session was closed or companion stopped; avoid appending synthetic error/interrupt items.
+          } else if (s.abort?.signal.aborted && !s.processFailure) {
             appendLiveItem(s, { role: 'system', kind: 'notice', text: '已中断' })
           } else {
-            const msg = snippet(err?.message ?? String(err))
+            const msg = s.processFailure && s.turnError ? s.turnError : snippet(err?.message ?? String(err))
             s.turnError = msg
             appendLiveItem(s, { role: 'system', kind: 'notice', text: `出错了：${msg}` })
           }
         } finally {
-          rt.streamEnd(id)
+          if (!stopped && !closedSessions.has(id)) rt.streamEnd(id)
           if (s.thoughtTimer) {
             clearTimeout(s.thoughtTimer)
             s.thoughtTimer = null
@@ -1516,9 +1678,9 @@ export function createOpencodeCompanion(options = {}) {
           s.abort = null
           s.updatedAt = now()
           listCache.at = 0
-          pushLiveSnapshot(s)
-          rt.sessionsChanged(0)
-          if (!worker) scheduleAcpIdleStop()
+          if (!stopped && !closedSessions.has(id)) pushLiveSnapshot(s)
+          if (!stopped) rt.sessionsChanged(0)
+          if (!worker && !stopped) scheduleAcpIdleStop()
         }
       }).finally(() => { if (worker) assistantWorkers.release(worker) })
       s.tail = turnDone
@@ -1535,6 +1697,8 @@ export function createOpencodeCompanion(options = {}) {
       if (!enqueued) {
         s.queued = Math.max(0, s.queued - 1)
         if (worker) assistantWorkers.release(worker)
+        if (!stopped) rt.sessionsChanged(0)
+        if (!worker) scheduleAcpIdleStop()
       }
     }
   }
@@ -1543,20 +1707,21 @@ export function createOpencodeCompanion(options = {}) {
     const id = params.session_id
     const s = live.get(id)
     if (!s) return { settled: true }
-    if (s.assistant) s.interruptVersion++
+    s.interruptVersion++
     s.abort?.abort()
     for (const ac of s.asks) ac.abort()
     s.asks.clear()
     const acp = s.worker?.acp || (!s.assistant ? sharedAcp : null)
     acp?.cancel(id)
-    if (!s.running) return { settled: true }
+    if (!s.running && s.queued === 0) return { settled: true }
+    let timer
     const settled = await Promise.race([
       s.tail.then(() => true, () => true),
       new Promise((r) => {
-        const t = setTimeout(() => r(false), INTERRUPT_SETTLE_MS)
-        t.unref?.()
+        timer = setTimeout(() => r(false), INTERRUPT_SETTLE_MS)
+        timer.unref?.()
       }),
-    ])
+    ]).finally(() => clearTimeout(timer))
     return settled ? { settled: true } : {}
   }
 
@@ -1599,8 +1764,8 @@ export function createOpencodeCompanion(options = {}) {
       s.abort?.abort()
       for (const ac of s.asks) ac.abort()
       s.asks.clear()
+      s.interruptVersion++
       if (s.assistant) {
-        s.interruptVersion++
         const worker = s.worker
         worker?.acp.cancel(id)
         if (worker) await assistantWorkers.discard(worker)

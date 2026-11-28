@@ -139,7 +139,7 @@ describe("on a hub that pages its Agents list", () => {
     expect(getState().sessions).toEqual({}); // nothing pushed: what the cards used to read
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(footer("MacBook")?.textContent).toBe("2 个 Agent，1 个在工作");
+    expect(footer("MacBook")?.textContent).toBe("2 个 Agent，1 个正在工作");
     expect(footer("NAS")?.textContent).toBe("1 个 Agent");
     const waiting = card("NAS")?.querySelector<HTMLAnchorElement>(`a[href="${href({ name: "session", mid: "nas", sid: "n1" })}"]`);
     expect(waiting?.textContent).toBe(stateCount("needs_you", 1));
@@ -154,17 +154,17 @@ describe("on a hub that pages its Agents list", () => {
     await hello(["sessions_list", "sessions_lookup"]);
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(footer("MacBook")?.textContent).toBe("正在读取 Agent…");
+    expect(footer("MacBook")?.textContent).toBe("正在加载 Agent…");
     expect(footer("MacBook")?.getAttribute("data-agents")).toBe("loading");
     expect(card("NAS")?.textContent).not.toContain(stateCount("needs_you", 0));
     expect(card("NAS")?.textContent).not.toContain(stateCount("needs_you", 1));
     await act(async () => { held.forEach((go) => go()); });
     await flush();
-    expect(footer("MacBook")?.textContent).toBe("没能读到 Agent");
+    expect(footer("MacBook")?.textContent).toBe("无法加载 Agent");
     expect(footer("NAS")?.getAttribute("data-agents")).toBe("failed");
     expect(card("NAS")?.textContent).not.toContain(stateCount("needs_you", 0));
     expect(card("NAS")?.textContent).not.toContain(stateCount("needs_you", 1));
-    expect(host.textContent).not.toContain("没有在跑的 Agent");
+    expect(host.textContent).not.toContain("没有正在运行的 Agent");
   });
 
   it("lists a computer's agents on its page, by its count", async () => {
@@ -187,7 +187,7 @@ describe("on a hub that pages its Agents list", () => {
     await flush();
     expect(agentsHeading()).toBe("Agent");
     expect(agentsBox()?.getAttribute("data-agents")).toBe("failed");
-    expect(agentsBox()?.textContent).toBe("没能读到这台电脑的 Agent，稍后会再试。");
+    expect(agentsBox()?.textContent).toBe("无法加载这台电脑的 Agent，稍后将自动重试。");
   });
 });
 
@@ -218,7 +218,7 @@ describe("a space's page on a hub that pages its Agents list", () => {
     await act(async () => { held.forEach((go) => go()); });
     await flush();
     expect(host.querySelector("[data-agents]")?.getAttribute("data-agents")).toBe("failed");
-    expect(host.textContent).toContain("没能读到这个空间的 Agent");
+    expect(host.textContent).toContain("无法加载此空间的 Agent");
     expect(host.textContent).not.toContain("找不到这个空间");
     // Retry reads them at once, not at the complete list's next try
     full = "ok";
@@ -243,7 +243,7 @@ describe("on a hub that pushes its sessions", () => {
     await hello([]);
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(footer("MacBook")?.textContent).toBe("2 个 Agent，1 个在工作");
+    expect(footer("MacBook")?.textContent).toBe("2 个 Agent，1 个正在工作");
     expect(footer("NAS")?.textContent).toBe("1 个 Agent");
     expect(fullReads).toBe(0);
     act(() => root.render(<MachineDetail mid="mac" onToggleSidebar={() => {}} />));

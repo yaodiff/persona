@@ -5,7 +5,7 @@ import { EventEmitter, once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
@@ -923,4 +923,978 @@ test('live ACP tool_call notifications normalize tool_name and tool_input from r
       ['WebFetch', { url: 'https://example.com', format: 'markdown' }],
     ],
   )
+})
+
+test('session.interrupt cancels queued turns on normal sessions, settles immediately, and clears working status', async (t) => {
+  const n = await startFakeNode(t)
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  let turn1Started
+  const turn1Entered = new Promise((r) => { turn1Started = r })
+  let finishTurn1
+  let finishUnexpectedTurn2
+  t.after(() => finishUnexpectedTurn2?.({ stopReason: 'end_turn' }))
+  acp.cancel = (sessionId) => {
+    acp.calls.push(['cancel', { sessionId }])
+    finishTurn1?.({ stopReason: 'cancelled' })
+  }
+  acp.onPrompt = async (_sessionId, blocks) => {
+    const text = blocks.map((b) => b.text).join('')
+    if (text === 'first turn') {
+      turn1Started()
+      return new Promise((r) => { finishTurn1 = r })
+    }
+    // If a queued second turn executes after interrupt, hold it until the test finishes so it is immediately obvious.
+    return new Promise((r) => { finishUnexpectedTurn2 = r })
+  }
+  const companion = createTestCompanion({ socketPath: n.path, openDb: db.openDb, acp })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  const started = await n.peer.call('session.start', { cwd: '/w/app', prompt: 'first turn' })
+  const sid = started.session.session_id
+  await turn1Entered
+
+  // Queue a second message while Turn 1 is still running on a normal (non-assistant) session.
+  const queued = await n.peer.call('session.send', { session_id: sid, text: 'queued follow-up' })
+  assert.equal(queued.queued, true)
+  assert.equal(companion.live.get(sid)?.queued, 1)
+
+  // Interrupt must cancel Turn 1, skip the queued follow-up, settle promptly, and push non-working status.
+  const intr = await n.peer.call('session.interrupt', { session_id: sid })
+  assert.equal(intr.settled, true)
+  assert.equal(companion.live.get(sid)?.running, false)
+  assert.equal(companion.live.get(sid)?.queued, 0)
+
+  const prompts = acp.calls.filter((c) => c[0] === 'prompt').map((c) => c[1].prompt.map((b) => b.text).join(''))
+  assert.deepEqual(prompts, ['first turn'])
+
+  await until('final pushed session status leaves working', () => {
+    const latest = n.last('runtime.sessions')?.sessions?.find((r) => r.session_id === sid)
+    return latest && latest.status !== 'working'
+  }, 1500)
+  const latest = n.last('runtime.sessions')?.sessions?.find((r) => r.session_id === sid)
+  assert.equal(latest?.status, 'done')
+})
+
+test('session.interrupt skips Turn 2 without waiting for an immediate Turn 3 and schedules idle stop after skipping queued turns', async (t) => {
+  const n = await startFakeNode(t)
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  let turn1Started
+  const turn1Entered = new Promise((r) => { turn1Started = r })
+  let turn1CancelSent
+  const turn1Cancelled = new Promise((r) => { turn1CancelSent = r })
+  let finishTurn1
+  let turn3Started
+  const turn3Entered = new Promise((r) => { turn3Started = r })
+  let finishTurn3
+  t.after(() => {
+    finishTurn1?.({ stopReason: 'cancelled' })
+    finishTurn3?.({ stopReason: 'end_turn' })
+  })
+  acp.cancel = (sessionId) => {
+    acp.calls.push(['cancel', { sessionId }])
+    turn1CancelSent?.()
+  }
+  acp.onPrompt = async (_sessionId, blocks) => {
+    const text = blocks.map((b) => b.text).join('')
+    if (text === 'turn 1') {
+      turn1Started()
+      return new Promise((r) => { finishTurn1 = r })
+    }
+    if (text === 'turn 3') {
+      turn3Started()
+      return new Promise((r) => { finishTurn3 = r })
+    }
+    throw new Error(`unexpected prompt ${text}`)
+  }
+  const companion = createOpencodeCompanion({
+    socketPath: n.path,
+    retryMs: 20,
+    pushDelayMs: 5,
+    home: '/home/u',
+    acpIdleMs: 40,
+    openDb: db.openDb,
+    acp,
+    discoverModels: async () => [{ providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+  })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  const started = await n.peer.call('session.start', { cwd: '/w/app', prompt: 'turn 1' })
+  const sid = started.session.session_id
+  await turn1Entered
+
+  // Queue Turn 2 while Turn 1 is active.
+  const q2 = await n.peer.call('session.send', { session_id: sid, text: 'turn 2 (should be skipped)' })
+  assert.equal(q2.queued, true)
+
+  // Start interrupt (holds until Turn 1 cancels and Turn 2 skips), then immediately send Turn 3 before Turn 1 settles.
+  const intrPromise = n.peer.call('session.interrupt', { session_id: sid })
+  await turn1Cancelled
+  const q3 = await n.peer.call('session.send', { session_id: sid, text: 'turn 3' })
+  assert.equal(q3.queued, true)
+
+  // Now complete Turn 1 cancellation: Turn 2 skips, interrupt resolves without waiting for Turn 3, and Turn 3 begins.
+  finishTurn1({ stopReason: 'cancelled' })
+  const intr = await intrPromise
+  assert.equal(intr.settled, true)
+  await turn3Entered
+
+  // Finish Turn 3 and verify only Turn 1 and Turn 3 ever reached acp.prompt.
+  finishTurn3({ stopReason: 'end_turn' })
+  await until('turn 3 done', () => !companion.live.get(sid)?.running && companion.live.get(sid)?.queued === 0)
+  const prompts = acp.calls.filter((c) => c[0] === 'prompt').map((c) => c[1].prompt.map((b) => b.text).join(''))
+  assert.deepEqual(prompts, ['turn 1', 'turn 3'])
+
+  // Now verify scheduleAcpIdleStop() fires cleanly after skipping a queued turn (no subsequent Turn 3).
+  acp.calls.length = 0
+  let finishA
+  let aStarted
+  const aEntered = new Promise((r) => { aStarted = r })
+  acp.cancel = (sessionId) => {
+    acp.calls.push(['cancel', { sessionId }])
+    finishA?.({ stopReason: 'cancelled' })
+  }
+  acp.onPrompt = async (_sessionId, blocks) => {
+    const text = blocks.map((b) => b.text).join('')
+    if (text === 'turn A') {
+      aStarted()
+      return new Promise((r) => { finishA = r })
+    }
+    throw new Error(`unexpected prompt ${text}`)
+  }
+  await n.peer.call('session.send', { session_id: sid, text: 'turn A' })
+  await aEntered
+  await n.peer.call('session.send', { session_id: sid, text: 'turn B (skipped)' })
+  const intr2 = await n.peer.call('session.interrupt', { session_id: sid })
+  assert.equal(intr2.settled, true)
+  await until('idle acp child stopped after skipping queued turn', () => acp.pid === 0 && acp.calls.some((c) => c[0] === 'stopChild'), 2000)
+})
+
+test('session.interrupt and session.close during pre-prompt setup prevent acp.prompt, stale snapshots, and leaks', async (t) => {
+  const n = await startFakeNode(t)
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  const companion = createOpencodeCompanion({
+    socketPath: n.path,
+    retryMs: 20,
+    pushDelayMs: 5,
+    home: '/home/u',
+    acpIdleMs: 0,
+    openDb: db.openDb,
+    acp,
+    discoverModels: async () => [
+      { providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', variants: { low: {}, high: {} } },
+      { providerID: 'openai', id: 'gpt-5', name: 'GPT-5', variants: { low: {}, high: {} } },
+    ],
+  })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  const started = await n.peer.call('session.start', { cwd: '/w/app' })
+  const sid = started.session.session_id
+
+  // 1) Interrupt while acp.ensureStarted is pending: must skip loadSession, setConfigOption, and acp.prompt,
+  //    leave loadedGeneration cleared, and allow an immediate follow-up send() to succeed cleanly (status working -> done).
+  acp.loadedSessions.delete(sid)
+  companion.live.get(sid).loadedGeneration = 0
+  acp.calls.length = 0
+  let releaseStart1
+  let start1EnteredResolve
+  const start1Entered = new Promise((r) => { start1EnteredResolve = r })
+  let cancelNotified
+  let cancelSeen = new Promise((r) => { cancelNotified = r })
+  acp.cancel = (sessionId) => {
+    acp.calls.push(['cancel', { sessionId }])
+    cancelNotified?.()
+  }
+  const origEnsureStarted = acp.ensureStarted.bind(acp)
+  acp.ensureStarted = async () => {
+    start1EnteredResolve()
+    await new Promise((r) => { releaseStart1 = r })
+    return origEnsureStarted()
+  }
+  t.after(() => releaseStart1?.())
+
+  await n.peer.call('session.send', { session_id: sid, text: 'cancel during ensureStarted', model: 'openai/gpt-5' })
+  await start1Entered
+  const intrStartPromise = n.peer.call('session.interrupt', { session_id: sid })
+  await cancelSeen
+  releaseStart1()
+  const intrStart = await intrStartPromise
+  assert.equal(intrStart.settled, true)
+  assert.equal(companion.live.get(sid).loadedGeneration, 0, 'loadedGeneration must remain cleared on pre-prompt cancel')
+  assert.equal(acp.calls.filter((c) => c[0] === 'loadSession').length, 0, 'loadSession must not run after interrupt during ensureStarted')
+  assert.equal(acp.calls.filter((c) => c[0] === 'setConfigOption').length, 0, 'setConfigOption must not run after interrupt during ensureStarted')
+  assert.equal(acp.calls.filter((c) => c[0] === 'prompt').length, 0, 'acp.prompt must not run after interrupt during ensureStarted')
+  await until('status leaves working after pre-prompt interrupt', () => {
+    const row = n.last('runtime.sessions')?.sessions?.find((r) => r.session_id === sid)
+    return row && row.status === 'done'
+  }, 1500)
+
+  // Immediate follow-up turn right after pre-prompt interrupt must load cleanly and complete.
+  acp.ensureStarted = origEnsureStarted
+  acp.calls.length = 0
+  await n.peer.call('session.send', { session_id: sid, text: 'follow-up after pre-prompt cancel' })
+  await until('follow-up turn done', () => !companion.live.get(sid)?.running)
+  assert.equal(acp.calls.filter((c) => c[0] === 'loadSession').length, 1)
+  assert.deepEqual(
+    acp.calls.filter((c) => c[0] === 'prompt').map((c) => c[1].prompt.map((b) => b.text).join('')),
+    ['follow-up after pre-prompt cancel'],
+  )
+  await until('status returns to done after follow-up turn', () => {
+    const row = n.last('runtime.sessions')?.sessions?.find((r) => r.session_id === sid)
+    return row && row.status === 'done'
+  }, 1500)
+
+  // 2) Interrupt while acp.loadSession is pending: must skip setConfigOption and acp.prompt and keep loadedGeneration cleared.
+  acp.loadedSessions.delete(sid)
+  companion.live.get(sid).loadedGeneration = 0
+  acp.calls.length = 0
+  cancelSeen = new Promise((r) => { cancelNotified = r })
+  let releaseLoad
+  let loadStarted
+  const loadEntered = new Promise((r) => { loadStarted = r })
+  const origLoad = acp.loadSession.bind(acp)
+  acp.loadSession = async (opts) => {
+    loadStarted()
+    await new Promise((r) => { releaseLoad = r })
+    return origLoad(opts)
+  }
+  t.after(() => releaseLoad?.())
+
+  await n.peer.call('session.send', { session_id: sid, text: 'cancel during load', model: 'openai/gpt-5' })
+  await loadEntered
+  const intrLoadPromise = n.peer.call('session.interrupt', { session_id: sid })
+  await cancelSeen
+  releaseLoad()
+  const intrLoad = await intrLoadPromise
+  assert.equal(intrLoad.settled, true)
+  assert.equal(companion.live.get(sid).loadedGeneration, 0)
+  assert.equal(acp.calls.filter((c) => c[0] === 'prompt').length, 0, 'acp.prompt must not run after interrupt during loadSession')
+  assert.equal(acp.calls.filter((c) => c[0] === 'setConfigOption').length, 0, 'applySessionConfig must not run after interrupt during loadSession')
+  const itemsAfterLoadCancel = await n.peer.call('session.items', { session_id: sid })
+  assert.ok(itemsAfterLoadCancel.items.some((it) => it.kind === 'notice' && it.text === '已中断'))
+
+  // 3) Interrupt mid-applySessionConfig multi-step (mode + model + effort):
+  //    pausing on the first setConfigOption (mode) must skip model, effort, and acp.prompt.
+  acp.loadSession = origLoad
+  acp.calls.length = 0
+  cancelSeen = new Promise((r) => { cancelNotified = r })
+  let releaseConfig
+  let configStarted
+  const configEntered = new Promise((r) => { configStarted = r })
+  const origSetConfig = acp.setConfigOption.bind(acp)
+  acp.setConfigOption = async (sessionId, configId, value) => {
+    if (configId === 'mode') {
+      configStarted()
+      await new Promise((r) => { releaseConfig = r })
+    }
+    return origSetConfig(sessionId, configId, value)
+  }
+  t.after(() => releaseConfig?.())
+
+  await n.peer.call('session.send', {
+    session_id: sid,
+    text: 'cancel during multi-step config',
+    mode: 'plan',
+    model: 'openai/gpt-5',
+    effort: 'high',
+  })
+  await configEntered
+  const intrConfigPromise = n.peer.call('session.interrupt', { session_id: sid })
+  await cancelSeen
+  releaseConfig()
+  const intrConfig = await intrConfigPromise
+  assert.equal(intrConfig.settled, true)
+  assert.deepEqual(
+    acp.calls.filter((c) => c[0] === 'setConfigOption').map((c) => c[1].configId),
+    ['mode'],
+    'model and effort setConfigOption must not run after interrupt during mode step',
+  )
+  assert.equal(acp.calls.filter((c) => c[0] === 'prompt').length, 0, 'acp.prompt must not run after interrupt during applySessionConfig')
+
+  // 4) session.modes closed mid-applySessionConfig must reject with code "closed" (not silent ok).
+  acp.calls.length = 0
+  let releaseModesConfig
+  let modesConfigEnteredResolve
+  const modesConfigEntered = new Promise((r) => { modesConfigEnteredResolve = r })
+  acp.setConfigOption = async (sessionId, configId, value) => {
+    modesConfigEnteredResolve()
+    await new Promise((r) => { releaseModesConfig = r })
+    return origSetConfig(sessionId, configId, value)
+  }
+  t.after(() => releaseModesConfig?.())
+  const modesStarted = await n.peer.call('session.start', { cwd: '/w/app' })
+  const modesSid = modesStarted.session.session_id
+  const modesPromise = n.peer.call('session.modes', { session_id: modesSid, model: 'openai/gpt-5' })
+  await modesConfigEntered
+  await n.peer.call('session.close', { session_id: modesSid })
+  releaseModesConfig()
+  await assert.rejects(modesPromise, (err) => err.code === 'closed')
+
+  // 5) Close while acp.loadSession is pending: must call closeSession, release mcpRoute, skip setConfigOption/prompt, and never call runtime.append after close.
+  acp.setConfigOption = origSetConfig
+  const loadCloseStarted = await n.peer.call('session.start', { cwd: '/w/app' })
+  const loadCloseSid = loadCloseStarted.session.session_id
+  const loadCloseState = companion.live.get(loadCloseSid)
+  const routeBeforeClose = loadCloseState.mcpRoute
+  let routeReleased = 0
+  if (routeBeforeClose) {
+    const origRelease = routeBeforeClose.release.bind(routeBeforeClose)
+    routeBeforeClose.release = () => { routeReleased++; return origRelease() }
+  }
+  acp.loadedSessions.delete(loadCloseSid)
+  loadCloseState.loadedGeneration = 0
+  acp.calls.length = 0
+  let releaseLoadClose
+  let loadCloseEnteredResolve
+  const loadCloseEntered = new Promise((r) => { loadCloseEnteredResolve = r })
+  acp.loadSession = async (opts) => {
+    loadCloseEnteredResolve()
+    await new Promise((r) => { releaseLoadClose = r })
+    return origLoad(opts)
+  }
+  t.after(() => releaseLoadClose?.())
+
+  let appendsAfterClose = 0
+  let closedTrackingId = ''
+  const origRuntimeAppend = companion.runtime.append
+  companion.runtime.append = (sessionId, payload) => {
+    if (sessionId === closedTrackingId) appendsAfterClose++
+    return origRuntimeAppend(sessionId, payload)
+  }
+  t.after(() => { companion.runtime.append = origRuntimeAppend })
+
+  await n.peer.call('session.watch', { session_id: loadCloseSid })
+  await n.peer.call('session.send', { session_id: loadCloseSid, text: 'close during loadSession', model: 'openai/gpt-5' })
+  await loadCloseEntered
+  await n.peer.call('session.close', { session_id: loadCloseSid })
+  const itemsLenAtLoadClose = loadCloseState.liveItems.length
+  closedTrackingId = loadCloseSid
+  appendsAfterClose = 0
+  const closeCallsBeforeRelease = acp.calls.filter((c) => c[0] === 'closeSession' && c[1].sessionId === loadCloseSid).length
+  releaseLoadClose()
+  await loadCloseState.tail.catch(() => {})
+  assert.equal(loadCloseState.running, false)
+  assert.ok(routeReleased >= 1, 'mcpRoute must be released on post-loadSession close')
+  assert.equal(
+    acp.calls.filter((c) => c[0] === 'closeSession' && c[1].sessionId === loadCloseSid).length,
+    closeCallsBeforeRelease + 1,
+    'post-loadSession close must call acp.closeSession to clean up newly loaded session',
+  )
+  assert.equal(acp.calls.filter((c) => c[0] === 'setConfigOption' && c[1].sessionId === loadCloseSid).length, 0)
+  assert.equal(acp.calls.filter((c) => c[0] === 'prompt' && c[1].sessionId === loadCloseSid).length, 0)
+  assert.equal(appendsAfterClose, 0, 'runtime.append must not be called after session.close')
+  assert.equal(loadCloseState.liveItems.length, itemsLenAtLoadClose, 'liveItems must not grow after session.close')
+
+  // 6) Close while acp.ensureStarted is pending: must skip loadSession, prompt, and any post-close runtime.append.
+  acp.loadSession = origLoad
+  acp.loadedSessions.delete(sid)
+  companion.live.get(sid).loadedGeneration = 0
+  acp.calls.length = 0
+  let releaseStartClose
+  let startCloseEnteredResolve
+  const startCloseEntered = new Promise((r) => { startCloseEnteredResolve = r })
+  acp.ensureStarted = async () => {
+    startCloseEnteredResolve()
+    await new Promise((r) => { releaseStartClose = r })
+    return origEnsureStarted()
+  }
+  t.after(() => releaseStartClose?.())
+
+  const closedState = companion.live.get(sid)
+  await n.peer.call('session.watch', { session_id: sid })
+  await n.peer.call('session.send', { session_id: sid, text: 'close during start' })
+  await startCloseEntered
+  await n.peer.call('session.close', { session_id: sid })
+  const itemsLenAtStartClose = closedState.liveItems.length
+  closedTrackingId = sid
+  appendsAfterClose = 0
+  releaseStartClose()
+  await closedState.tail.catch(() => {})
+  assert.equal(closedState.running, false)
+  assert.equal(acp.calls.filter((c) => c[0] === 'loadSession').length, 0, 'loadSession must not run after session.close')
+  assert.equal(acp.calls.filter((c) => c[0] === 'prompt').length, 0, 'acp.prompt must not run after session.close')
+  assert.equal(appendsAfterClose, 0, 'runtime.append must not be called after session.close')
+  assert.equal(closedState.liveItems.length, itemsLenAtStartClose, 'liveItems must not grow after session.close')
+
+  // 7) Close while an activeThoughtItem is live during acp.prompt:
+  //    flushLiveText -> flushActiveThought -> pushLiveUpdate must NOT call runtime.append or rt.streamEnd after close.
+  acp.ensureStarted = origEnsureStarted
+  const thoughtStarted = await n.peer.call('session.start', { cwd: '/w/app' })
+  const thoughtSid = thoughtStarted.session.session_id
+  const thoughtState = companion.live.get(thoughtSid)
+  let releaseThoughtPrompt
+  let thoughtEmittedResolve
+  const thoughtEmitted = new Promise((r) => { thoughtEmittedResolve = r })
+  acp.onPrompt = async (sessionId, _blocks, client) => {
+    client.emit('update', { sessionId, update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking step 1 ' } } })
+    client.emit('update', { sessionId, update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'step 2' } } })
+    thoughtEmittedResolve()
+    return new Promise((r) => { releaseThoughtPrompt = r })
+  }
+  t.after(() => releaseThoughtPrompt?.({ stopReason: 'cancelled' }))
+
+  await n.peer.call('session.watch', { session_id: thoughtSid })
+  await n.peer.call('session.send', { session_id: thoughtSid, text: 'close during thought' })
+  await thoughtEmitted
+  assert.ok(thoughtState.activeThoughtItem, 'activeThoughtItem must be active before close')
+
+  let streamEndAfterClose = 0
+  const origStreamEnd = companion.runtime.streamEnd
+  companion.runtime.streamEnd = (sessionId) => {
+    if (sessionId === thoughtSid && closedTrackingId === thoughtSid) streamEndAfterClose++
+    return origStreamEnd(sessionId)
+  }
+  t.after(() => { companion.runtime.streamEnd = origStreamEnd })
+
+  await n.peer.call('session.close', { session_id: thoughtSid })
+  const thoughtItemsAtClose = thoughtState.liveItems.length
+  closedTrackingId = thoughtSid
+  appendsAfterClose = 0
+  streamEndAfterClose = 0
+  releaseThoughtPrompt({ stopReason: 'cancelled' })
+  await thoughtState.tail.catch(() => {})
+  assert.equal(thoughtState.running, false)
+  assert.equal(appendsAfterClose, 0, 'flushActiveThought/pushLiveUpdate must not call runtime.append after session.close')
+  assert.equal(streamEndAfterClose, 0, 'finally must not call runtime.streamEnd after session.close')
+  assert.equal(thoughtState.liveItems.length, thoughtItemsAtClose, 'liveItems must not grow after session.close')
+})
+
+test('assistant pre-prompt interrupt/close guards: ensureGateRules, mcpProxy.allocate, ensureLoaded applySessionConfig, and processFailure', async (t) => {
+  // 1) Interrupt while turnDone awaits ensureGateRules() on a queued assistant turn:
+  //    must append "已中断" and skip ensureLoaded and acp.prompt.
+  {
+    const n = await startFakeNode(t)
+    const db = fakeV1Db()
+    db.session('ses_asst_gate', { directory: '/home/u/.persona/assistant', title: 'Asst Gate' })
+    const acp = new FakeAcpClient()
+    const companion = createTestCompanion({
+      socketPath: n.path,
+      retryMs: 20,
+      pushDelayMs: 5,
+      home: '/home/u',
+      acpIdleMs: 0,
+      openDb: db.openDb,
+      acp,
+      discoverModels: async () => [
+        { providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+      ],
+    })
+    t.after(() => companion.stop())
+
+    // Intercept companion.runtime.tools BEFORE start:
+    //  call #1 (onHub refresh): reject so gateShellRulesReady stays false
+    //  call #2 (Turn 1 pre-enqueue L1488): pause until Turn 2 queues (wasBusy=true -> skips L1488), then reject Turn 1
+    //  call #3 (Turn 2 inside turnDone L1553 ensureGateRules): pause so interrupt hits L1553 directly!
+    let toolCallCount = 0
+    let turn1ToolsEnteredResolve
+    const turn1ToolsEntered = new Promise((r) => { turn1ToolsEnteredResolve = r })
+    let rejectTurn1Tools
+    let turn2ToolsEnteredResolve
+    const turn2ToolsEntered = new Promise((r) => { turn2ToolsEnteredResolve = r })
+    let releaseTurn2Tools
+    let hubRefreshDoneResolve
+    const hubRefreshDone = new Promise((r) => { hubRefreshDoneResolve = r })
+    const origTools = companion.runtime.tools
+    companion.runtime.tools = async (opts) => {
+      toolCallCount++
+      if (toolCallCount === 1) {
+        hubRefreshDoneResolve()
+        throw new Error('initial hub tools unavailable')
+      }
+      if (toolCallCount === 2) {
+        turn1ToolsEnteredResolve()
+        await new Promise((_res, rej) => { rejectTurn1Tools = rej })
+      }
+      if (toolCallCount === 3) {
+        turn2ToolsEnteredResolve()
+        await new Promise((r) => { releaseTurn2Tools = r })
+        return origTools(opts)
+      }
+      return origTools(opts)
+    }
+    t.after(() => {
+      rejectTurn1Tools?.(new Error('cleanup'))
+      releaseTurn2Tools?.()
+    })
+
+    await companion.start()
+    await n.ready
+    await hubRefreshDone
+
+    const turn1Promise = n.peer.call('session.send', { session_id: 'ses_asst_gate', text: 'turn 1 fails upfront', assistant: true })
+    await turn1ToolsEntered
+    const turn2Queued = await n.peer.call('session.send', { session_id: 'ses_asst_gate', text: 'turn 2 cancelled in ensureGateRules', assistant: true })
+    assert.equal(turn2Queued.queued, true)
+    rejectTurn1Tools(new Error('turn 1 gate fetch failed'))
+    await assert.rejects(turn1Promise)
+
+    await turn2ToolsEntered
+    acp.calls.length = 0
+    const intrPromise = n.peer.call('session.interrupt', { session_id: 'ses_asst_gate' })
+    await until('interrupt registered on session', () => companion.live.get('ses_asst_gate')?.abort?.signal.aborted)
+    releaseTurn2Tools()
+    const intr = await intrPromise
+    assert.equal(intr.settled, true)
+    assert.equal(acp.calls.filter((c) => c[0] === 'ensureStarted').length, 0, 'ensureLoaded must not run after interrupt during ensureGateRules')
+    assert.equal(acp.calls.filter((c) => c[0] === 'prompt').length, 0, 'acp.prompt must not run after interrupt during ensureGateRules')
+    const items = await n.peer.call('session.items', { session_id: 'ses_asst_gate' })
+    assert.ok(items.items.some((it) => it.kind === 'notice' && it.text === '已中断'))
+  }
+
+  // 2) Close while mcpProxy.allocate is pending inside ensureLoaded():
+  //    must release the allocated route immediately and skip resumeSession/prompt.
+  {
+    const n = await startFakeNode(t)
+    const db = fakeV1Db()
+    const acp = new FakeAcpClient()
+    let allocCalls = 0
+    let pauseNextAlloc = false
+    let allocEnteredResolve
+    const allocEntered = new Promise((r) => { allocEnteredResolve = r })
+    let releaseAlloc
+    let pausedRouteReleased = 0
+    const fakeMcpProxy = {
+      async allocate() {
+        allocCalls++
+        const route = {
+          acpServer: { type: 'http', name: 'persona', url: `http://127.0.0.1:9999/mcp/${allocCalls}`, headers: [] },
+          bind() {},
+          release() {},
+        }
+        if (pauseNextAlloc) {
+          pauseNextAlloc = false
+          route.release = () => { pausedRouteReleased++ }
+          allocEnteredResolve()
+          await new Promise((r) => { releaseAlloc = r })
+        }
+        return route
+      },
+      async forSession() {
+        return { acpServer: { type: 'http', name: 'persona', url: 'http://127.0.0.1:9999/mcp/s', headers: [] }, release() {} }
+      },
+      stop() {},
+    }
+    t.after(() => releaseAlloc?.())
+
+    const companion = createTestCompanion({
+      socketPath: n.path,
+      retryMs: 20,
+      pushDelayMs: 5,
+      home: '/home/u',
+      acpIdleMs: 0,
+      openDb: db.openDb,
+      acp,
+      mcpProxy: fakeMcpProxy,
+      discoverModels: async () => [
+        { providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+      ],
+    })
+    t.after(() => companion.stop())
+    await companion.start()
+    await n.ready
+
+    const started = await n.peer.call('session.start', { cwd: '/home/u/.persona/assistant', assistant: true })
+    const sid = started.session.session_id
+    const s = companion.live.get(sid)
+    // Simulate a session whose worker exists but needs ensureLoaded to allocate a fresh mcpRoute.
+    s.mcpRoute = null
+    s.loadedGeneration = 0
+    pauseNextAlloc = true
+    acp.calls.length = 0
+
+    await n.peer.call('session.send', { session_id: sid, text: 'close during allocate', assistant: true })
+    await allocEntered
+    await n.peer.call('session.close', { session_id: sid })
+    releaseAlloc()
+    await s.tail.catch(() => {})
+    assert.equal(pausedRouteReleased, 1, 'allocated mcpRoute must be released when session closed during allocate')
+    assert.equal(acp.calls.filter((c) => c[0] === 'resumeSession').length, 0)
+    assert.equal(acp.calls.filter((c) => c[0] === 'prompt').length, 0)
+  }
+
+  // 3) Close during assistant ensureLoaded()'s applySessionConfig():
+  //    must throw closed, never leak a non-zero runtime.assistantPid after close, and never call prompt.
+  // 4) Process exit (processFailure) while paused in assistant ensureLoaded()'s applySessionConfig():
+  //    must record "出错了：OpenCode execution process exited unexpectedly" (NOT "已中断").
+  {
+    const n = await startFakeNode(t)
+    const db = fakeV1Db()
+    const acp = new FakeAcpClient()
+    const workersBySession = new Map()
+    const companion = createOpencodeCompanion({
+      socketPath: n.path,
+      retryMs: 20,
+      pushDelayMs: 5,
+      home: '/home/u',
+      acpIdleMs: 0,
+      openDb: db.openDb,
+      acp,
+      discoverModels: async () => [
+        { providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+        { providerID: 'openai', id: 'gpt-5', name: 'GPT-5' },
+      ],
+      assistantAcpFactory: () => {
+        const child = new FakeAcpClient()
+        child.calls = acp.calls
+        Object.defineProperty(child, 'nextId', { get: () => acp.nextId, set: (v) => { acp.nextId = v } })
+        const origNew = child.newSession.bind(child)
+        child.newSession = async (params) => {
+          const res = await origNew(params)
+          workersBySession.set(res.sessionId, child)
+          return res
+        }
+        return child
+      },
+    })
+    t.after(() => companion.stop())
+    await companion.start()
+    await n.ready
+
+    // Case 3: close during assistant ensureLoaded -> applySessionConfig
+    const started1 = await n.peer.call('session.start', { cwd: '/home/u/.persona/assistant', assistant: true, model: 'openai/gpt-5' })
+    const sid1 = started1.session.session_id
+    const s1 = companion.live.get(sid1)
+    const workerAcp1 = workersBySession.get(sid1)
+    s1.loadedGeneration = 0
+    workerAcp1.loadedSessions.delete(sid1)
+    let releaseAsstConfig1
+    let asstConfig1EnteredResolve
+    const asstConfig1Entered = new Promise((r) => { asstConfig1EnteredResolve = r })
+    const origSetConfig1 = workerAcp1.setConfigOption.bind(workerAcp1)
+    workerAcp1.setConfigOption = async (sessionId, configId, value) => {
+      asstConfig1EnteredResolve()
+      await new Promise((r) => { releaseAsstConfig1 = r })
+      return origSetConfig1(sessionId, configId, value)
+    }
+    t.after(() => releaseAsstConfig1?.())
+
+    const pidCallsAfterClose = []
+    let trackClosePidFor = ''
+    const origAssistantPid = companion.runtime.assistantPid
+    companion.runtime.assistantPid = (sessionId, pid) => {
+      if (sessionId === trackClosePidFor) pidCallsAfterClose.push(pid)
+      return origAssistantPid(sessionId, pid)
+    }
+    t.after(() => { companion.runtime.assistantPid = origAssistantPid })
+
+    acp.calls.length = 0
+    await n.peer.call('session.send', { session_id: sid1, text: 'close during asst applySessionConfig', assistant: true })
+    await asstConfig1Entered
+    await n.peer.call('session.close', { session_id: sid1 })
+    trackClosePidFor = sid1
+    pidCallsAfterClose.length = 0
+    releaseAsstConfig1()
+    await s1.tail.catch(() => {})
+    assert.deepEqual(pidCallsAfterClose, [], 'must not leak runtime.assistantPid after close during ensureLoaded applySessionConfig')
+    assert.equal(s1.loadedGeneration, 0)
+    assert.equal(acp.calls.filter((c) => c[0] === 'prompt' && c[1].sessionId === sid1).length, 0)
+
+    // Case 4: worker process crash (processFailure) during pre-prompt ensureLoaded -> applySessionConfig
+    const started2 = await n.peer.call('session.start', { cwd: '/home/u/.persona/assistant', assistant: true, model: 'openai/gpt-5' })
+    const sid2 = started2.session.session_id
+    const s2 = companion.live.get(sid2)
+    const workerAcp2 = workersBySession.get(sid2)
+    s2.loadedGeneration = 0
+    workerAcp2.loadedSessions.delete(sid2)
+    let releaseAsstConfig2
+    let asstConfig2EnteredResolve
+    const asstConfig2Entered = new Promise((r) => { asstConfig2EnteredResolve = r })
+    const origSetConfig2 = workerAcp2.setConfigOption.bind(workerAcp2)
+    workerAcp2.setConfigOption = async (sessionId, configId, value) => {
+      asstConfig2EnteredResolve()
+      await new Promise((r) => { releaseAsstConfig2 = r })
+      return origSetConfig2(sessionId, configId, value)
+    }
+    t.after(() => releaseAsstConfig2?.())
+
+    acp.calls.length = 0
+    await n.peer.call('session.send', { session_id: sid2, text: 'crash during pre-prompt', assistant: true })
+    await asstConfig2Entered
+    workerAcp2.emit('process', 0)
+    releaseAsstConfig2()
+    await s2.tail.catch(() => {})
+    assert.equal(acp.calls.filter((c) => c[0] === 'prompt' && c[1].sessionId === sid2).length, 0)
+    assert.equal(s2.model, 'openai/gpt-5', 'desired assistant model must be preserved after pre-prompt abort')
+    const crashItems = await n.peer.call('session.items', { session_id: sid2 })
+    assert.equal(
+      crashItems.items.at(-1)?.text,
+      '出错了：OpenCode execution process exited unexpectedly',
+      'processFailure during pre-prompt cancel must report error notice rather than 已中断',
+    )
+  }
+
+  // 5) Two concurrent ensureLoaded() calls on a non-assistant session sharing the same mcpProxy.forSession path
+  //    must NOT release/delete the live MCP route!
+  {
+    const n = await startFakeNode(t)
+    const db = fakeV1Db()
+    const acp = new FakeAcpClient()
+    let forSessionCalls = 0
+    const releases = []
+    let firstForSessionEnteredResolve
+    const firstForSessionEntered = new Promise((r) => { firstForSessionEnteredResolve = r })
+    let secondForSessionEnteredResolve
+    const secondForSessionEntered = new Promise((r) => { secondForSessionEnteredResolve = r })
+    let releaseFirst
+    let releaseSecond
+    const sharedPath = '/mcp/session/shared_concurrent'
+    const fakeMcpProxy = {
+      async allocate() {
+        return {
+          path: '/mcp/alloc_1',
+          acpServer: { type: 'http', name: 'persona', url: 'http://127.0.0.1:9999/mcp/alloc_1', headers: [] },
+          bind() {},
+          release() {},
+        }
+      },
+      async forSession() {
+        const callNum = ++forSessionCalls
+        const route = {
+          path: sharedPath,
+          acpServer: { type: 'http', name: 'persona', url: `http://127.0.0.1:9999${sharedPath}`, headers: [] },
+          release() { releases.push(callNum) },
+        }
+        if (callNum === 1) {
+          firstForSessionEnteredResolve()
+          await new Promise((r) => { releaseFirst = r })
+        } else if (callNum === 2) {
+          secondForSessionEnteredResolve()
+          await new Promise((r) => { releaseSecond = r })
+        }
+        return route
+      },
+      stop() {},
+    }
+    t.after(() => { releaseFirst?.(); releaseSecond?.() })
+
+    const companion = createTestCompanion({
+      socketPath: n.path,
+      retryMs: 20,
+      pushDelayMs: 5,
+      home: '/home/u',
+      acpIdleMs: 0,
+      openDb: db.openDb,
+      acp,
+      mcpProxy: fakeMcpProxy,
+      discoverModels: async () => [
+        { providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+        { providerID: 'openai', id: 'gpt-5', name: 'GPT-5' },
+      ],
+    })
+    t.after(() => companion.stop())
+    await companion.start()
+    await n.ready
+
+    const started = await n.peer.call('session.start', { cwd: '/w/app' })
+    const sid = started.session.session_id
+    const s = companion.live.get(sid)
+    s.mcpRoute = null
+    s.loadedGeneration = 0
+    acp.loadedSessions.delete(sid)
+
+    // Launch send() and modes() concurrently so both enter ensureLoaded() -> mcpProxy.forSession(s).
+    await n.peer.call('session.send', { session_id: sid, text: 'concurrent route check' })
+    await firstForSessionEntered
+    const modesPromise = n.peer.call('session.modes', { session_id: sid, model: 'openai/gpt-5' })
+    await secondForSessionEntered
+    releaseFirst()
+    releaseSecond()
+    await modesPromise
+    await s.tail
+    assert.equal(forSessionCalls, 2)
+    assert.deepEqual(releases, [], 'concurrent forSession() calls sharing the same deterministic path must never release/delete the live route')
+    assert.equal(s.mcpRoute?.path, sharedPath)
+  }
+})
+
+test('companion assistant isMemoryWrite blocks symlink escapes, namei divergence, missing cwd fallback, conflicting keys, and clipInput truncation', async (t) => {
+  const base = mkdtempSync(join(tmpdir(), 'persona-oc-comp-mem-'))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const asstDir = join(base, 'assistant')
+  const memDir = join(asstDir, 'memory')
+  const nestedMem = join(memDir, 'nested', 'deep')
+  const outsideDir = join(base, 'outside')
+  const outsideSub = join(outsideDir, 'sub')
+  mkdirSync(nestedMem, { recursive: true })
+  mkdirSync(outsideSub, { recursive: true })
+  writeFileSync(join(outsideDir, 'secret.txt'), 'secret')
+  const escapeFileLink = join(memDir, 'escape-file.md')
+  const danglingLink = join(memDir, 'dangling.md')
+  const escapeDirLink = join(memDir, 'out-dir')
+  const deepLink = join(memDir, 'deep-link')
+  const loopA = join(memDir, 'loop-a')
+  const loopB = join(memDir, 'loop-b')
+  symlinkSync(join(outsideDir, 'secret.txt'), escapeFileLink)
+  symlinkSync(join(outsideDir, 'new-evil.txt'), danglingLink)
+  symlinkSync(outsideSub, escapeDirLink)
+  symlinkSync(nestedMem, deepLink)
+  symlinkSync(loopB, loopA)
+  symlinkSync(loopA, loopB)
+
+  const n = await startFakeNode(t, { tools: [] })
+  n.resolve = () => ({ allow: false })
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  const companion = createTestCompanion({
+    socketPath: n.path,
+    retryMs: 20,
+    pushDelayMs: 5,
+    home: base,
+    openDb: db.openDb,
+    acp,
+    discoverModels: async () => [{ providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+  })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  const started = await n.peer.call('session.start', { cwd: asstDir, assistant: true })
+  const sid = started.session.session_id
+  const s = companion.live.get(sid)
+  const opts = [
+    { optionId: 'once', kind: 'allow_once', name: 'Allow' },
+    { optionId: 'reject', kind: 'reject_once', name: 'Reject' },
+  ]
+  const paddedEscape = `${memDir}/${'./'.repeat(6300)}../SOUL.md`
+  const sparseLocations = [{ path: join(memDir, 'ok.md') }]
+  sparseLocations.length = 2
+  const deniedCases = [
+    { id: 'sym_file', rawInput: { filePath: escapeFileLink } },
+    { id: 'sym_dangling', rawInput: { filePath: danglingLink } },
+    { id: 'sym_dir', rawInput: { filePath: join(escapeDirLink, 'pwn.txt') } },
+    { id: 'namei_dotdot', rawInput: { filePath: `${escapeDirLink}/../secret.txt` } },
+    { id: 'lex_dotdot', rawInput: { filePath: `${deepLink}/../../SOUL.md` } },
+    { id: 'sym_loop', rawInput: { filePath: loopA } },
+    { id: 'tilde', rawInput: { filePath: '~/SOUL.md' } },
+    { id: 'nul', rawInput: { filePath: `${join(memDir, 'ok.md')}\0` } },
+    { id: 'mem_dir_self', rawInput: { filePath: memDir } },
+    { id: 'conflict_path', rawInput: { filePath: join(memDir, 'ok.md'), path: join(outsideDir, 'secret.txt') } },
+    { id: 'conflict_file_path', rawInput: { filePath: join(memDir, 'ok.md'), file_path: join(outsideDir, 'secret.txt') } },
+    { id: 'non_string_key', rawInput: { filePath: 123, path: join(memDir, 'ok.md') } },
+    { id: 'unknown_filepath_lower', rawInput: { filePath: join(memDir, 'ok.md'), filepath: join(outsideDir, 'secret.txt') } },
+    { id: 'unknown_newPath', rawInput: { filePath: join(memDir, 'ok.md'), newPath: join(outsideDir, 'secret.txt') } },
+    { id: 'unknown_diff', rawInput: { filePath: join(memDir, 'ok.md'), diff: '--- a/etc/hosts' } },
+    { id: 'edits_array_item', rawInput: { filePath: join(memDir, 'ok.md'), edits: [[]] } },
+    { id: 'edits_unknown_filepath', rawInput: { filePath: join(memDir, 'ok.md'), edits: [{ filepath: join(outsideDir, 'secret.txt') }] } },
+    { id: 'edits_unknown_patchText', rawInput: { filePath: join(memDir, 'ok.md'), edits: [{ patchText: '*** Update File: /etc/hosts' }] } },
+    { id: 'title_apply_patch', title: 'apply_patch', rawInput: { filePath: join(memDir, 'ok.md') } },
+    { id: 'title_move_file', title: 'move_file', rawInput: { filePath: join(memDir, 'ok.md') } },
+    { id: 'title_delete', title: 'delete', rawInput: { filePath: join(memDir, 'ok.md') } },
+    { id: 'patch_text', rawInput: { filePath: join(memDir, 'ok.md'), patchText: '*** Update File: /etc/hosts' } },
+    { id: 'files_array', rawInput: { filePath: join(memDir, 'ok.md'), files: [join(outsideDir, 'secret.txt')] } },
+    { id: 'locations_mismatch', rawInput: { filePath: join(memDir, 'ok.md') }, locations: [{ path: join(outsideDir, 'secret.txt') }] },
+    { id: 'locations_sparse', rawInput: { filePath: join(memDir, 'ok.md') }, locations: sparseLocations },
+    { id: 'content_diff_outside', rawInput: { filePath: join(memDir, 'ok.md') }, content: [{ type: 'diff', path: join(outsideDir, 'secret.txt'), oldText: 'a', newText: 'b' }] },
+    { id: 'content_diff_missing_path', rawInput: { filePath: join(memDir, 'ok.md') }, content: [{ type: 'diff', oldText: 'a', newText: 'b' }] },
+    { id: 'content_non_array', rawInput: { filePath: join(memDir, 'ok.md') }, content: { type: 'diff', path: join(memDir, 'ok.md') } },
+    { id: 'clip_escape', rawInput: { filePath: paddedEscape, content: 'x'.repeat(20_000) } },
+  ]
+
+  let promptRan = false
+  let promptErr = null
+  acp.onPrompt = async (sessionId, _blocks, client) => {
+    promptRan = true
+    try {
+      for (const tc of deniedCases) {
+        const before = n.asked.length
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: {
+            toolCallId: tc.id,
+            kind: 'edit',
+            title: tc.title ?? 'write',
+            rawInput: tc.rawInput,
+            ...(tc.locations !== undefined ? { locations: tc.locations } : {}),
+            ...(tc.content !== undefined ? { content: tc.content } : {}),
+          },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'reject' } }, `${tc.id} must not auto-allow`)
+        assert.equal(n.asked.length, before + 1, `${tc.id} must ask phone`)
+      }
+
+      // Empty cwd must NOT fall back to memoryDir for relative paths.
+      const savedCwd = s.cwd
+      s.cwd = ''
+      try {
+        const before = n.asked.length
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: { toolCallId: 'empty_cwd', kind: 'edit', title: 'write', rawInput: { filePath: 'AGENTS.md' } },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'reject' } }, 'empty cwd must not fall back to memoryDir')
+        assert.equal(n.asked.length, before + 1)
+      } finally {
+        s.cwd = savedCwd
+      }
+
+      // Root filesystem memoryDir must fail closed.
+      const savedMem = s.memoryDir
+      s.memoryDir = '/'
+      try {
+        const before = n.asked.length
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: { toolCallId: 'root_mem', kind: 'edit', title: 'write', rawInput: { filePath: '/etc/hosts' } },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'reject' } }, 'root memoryDir must fail closed')
+        assert.equal(n.asked.length, before + 1)
+      } finally {
+        s.memoryDir = savedMem
+      }
+
+      // Legitimate writes inside memoryDir still auto-allow without asking phone.
+      const askedBeforeAllowed = n.asked.length
+      for (const tc of [
+        { id: 'ok_abs', rawInput: { filePath: join(memDir, 'notes.md') } },
+        { id: 'ok_rel', rawInput: { filePath: 'memory/sub/new.md' } },
+        { id: 'ok_dotdot_name', rawInput: { filePath: join(memDir, '..note.md') } },
+        { id: 'ok_loc', rawInput: { filePath: join(memDir, 'notes.md') }, locations: [{ path: join(memDir, 'notes.md') }] },
+        { id: 'ok_content_diff', rawInput: { filePath: join(memDir, 'notes.md') }, content: [{ type: 'diff', path: join(memDir, 'notes.md'), oldText: 'a', newText: 'b' }] },
+      ]) {
+        const res = await client.onPermissionRequest({
+          sessionId,
+          toolCall: {
+            toolCallId: tc.id,
+            kind: 'edit',
+            title: 'write',
+            rawInput: tc.rawInput,
+            ...(tc.locations !== undefined ? { locations: tc.locations } : {}),
+            ...(tc.content !== undefined ? { content: tc.content } : {}),
+          },
+          options: opts,
+        })
+        assert.deepEqual(res, { outcome: { outcome: 'selected', optionId: 'once' } }, `${tc.id} must auto-allow`)
+      }
+      assert.equal(n.asked.length, askedBeforeAllowed, 'legitimate memory writes must not ask phone')
+    } catch (err) {
+      promptErr = err
+      throw err
+    }
+
+    return { stopReason: 'end_turn' }
+  }
+
+  await n.peer.call('session.send', {
+    session_id: sid,
+    text: 'memory security check',
+    assistant: true,
+    mode: 'default',
+    memory_dir: memDir,
+    client_msg_id: 'cm_mem_sec_1',
+  })
+  await s.tail
+  assert.equal(promptRan, true, 'acp.onPrompt must have run')
+  if (promptErr) throw promptErr
+  assert.equal(s.turnError, '')
 })

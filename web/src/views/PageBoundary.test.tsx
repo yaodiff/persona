@@ -32,7 +32,7 @@ describe("PageBoundary", () => {
     const b = new PageBoundary({ page: "x", children: null });
     b.state = failed;
     const html = renderToStaticMarkup(<>{b.render()}</>);
-    expect(html).toContain("这一页没能加载");
+    expect(html).toContain("页面加载失败");
     expect(html).toContain("重新加载");
   });
   it("reports a render crash as fatal and draws the same way out", () => {

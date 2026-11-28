@@ -484,7 +484,7 @@ func TestOnlyABriefingThatReachedTheOwnerEndsTheWait(t *testing.T) {
 		reviewTask(t, s, todo.ID, waitingDecision())
 		run := &briefRun{Facts: s.briefFactsAt(context.Background(), time.Now(), "morning"), Label: "morning"}
 		s.briefSetTaskRun("morning", run)
-		s.briefSent("morning", "conv-briefing", true)
+		s.briefSent(ScheduleRun{RefID: "morning", SessionID: "conv-briefing", Retried: true})
 		if a := askOf(s, todo.ID); !a.ForBriefing {
 			t.Fatalf("sending the run ended the wait: %+v", a)
 		}

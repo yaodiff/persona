@@ -20,6 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
@@ -31,6 +32,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/sessionlist"
@@ -80,6 +82,9 @@ func (h *Hub) routes() http.Handler {
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
+		if !h.requestHasApprovalMirrors(r) {
+			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool { return ix.MirrorOf != "" })
+		}
 		if restrictedAgentData(r) {
 			em := extensionManager(r)
 			ro := principalOf(r.Context()).Role == roleReadOnly
@@ -137,7 +142,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
 	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
-	return h.outerLayers(h.privateNetworkOnly(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux)))))
+	return h.previewDispatcher(h.outerLayers(h.privateNetworkOnly(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux))))))
 }
 
 // outerLayers are what every request goes through around the routes, outermost first: the auth layer's marks
@@ -424,6 +429,7 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 		if !compat.HeaderConflict(r.Header, "X-Persona-Client") {
 			client = parseRequestClient(compat.Header(r.Header, "X-Persona-Client"))
 		}
+		client.Instance = parseRequestClientInstance(r.Header.Get("X-Persona-Client-Instance"))
 		r = r.WithContext(context.WithValue(r.Context(), requestClientKey{}, client))
 		id := requestID(r.Header.Get("X-Client-Request-Id"))
 		w.Header().Set("X-Request-Id", id)
@@ -721,6 +727,9 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
 		return
 	}
+	if !strict {
+		h.noteInlineViewPage(m.cfg.ID, r.PathValue("sid"), res.Items)
+	}
 	res.Items = clientItemsCompat(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	// Allow binding a pending live Hub TTFT on latest-page / incremental reads while keeping historical pages read-only.
 	allowBind := atoi(q.Get("before_seq")) == 0 && atoi(q.Get("through_seq")) == 0 && principalOf(r.Context()).Role != roleReadOnly
@@ -729,6 +738,26 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
 	writeItemsJSON(w, res)
+}
+
+// Pass only potential cards from the trusted node response, before compatibility rewrites for the client.
+func (h *Hub) noteInlineViewPage(machine, sid string, items []proto.Item) {
+	var cards []proto.Item
+	for _, it := range items {
+		if it.ID == "" || it.Role != "assistant" || it.Kind != proto.KindText || (it.FullSize == 0 && !wire.HasAssistantView(it.Text)) {
+			continue
+		}
+		text := it.Text
+		if it.FullSize > 0 {
+			text = "" // the manager must read and validate the complete item
+		}
+		cards = append(cards, proto.Item{ID: it.ID, Role: it.Role, Kind: it.Kind, Text: text, TS: it.TS, FullSize: it.FullSize})
+	}
+	if len(cards) > 0 {
+		h.asstOf(h.sessionOwner(machine, sid)).notify(assistantwire.EventInlineViewPage, assistantwire.SessionItems{
+			MachineID: machine, SessionID: sid, Items: cards,
+		})
+	}
 }
 
 // sessionItemFull serves one item whole: pages cut long text (the item says full_size), the app fetches the rest when
@@ -937,18 +966,19 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 }
 
 type sessionStartRequest struct {
-	MachineID        string        `json:"machine_id"`
-	Cwd              string        `json:"cwd"`
-	Launcher         string        `json:"launcher"`
-	AgentType        string        `json:"agent_type,omitempty"`
-	WorkSession      bool          `json:"work_session,omitempty"`
-	Model            string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-	Prompt           string        `json:"prompt"`
-	ClientMsgID      string        `json:"client_msg_id,omitempty"`
-	Images           []proto.Image `json:"images,omitempty"`
-	ResumeSessionID  string        `json:"resume_session_id"`
-	WorkspaceID      string        `json:"workspace_id"`
-	DesktopProjectID string        `json:"desktop_project_id"`
+	ModelAliases     proto.ModelAliases `json:"model_aliases,omitempty"`
+	MachineID        string             `json:"machine_id"`
+	Cwd              string             `json:"cwd"`
+	Launcher         string             `json:"launcher"`
+	AgentType        string             `json:"agent_type,omitempty"`
+	WorkSession      bool               `json:"work_session,omitempty"`
+	Model            string             `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+	Prompt           string             `json:"prompt"`
+	ClientMsgID      string             `json:"client_msg_id,omitempty"`
+	Images           []proto.Image      `json:"images,omitempty"`
+	ResumeSessionID  string             `json:"resume_session_id"`
+	WorkspaceID      string             `json:"workspace_id"`
+	DesktopProjectID string             `json:"desktop_project_id"`
 	// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
 	// Checked by the node (an older node ignores it and starts in its engine).
 	Host           string `json:"host,omitempty"`
@@ -957,6 +987,7 @@ type sessionStartRequest struct {
 	// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
 	LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
 	Speed                 string `json:"speed,omitempty"`
+	ServiceTier           string `json:"service_tier,omitempty"`
 	Ultracode             *bool  `json:"ultracode,omitempty"`
 	// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
 	// start it cannot take there answers 409 start_goal_unsupported before anything starts.
@@ -982,10 +1013,26 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeBodyErr(w, err, err)
 		return
 	}
-	h.startSessionWith(w, r, p, false)
+	// Read here, where the body is: "via" stays out of p, so the node never gets it. A marked start is delivered as
+	// usual but never counts as the owner's input (project_review.go).
+	var mark struct {
+		Via any `json:"via"`
+	}
+	_ = json.Unmarshal(body, &mark)
+	h.startSessionWith(w, r, p, false, viaMarked(mark.Via))
 }
 
-func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff bool) {
+// handoff: p carries generated context (context_handoff.go), not words someone typed; indirect: the request was
+// marked "via" (viaMarked). Neither counts as the owner's input.
+func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff, indirect bool) {
+	if err := p.ModelAliases.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(p.ModelAliases) != 0 && p.ResumeSessionID != "" {
+		writeErr(w, http.StatusBadRequest, errors.New("model_aliases require a new Claude Code session"))
+		return
+	}
 	orig := p
 	replay := heldStartReplayOf(r.Context())
 	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
@@ -1003,6 +1050,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if !handoff && replay == nil {
 		r = h.captureHumanSubmission(r, p.Prompt)
 	}
+	// Taken before the to-do handoff adds its own words and images: only the owner's own input counts.
+	firstInput := p.ResumeSessionID == "" && (strings.TrimSpace(p.Prompt) != "" || len(p.Images) > 0)
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
@@ -1050,6 +1099,14 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		writeErr(w, http.StatusBadRequest, errors.New("unsupported agent type"))
 		return
 	}
+	if p.ServiceTier != "" && !m.announces(nodeproto.SessionStartServiceTier) {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_session_start_speed"))
+		return
+	}
+	if len(p.ModelAliases) != 0 && !m.announces(nodeproto.SessionStartModelAliases) {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_model_aliases"))
+		return
+	}
 	opID := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Persona-Op-Id")))
 	if replay != nil {
 		opID = replay.opID
@@ -1058,21 +1115,6 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		clientOpUUID.MatchString(opID) && personSent(r.Context()) && h.requestWants(r, proto.FeatureAgentStartHold)
 	if canHold && !m.isConnected() {
 		if h.tryHoldStart(r.Context(), w, r, m, orig, opID, true) {
-			return
-		}
-	}
-	decided := ""
-	var handoffImages []proto.Image
-	if p.TodoID != "" {
-		// The manager checks the todo (404, 409, 503 assistant_offline while it is away) and puts its decisions before
-		// the prompt, a new agent's project background before those (#1618, #2820); they go to the agent, not into
-		// its tab's name (nameFrom is taken from the prompt as sent).
-		hand := assistantwire.TodoHandoff{TodoID: p.TodoID, Text: p.Prompt}
-		if p.ResumeSessionID == "" {
-			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, startCwd(m, p.Cwd)
-		}
-		var ok bool
-		if decided, handoffImages, ok = h.todoHandoff(r.Context(), w, hand); !ok {
 			return
 		}
 	}
@@ -1093,12 +1135,6 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	nameFrom := p.Prompt
 	if strings.TrimSpace(p.NameHint) != "" {
 		nameFrom = p.NameHint
-	}
-	if p.TodoID != "" {
-		p.Prompt = decided
-	}
-	if strings.TrimSpace(p.Prompt) != "" {
-		p.Images = append(p.Images, handoffImages...)
 	}
 	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType) && !desktopStartLauncher(p.Launcher)
 	parent := r.Context()
@@ -1151,6 +1187,30 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 				params["agent_type"] = resolvedAgent
 				break
 			}
+		}
+	}
+	if resolvedAgent == "" && p.ResumeSessionID != "" {
+		if c, ok := m.session(p.ResumeSessionID); ok {
+			resolvedAgent = c.Agent
+		}
+	}
+	if p.TodoID != "" {
+		// The manager checks the todo (404, 409, 503 assistant_offline while it is away) and puts its decisions (and a
+		// new agent's project background) before the prompt, except after an Antigravity workflow command (#1618,
+		// #2820, #16539); they go to the agent, not into its tab's name (nameFrom is the prompt as sent).
+		hand := assistantwire.TodoHandoff{TodoID: p.TodoID, Text: p.Prompt, Agent: resolvedAgent}
+		if p.ResumeSessionID == "" {
+			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, startCwd(m, p.Cwd)
+		}
+		decided, handoffImages, ok := h.todoHandoff(r.Context(), w, hand)
+		if !ok {
+			return
+		}
+		p.Prompt = decided
+		params["prompt"] = decided
+		if strings.TrimSpace(decided) != "" {
+			p.Images = append(p.Images, handoffImages...)
+			mergeTodoImages(params, handoffImages)
 		}
 	}
 	if handoff {
@@ -1227,6 +1287,17 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if !async {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
 	}
+	recordFirstInput := func() {
+		// Before the machine lists it, the returned session says where it runs.
+		started := res.Session
+		started.Cwd = cmp.Or(started.Cwd, startCwd(m, p.Cwd))
+		h.recordAcceptedProjectReviewInput(ctx, r, m.cfg.ID, started.SessionID, "first-agent:"+started.SessionID, &started, indirect)
+	}
+	if firstInput && p.TodoID == "" {
+		// Recorded as soon as the node has the session, before the listing wait: a restart in between would lose it
+		// (project_review.go).
+		recordFirstInput()
+	}
 	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) &&
 		(res.Instead == nil || res.Instead.Model == "") { // a model the launcher that ran does not offer did not run
 		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
@@ -1259,6 +1330,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		} else {
 			res.Session.Todo = &proto.TodoRef{ID: p.TodoID, Title: linked.Title}
 		}
+		if firstInput {
+			// After the link, so the manager finds the task when the relay delivers it.
+			recordFirstInput()
+		}
 	}
 	m.mu.Lock()
 	engine := proto.EngineNames[cmp.Or(p.Host, startEngine(m.info))]
@@ -1270,7 +1345,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		_ = h.notifyBus(h.machineOwner(m.cfg.ID), assistantwire.EventAgentTabNameStarted, assistantwire.AgentTabNameStart{
 			MachineID: assistantwire.AgentMachineID(m.cfg.ID), SessionID: assistantwire.AgentSessionID(res.Session.SessionID),
 			TabID:           assistantwire.AgentTabID(cmp.Or(namingSession.SlotID, namingSession.TabID)),
-			ExpectedTabName: cmp.Or(namingSession.HerdrTabName(), requested), NameFrom: nameFrom,
+			ExpectedTabName: cmp.Or(namingSession.RenamableTabName(), requested), NameFrom: nameFrom,
 		})
 	}
 }
@@ -1318,7 +1393,20 @@ func startEngine(info proto.NodeInfo) string {
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
 func startsAsync(asked bool, resume, launcher, agentType string) bool {
-	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy"))
+	if !asked || resume != "" {
+		return false
+	}
+	if agentType != "" {
+		return agentType == "claude"
+	}
+	// An untyped launcher is inferred as Claude unless its name identifies an agent that owns its session ID.
+	// Keep the Hub's acknowledgement and deadline aligned with the Node's launcherAgentType/workAgentKind rules.
+	switch launcher {
+	case "codex", "traex", "omp", "agy", "pi", "cursor":
+		return false
+	default:
+		return true
+	}
 }
 
 // startBudget is how long a start may take: one acknowledged before the session is ready a moment, one answered only
@@ -1356,6 +1444,7 @@ type client struct {
 	mu             sync.Mutex
 	traffic        trafficAttribution // inferred once from the upgrade; hello may refine platform
 	subs           map[[2]string]bool
+	termSubs       map[[3]string]bool       // canonical machine, session, requested machine; independent of stream retries
 	fsw            map[[3]string]fsWatchReq // {machine id, cwd, asked id} -> the folders this browser has open there (fswatch.go)
 	phone          bool
 	phoneID        string
@@ -1412,11 +1501,12 @@ func (h *Hub) broadcast(v any) {
 		return
 	}
 	typ, _ := m["type"].(string)
-	var elicitation bool
+	var elicitation, approvalMirror bool
 	if ix, ok := m["interaction"].(proto.Interaction); ok {
 		elicitation = ix.Kind == proto.IxElicitation
+		approvalMirror = ix.MirrorOf != ""
 	}
-	h.broadcastTo(typ, b, elicitation)
+	h.broadcastToApprovalMirror(typ, b, elicitation, approvalMirror)
 }
 
 // broadcastRaw sends every app the message b (of type typ).
@@ -1425,6 +1515,10 @@ func (h *Hub) broadcastRaw(typ string, b []byte) { h.broadcastTo(typ, b, false) 
 // broadcastTo sends every app the message b (of type typ); an MCP form or URL request (elicitation) only goes to the
 // apps that said they can answer one.
 func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
+	h.broadcastToApprovalMirror(typ, b, elicitation, false)
+}
+
+func (h *Hub) broadcastToApprovalMirror(typ string, b []byte, elicitation, approvalMirror bool) {
 	switch typ {
 	case "sessions", "interaction", "interaction_resolved": // what the Fleet activity is made of
 		h.live.changed()
@@ -1437,7 +1531,7 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	if h.events == nil {
 		h.events = newEventLog()
 	}
-	b = h.events.add(b, elicitation, time.Now())
+	b = h.events.addApprovalMirror(b, elicitation, approvalMirror, time.Now())
 	// Each broadcast has one type and localizer; keep its language forms local to this call.
 	localize := i18n.ExtensionEvent
 	if typ == "machines" {
@@ -1449,6 +1543,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 			continue
 		}
 		if elicitation && !c.has("elicitation") {
+			continue
+		}
+		if approvalMirror && !c.wants(featureApprovalMirrors) {
 			continue
 		}
 		if typ == legacyLarkEvent && c.has(featureLarkViaMessaging) {
@@ -1537,13 +1634,15 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	if items == nil {
 		items = []proto.Item{}
 	}
-	msg := func(items []proto.Item) []byte {
-		out := span.into(map[string]any{"type": "items", "machine_id": machineID, "session_id": sessionID, "items": items})
-		if moreAfter {
-			out["more_after"] = true
-		}
-		b, _ := marshalItems(out)
-		return b
+	buildFrames := func(items []proto.Item) [][]byte {
+		frames, _ := marshalItemsFrames(itemsFrameOpts{
+			machineID: machineID,
+			sessionID: sessionID,
+			items:     items,
+			span:      span,
+			moreAfter: moreAfter,
+		})
+		return frames
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
 	type form struct {
@@ -1553,7 +1652,7 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		ring             bool // draws ```persona-card rings (card_compat.go)
 		toolViews        bool // draws Item.ToolViews / Fold.ToolViews (proto.FeatureToolViews)
 	}
-	msgs := map[form][]byte{}
+	msgs := map[form][][]byte{}
 	key := [2]string{machineID, sessionID}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1565,16 +1664,20 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 			continue
 		}
 		f := form{lang: c.lang(), lazy: wantsLazy, ring: c.has(featureCardRing), markdownCloseout: c.has(featureMarkdownCloseout), toolViews: c.has(proto.FeatureToolViews)}
-		b, ok := msgs[f]
+		frames, ok := msgs[f]
 		if !ok {
 			its := clientItemsCompat(f.lang, f.ring, f.markdownCloseout, f.toolViews, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
-			b = msg(its)
-			msgs[f] = b
+			frames = buildFrames(its)
+			msgs[f] = frames
 		}
-		c.queue(b) // not select/default: a burst's tail dropped here left a page behind with nothing to tell it (#3036)
+		for _, b := range frames {
+			if !c.queue(b) { // not select/default: a burst's tail dropped here left a page behind with nothing to tell it (#3036)
+				break
+			}
+		}
 	}
 }
 
@@ -1896,6 +1999,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		c.mu.Unlock()
 		if !already {
 			m.watcherJoined(msg.SessionID)
+			h.fleetClientsChanged()
 		}
 		m.replayLiveTools(c, msg.SessionID)
 		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
@@ -1918,6 +2022,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		c.mu.Unlock()
 		if had {
 			m.watcherLeft(msg.SessionID)
+			h.fleetClientsChanged()
 			go m.syncUnwatch(msg.SessionID)
 		}
 	case "register_phone":
@@ -2017,23 +2122,34 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}
-		out := res.itemSpan.into(map[string]any{"type": "items", "machine_id": m.cfg.ID, "session_id": sid, "items": res.Items, "backlog": true})
-		if res.Partial {
-			out["partial"] = true
+		opts := itemsFrameOpts{
+			machineID: m.cfg.ID,
+			sessionID: sid,
+			items:     res.Items,
+			span:      res.itemSpan,
+			backlog:   true,
+			partial:   res.Partial,
 		}
 		if since == 0 {
 			// Only a page counted back from the end knows whether older items exist. A catch-up after since_seq does
 			// not: sending false there told the app the history was complete, and scrolling up stopped at its oldest.
-			out["has_more"] = res.HasMore
+			hasMore := res.HasMore
+			opts.hasMore = &hasMore
 		}
 		// A catch-up continues page by page (one page used to be all: whatever came after its 500 items was lost).
 		more := since > 0 && res.MoreAfter && len(res.Items) > 0
 		if more && page+1 >= backlogPages {
-			out["more_after"] = true
+			opts.moreAfter = true
 			more = false
 		}
-		if b, err := marshalItems(out); err == nil {
-			if !m.queueConversationBacklog(sid, func() { c.queue(b) }) {
+		if frames, err := marshalItemsFrames(opts); err == nil {
+			if !m.queueConversationBacklog(sid, func() {
+				for _, b := range frames {
+					if !c.queue(b) {
+						break
+					}
+				}
+			}) {
 				c.sendJSON(deletedConversationEvent(m.cfg.ID, sid))
 				return
 			}

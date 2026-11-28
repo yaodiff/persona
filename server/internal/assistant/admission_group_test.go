@@ -274,7 +274,7 @@ func TestAdmissionQueueOtherLinesKeepTheirBoundsWithGroups(t *testing.T) {
 // The queue record lives in the plan, so a restarted hub (a fresh service on the same database, with empty claim books)
 // still waits on the group past the bounds and starts the task once there is room.
 func TestAdmissionQueueGroupWaitSurvivesRestart(t *testing.T) {
-	url := newDatabase(t)
+	url := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(context.Background(), url, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

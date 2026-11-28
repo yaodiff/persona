@@ -163,4 +163,43 @@ describe("TodoDirectionPicker (#16138)", () => {
       transfer_supervision: false,
     });
   });
+
+  it("shows honest inherited hint and allows pinning explicitly, overriding, or clearing an inherited direction (#16939)", async () => {
+    const onApply = vi.fn(async (_req: TodoReorganizeRequest) => {});
+    const onClose = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <TodoDirectionPicker
+          todoId="inherited_1"
+          currentDirectionId="dir-platform"
+          currentDirectionLabel="Platform"
+          currentDirectionInherited={true}
+          childCount={0}
+          directions={DIRECTIONS}
+          onApply={onApply}
+          onClose={onClose}
+        />,
+      );
+    });
+    await flush();
+
+    // Displays inherited hint and pre-selects the resolved direction
+    expect(host.querySelector("[data-testid=todo-detail-direction-inherited]")?.textContent).toContain("Platform");
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-direction-select]")!;
+    expect(select.value).toBe("dir-platform");
+
+    // Apply is enabled so the user can explicitly pin the inherited direction
+    const applyBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-direction-apply]")!;
+    expect(applyBtn.disabled).toBe(false);
+
+    await act(async () => applyBtn.click());
+    await flush();
+    expect(onApply).toHaveBeenCalledWith({
+      ids: ["inherited_1"],
+      direction_id: "dir-platform",
+      include_children: false,
+      transfer_supervision: false,
+    });
+  });
 });

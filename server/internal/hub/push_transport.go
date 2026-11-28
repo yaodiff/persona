@@ -32,7 +32,7 @@ func (p *Pusher) sendDirect(d Device, r apns.Request) (apns.Result, error) {
 	res, err := p.direct.Send(context.Background(), r)
 	tries := 1
 	for _, wait := range p.retryWaits {
-		if err == nil && !directRetryable(res.Status) {
+		if (err == nil && !directRetryable(res.Status)) || errors.Is(err, apns.ErrInvalidDeviceToken) {
 			break
 		}
 		time.Sleep(wait)

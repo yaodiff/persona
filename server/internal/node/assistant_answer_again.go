@@ -2,15 +2,18 @@ package node
 
 import (
 	"context"
+	"errors"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 type answerAgainAfterKey struct{}
 
 // answerAgainCurrent runs under the same typing lock as owner sends. It requires the settled
 // process and transcript tail the manager inspected. A newer send, stopped process or turn that
-// has resumed on its own makes the follow-up obsolete.
+// has resumed on its own makes the follow-up obsolete. An unchanged transcript
+// whose process is gone needs a manual retry, unless the owner stopped it.
 func (n *Node) answerAgainCurrent(ctx context.Context, id string) error {
 	after, _ := ctx.Value(answerAgainAfterKey{}).(string)
 	if after == "" {
@@ -22,7 +25,7 @@ func (n *Node) answerAgainCurrent(ctx context.Context, id string) error {
 	n.mu.Lock()
 	p := n.procs[id]
 	n.mu.Unlock()
-	if p == nil || !p.alive() {
+	if cause := n.stopCause(id); cause == proto.StopUser || cause == proto.StopExit {
 		return changed()
 	}
 	f, err := n.file(id)
@@ -35,6 +38,9 @@ func (n *Node) answerAgainCurrent(ctx context.Context, id string) error {
 	items, _, _ := f.Page(0, 1)
 	if len(items) == 0 || items[len(items)-1].ID != after {
 		return changed()
+	}
+	if p == nil || !p.alive() {
+		return errors.New("the conversation process is unavailable for a follow-up")
 	}
 	p.mu.Lock()
 	busy := p.workingLocked() || p.stopReason != "" || p.turnError != ""

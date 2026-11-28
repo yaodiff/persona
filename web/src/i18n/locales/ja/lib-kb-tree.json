@@ -1,0 +1,17 @@
+{
+  "state_open": "未確認",
+  "state_accepted": "合格",
+  "state_not_accepted": "不合格",
+  "why_self": "自分自身の下には置けません",
+  "why_below": "このプロジェクトの下にあります",
+  "why_here": "すでにここにあります",
+  "warn_deep": "{levels} 階層：おすすめの {suggested} 階層より深くなります",
+  "flag_accepted": "合格",
+  "flag_not_accepted": "不合格",
+  "no_tag": "タグなし",
+  "also_under_other": "ほか {count} 個のタグにも",
+  "sub_count_other": "サブプロジェクト {count} 件",
+  "root": "プロジェクト",
+  "root_by_tag": "タグ別",
+  "root_count_other": "{count} 件のプロジェクト"
+}

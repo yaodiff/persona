@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 )
 
-// Task workspaces (#4786): a leader and its workers share one herdr workspace owned by their top-level task. The node
+// Task workspaces (#4786): a leader and its workers share a herdr workspace or tabs of an Orca worktree. The node
 // records that ownership with every session it starts, so a direct resume keeps the placement and workspace.close can
 // prove both IDs before closing anything. Other terminal hosts and runtimes ignore task placement as before.
 
@@ -36,10 +36,12 @@ func withTaskSpace(ctx context.Context, task, id, label string) (context.Context
 
 func taskSpaceIn(ctx context.Context, launch host.Launcher) *taskSpace {
 	ts, _ := ctx.Value(taskSpaceKey{}).(*taskSpace)
-	if _, ok := launch.(*herdrHost); !ok {
+	switch launch.(type) {
+	case *herdrHost, *orcaHost:
+		return ts
+	default:
 		return nil
 	}
-	return ts
 }
 
 func (ts *taskSpace) opened(workspace string) {
@@ -91,9 +93,12 @@ func (ts *taskSpace) current() string {
 func (n *Node) putAgentState(ctx context.Context, launch host.Launcher, id string, state sessionState) {
 	if ts := taskSpaceIn(ctx, launch); ts != nil {
 		state.TaskID = ts.task
+		if _, ok := launch.(*orcaHost); ok {
+			state.WorkspaceHost = host.Orca
+		}
 		previous, hadPrevious := n.state.get(id)
 		switch {
-		case ts.adopted && hadPrevious && previous.TaskID == state.TaskID:
+		case ts.adopted && hadPrevious && previous.WorkspaceHost == state.WorkspaceHost && previous.TaskID == state.TaskID:
 			// A kept or user-picked shell does not move the task to its current user workspace.
 			state.WorkspaceID, state.WorkspaceLabel = previous.WorkspaceID, previous.WorkspaceLabel
 		case ts.adopted:
@@ -101,7 +106,7 @@ func (n *Node) putAgentState(ctx context.Context, launch host.Launcher, id strin
 		default:
 			state.WorkspaceID = ts.current()
 			state.WorkspaceLabel = ts.label
-			if hadPrevious && previous.TaskID == state.TaskID {
+			if hadPrevious && previous.WorkspaceHost == state.WorkspaceHost && previous.TaskID == state.TaskID {
 				if state.WorkspaceID == "" {
 					state.WorkspaceID = previous.WorkspaceID
 				}
@@ -111,10 +116,13 @@ func (n *Node) putAgentState(ctx context.Context, launch host.Launcher, id strin
 			}
 		}
 	}
+	if h, ok := launch.(*orcaHost); ok {
+		state.OrcaTerminal = h.claimTerminalOwner(state.Pane, id)
+	}
 	n.state.put(id, state)
 }
 
-// tabSpace keeps ordinary directory placement unless this is a task start on classic herdr. A recorded task workspace
+// tabSpace keeps ordinary directory placement unless a classic herdr or Orca task supplies its placement. A recorded task workspace
 // is selected by ID, never by a directory basename or a mutable label. If it is gone, the same task label is recreated.
 func (n *Node) tabSpace(ctx context.Context, launch host.Launcher, cwd, asked string) (string, error) {
 	ts := taskSpaceIn(ctx, launch)
@@ -130,6 +138,10 @@ func (n *Node) tabSpace(ctx context.Context, launch host.Launcher, cwd, asked st
 			return asked, nil
 		}
 		return n.workspaceFor(ctx, launch, cwd)
+	}
+	if _, orca := launch.(*orcaHost); orca {
+		// Orca resolves the first tab by checkout and all subsequent tabs by the recorded worktree ID.
+		return ts.id, nil
 	}
 	_ = n.ensureHerdr(ctx, "start a session in a task workspace")
 	if ts.id == "" {
@@ -219,7 +231,7 @@ func (n *Node) closeTaskSpace(ctx context.Context, task, id string) (map[string]
 	n.state.mu.Lock()
 	owned := false
 	for _, state := range n.state.Sessions {
-		if state.TaskID == task && state.WorkspaceID == id {
+		if state.WorkspaceHost == "" && state.TaskID == task && state.WorkspaceID == id {
 			owned = true
 			break
 		}

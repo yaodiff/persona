@@ -21,7 +21,7 @@
   "background_task": "后台任务",
   "more_workflows_other": "还有 {count} 个",
   "more_waits_other": "还有 {count} 个",
-  "background_subtasks": "后台子任务运行中，模型用量仍在消耗…",
+  "background_subtasks": "后台子任务仍在运行，模型用量持续消耗中…",
   "retrying": "正在重试（{attempt}/{max}）· {reason}…",
   "every_minutes": "每 {count} 分钟",
   "every_hours": "每 {count} 小时",

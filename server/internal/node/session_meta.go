@@ -73,6 +73,7 @@ type quickMeta struct {
 	versionAt   time.Time // when the line that said version was written: a resumed process has written none yet
 	ultracode   *bool
 	ultracodeAt time.Time
+	speed       transcript.SpeedObservation
 	sandbox     string // Codex: the turn's sandbox, which with mode (its approval policy) gives the app's mode back
 	// contextTokens / contextWindow: the latest reply's input tokens and, for Codex, the window its rollout records
 	// (transcript.Meta; Session.ContextTokens / ContextWindow, #2430). Carried over from the last read when the tail
@@ -255,6 +256,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	if covered {
 		// All newly appended rows are in the tail, so it can invalidate the previous fallback itself.
 		tm.ModelFallback = prev.modelFallback
+		tm.Speed = prev.speed
 		if tm.Codex && prev.modelAt.After(tm.ModelAt) {
 			tm.Model, tm.ModelAt = prev.model, prev.modelAt
 		}
@@ -288,6 +290,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			}
 			prevOpen, prevClosed := tm.TurnOpen, tm.TurnClosed
 			quickLine(line, &tm, &tail)
+			tm.ObserveSpeed(line)
 			if tm.Codex {
 				switch {
 				case tm.TurnClosed && !prevClosed:
@@ -451,6 +454,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			m.mode, m.modeAt, m.sandbox = head.PermissionMode, head.ModeAt, head.CodexSandbox
 		}
 	}
+	m.speed = tm.Speed
 	m.version, m.versionAt, m.ultracode, m.ultracodeAt = tm.Version, tm.VersionAt, tm.Ultracode, tm.UltracodeAt
 	m.contextTokens, m.contextWindow = tm.ContextTokens, tm.ContextWindow
 	m.contextStats = tm.ContextStats
@@ -481,6 +485,9 @@ func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
 			m.titleSource = ""
 		}
 		return
+	}
+	if sc.meta.Speed.Supersedes(m.speed) {
+		m.speed = sc.meta.Speed
 	}
 	m.outputTokens = sc.meta.OutputTokens
 	m.contextRestartRecommended = sc.meta.ContextRestartRecommended()

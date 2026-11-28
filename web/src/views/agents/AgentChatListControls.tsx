@@ -16,7 +16,7 @@ import {
   type SearchScope,
 } from "../../lib/agent-chatlist-filter";
 import { awaitsReply, justFinished, sessionSource, sourceName, type AgentMutes } from "../../lib/agent-groups";
-import { backgroundWaiting, sessionPreview, sessionTitle, stateOf, tabLabel } from "../../lib/format";
+import { activityOf, backgroundWaiting, sessionPreview, sessionTitle, stateOf, tabLabel } from "../../lib/format";
 import { rowCards } from "../../lib/supervisor-held";
 import { machineWithHub } from "../../lib/mesh";
 import { plainMarkdown } from "../../lib/plain-markdown";
@@ -347,8 +347,8 @@ export const AgentChatListRow = memo(function AgentChatListRow({
   onMenu?: RowMenuFn;
 }) {
   const { ix, heldOnly } = useStore((state) => rowCards(state.interactions, s.machine_id, s.session_id));
-  const row = heldOnly && stateOf(s) === "needs_you" ? { ...s, state: "working" as const } : s;
-  const st = stateOf(row);
+  const row = !s.view && heldOnly && stateOf(s) === "needs_you" ? { ...s, state: "working" as const, pending_interactions: 0 } : s;
+  const st = activityOf(row);
   const title = sessionTitle(s);
   const awaiting = awaitsReply(row, mutes);
   const finished = justFinished(row, mutes);
@@ -404,7 +404,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
         <span className="relative mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-inset shadow-hairline">
           <SessionMark s={s} size={17} />
           <span className="absolute -right-0.5 -bottom-0.5 flex size-3.5 items-center justify-center rounded-full bg-canvas ring-1 ring-canvas">
-            <StatusMark state={st} size="sm" awaiting={awaiting} finished={finished} waiting={backgroundWaiting(row)} />
+            <StatusMark state={stateOf(row)} size="sm" awaiting={awaiting} finished={finished} waiting={backgroundWaiting(row)} />
           </span>
         </span>
 

@@ -48,7 +48,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const card: Interaction = { id: "ix1", machine_id: "m1", session_id: "s1", kind: "permission", tool_name: "Bash", created_at: "2026-01-02T03:04:05Z" };
+const card: Interaction = { id: "ix1", machine_id: "m1", session_id: "s1", kind: "permission", tool_name: "Bash", created_at: "2026-01-02T03:04:05.000000001Z" };
 const other: Interaction = { ...card, id: "ix2" };
 
 function online() {
@@ -102,6 +102,76 @@ describe("a card this page ended", () => {
     s.push({ type: "interaction", interaction: card });
     expect(getState().interactions.map((i) => i.id)).toEqual(["ix1"]);
     expect(mergeInteractions([card], Number.MAX_SAFE_INTEGER).map((i) => i.id)).toEqual(["ix1"]);
+  });
+
+  it("keeps a same-ID replacement that arrives before the earlier answer response", async () => {
+    const s = online();
+    let finish!: (value: Record<string, unknown>) => void;
+    op.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const answering = answerCard(card, { allow: true });
+    const replacement: Interaction = { ...card, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+    s.push({ type: "interaction", interaction: replacement });
+    expect(getState().interactions).toEqual([replacement]);
+    finish({ ok: true });
+    expect((await answering).ok).toBe(true);
+    expect(getState().interactions).toEqual([replacement]);
+    expect(mergeInteractions([replacement], Number.MAX_SAFE_INTEGER)).toEqual([replacement]);
+  });
+
+  it("keeps a newer answered receipt when the earlier occurrence's response arrives late", async () => {
+    const s = online();
+    let finish!: (value: Record<string, unknown>) => void;
+    op.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const answering = answerCard(card, { allow: true });
+    const replacement: Interaction = { ...card, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+    s.push({ type: "interaction", interaction: replacement });
+    op.mockResolvedValueOnce({ ok: true });
+    expect((await answerCard(replacement, { allow: true })).ok).toBe(true);
+    expect(getState().answered.ix1.ix).toEqual(replacement);
+    finish({ ok: true });
+    expect((await answering).ok).toBe(true);
+    expect(getState().answered.ix1.ix).toEqual(replacement);
+  });
+
+  it("keeps a replacement when the earlier answer was already delegated", async () => {
+    const s = online();
+    const first: Interaction = { ...card, kind: "question" };
+    s.push({ type: "interaction", interaction: first });
+    let finish!: (value: Record<string, unknown>) => void;
+    op.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const answering = answerCard(first, { answers: { "Which?": "Mine" } });
+    const replacement: Interaction = { ...first, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+    s.push({ type: "interaction", interaction: replacement });
+    finish({ already: true, status: "resolved", resolution: { answered_by: "assistant", answers: { "Which?": "Assistant" } } });
+    expect((await answering).ok).toBe(true);
+    expect(getState().interactions).toEqual([replacement]);
+  });
+
+  it("keeps a replacement when the earlier occurrence resolves late", () => {
+    const s = online();
+    const replacement: Interaction = { ...card, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+    s.push({ type: "interaction", interaction: replacement });
+    s.push({ type: "interaction_resolved", id: card.id, created_at: card.created_at });
+    expect(getState().interactions).toEqual([replacement]);
+  });
+
+  it("does not let a delayed older live event replace a newer pending occurrence", () => {
+    const s = online();
+    const replacement: Interaction = { ...card, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+    s.push({ type: "interaction", interaction: replacement });
+    s.push({ type: "interaction", interaction: card });
+    expect(getState().interactions.filter((i) => i.id === card.id)).toEqual([replacement]);
+    expect(mergeInteractions([card], Number.MAX_SAFE_INTEGER)).toEqual([replacement]);
+  });
+
+  it("does not resurrect an older occurrence after its replacement resolved elsewhere", () => {
+    const s = online();
+    const replacement: Interaction = { ...card, created_at: "2026-01-02T03:04:05.000000002Z", summary: "replacement" };
+    s.push({ type: "interaction", interaction: replacement });
+    s.push({ type: "interaction_resolved", id: replacement.id, created_at: replacement.created_at });
+    s.push({ type: "interaction", interaction: card });
+    expect(getState().interactions.filter((i) => i.id === card.id)).toEqual([]);
+    expect(mergeInteractions([card], Number.MAX_SAFE_INTEGER)).toEqual([]);
   });
 
   it("is forgotten with a new login", async () => {

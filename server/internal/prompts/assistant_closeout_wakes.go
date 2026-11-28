@@ -6,6 +6,8 @@ type PRMergedWake struct {
 	Language string
 	PRURL    string
 	OtherPRs []string
+	// Parked: the reason the task is parked for, when it still is (its park waits on something other than these PRs).
+	Parked string
 }
 
 // RenderPRMergedWake renders the localized PR-merge closeout wake text.

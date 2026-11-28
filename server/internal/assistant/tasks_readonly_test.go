@@ -233,7 +233,7 @@ func TestReadonlyTaskDispatchBoundary(t *testing.T) {
 
 func TestReadonlyTaskResolveStartFailureDoesNotSavePlan(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestReadonlyTaskUnsupportedLauncherReportsFailure(t *testing.T) {
 
 func TestReadonlyTaskPlanPersistsAcrossRestart(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestReadonlyPlanExitDoesNotSuppressOtherApprovals(t *testing.T) {
 					t.Fatalf("task not dispatched: %+v", todo)
 				}
 				ix := proto.Interaction{ID: "approval", MachineID: tc.machine, SessionID: todo.Agents[0].SessionID,
-					Kind: tc.kind, ToolName: tc.tool}
+					Kind: tc.kind, OutwardWrite: tc.kind == proto.IxPermission, ToolName: tc.tool}
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				done := make(chan proto.Resolution, 1)
@@ -428,10 +428,19 @@ func TestReadonlyPlanExitDoesNotSuppressOtherApprovals(t *testing.T) {
 					t.Fatal("ordinary approval card was not registered")
 				}
 				approve := true
-				if err := s.resolve(ix.ID, proto.Resolution{Approve: &approve}); err != nil {
+				answer := proto.Resolution{Approve: &approve}
+				if tc.kind == proto.IxPermission {
+					answer = proto.Resolution{Allow: &approve}
+				}
+				if err := s.resolve(ix.ID, answer); err != nil {
 					t.Fatal(err)
 				}
-				if r := <-done; r.Approve == nil || !*r.Approve {
+				r := <-done
+				decision := r.Approve
+				if tc.kind == proto.IxPermission {
+					decision = r.Allow
+				}
+				if decision == nil || !*decision {
 					t.Fatalf("user approval lost: %+v", r)
 				}
 			})
@@ -441,7 +450,7 @@ func TestReadonlyPlanExitDoesNotSuppressOtherApprovals(t *testing.T) {
 
 func TestReadonlyTaskExitPlanModeAfterRestart(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,6 +576,9 @@ func testReusedWritableTaskKeepsApproval(t *testing.T, report bool) {
 				}
 				if backend == "restart" {
 					s, _ = newTaskServiceOn(t, store)
+					// newTaskServiceOn installs fresh fixture settings; restore the
+					// reviewer that was configured before this simulated restart.
+					setSettings(t, s, func(v *Settings) { v.Main = "reuse-chat" })
 				}
 				callCtx, cancel := context.WithCancel(ctx)
 				defer cancel()
@@ -627,6 +639,9 @@ func testReusedWritableTaskKeepsApproval(t *testing.T, report bool) {
 				})
 				if backend == "restart" {
 					s, _ = newTaskServiceOn(t, store)
+					// newTaskServiceOn installs fresh fixture settings; restore the
+					// reviewer that was configured before this simulated restart.
+					setSettings(t, s, func(v *Settings) { v.Main = "reuse-chat" })
 				}
 				denyCtx, stop := context.WithTimeout(ctx, time.Second)
 				defer stop()

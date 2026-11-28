@@ -196,6 +196,14 @@ func expiryLoopFixture(t *testing.T) (*Service, *fakeHub, *failingLoopExpiryStor
 	return s, f, store, card
 }
 
+func TestToolLoopExpiryRecordsExpiredAttribution(t *testing.T) {
+	s, _, store, card := expiryLoopFixture(t)
+	s.checkToolLoops(context.Background())
+	if got := store.endedAs(card.ID); got != db.EndedByExpired {
+		t.Fatalf("tool-loop expiry recorded ended_by %q, want %q", got, db.EndedByExpired)
+	}
+}
+
 func TestToolLoopExpirySaveFailureRetriesEverything(t *testing.T) {
 	s, f, store, card := expiryLoopFixture(t)
 	store.failAt.Store(store.puts.Load() + 1) // unchanged tick snapshot is skipped; expiration save fails

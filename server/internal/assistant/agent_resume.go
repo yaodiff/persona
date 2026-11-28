@@ -55,7 +55,7 @@ func stoppedRefusal(c proto.Session) error {
 
 // resumeAllowed checks a resume before anything is asked or started: a reason, the computer reachable, room left in
 // the agent's context, and a task of self's it will be on (one it is on, or task, which the send's checks go on with).
-func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c proto.Session, why string, task *sendTask) error {
+func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c proto.Session, why string, task *sendTask, review resumeReview) error {
 	cause := proto.StopUnknown
 	if c.Capabilities != nil {
 		cause = c.Capabilities.StopCause
@@ -76,11 +76,18 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 	// Every stop but the user's may be resumed (#11528): an unknown cause too, an Agent that quit by itself or that a
 	// restart of its machine cut off. An archived one only with a cause the node recorded as not the user's: archiving
 	// it was the user's (or the assistant's own close, which records its cause).
-	if c.Capabilities == nil && !c.Archived {
+	oldNode := c.Capabilities == nil && !c.Archived
+	ownerOnlyStop := c.Archived && !cause.AllowsSupervisorResume() || !cause.SupervisorMayResume()
+	// An archive lookup failure above leaves the last verified cause intact. Background forwarding never
+	// contributes evidence to a supervisor's decision.
+	if review.reviewer != "" {
+		s.todos.noteResumeCheck(self, review, am.ID, c, oldNode || ownerOnlyStop)
+	}
+	if oldNode {
 		return fmt.Errorf("%s cannot be resumed by the assistant: its computer's node reports no stop cause (too old). "+
 			"The user's Resume on its terminal page can. Nothing was started or sent", agentLabel(c))
 	}
-	if c.Archived && !cause.AllowsSupervisorResume() || !cause.SupervisorMayResume() {
+	if ownerOnlyStop {
 		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. %s require "+
 			"the user's Resume on its terminal page. Give that instruction separately from the choices on a decision card. Nothing was started or sent",
 			agentLabel(c), cause, userResumeOnly(c.Archived, cause))
@@ -114,6 +121,109 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 		return fmt.Errorf("%w; it is not yours to resume. Nothing was started or sent", err)
 	}
 	return nil
+}
+
+// resumeTodoForAgent prepares a same-session resume of stopped agent c back onto open to-do id: the to-do must be one
+// self opened or supervises, still open, with no active agent, and c its most recently released (not dismissed) agent.
+// The historical link is reactivated (released_at cleared) before resumeAllowed runs, so the resume keeps the original
+// to-do and its brief instead of adopting the agent onto a new supervised task (#13192). Nothing starts here: the
+// caller still goes through resumeAllowed and the node's session.start.
+func (s *Service) resumeTodoForAgent(ctx context.Context, self string, am Device, c proto.Session, id string) (Todo, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Todo{}, errors.New("todo_id is empty")
+	}
+	if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
+		return Todo{}, fmt.Errorf("%s is waiting for the user (a question, plan, permission or dialog): it is theirs to answer first", agentLabel(c))
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return Todo{}, err
+	}
+	t, ok := s.todoNow(id)
+	if !ok {
+		return Todo{}, fmt.Errorf("todo_id %s: there is no such to-do", id)
+	}
+	if t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self) {
+		return Todo{}, fmt.Errorf("todo_id %s: it was not opened from this conversation, nor is it supervised by it", id)
+	}
+	if t.DoneAt != nil {
+		return Todo{}, fmt.Errorf("todo_id %s: it is already done; reopen it before resuming its Agent", id)
+	}
+	for _, a := range t.Agents {
+		if a.active() {
+			return Todo{}, fmt.Errorf("todo_id %s: an agent is already working on it; send that Agent instead of resuming another", id)
+		}
+	}
+	// Reject before the re-link when the session still serves another open to-do: writeTodoAgentLink would release that
+	// other active link, and rollbackResumeTodo only releases this to-do's link, so a later refusal/failed start would
+	// leave the other to-do with no Agent even though nothing was sent (#13225 QA).
+	if other, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok && other.ID != t.ID {
+		return Todo{}, fmt.Errorf("todo_id %s: this Agent is still on to-do %s; resume it there, or hand that to-do over first", id, other.ID)
+	}
+	last := lastReleasedAgent(t)
+	if last == nil || last.MachineID != am.ID || last.SessionID != c.SessionID {
+		return Todo{}, fmt.Errorf("todo_id %s: this Agent is not the to-do's latest released Agent; resume onto a to-do only with the Agent that last worked on it", id)
+	}
+	agentName := c.Agent
+	if agentName == "" {
+		agentName = last.Agent
+	}
+	// The upsert clears released_at on the same (todo, machine, session) link and keeps its title/cwd history
+	// (db.linkTodoAgentWithSource); any active link elsewhere would be released first, which the checks above rule out.
+	if err := s.linkTodoAgentWithSource(ctx, t.ID, am.ID, c.SessionID, last.Title, last.Cwd, agentName,
+		"", "manual", "resume"); err != nil {
+		return Todo{}, fmt.Errorf("resume it on its to-do: %w", err)
+	}
+	relinked, _ := s.todoNow(t.ID)
+	s.logf("resume todo %s: re-linked agent %s/%s", t.ID, am.ID, short(c.SessionID))
+	return formatTodo(relinked), nil
+}
+
+// lastReleasedAgent is the to-do's most recently linked agent that was let go (released, not dismissed); nil when the
+// to-do never had one. A dismissed link is an explicit removal, not a stop the assistant may undo.
+func lastReleasedAgent(t Todo) *TodoAgent {
+	var last *TodoAgent
+	for i := range t.Agents {
+		a := &t.Agents[i]
+		if a.ReleasedAt == nil || a.DismissedAt != nil {
+			continue
+		}
+		if last == nil || a.LinkedAt.After(last.LinkedAt) {
+			last = a
+		}
+	}
+	return last
+}
+
+// rollbackResumeTodo undoes a resumeTodoForAgent re-link when the send does not happen (a refusal after the link, a
+// declined confirmation, or a node start that failed for a known reason): the link is released again so the to-do is
+// unassigned as before. A start whose result is unknown keeps the link, as the session may still come up. Best
+// effort: a failure here only logs, the caller's original error stands.
+func (s *Service) rollbackResumeTodo(ctx context.Context, todoID, mid, sid string) {
+	now := time.Now().UTC()
+	s.todos.writing.Lock()
+	if st, ok := s.todoDB().(todoAgentReleaser); ok {
+		if err := st.ReleaseTodoAgent(ctx, todoID, mid, sid, now); err != nil {
+			s.logf("resume todo %s: rollback release: %v", todoID, err)
+		}
+	}
+	s.todos.mu.Lock()
+	if t, ok := s.todos.todos[todoID]; ok {
+		for i := range t.Agents {
+			if t.Agents[i].MachineID == mid && t.Agents[i].SessionID == sid && t.Agents[i].ReleasedAt == nil {
+				t.Agents[i].ReleasedAt = &now
+				t.UpdatedAt = now
+			}
+		}
+	}
+	if key := [2]string{mid, sid}; s.todos.activeBySession[key] == todoID {
+		delete(s.todos.activeBySession, key)
+	}
+	s.todos.mu.Unlock()
+	s.todos.writing.Unlock()
+	s.linksChanged(ctx)
+	s.todosChanged(ctx)
+	s.logf("resume todo %s: rolled back the re-link of %s/%s", todoID, mid, short(sid))
 }
 
 // eventMayResume: an event Persona routes on its own (a PR's, an Inbox item's) may resume c only after a stop the node
@@ -156,7 +266,12 @@ func compactable(c proto.Session) bool {
 	case "", "claude":
 		return c.SourceKind == ""
 	case "codex":
-		return c.SpaceKind != codexAppSpace && (c.SourceKind == "" || c.SourceKind == "codex_history" || c.SourceKind == "codex_app_server")
+		if c.SpaceKind == codexAppSpace {
+			// An idle, unowned Codex App thread explicitly advertised as resumable into a Persona terminal can be
+			// compacted there like any terminal Codex; live or non-takeover Codex App chats stay non-compactable.
+			return stoppedAgent(c) && c.Capabilities != nil && c.Capabilities.Takeover != nil && c.Capabilities.Takeover.CanResume
+		}
+		return c.SourceKind == "" || c.SourceKind == "codex_history" || c.SourceKind == "codex_app_server"
 	}
 	return false
 }

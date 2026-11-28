@@ -17,8 +17,9 @@ import (
 // claude handed to WSL exited at once (#1994).
 func TestInteractiveShellIsTheLoginShell(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		// zsh wherever it is installed, except for a bash user with no ~/.zshrc (loginShellProgram). The login shell
-		// and home are set here, so the machine running the test does not decide the answer.
+		// zsh wherever it is installed, except for a bash user with no ~/.zshrc, and on macOS for any bash user
+		// (loginShellProgram, #16217). The login shell and home are set here, so the machine running the test does not
+		// decide the answer.
 		_, zerr := exec.LookPath("zsh")
 		for _, tc := range []struct {
 			name, login string
@@ -26,7 +27,7 @@ func TestInteractiveShellIsTheLoginShell(t *testing.T) {
 			want        string
 		}{
 			{name: "zsh user", login: "/bin/zsh", want: "zsh"},
-			{name: "bash user with a .zshrc", login: "/bin/bash", zshrc: true, want: "zsh"},
+			{name: "bash user with a .zshrc", login: "/bin/bash", zshrc: true, want: map[bool]string{true: "bash", false: "zsh"}[runtime.GOOS == "darwin"]},
 			{name: "bash user without a .zshrc", login: "/bin/bash", want: "bash"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

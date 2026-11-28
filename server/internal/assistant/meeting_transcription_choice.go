@@ -18,15 +18,22 @@ func (s *Service) meetingChoiceRequest(ctx context.Context, method string, param
 	if method != assistantwire.MethodMeetingTranscriptionChoice {
 		return nil, false, nil
 	}
-	var p assistantwire.MeetingTranscriptionChoose
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
+	decode := func(out any) error {
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, out); err != nil {
+				return &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
+			}
 		}
+		return nil
 	}
+	return handleAssistantRequest(ctx, assistantwire.MeetingTranscriptionChoiceMethod, decode, s.meetingTranscriptionChoice)
+}
+
+func (s *Service) meetingTranscriptionChoice(ctx context.Context, p assistantwire.MeetingTranscriptionChoose) (assistantwire.MeetingTranscriptionChoice, error) {
 	if p.Set {
 		if p.Extension == "" || p.Use && (s.trans == nil || !s.trans.IsTranscriptionContribution(p.Extension)) {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": not a transcription contribution"}
+			return assistantwire.MeetingTranscriptionChoice{}, &rpc.Error{Code: bus.CodeInvalidParams,
+				Message: assistantwire.MethodMeetingTranscriptionChoice + ": not a transcription contribution"}
 		}
 		changed := false
 		if _, err := s.updateSettings(ctx, func(v *Settings) error {
@@ -42,7 +49,7 @@ func (s *Service) meetingChoiceRequest(ctx context.Context, method string, param
 			}
 			return nil
 		}); err != nil {
-			return nil, true, err
+			return assistantwire.MeetingTranscriptionChoice{}, err
 		}
 		if changed {
 			s.settingsChanged(ctx)
@@ -50,5 +57,5 @@ func (s *Service) meetingChoiceRequest(ctx context.Context, method string, param
 		}
 	}
 	v := s.settings(ctx)
-	return assistantwire.MeetingTranscriptionChoice{Extension: meetingTranscriptionExtensionOf(v), Default: meetingTranscriptionDefaultOf(v)}, true, nil
+	return assistantwire.MeetingTranscriptionChoice{Extension: meetingTranscriptionExtensionOf(v), Default: meetingTranscriptionDefaultOf(v)}, nil
 }

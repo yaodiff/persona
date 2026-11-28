@@ -17,6 +17,7 @@ export interface HubDevelopmentProgress {
   step: string;
   step_index: number;
   step_total: number;
+  steps?: string[];
   elapsed_seconds: number;
   item_label?: string;
   item_done?: number;
@@ -28,6 +29,8 @@ export interface HubDevelopmentProgress {
 }
 
 export interface HubUpdateStatus {
+  can_cancel?: boolean;
+  cancelling?: boolean;
   supports_preview?: boolean;
   source?: "release" | "beta" | "web-dev";
   development?: {
@@ -94,7 +97,7 @@ export interface HubUpdateRecord {
   to_build: number;
   started?: string;
   ended?: string;
-  result: string; // updated | rolled_back | failed | held
+  result: string; // updated | rolled_back | failed | cancelled | held
   reason?: string;
   auto: boolean;
 }

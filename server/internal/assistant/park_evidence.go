@@ -176,6 +176,34 @@ func parkSourceURL(raw string) bool {
 		u.Path != "" && u.Path != "/"
 }
 
+// parkSelfTodoURL rejects evidence URLs that point back to the task's own page (e.g. /todos/<todoID> or
+// /api/v1/todos/<todoID>), because an internal task cannot act as its own external wait event.
+func parkSelfTodoURL(todoID, raw string) bool {
+	todoID = strings.TrimSpace(todoID)
+	raw = strings.TrimSpace(raw)
+	if todoID == "" || raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	segs := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i := 0; i+1 < len(segs); i++ {
+		if segs[i] == "todos" && segs[i+1] == todoID {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyParkTarget(todoID string, e *ParkEvidence) error {
+	if e != nil && e.Kind == "external_event" && parkSelfTodoURL(todoID, e.URL) {
+		return fmt.Errorf("parked is refused: evidence.url points to task %s's own page, not an observable external event; owner/internal waits cannot be parked. %s", todoID, parkElse)
+	}
+	return nil
+}
+
 func parkReviewURL(raw string) bool {
 	if !parkSourceURL(raw) {
 		return false

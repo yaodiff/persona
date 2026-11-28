@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -65,7 +64,7 @@ type updateRecord struct {
 	ToBuild     int64                     `json:"to_build"`
 	Started     time.Time                 `json:"started"`
 	Ended       time.Time                 `json:"ended"`
-	Result      string                    `json:"result"` // updated | rolled_back | failed | held (newer, not installed by itself: Reason)
+	Result      string                    `json:"result"` // updated | rolled_back | failed | cancelled | held (newer, not installed by itself: Reason)
 	Reason      string                    `json:"reason,omitempty"`
 	Auto        bool                      `json:"auto"`
 	Source      string                    `json:"source,omitempty"`
@@ -140,6 +139,7 @@ type updater struct {
 	newestImage string // a Docker hub: the newest release tag of its image
 	lastCheck   time.Time
 	busy        []busyItem
+	attempt     *developmentAttempt // guarded by mu; nil once adoption wins
 	running     bool
 	checking    bool
 	opGen       uint64 // bumped whenever an update or check starts, preventing busy-check ABA races
@@ -158,7 +158,7 @@ type updater struct {
 
 	// androidNote is what syncAndroid last logged: the same failure is not logged again every hour.
 	androidNote string
-	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any, func(update.DevelopmentProgress)) error
+	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any, func(), func(update.DevelopmentProgress)) error
 	// behindNote is the update source and release noteBehind last logged as behind: once per pair, not every hour.
 	behindNote string
 	// testAfterBackupRecoveryCheck runs in tests right after UnrecoveredSnapshot
@@ -516,16 +516,23 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.h.logf("update: %s -> %s: cannot claim confirmation: %v", p.FromVersion, p.ToVersion, err)
 		return
 	}
-	u.mu.Lock()
-	u.confirmed = true
-	u.mu.Unlock()
 	if u.edgeConfirmed != nil {
 		u.edgeConfirmed()
 	}
 	nodeErr := u.updateNodes(ctx, p.Nodes, p.FromVersion, p.Development)
+	// A co-located resident can have an old executable inode even when its
+	// relay returned during confirmation. It drains on a main-process HUP.
+	if nodeErr == nil && u.nodesEnabled() {
+		if err := syncLocalNode(ctx, identity.HomeDir(), u.services, &update.Manifest{Version: p.ToVersion, Build: p.ToBuild}); err != nil {
+			u.h.logf("update: local node reload: %v", err)
+		}
+	}
 	if p.Development != nil {
 		nodeErr = errors.Join(nodeErr, u.publishDevelopmentPackages(p))
 	}
+	u.mu.Lock()
+	u.confirmed = true
+	u.mu.Unlock()
 	why := ""
 	if nodeErr != nil {
 		why = su(u.h.userLang(), "err_computer_packages")
@@ -540,8 +547,8 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.notify(su(l, "push_updated_title", i18n.Args{"version": p.ToVersion}), su(l, "push_updated_body"))
 	}
 	update.ClearDevelopmentAdoption(u.dir, p)
-	if p.Development != nil {
-		u.h.queueDevicesConfig(nodeErr == nil)
+	if p.Development != nil || u.nodesEnabled() || u.publishedBuild() != nil {
+		u.h.queueDevicesConfig(nodeErr == nil && u.nodesEnabled())
 	}
 	if p.WebPrev != "" && filepath.Dir(p.WebPrev) == filepath.Join(u.dir, "development") && strings.HasPrefix(filepath.Base(p.WebPrev), "web-previous-") {
 		_ = os.RemoveAll(p.WebPrev)
@@ -625,17 +632,6 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 		}
 		return nil
 	}
-	if !dev && !managed && from != "" && from != u.h.version {
-		// The release replaces the builds of the platforms it carries; one it does not carry (a Windows build next to
-		// a release published without one, a build left by hand) would otherwise stay unlabelled and pass for this
-		// hub's version, and Redeploy would send it to fail the node's self-check. Set aside first, the release's
-		// builds go in below, and the manager fetches the rest from the release of the hub's version.
-		if moved, err := setAsideOldNodes(dir); err != nil {
-			u.h.logf("update: set aside the node builds of %s: %v", from, err)
-		} else if len(moved) > 0 {
-			u.h.logf("update: node builds of %s set aside before the release's go in: %s", from, strings.Join(moved, ", "))
-		}
-	}
 	if dev && from != "" && from != u.h.version {
 		if development[0].BackupID != "" {
 			// A saved version may cover fewer platforms. Keep other usable
@@ -643,53 +639,23 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 			if err := labelUnstagedNodes(dir, staged, from); err != nil {
 				return err
 			}
-		} else if _, err := setAsideOldNodes(dir); err != nil {
+		}
+	}
+	if staged != "" && !managed {
+		build := u.h.build
+		build.Version = u.h.version
+		if err := update.PublishPackages(staged, dir, build); err != nil {
 			return err
 		}
 	}
-	var first error
-	if staged != "" && !managed {
-		files, _ := filepath.Glob(filepath.Join(staged, "personad-*"))
-		legacy, _ := filepath.Glob(filepath.Join(staged, compat.DaemonBinary+"-*"))
-		files = append(files, legacy...)
-		for _, f := range files {
-			if strings.HasSuffix(f, ".gz") || strings.HasSuffix(f, ".part") {
-				continue
-			}
-			if err := os.MkdirAll(identity.NodeBinaryDir(), 0o755); err == nil {
-				_, err = update.Swap(filepath.Join(identity.NodeBinaryDir(), filepath.Base(f)), f)
-				if err != nil && errors.Is(err, os.ErrNotExist) {
-					err = copyInto(f, filepath.Join(identity.NodeBinaryDir(), filepath.Base(f)))
-				}
-				if err != nil {
-					if first == nil {
-						first = err
-					}
-					u.h.logf("update: node binary %s: %v", filepath.Base(f), err)
-				} else {
-					// It is this build now: a version file put beside an older one (docs/operations/docker.md "Node builds") goes.
-					_ = os.Remove(filepath.Join(identity.NodeBinaryDir(), filepath.Base(f)+".version"))
-				}
-			} else if first == nil {
-				first = err
-			}
+	if !managed && from != "" && from != u.h.version && (!dev || development[0].BackupID == "") {
+		// Canonical replacements are already labelled. Set aside unlabelled
+		// packages for platforms this build did not supply.
+		if _, err := setAsideOldNodes(dir); err != nil {
+			return err
 		}
 	}
-	if first != nil {
-		return first
-	}
-	if !dev && u.nodesEnabled() {
-		u.h.updateNodes(ctx)
-	} // each computer retains the existing policy/guardian
 	return nil
-}
-
-func copyInto(from, to string) error {
-	b, err := os.ReadFile(from)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(to, b, 0o755)
 }
 
 // whyNot is why this hub cannot update itself (begin's error); whyNotReason is the reason alone (the view's why_not).
@@ -710,6 +676,9 @@ func (u *updater) whyNotKey() (string, i18n.Args) {
 	case update.Release:
 		if err := u.h.updateSource().urlErr; err != nil {
 			return "bad_source", i18n.Args{"error": err.Error()}
+		}
+		if u.h.cfg != nil && u.h.cfg.Security.PrivateNetworkOnly {
+			return "private_no_source", nil
 		}
 		return "no_source", nil
 	}
@@ -751,6 +720,8 @@ func (u *updater) setLocked(state, progress, errText string) {
 
 // updateView is GET /api/v1/hub/update.
 type updateView struct {
+	CanCancel       bool                      `json:"can_cancel"`
+	Cancelling      bool                      `json:"cancelling"`
 	SupportsPreview bool                      `json:"supports_preview"`
 	Source          string                    `json:"source"`
 	Development     *developmentView          `json:"development,omitempty"`
@@ -774,9 +745,8 @@ type updateView struct {
 
 	DevelopmentProgress *update.DevelopmentProgress `json:"development_progress,omitempty"`
 
-	// UpdateURL is where the hub looks for releases now (selfupdate_source.go), UpdateFrom whether hub.json's
-	// update.url or the build said so; UpdateProxy the proxy its checks and downloads go through (update.proxy), with
-	// no user or password. All three are left out when there is none.
+	// UpdateURL is where the hub looks for releases. UpdateFrom is "hub.json" for a configured source or "build"
+	// for an embedded or built-in source. UpdateProxy shows the proxy for checks and downloads without credentials.
 	UpdateURL   string `json:"update_url,omitempty"`
 	UpdateFrom  string `json:"update_url_from,omitempty"`
 	UpdateProxy string `json:"update_proxy,omitempty"`
@@ -810,6 +780,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 	defer u.mu.Unlock()
 	selfUpdates, source := u.h.selfUpdates(), u.h.updateSource()
 	v := updateView{SupportsPreview: true, Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: selfUpdates,
+		CanCancel: u.attempt != nil, Cancelling: u.attempt != nil && u.attempt.cancelling,
 		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && selfUpdates,
 		AutoNotice: selfUpdates && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed,
 		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}

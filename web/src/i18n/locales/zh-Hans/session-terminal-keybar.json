@@ -1,10 +1,17 @@
 {
-  "modifier_hint": "{name}：点一下作用于下一个键，双击锁定，按住不放",
-  "take_control_first": "接管终端后才能按键",
+  "modifier_hint": "{name}：轻点一次作用于下一个按键，双击可锁定，也可长按使用",
+  "take_control_first": "接管终端后即可使用按键",
   "title": "按键栏",
   "send_ctrl_c": "发送 Ctrl+C",
   "shortcuts": "快捷命令",
-  "copy_selection": "复制选中的文字",
-  "paste": "粘贴剪贴板",
-  "enter": "回车"
+  "copy_selection": "复制所选文本",
+  "paste": "从剪贴板粘贴",
+  "enter": "回车",
+  "line": "隐藏输入一行",
+  "line_title": "隐藏输入",
+  "line_placeholder": "密码、令牌、验证码…",
+  "line_send": "输入并回车",
+  "line_show": "显示输入内容",
+  "line_hide": "隐藏输入内容",
+  "line_hint": "内容将按原样输入终端并自动回车，Persona 不会保存此内容。"
 }

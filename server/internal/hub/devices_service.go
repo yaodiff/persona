@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -58,12 +59,9 @@ func (h *Hub) keepConnectorCred(ctx context.Context, c devicewire.ConnectorCred)
 func (h *Hub) pairConnector(ctx context.Context, pairLink, id, address, proxyURL string) (string, string, error) {
 	owner := h.machineOwner(id)
 	_ = h.waitDevicesFor(ctx, owner) // the hub just started: its manager is on its way
-	var out struct {
-		Address string `json:"address"`
-		Version string `json:"version"`
-	}
-	err := h.callBus(ctx, owner, devicewire.MethodPairConnector, devicewire.PairConnector{Link: pairLink, MachineID: id,
-		Address: address, Proxy: proxyURL}, &out)
+	out, err := buswire.Call(ctx, h.managerCaller(owner), devicewire.PairConnectorMethod, devicewire.PairConnector{
+		Link: pairLink, MachineID: id, Address: address, Proxy: proxyURL,
+	})
 	if errors.Is(err, errBusOffline) {
 		return "", "", errAssistantOffline
 	}

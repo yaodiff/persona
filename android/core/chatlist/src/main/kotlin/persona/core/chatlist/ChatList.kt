@@ -1,5 +1,6 @@
 package persona.core.chatlist
 
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -42,6 +43,21 @@ class ChatListState internal constructor(
     internal val store: ChatAnchorStore?,
     initial: ChatReadingPosition,
 ) {
+    /**
+     * A fold opened from the list. [rowId] is the header the user tapped, [offsetPx] its distance from the newest
+     * edge (the reversed list's item offset), and [sizePx] its measured height. While it is set, new rows below the
+     * header must not move it: [ChatListEffects] puts the item back until the rows that arrive with the fold settle.
+     * [riseToTop] is set when the tap happened while following the newest end: there the header may rise to the top
+     * edge, showing what opened under it, but no further.
+     */
+    internal data class ExpansionAnchor(
+        val rowId: String,
+        val offsetPx: Int,
+        val sizePx: Int,
+        val epoch: Int,
+        val riseToTop: Boolean,
+    )
+
     /** The reading anchor. Scrolling writes a new offset into it every frame: composition reads [expanded] and [followsEnd]. */
     var position by mutableStateOf(initial)
         internal set
@@ -58,6 +74,12 @@ class ChatListState internal constructor(
     internal var dragged by mutableStateOf(false)
     internal var epoch by mutableIntStateOf(0)
     internal var latestRequest by mutableIntStateOf(0)
+    internal var expansionAnchor by mutableStateOf<ExpansionAnchor?>(null)
+        private set
+    internal var expansionLoading by mutableStateOf(false)
+        private set
+    /** A tapped fold is still being held in place. */
+    val expanding: Boolean get() = expansionAnchor != null
     internal var rowIds: List<String> = emptyList()
         set(value) { if (value !== field) { field = value; rowIdSet = null } }
     /** [rowIds] as a set, built once per list: [capture] runs every frame of a scroll. */
@@ -66,6 +88,38 @@ class ChatListState internal constructor(
 
     fun setExpanded(ids: Set<String>) { position = position.copy(expanded = ids) }
     fun reportLastLine(rowId: String, extentPx: Int) { lastLineExtents[rowId] = extentPx }
+
+    /**
+     * Hold [rowId]'s header where it is before opening or closing its fold. The tap stops following the newest end, as
+     * a drag does, and bumps [epoch] so an in-flight restore cannot pull the list away. [riseToTop] lets an opening at
+     * the newest end use the room to the top edge instead of holding the header near the composer. Returns false when
+     * the row is not on screen or the list is still being placed; the fold then changes as before.
+     */
+    fun beginToggle(rowId: String, riseToTop: Boolean = position.followsEnd): Boolean {
+        if (!restored || programmaticScroll) return false
+        val info = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == rowId } ?: return false
+        capture()
+        epoch++
+        dragged = false
+        restored = true
+        position = position.copy(followsEnd = false)
+        expansionAnchor = ExpansionAnchor(rowId, info.offset, info.size, epoch, riseToTop)
+        expansionLoading = false
+        return true
+    }
+
+    /** What the opened fold is still fetching (a hub fold, another row's content): keep watching until it arrives. */
+    fun noteExpansionLoading(loading: Boolean) {
+        if (expansionAnchor != null) expansionLoading = loading
+    }
+
+    /** The tap opened nothing (or another toggle replaced it): stop holding the previous header. */
+    fun endExpansion() {
+        if (expansionAnchor == null) return
+        expansionAnchor = null
+        expansionLoading = false
+        capture()
+    }
 
     /** Explicit navigation invalidates any pending entry correction. */
     fun returnToLatest() {
@@ -205,7 +259,7 @@ fun ChatListEffects(
                     }
                 }
                 if (movedAway) {
-                    state.position = state.position.copy(followsEnd = false)
+                    if (state.position.followsEnd) state.position = state.position.copy(followsEnd = false)
                     freeze()
                 }
             }
@@ -237,9 +291,9 @@ fun ChatListEffects(
                         settleAfterStop = null
                         activeDrags += interaction
                         userScrollPending = true
-                        if (!state.restored) state.epoch++
-                        state.dragged = true
-                        state.restored = true
+                        if (!state.restored || state.programmaticScroll) state.epoch++
+                        if (!state.dragged) state.dragged = true
+                        if (!state.restored) state.restored = true
                         reconcileFollow()
                     }
                     is DragInteraction.Stop -> {
@@ -308,6 +362,46 @@ fun ChatListEffects(
             state.restored = true
         } finally { state.programmaticScroll = false }
     }
+    LaunchedEffect(state, state.expansionAnchor) {
+        val anchor = state.expansionAnchor ?: return@LaunchedEffect
+        state.programmaticScroll = true
+        var settledFrames = 0
+        try {
+            while (true) {
+                withFrameNanos { }
+                if (state.expansionAnchor !== anchor || state.dragged || state.epoch != anchor.epoch) return@LaunchedEffect
+                val index = state.rowIds.indexOf(anchor.rowId)
+                if (index < 0) return@LaunchedEffect
+                val layout = state.list.layoutInfo
+                val visible = layout.visibleItemsInfo.firstOrNull { it.key == anchor.rowId }
+                // The reversed list measures an item's offset from the newest edge: the same number scrollToItem takes.
+                val topOffset = layout.viewportEndOffset - anchor.sizePx
+                val target = if (anchor.riseToTop) topOffset else anchor.offsetPx
+                val needs = visible == null || expansionNeedsScroll(visible.offset, target, anchor.riseToTop)
+                if (needs) {
+                    if (visible != null) {
+                        val delta = visible.offset - target
+                        if (abs(delta) > 1) state.list.scrollBy(delta.toFloat())
+                    } else {
+                        // It left the composed window (a whole fold laid out in one pass): put it at the newest edge
+                        // first, then move it up by the offset it should have from that edge.
+                        state.list.scrollToItem(index, 0)
+                        withFrameNanos { }
+                        val placed = state.list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == anchor.rowId }?.offset ?: 0
+                        if (abs(placed - target) > 1) state.list.scrollBy((placed - target).toFloat())
+                    }
+                    settledFrames = 0
+                } else if (state.expansionLoading) {
+                    settledFrames = 0
+                } else if (++settledFrames >= 3) {
+                    return@LaunchedEffect
+                }
+            }
+        } finally {
+            state.programmaticScroll = false
+            if (state.expansionAnchor === anchor) state.endExpansion()
+        }
+    }
     LaunchedEffect(state, state.latestRequest) {
         if (state.latestRequest == 0) return@LaunchedEffect
         follow()
@@ -329,6 +423,11 @@ fun ChatListEffects(
         snapshotFlow { state.position }.debounce(250).distinctUntilChanged().collect { state.persist() }
     }
 }
+
+/** Whether a held fold header still has to move. A one-pixel rounding difference is settled, as the ordinary hold
+ *  already treats it; a rise-to-top hold only ever moves the header up, never back down. */
+internal fun expansionNeedsScroll(visibleOffset: Int, target: Int, riseToTop: Boolean): Boolean =
+    if (riseToTop) visibleOffset - target > 1 else abs(visibleOffset - target) > 1
 
 @Composable
 fun ChatList(

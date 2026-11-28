@@ -419,3 +419,30 @@ func TestDecisionRefreshBackgroundNamesOrigins(t *testing.T) {
 		})
 	}
 }
+
+// A decision that ages past its recheck while its conversation is stopped (/stop, #3308) stays with the owner, since
+// signal would drop the hand-back then; once the user speaks again the sweep hands it back (#13415).
+func TestDecisionRecheckUnderStopWaitsForTheUser(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "The prepared work is ready for the owner's decision.")
+	if _, err := reviewErr(s, todo.ID, dropTableDecision()); err != nil {
+		t.Fatal(err)
+	}
+	s.markReporter(ctx, "box", todo.Origin)
+	s.setReporterStopped(ctx, todo.Origin, "app")
+	at := time.Now().Add(decisionRecheckAfter + time.Minute)
+	s.sweepDecisionAges(at)
+	if a := askOf(s, todo.ID); a == nil || !a.RecheckAt.IsZero() {
+		t.Fatal("the decision was marked for recheck while stopped, though nothing was queued")
+	}
+	requireRefreshOwnerFacing(t, s, todo.ID)
+	s.setReporterStopped(ctx, todo.Origin, "")
+	s.sweepDecisionAges(at.Add(time.Minute))
+	if a := askOf(s, todo.ID); a == nil || a.RecheckAt.IsZero() {
+		t.Fatal("the decision was not handed back once /stop was lifted")
+	}
+	if !slices.Contains(pendingKinds(s, todo.ID), sigRecheck) {
+		t.Fatalf("no recheck signal once /stop was lifted: %v", pendingKinds(s, todo.ID))
+	}
+}

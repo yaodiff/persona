@@ -1574,7 +1574,6 @@ export class SessionWorkspace {
   private receiveTerminal(event: Record<string, Object>): void {
     const error = Wire.text(event, 'error');
     if (error) {
-      this.terminalSubscribed = false;
       if (Wire.bool(event, 'unsupported')) this.beginTerminalPoll();
       else this.terminalError = error;
       return;

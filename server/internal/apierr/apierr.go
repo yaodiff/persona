@@ -4,6 +4,7 @@
 package apierr
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -115,6 +116,8 @@ func Body(status int, code string, err error) map[string]any {
 	case "invalid_token", "forbidden", "bad_request", "not_found", "method_not_allowed", "gone":
 		body["retryable"] = false
 	case "input_draft", "dialog_open", "prompt_changed":
+		body["retryable"], body["delivered"] = false, "none"
+	case proto.CodeCodexNotLoggedIn: // refused before anything was typed; only a sign-in on that computer clears it
 		body["retryable"], body["delivered"] = false, "none"
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -234,7 +237,7 @@ func CallStatusBody(w http.ResponseWriter, status int, err error) map[string]any
 			body["error"] = re.Message
 		}
 		body["code"] = code
-		if _, ok := codeActions[code]; ok {
+		if hubWords(code) {
 			explain(body, code, re.Message, i18n.OfWriter(w))
 		}
 	}
@@ -255,7 +258,7 @@ func CallStatusBody(w http.ResponseWriter, status int, err error) map[string]any
 			key = notFoundKeys[reason]
 		}
 		body["error"] = i18n.T(l, key)
-	} else if _, explained := codeActions[code]; !explained {
+	} else if !hubWords(code) {
 		localizeFailure(body, status, err, i18n.OfWriter(w))
 	}
 	return body
@@ -308,6 +311,8 @@ func LocalizeErrorJSON(l i18n.Lang, body []byte) []byte {
 			}
 		case "dialog_open":
 			key = "rpc-errors.dialog_open"
+		case "engine_missing":
+			key, args = engineMissingWords(m)
 		case "delivery_unknown":
 			key = "rpc-errors.in_doubt"
 			if reason, _ := m["reason"].(string); reason == "guide_retry_refused" {
@@ -366,6 +371,7 @@ var rpcFailureKeys = map[string]string{
 	"prompt_changed":           "rpc-errors.prompt_changed",
 	"attach_busy":              "rpc-errors.attach_busy",
 	proto.CodeTerminalNotReady: "rpc-errors.terminal_not_ready",
+	proto.CodeCodexNotLoggedIn: "rpc-errors.codex_not_logged_in", // a start that met Codex's sign-in screen (node/codex_start.go)
 	// a start that named the Antigravity companion while it is not connected (node/starthost.go, #13447)
 	proto.CodeAgyCompanionOffline: "rpc-errors.agy_companion_offline",
 	// a start's new tab stopped on its shell (node/shellsettle.go, #2570)
@@ -385,6 +391,9 @@ var rpcFailureKeys = map[string]string{
 	"agent_speed_unsupported":            "rpc-errors.agent_speed_unsupported",
 	"agent_speed_start_only":             "rpc-errors.agent_speed_start_only",
 	"agent_speed_model":                  "rpc-errors.agent_speed_model",
+	"session_speed_unsupported":          "rpc-errors.session_speed_unsupported",
+	"session_speed_refused":              "rpc-errors.session_speed_refused",
+	"session_speed_unconfirmed":          "rpc-errors.session_speed_unconfirmed",
 	"agent_speed_invalid":                "rpc-errors.agent_speed_invalid",
 	"readonly_unsupported":               "rpc-errors.readonly_unsupported",
 	"assistant_supervision_runtime":      "rpc-errors.assistant_supervision_runtime",
@@ -449,6 +458,13 @@ var rpcFailureKeys = map[string]string{
 	"agy_in_terminal": "rpc-errors.agy_in_terminal",
 	// a message to an omp session the node cannot resume: no usable session file (node/ompresume.go)
 	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
+	// a resume Orca does not carry out from the phone: an omp session's (node/ompresume.go), and an older node's refusal of
+	// every agent but Claude Code (#17044)
+	"orca_resume": "rpc-errors.orca_resume",
+	// a launcher resume of a pi, Cursor or agy session (node/control.go)
+	"work_agent_resume": "rpc-errors.work_agent_resume",
+	// a message to a session whose last pane is still open with its agent not in front (node/sendsafe.go notRunningRefusal)
+	"agent_not_in_front": "rpc-errors.agent_not_in_front",
 	// a resume of a conversation the computer has nothing of (node/control.go resumeKnown, #10941)
 	proto.CodeResumeUnknown: "rpc-errors.resume_unknown",
 	// a call a stopped omp has nothing to answer with: rename, interrupt, modes, queue, close (node/ompcalls.go)
@@ -468,6 +484,76 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeSwitchFailed:          "rpc-errors.switch_failed",
 	proto.CodeSwitchFailedStopped:   "rpc-errors.switch_failed_stopped",
 	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
+	// a start Orca could not place: no project open there, or the chosen workspace gone (node/hostorca_launch.go)
+	"orca_not_registered":        "rpc-errors.orca_not_registered",
+	"orca_workspace_unavailable": "rpc-errors.orca_workspace_unavailable",
+	// a resume of a session another app's runtime owns, an Orca chat's (node/control.go)
+	"runtime_session": "rpc-errors.runtime_session",
+	// Orca's Codex launch settings a stock Codex start would follow (node/codex_orca_launch_defaults.go); reasonKeys words
+	// each case, this one an older node's refusal without a reason
+	"codex_launch_preferences": "rpc-errors.codex_launch_preferences",
+	// the terminal browser's actions and a start's new tab (node/panes.go, panes_actions.go, retire.go newTab): the
+	// engine's own words, data detail, in the summary
+	"terminal_open_failed":    "rpc-errors.terminal_open_failed",
+	"tab_close_failed":        "rpc-errors.tab_close_failed",
+	"pane_close_failed":       "rpc-errors.pane_close_failed",
+	"pane_split_failed":       "rpc-errors.pane_split_failed",
+	"tab_name_invalid":        "rpc-errors.tab_name_invalid",
+	"tab_gone":                "rpc-errors.tab_gone",
+	"pane_gone":               "rpc-errors.pane_gone",
+	"pane_has_agent":          "rpc-errors.pane_has_agent",
+	"pane_not_at_prompt":      "rpc-errors.pane_not_at_prompt",
+	"pane_directory_unknown":  "rpc-errors.pane_directory_unknown",
+	"pane_foreground_unknown": "rpc-errors.pane_foreground_unknown",
+	// a Close of an Agent that runs in no terminal of the computer and is not one Persona started (node/control.go)
+	"close_not_in_terminal": "rpc-errors.close_not_in_terminal",
+}
+
+// reasonKeys word a refusal whose code covers several cases by its data reason (the Orca paths', #17057): a close of a
+// stopped Agent whose terminal changed (agent_busy, which also stands for other refusals with words of their own), Orca's
+// Codex launch settings, a session that is not running for a known reason, a capability the computer's engine lacks.
+// The data's detail, engine (an id, named by proto.EngineNames), seconds, program and max fill the words (reasonArgs).
+var reasonKeys = map[string]map[string]string{
+	"agent_busy": {"terminal_changed": "rpc-errors.agent_busy_terminal_changed"},
+	"codex_launch_preferences": {
+		"unreadable": "rpc-errors.codex_launch_preferences_unreadable",
+		"custom":     "rpc-errors.codex_launch_preferences_custom",
+		"shell":      "rpc-errors.codex_launch_preferences_shell",
+		"quoting":    "rpc-errors.codex_launch_preferences_quoting",
+	},
+	"not_running": {
+		"directory_gone": "rpc-errors.not_running_directory_gone",
+		"resume_timeout": "rpc-errors.not_running_resume_timeout",
+		"agent_exited":   "rpc-errors.not_running_agent_exited",
+	},
+	"pane_foreground_unknown": {"unreadable": "rpc-errors.pane_foreground_unreadable"},
+	"unsupported":             {"engine_unsupported": "rpc-errors.engine_unsupported"},
+}
+
+// reasonKey is the key reasonKeys words a refusal by, its code and data reason; "" for any other.
+func reasonKey(code string, data map[string]any) string {
+	reason, _ := data["reason"].(string)
+	return reasonKeys[code][reason]
+}
+
+// reasonArgs are the arguments a refusal's data gives its words: detail (the engine's or Orca's own words), engine (its
+// name), seconds, program and max.
+func reasonArgs(data map[string]any) i18n.Args {
+	args := i18n.Args{}
+	for _, k := range []string{"detail", "program"} {
+		if s, _ := data[k].(string); s != "" {
+			args[k] = s
+		}
+	}
+	if engine, _ := data["engine"].(string); engine != "" {
+		args["engine"] = cmp.Or(proto.EngineNames[engine], engine)
+	}
+	for _, k := range []string{"seconds", "max"} {
+		if n, ok := data[k].(float64); ok {
+			args[k] = n
+		}
+	}
+	return args
 }
 
 // notFoundKeys word a node's not_found by why its session's history can't be read (data.reason, node/transcript_files.go
@@ -476,6 +562,27 @@ var rpcFailureKeys = map[string]string{
 var notFoundKeys = map[string]string{
 	proto.NotFoundNoTranscript:   "apierr-apierr.session_no_transcript",
 	proto.NotFoundUnknownSession: "apierr-apierr.session_unknown",
+}
+
+// bridgeReasonKeys word the refusals of the node's Orca chat bridge by their reason (node/orcabridge.go): Orca is not
+// running, turned the request down, may or may not have done it, or no longer has the chat; a chat it closed takes no
+// mode change; a permission mode the chat's provider does not take; an Orca that cannot rename chats; a chat Orca can't
+// open for that provider on the computer, its chat runtime not installed there or for a reason in Orca's words, naming
+// the provider (data program, node/orcabridge_start.go orcaStartErr, #17684).
+var bridgeReasonKeys = map[string]string{
+	"orca_away":                 "rpc-errors.orca_away",
+	"orca_refused":              "rpc-errors.orca_refused",
+	"orca_unknown":              "rpc-errors.orca_unknown",
+	"orca_session_gone":         "rpc-errors.orca_session_gone",
+	"orca_closed":               "rpc-errors.orca_closed",
+	"orca_mode_unsupported":     "rpc-errors.orca_mode_unsupported",
+	"orca_rename_unsupported":   "rpc-errors.orca_rename_unsupported",
+	"orca_start_unsupported":    "rpc-errors.orca_start_unsupported",
+	"orca_start_folder":         "rpc-errors.orca_start_folder",
+	"orca_start_launcher":       "rpc-errors.orca_start_launcher",
+	"orca_chat_runtime_missing": "rpc-errors.orca_chat_runtime_missing",
+	"orca_chat_unavailable":     "rpc-errors.orca_chat_unavailable",
+	"orca_unsupported":          "rpc-errors.orca_unsupported", // a call the bridge does not take (#17057)
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
@@ -488,12 +595,52 @@ var openElsewhereKeys = map[string]string{
 	"agents_list": "rpc-errors.open_elsewhere_agents_list",
 }
 
-// notDeliveredKeys word the node's generic not_delivered refusal by reason (node/sendsafe.go deliveryRefusal);
-// specific refusals that carry their own recovery instructions (a cut dialog, a botmux probe failure, an unread box)
-// omit reason and keep their own words.
+// engineMissingKeys word the node's engine_missing refusal by why its engine could not take the start (data reason,
+// node/orcaengine.go orcaMissing, #17037), naming the engine (data engine). One without both (an older node, a
+// refusal about the machine's whole engine set) keeps its words.
+var engineMissingKeys = map[string]string{
+	"not_running":   "rpc-errors.engine_not_running",
+	"not_installed": "rpc-errors.engine_not_installed",
+	"incompatible":  "rpc-errors.engine_incompatible",
+	// the start's engine did not answer (node/control.go workspaceFor), and herdr's autostart failed too; a stopped
+	// session's resume with no engine to open it in (node/pi.go); a start naming an engine the computer does not turn on
+	// (node/starthost.go) (#17057)
+	"unavailable":        "rpc-errors.engine_unavailable",
+	"start_failed":       "rpc-errors.engine_start_failed",
+	"resume_unavailable": "rpc-errors.engine_resume_unavailable",
+	"not_enabled":        "rpc-errors.engine_not_enabled",
+}
+
+// engineNoneReason is engine_missing's reason on a computer that turns on no engine at all (node/engine.go
+// noEngineRefusal): there is no engine to name.
+const engineNoneReason = "none"
+
+// engineMissingWords is the key and arguments of an engine_missing refusal whose data says which engine and why
+// (engineMissingKeys), or that there is none (engineNoneReason); "" for one that does not.
+func engineMissingWords(data map[string]any) (string, i18n.Args) {
+	engine, _ := data["engine"].(string)
+	reason, _ := data["reason"].(string)
+	if reason == engineNoneReason {
+		return "rpc-errors.engine_none", nil
+	}
+	name := proto.EngineNames[engine]
+	if name == "" || engineMissingKeys[reason] == "" {
+		return "", nil
+	}
+	return engineMissingKeys[reason], i18n.Args{"engine": name}
+}
+
+// notDeliveredKeys word the node's generic not_delivered refusal by reason (node/sendsafe.go deliveryRefusal), and a
+// screen the node could not read before typing (screen_unreadable, #17057); specific refusals that carry their own
+// recovery instructions (a cut dialog, a botmux probe failure) omit reason and keep their own words.
 var notDeliveredKeys = map[string]string{
 	"terminal_refused":  "rpc-errors.not_delivered",
 	"terminal_finished": "rpc-errors.not_delivered_finished",
+	"screen_unreadable": "rpc-errors.not_delivered_screen_unreadable",
+	// botmux's 403 on a send as the owner (node/sendsafe.go botmuxOwnerRefusedError).
+	"botmux_owner_unresolved": "rpc-errors.not_delivered_botmux_owner_unresolved",
+	"botmux_owner_mismatch":   "rpc-errors.not_delivered_botmux_owner_mismatch",
+	"botmux_owner_refused":    "rpc-errors.not_delivered_botmux_owner_refused",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
@@ -510,6 +657,9 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
 	args := i18n.Args{"reason": original}
+	for k, v := range reasonArgs(body) { // what a refusal's words name: the engine's words, the engine, a program (#17057)
+		args[k] = v
+	}
 	if code == "assistant_model_unresolved" {
 		model, _ := body["model"].(string)
 		launcher, _ := body["launcher"].(string)
@@ -552,6 +702,23 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 		where, _ := body["where"].(string)
 		key = openElsewhereKeys[where]
 	}
+	if code == "engine_missing" {
+		if k, a := engineMissingWords(body); k != "" {
+			key, args["engine"] = k, a["engine"]
+		}
+	}
+	if code == "not_running" {
+		// Only the node's refusal that names the engine (node/sendsafe.go notRunningRefusal, #17044): not_running's other
+		// words (a runtime's, a resume that never came up) stay as the node wrote them.
+		reason, _ := body["reason"].(string)
+		engine, _ := body["engine"].(string)
+		if reason == proto.NotRunningEngine && engine != "" {
+			key, args["engine"] = "rpc-errors.not_running_engine", engine
+		}
+	}
+	if k := reasonKey(code, body); k != "" {
+		key = k
+	}
 	if body["partial"] == true {
 		switch code {
 		case "not_delivered":
@@ -579,6 +746,13 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 				args["dialog"], args["retry_code"] = dialog, retryCode
 			}
 		}
+	}
+	// A bridge's refusal under a generic code (runtime_away, refused, unknown, session_gone) words its reason; Orca's own
+	// words, when it gave any, are the detail (node/orcabridge.go orcaChatErr).
+	if reason, _ := body["reason"].(string); bridgeReasonKeys[reason] != "" {
+		key = bridgeReasonKeys[reason]
+		detail, _ := body["detail"].(string)
+		args["detail"] = detail
 	}
 	if errors.Is(err, ErrOffline) {
 		key = "rpc-errors.offline"
@@ -633,6 +807,19 @@ var codeActions = map[string]string{
 	proto.TurnErrorNotLoggedIn: "connect_model",
 }
 
+// wordedWithoutAction are refusals the hub also words itself, naming the machine, but with nothing for a client to
+// offer: the fix is on that computer (Codex's sign-in, node/codex_start.go).
+var wordedWithoutAction = map[string]bool{
+	proto.CodeCodexNotLoggedIn: true,
+}
+
+// hubWords is whether the hub writes code's words itself (codeActions, wordedWithoutAction) instead of passing on
+// the caller's.
+func hubWords(code string) bool {
+	_, ok := codeActions[code]
+	return ok || wordedWithoutAction[code]
+}
+
 // OnMachine is err naming the machine (its display name) it was refused on, when it is one of the refusals the hub
 // words itself and does not name one yet: what the sentence says instead of "this computer". Anything else is err.
 func OnMachine(err error, name string) error {
@@ -640,7 +827,7 @@ func OnMachine(err error, name string) error {
 	if name == "" || !errors.As(err, &re) {
 		return err
 	}
-	if _, ok := codeActions[re.Code]; !ok {
+	if !hubWords(re.Code) {
 		return err
 	}
 	data := map[string]any{}
@@ -671,7 +858,9 @@ func explain(body map[string]any, code, message string, l i18n.Lang) {
 		body["detail"] = message
 	}
 	if a, _ := body["action"].(string); a == "" {
-		body["action"] = Action(code, body)
+		if a := Action(code, body); a != "" { // wordedWithoutAction: nothing for a client to offer
+			body["action"] = a
+		}
 	}
 	if s := Summary(l, code, body); s != "" {
 		body["summary"] = s
@@ -718,7 +907,8 @@ func Sentence(l i18n.Lang, code string, data map[string]any) string {
 	case "readonly_unsupported", proto.CodeDirectoryUntypable, "omp_options", proto.CodeAgyCompanionOffline: // refusal needs no request parameters
 		return i18n.T(l, rpcFailureKeys[code])
 	}
-	if code == proto.CodeShellWaiting || code == proto.CodeStartLineRejected { // a start's new tab (node/shellsettle.go, #2570)
+	// a start's new tab (node/shellsettle.go, #2570), or the Codex in it on its sign-in screen (node/codex_start.go)
+	if code == proto.CodeShellWaiting || code == proto.CodeStartLineRejected || code == proto.CodeCodexNotLoggedIn {
 		machine, _ := data["machine_name"].(string)
 		line, _ := data["line"].(string)
 		key := "apierr-apierr." + code

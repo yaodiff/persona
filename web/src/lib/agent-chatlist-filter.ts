@@ -1,7 +1,7 @@
 import { t } from "../i18n";
 import { agentId, agentName, isTraeCli, sessionAgent } from "./agent-kind";
 import { modelShort } from "./context-usage";
-import { baseName, failureReason, sessionPreview, sessionTitle, stateOf } from "./format";
+import { baseName, activityOf, failureReason, sessionPreview, sessionTitle, stateOf } from "./format";
 import { machineWithHub } from "./mesh";
 import { isPinned, type AgentPins } from "./pins";
 import { plainMarkdown } from "./plain-markdown";
@@ -168,6 +168,7 @@ export function sessionModelId(s: Session): string {
 
 /** Whether a session has an active error, turn error, start refusal, or blocked state. */
 export function sessionHasError(s: Session, interactions: readonly Interaction[] = []): boolean {
+  if (s.view) return s.view.phase === "error" || s.view.phase === "needs_you";
   if (s.start_error || s.turn_error || failureReason(s) || s.attention_reason) return true;
   if (s.work?.phase === "blocked") return true;
   const st = stateOf(s);
@@ -552,7 +553,7 @@ export function compileSearchAsCode(
   if (stateTargets.size > 0) {
     const list = [...stateTargets];
     clauses.push(list.length === 1 ? `s.state === ${JSON.stringify(list[0])}` : `${JSON.stringify(list)}.includes(s.state)`);
-    predicates.push((s) => list.includes(stateOf(s)));
+    predicates.push((s) => list.includes(activityOf(s)));
   }
 
   // 8. Time window intent (`since:24h` or natural language "最近两天" / "今天" / "本周")
@@ -626,7 +627,7 @@ function evaluateCustomPlanCode(code: string, s: Session, ctx: EvalContext): boo
     project: sessionProjectName(s).toLowerCase(),
     harness: sessionHarnessId(s).toLowerCase(),
     model: sessionModelId(s).toLowerCase(),
-    state: stateOf(s),
+    state: activityOf(s),
     title: sessionTitle(s).toLowerCase(),
     isPinned: isPinned(s, ctx.pins),
     hasErrors: sessionHasError(s, ctx.interactions),

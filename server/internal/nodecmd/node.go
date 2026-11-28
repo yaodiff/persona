@@ -130,7 +130,12 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 	defer transport.Close()
 	updates := make(chan string, 1)
 	tailcatUpdate := make(chan struct{}, 1)
-	updater := nodeupdate.New(b.Version, func(id string) { updates <- id }, nodeupdate.Options{Supervised: supervised, RequireResidentHandover: node.ResidentHandoverSupported, Signer: residentSigner(b.Program)})
+	reload := &node.ResidentReload{}
+	var updater *nodeupdate.Manager
+	updater = nodeupdate.New(b.Version, func(id string) {
+		reload.SetUpdateDraining(id, updater.PendingTarget(id))
+		updates <- id
+	}, nodeupdate.Options{Supervised: supervised, RequireResidentHandover: node.ResidentHandoverSupported, Signer: residentSigner(b.Program)})
 	defer updater.Close()
 	askTailcatRestart := func() {
 		select {
@@ -165,9 +170,12 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 	if err != nil {
 		logger.Printf("tailcat: %v (serving relays over ssh only)", err)
 	}
-	reload := &node.ResidentReload{}
 	reload.SetLogger(logger)
-	handover := make(chan *node.ResidentFiles, 1)
+	type residentHandover struct {
+		files    *node.ResidentFiles
+		updateID string
+	}
+	handover := make(chan residentHandover, 1)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
@@ -186,10 +194,18 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 			case <-ctx.Done():
 				return
 			}
+			if updateID != "" {
+				target := updater.PendingTarget(updateID)
+				if err := updater.BeginDrain(updateID); err != nil {
+					logger.Printf("node update: begin drain: %v", err)
+				}
+				reload.ReportUpdateDraining(ctx, updateID, target)
+			}
 			// A build a deployment or tailcat put in place runs signed too; an update's commit signed its own.
 			updater.SignInstalled(ctx)
 			if err := preflightResidentReload(ctx, logger, updater.Executable(), b.Program); err != nil {
 				if updateID != "" {
+					reload.SetUpdateDraining("", "")
 					updater.PreflightFailed(updateID, err)
 					reload.ReportUpdatePreflightFailure(ctx, updateID, err)
 				}
@@ -197,6 +213,10 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 			}
 			logger.Printf("restart asked for (%s): draining idle work while attach remains available", reason)
 			if err := reload.Prepare(ctx); err != nil {
+				if updateID != "" {
+					reload.SetUpdateDraining("", "")
+					_ = updater.ArmHandover(updateID)
+				}
 				return
 			}
 			// Windows hands nothing over: its supervisor starts the new program as a new process (nodeupdate.Restart).
@@ -205,12 +225,21 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 				var err error
 				if files, err = transport.PrepareExec(); err != nil {
 					reload.Resume()
+					if updateID != "" {
+						reload.SetUpdateDraining("", "")
+						updater.PreflightFailed(updateID, err)
+						reload.ReportUpdatePreflightFailure(ctx, updateID, err)
+					}
 					logger.Printf("resident reload: cannot retain the attach listener; keeping the current node")
 					continue
 				}
 			}
 			if ctx.Err() != nil {
 				files.Close()
+				if updateID != "" {
+					reload.SetUpdateDraining("", "")
+					_ = updater.ArmHandover(updateID)
+				}
 				return
 			}
 			announce, end := context.WithTimeout(ctx, time.Second)
@@ -220,10 +249,14 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 				files.Close()
 				reload.Resume()
 				reload.CancelAnnouncement()
+				if updateID != "" {
+					reload.SetUpdateDraining("", "")
+					_ = updater.ArmHandover(updateID)
+				}
 				logger.Printf("resident reload: handover was not acknowledged; keeping the current node")
 				continue
 			}
-			handover <- files
+			handover <- residentHandover{files: files, updateID: updateID}
 			cancel() // only now: idle work is reaped and the listener/backlog and run lock have retained duplicates
 			return
 		}
@@ -236,6 +269,7 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 			n.SetUpdater(updater)
 			n.SetResidentReload(reload)
 			n.Program = b.Program
+			n.Edition = b.Edition
 		}
 		return n, err
 	}, conns, runtimeHost, transport)
@@ -244,17 +278,22 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 	tstop()
 	<-stopped
 	select {
-	case files := <-handover:
-		defer files.Close()
+	case ho := <-handover:
+		defer ho.files.Close()
+		if ho.updateID != "" {
+			if err := updater.ArmHandover(ho.updateID); err != nil {
+				logger.Printf("node update: arm handover deadline: %v", err)
+			}
+		}
 		if stop.Err() != nil {
 			return nil // an explicit stop wins over a deployment
 		}
-		if files == nil {
+		if ho.files == nil {
 			logger.Printf("restarting on %s", updater.Executable())
 			return nodeupdate.Restart(updater.Executable())
 		}
 		logger.Printf("restarting on %s with the retained attach listener", updater.Executable())
-		return files.Exec(updater.Executable(), os.Args, os.Environ())
+		return ho.files.Exec(updater.Executable(), os.Args, os.Environ())
 	default:
 		return err
 	}

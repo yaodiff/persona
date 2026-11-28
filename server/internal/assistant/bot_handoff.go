@@ -7,6 +7,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
 )
 
 // Proxy replies (docs/extensions/bots.md "Proxy replies handed off from a group"). The run itself is the lark module's
@@ -16,12 +17,9 @@ import (
 // Native message_cot is not part of this: a handoff has no channel run, its chat is deliberately not one the bot may
 // send into, and the default tier asks the owner before anything is posted.
 
-const botGroupReplyTool = "bot_group_reply"
-
 // StartHandoffGuest starts the guest that answers handoff, registered before the node starts it (the module's
-// HandoffTools is the one tool it lists).
+// HandoffTools is the one tool it lists). Without the lark module (built out or switched off), no guest starts.
 func (s *Service) StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (string, string, error) {
-	id := newGuestSessionID()
 	names := make([]string, 0, 1)
 	for _, tool := range s.larkModule().HandoffTools() {
 		if tool.Name != "" {
@@ -29,8 +27,9 @@ func (s *Service) StartHandoffGuest(ctx context.Context, handoff, text, launcher
 		}
 	}
 	if len(names) == 0 {
-		names = []string{botGroupReplyTool}
+		return "", "", larkhost.ErrNoChannel
 	}
+	id := newGuestSessionID()
 	machine := s.settings(ctx).MachineID
 	if err := s.guestSetHandoff(ctx, machine, id, handoff, names); err != nil {
 		return "", "", err

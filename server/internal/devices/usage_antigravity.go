@@ -20,6 +20,48 @@ func canonicalUsageProvider(provider string) string {
 	return provider
 }
 
+// antigravityAccountIdentity extracts an explicit signed-in Antigravity user identity when present, returning ""
+// for generic placeholder labels ("Antigravity", "Antigravity · Gemini", numbered suffixes, etc.).
+func antigravityAccountIdentity(a proto.UsageAccount) string {
+	if canonicalUsageProvider(a.Provider) != antigravityUsageProvider {
+		return ""
+	}
+	head, _, _ := strings.Cut(a.Name, "·")
+	head = strings.ToLower(strings.TrimSpace(head))
+	if head == "" || head == antigravityUsageProvider || head == "agy" {
+		return ""
+	}
+	if i := strings.LastIndexByte(head, ' '); i >= 0 {
+		base := strings.TrimSpace(head[:i])
+		if n, err := strconv.Atoi(head[i+1:]); err == nil && n > 1 && (base == antigravityUsageProvider || base == "agy") {
+			return ""
+		}
+	}
+	if strings.Contains(head, "@") {
+		return "email:" + head
+	}
+	if a.Local && len(a.Sources) == 0 {
+		return "name:" + head
+	}
+	return ""
+}
+
+// sameProviderAccountConflict reports whether two samples of the same provider carry distinct explicit account
+// identities (either distinct cryptographic node AccountKeys, or distinct signed-in Antigravity emails/names of the
+// same kind). An unnamed/generic sample never conflicts here so rolling upgrades and generic external pools still reconcile.
+func sameProviderAccountConflict(a, b proto.UsageAccount) bool {
+	if a.CodexAccountKey != "" && b.CodexAccountKey != "" && a.CodexAccountKey != b.CodexAccountKey {
+		return true
+	}
+	idA, idB := antigravityAccountIdentity(a), antigravityAccountIdentity(b)
+	if idA == "" || idB == "" || idA == idB {
+		return false
+	}
+	kindA, _, _ := strings.Cut(idA, ":")
+	kindB, _, _ := strings.Cut(idB, ":")
+	return kindA == kindB
+}
+
 // The companion sends model groups in one account. An external source can send the same groups as separate
 // accounts whose plan windows have no Model field.
 func antigravityQuotaScope(a proto.UsageAccount, w proto.UsageWindow) string {
@@ -120,6 +162,9 @@ func antigravityPairs(accounts []proto.UsageAccount, now time.Time) antigravityP
 		for _, w := range a.Windows {
 			if key, ok := antigravityWindowKey(a, w, now); ok {
 				for _, peer := range externals[key] {
+					if sameProviderAccountConflict(a, accounts[peer]) {
+						continue
+					}
 					local.record(antigravityAccountScope{i, key.scope}, peer)
 					external.record(antigravityAccountScope{peer, key.scope}, i)
 				}

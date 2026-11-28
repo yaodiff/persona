@@ -2,9 +2,14 @@ package persona.platform.phonetools
 
 import android.Manifest
 import android.app.Application
+import android.content.ContentProvider
 import android.content.ContentProviderResult
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
+import android.database.MatrixCursor
+import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.ContactsContract.CommonDataKinds.Email
 import android.provider.ContactsContract.CommonDataKinds.Organization
@@ -28,6 +33,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowContentResolver
 
 /**
  * Contact create / update over a fake provider: the generated RawContacts / Data operations, the replace rules and the
@@ -236,6 +242,109 @@ class ContactsWriteToolsTest {
         Shadows.shadowOf(app).grantPermissions(Manifest.permission.WRITE_CALENDAR)
         assertEquals(writes, offered().intersect(writes))
         assertEquals(PhoneAccess.Granted, permissions.status(PhoneSource.Calendar))
+    }
+
+    @Test fun androidContactsBackendReadsStructuredNameFromData2AndData3AndPreservesFamilyName() {
+        val rowsByContact: Map<String, List<Map<String, Any?>>> = mapOf(
+            "5" to listOf(
+                mapOf(
+                    Data._ID to 100L, Data.RAW_CONTACT_ID to 50L, Data.MIMETYPE to StructuredName.CONTENT_ITEM_TYPE,
+                    StructuredName.DISPLAY_NAME to "Ann Lee",
+                    StructuredName.GIVEN_NAME to "Ann",
+                    StructuredName.FAMILY_NAME to "Lee",
+                ),
+                mapOf(
+                    Data._ID to 101L, Data.RAW_CONTACT_ID to 50L, Data.MIMETYPE to Organization.CONTENT_ITEM_TYPE,
+                    Organization.COMPANY to "Acme",
+                    Organization.TITLE to "Engineer",
+                ),
+                mapOf(
+                    Data._ID to 110L, Data.RAW_CONTACT_ID to 50L, Data.MIMETYPE to Phone.CONTENT_ITEM_TYPE,
+                    Phone.NUMBER to "+1 555 0100",
+                    Phone.TYPE to Phone.TYPE_WORK,
+                    Phone.LABEL to "iPhone",
+                ),
+                mapOf(
+                    Data._ID to 111L, Data.RAW_CONTACT_ID to 50L, Data.MIMETYPE to Phone.CONTENT_ITEM_TYPE,
+                    Phone.NUMBER to "+1 555 0101",
+                    Phone.TYPE to Phone.TYPE_CUSTOM,
+                    Phone.LABEL to "iPhone",
+                ),
+                mapOf(
+                    Data._ID to 120L, Data.RAW_CONTACT_ID to 50L, Data.MIMETYPE to Email.CONTENT_ITEM_TYPE,
+                    Email.ADDRESS to "ann@work.example",
+                    Email.TYPE to Email.TYPE_WORK,
+                    Email.LABEL to "iPhone",
+                ),
+                mapOf(
+                    Data._ID to 121L, Data.RAW_CONTACT_ID to 50L, Data.MIMETYPE to Email.CONTENT_ITEM_TYPE,
+                    Email.ADDRESS to "ann@icloud.example",
+                    Email.TYPE to Email.TYPE_CUSTOM,
+                    Email.LABEL to "iPhone",
+                ),
+            ),
+            "6" to listOf(
+                mapOf(
+                    Data._ID to 200L, Data.RAW_CONTACT_ID to 60L, Data.MIMETYPE to StructuredName.CONTENT_ITEM_TYPE,
+                    StructuredName.DISPLAY_NAME to "Ann",
+                    StructuredName.GIVEN_NAME to "Ann",
+                    StructuredName.FAMILY_NAME to null,
+                ),
+            ),
+        )
+        val provider = object : ContentProvider() {
+            override fun onCreate() = true
+            override fun query(
+                uri: Uri,
+                projection: Array<out String>?,
+                selection: String?,
+                selectionArgs: Array<out String>?,
+                sortOrder: String?,
+            ): Cursor {
+                assertEquals(Data.CONTENT_URI, uri)
+                val cols = projection ?: arrayOf(Data._ID)
+                val cursor = MatrixCursor(cols)
+                val rows = rowsByContact[selectionArgs?.firstOrNull()].orEmpty()
+                for (row in rows) cursor.addRow(Array<Any?>(cols.size) { row[cols[it]] })
+                return cursor
+            }
+            override fun getType(uri: Uri): String? = null
+            override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+            override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+        }
+        ShadowContentResolver.registerProviderInternal(ContactsContract.AUTHORITY, provider)
+
+        val realTools = ContactsTool(context)
+        val prepared = realTools.prepareUpdate(args("id" to "5", "given_name" to "Bea", "replace" to true))
+        assertEquals("Ann", prepared.snapshot.fields.givenName)
+        assertEquals("Lee", prepared.snapshot.fields.familyName)
+        assertEquals("Acme", prepared.snapshot.fields.company)
+        assertEquals("Engineer", prepared.snapshot.fields.jobTitle)
+        assertEquals(
+            listOf("+1 555 0100" to "work", "+1 555 0101" to "iphone"),
+            prepared.snapshot.phones.map { it.entry.value to it.entry.label },
+        )
+        assertEquals(
+            listOf("ann@work.example" to "work", "ann@icloud.example" to "iphone"),
+            prepared.snapshot.emails.map { it.entry.value to it.entry.label },
+        )
+
+        val card = prepared.text(context.resources)
+        assertTrue(card, card.contains("Ann Lee") && !card.contains("Ann Lee Ann"))
+        val write = realTools.updateWrites(prepared).single()
+        assertEquals(ProviderWrite.Kind.Update, write.kind)
+        assertEquals(100L, write.id)
+        assertEquals("Bea", write.values[StructuredName.GIVEN_NAME])
+        assertEquals("Lee", write.values[StructuredName.FAMILY_NAME])
+
+        // A given-name-only contact must leave familyName empty so family_name can be added without replace=true.
+        val addedFamily = realTools.prepareUpdate(args("id" to "6", "family_name" to "Lee"))
+        assertEquals("Ann", addedFamily.snapshot.fields.givenName)
+        assertEquals("", addedFamily.snapshot.fields.familyName)
+        val familyWrite = realTools.updateWrites(addedFamily).single()
+        assertEquals("Ann", familyWrite.values[StructuredName.GIVEN_NAME])
+        assertEquals("Lee", familyWrite.values[StructuredName.FAMILY_NAME])
     }
 }
 

@@ -23,7 +23,7 @@ describe("the lazy refusal notice", () => {
       root.render(<ChatLineView line={line} mid="m" sid="s" expandFold={async () => {}} />);
       await RefusalNoticePage.preload();
     });
-    expect(host.textContent).toContain("Claude Code 从 primary-x 自动改用 fallback-y");
+    expect(host.textContent).toContain("Claude Code 已自动从 primary-x 切换至 fallback-y");
     await act(async () => root.unmount());
     host.remove();
   });

@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { contrast, pageToken } from "./extension-theme";
 import {
-  ACCENT_PRESETS, accentChoice, accentCSS, accentTokens, applyLook, personaAccent, PRESET_COLORS, savedPersonaAccent, setAccentChoice,
-  setExtensionThemeActive, setPersonaAccent, setTextSize, textSize,
+  ACCENT_PRESETS, accentChoice, accentCSS, accentTokens, applyLook, DEFAULT_GLASS_TRANSLUCENCY, glassTranslucency, personaAccent,
+  PRESET_COLORS, savedPersonaAccent, setAccentChoice, setExtensionThemeActive, setGlassTranslucency, setPersonaAccent,
+  setSurfaceStyle, setTextSize, surfaceStyle, textSize,
 } from "./look";
 
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
@@ -100,5 +103,114 @@ describe("字号", () => {
     setTextSize("standard");
     expect(localStorage.getItem("persona.text-size")).toBeNull();
     expect(document.documentElement.dataset.textSize).toBeUndefined();
+  });
+});
+
+describe("窗口外观风格", () => {
+  it("defaults to opaque default style and toggles opt-in liquid-glass cleanly", () => {
+    const setSurface = vi.fn();
+    Object.assign(window, { personaDesktop: { platform: "darwin", setSurfaceStyle: setSurface } });
+    expect(surfaceStyle()).toBe("default");
+    expect(glassTranslucency()).toBe(DEFAULT_GLASS_TRANSLUCENCY);
+    expect(document.documentElement.dataset.surfaceStyle).toBeUndefined();
+    expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
+
+    setSurfaceStyle("liquid-glass");
+    expect(localStorage.getItem("persona.surface-style")).toBe("liquid-glass");
+    expect(document.documentElement.dataset.surfaceStyle).toBe("liquid-glass");
+    expect(document.documentElement.dataset.desktopGlass).toBe("1");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.75");
+    expect(setSurface).toHaveBeenLastCalledWith("liquid-glass");
+
+    setGlassTranslucency(0);
+    expect(glassTranslucency()).toBe(0);
+    expect(localStorage.getItem("persona.glass-translucency")).toBe("0");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.00");
+
+    setGlassTranslucency(100);
+    expect(glassTranslucency()).toBe(100);
+    expect(localStorage.getItem("persona.glass-translucency")).toBe("100");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("1.00");
+
+    setGlassTranslucency(84);
+    expect(glassTranslucency()).toBe(84);
+    expect(localStorage.getItem("persona.glass-translucency")).toBe("84");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.84");
+
+    setGlassTranslucency(DEFAULT_GLASS_TRANSLUCENCY);
+    expect(localStorage.getItem("persona.glass-translucency")).toBeNull();
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.75");
+
+    setSurfaceStyle("default");
+    expect(localStorage.getItem("persona.surface-style")).toBeNull();
+    expect(document.documentElement.dataset.surfaceStyle).toBeUndefined();
+    expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("");
+    expect(setSurface).toHaveBeenLastCalledWith("default");
+    delete (window as { personaDesktop?: unknown }).personaDesktop;
+  });
+
+  it("syncs web theme source before surface style and omits gracefully on older shells", () => {
+    const order: string[] = [];
+    const setThemeSource = vi.fn((theme: string) => order.push(`theme:${theme}`));
+    const setSurface = vi.fn((style: string) => order.push(`surface:${style}`));
+    Object.assign(window, { personaDesktop: { platform: "darwin", setThemeSource, setSurfaceStyle: setSurface } });
+
+    localStorage.setItem("persona.theme", "dark");
+    applyLook();
+    expect(order).toEqual(["theme:dark", "surface:default"]);
+
+    localStorage.setItem("persona.theme", "light");
+    applyLook();
+    expect(setThemeSource).toHaveBeenLastCalledWith("light");
+
+    localStorage.setItem("persona.theme", "sepia");
+    applyLook();
+    expect(setThemeSource).toHaveBeenLastCalledWith("system");
+
+    localStorage.removeItem("persona.theme");
+    applyLook();
+    expect(setThemeSource).toHaveBeenLastCalledWith("system");
+
+    Object.assign(window, { personaDesktop: { platform: "darwin", setSurfaceStyle: setSurface } });
+    expect(() => applyLook()).not.toThrow();
+    delete (window as { personaDesktop?: unknown }).personaDesktop;
+  });
+
+  it("seeds data-desktop-glass synchronously in the index.html pre-paint script before React hydration", () => {
+    const html = readFileSync(resolve(import.meta.dirname, "../../index.html"), "utf8");
+    const prePaintScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+      .map((m) => m[1]!)
+      .find((s) => s.includes("persona.surface-style"));
+    expect(prePaintScript).toBeDefined();
+    const runPrePaint = new Function(prePaintScript!);
+
+    try {
+      vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false }));
+      localStorage.setItem("persona.surface-style", "liquid-glass");
+      Object.assign(window, { personaDesktop: { platform: "darwin", setSurfaceStyle: vi.fn() } });
+      runPrePaint();
+      expect(document.documentElement.dataset.surfaceStyle).toBe("liquid-glass");
+      expect(document.documentElement.dataset.desktopGlass).toBe("1");
+
+      delete document.documentElement.dataset.desktopGlass;
+      delete document.documentElement.dataset.surfaceStyle;
+      delete (window as { personaDesktop?: unknown }).personaDesktop;
+      runPrePaint();
+      expect(document.documentElement.dataset.surfaceStyle).toBe("liquid-glass");
+      expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
+
+      delete document.documentElement.dataset.surfaceStyle;
+      Object.assign(window, { personaDesktop: { platform: "win32", setSurfaceStyle: vi.fn() } });
+      runPrePaint();
+      expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      delete (window as { personaDesktop?: unknown }).personaDesktop;
+      document.documentElement.classList.remove("dark");
+      delete document.documentElement.dataset.surfaceStyle;
+      delete document.documentElement.dataset.desktopGlass;
+      document.documentElement.style.removeProperty("--glass-t");
+    }
   });
 });

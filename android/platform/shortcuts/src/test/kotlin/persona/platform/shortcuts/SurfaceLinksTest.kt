@@ -5,7 +5,9 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -14,8 +16,12 @@ import persona.core.contracts.FleetState
 import persona.core.contracts.Interaction
 import persona.core.contracts.SessionKey
 import persona.core.navigation.AppTab
+import persona.core.navigation.AskPersonaLink
+import persona.core.navigation.AssistantRoute
 import persona.core.navigation.NotificationRoute
 import persona.core.navigation.RequestRef
+import persona.core.navigation.RouteInput
+import persona.core.navigation.Router
 
 /** A tap on a widget row or the tile lands on the request it shows, as a needs-you notification does (#4149). */
 @RunWith(AndroidJUnit4::class)
@@ -68,5 +74,35 @@ class SurfaceLinksTest {
         val inSession = SurfaceLinks.request(context, Interaction("q1", "mac", "s1", kind = "question")) { false }
         assertEquals("s1", inSession.data?.getQueryParameter("session"))
         assertEquals("q1", request(inSession))
+    }
+
+    @Test fun mainChatLinkOpensExactMainConversationOrPersonaTab() {
+        val key = SessionKey("hub", "main-1")
+        val direct = SurfaceLinks.mainChat(context, key)
+        assertEquals("persona", direct.data?.getQueryParameter("tab"))
+        assertEquals("hub", direct.data?.getQueryParameter("machine"))
+        assertEquals("main-1", direct.data?.getQueryParameter("session"))
+
+        val fallback = SurfaceLinks.mainChat(context, null)
+        assertEquals(NotificationRoute(AppTab.Persona), fallback.data?.let(NotificationRoute::parse))
+        assertEquals(persona.core.navigation.AskPersonaLink, SurfaceLinks.ask(context).dataString)
+        assertEquals(persona.core.navigation.NewTodoLink, SurfaceLinks.newTodo(context).dataString)
+    }
+
+    @Test fun askWidgetOpensMainChatComposerWhenPairedAndPairingPageWhenUnpaired() {
+        val paired = SurfaceLinks.askWidget(context, paired = true)
+        assertEquals(Intent.ACTION_VIEW, paired.action)
+        assertEquals(AskPersonaLink, paired.dataString)
+        assertEquals("persona", paired.data?.getQueryParameter("tab"))
+        assertEquals("composer", paired.data?.getQueryParameter("focus"))
+        val resolved = Router().parse(RouteInput.DeepLink(paired.dataString!!))
+        assertNotNull(resolved)
+        assertEquals(AppTab.Persona, resolved!!.tab)
+        assertEquals(AssistantRoute, resolved.key)
+        assertTrue(resolved.focusComposer)
+
+        val unpaired = SurfaceLinks.askWidget(context, paired = false)
+        assertNull(unpaired.data)
+        assertEquals(context.packageName, unpaired.`package` ?: unpaired.component?.packageName)
     }
 }

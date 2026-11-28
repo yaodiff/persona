@@ -406,3 +406,514 @@ func TestToolsCallInvalidParamsOverServe(t *testing.T) {
 		t.Fatalf("answer %s after %d dials", out.String(), *n)
 	}
 }
+
+type testProgressTicker struct {
+	ch      chan time.Time
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (m *testProgressTicker) ticks() <-chan time.Time { return m.ch }
+func (m *testProgressTicker) Stop()                   { m.once.Do(func() { close(m.stopped) }) }
+
+// When a request ID is reused while an earlier call with the same ID is still finishing or
+// unwinding from cancellation, the earlier call's cleanup must not delete the newer call's
+// cancellation entry from inflight.
+func TestServeReusedIDDoesNotClobberActiveCancellation(t *testing.T) {
+	t.Run("completing_older_call_preserves_newer_cancel", func(t *testing.T) {
+		old := dialNode
+		t.Cleanup(func() { dialNode = old })
+
+		firstStarted := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		var releaseFirstOnce sync.Once
+		stopFirst := func() { releaseFirstOnce.Do(func() { close(releaseFirst) }) }
+		secondStarted := make(chan struct{})
+		secondCancelled := make(chan struct{})
+		dialNode = func(ctx context.Context, req any) ([]byte, error) {
+			name, _ := req.(map[string]any)["name"].(string)
+			switch name {
+			case "first":
+				close(firstStarted)
+				<-releaseFirst
+				return []byte(`{"content":[{"type":"text","text":"first-done"}]}`), nil
+			case "second":
+				close(secondStarted)
+				<-ctx.Done()
+				close(secondCancelled)
+				return nil, ctx.Err()
+			default:
+				return []byte(`{"content":[{"type":"text","text":"ok"}]}`), nil
+			}
+		}
+
+		in, w := io.Pipe()
+		out := &syncBuf{}
+		done := make(chan error, 1)
+		go func() { done <- Serve(context.Background(), "test", in, out) }()
+		var closeOnce sync.Once
+		stopServe := func() error {
+			var err error
+			closeOnce.Do(func() {
+				stopFirst()
+				_ = w.Close()
+				select {
+				case err = <-done:
+				case <-time.After(5 * time.Second):
+					err = errors.New("Serve did not stop")
+				}
+			})
+			return err
+		}
+		t.Cleanup(func() {
+			if err := stopServe(); err != nil {
+				t.Errorf("Serve cleanup: %v", err)
+			}
+		})
+		send := func(s string) { _, _ = io.WriteString(w, s+"\n") }
+
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"first","arguments":{}}}`)
+		<-firstStarted
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"second","arguments":{}}}`)
+		<-secondStarted
+
+		// Let the first call finish and run its inflight cleanup; seeing its response guarantees cleanup ran.
+		stopFirst()
+		waitFor(t, "first response", func() bool { return strings.Contains(out.String(), `"first-done"`) })
+
+		// Cancelling id 1 must still cancel the second call.
+		send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+		select {
+		case <-secondCancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("second call was not cancelled after older call with the same ID finished")
+		}
+		if err := stopServe(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("unwinding_cancelled_call_preserves_reused_id_cancel", func(t *testing.T) {
+		oldDial := dialNode
+		oldCleanup := afterInflightCleanup
+		t.Cleanup(func() {
+			dialNode = oldDial
+			afterInflightCleanup = oldCleanup
+		})
+
+		firstStarted := make(chan struct{})
+		firstCancelled := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		var releaseFirstOnce sync.Once
+		stopFirst := func() { releaseFirstOnce.Do(func() { close(releaseFirst) }) }
+		secondStarted := make(chan struct{})
+		secondCancelled := make(chan struct{})
+		dialNode = func(ctx context.Context, req any) ([]byte, error) {
+			name, _ := req.(map[string]any)["name"].(string)
+			switch name {
+			case "first":
+				close(firstStarted)
+				<-ctx.Done()
+				close(firstCancelled)
+				<-releaseFirst
+				return nil, ctx.Err()
+			case "second":
+				close(secondStarted)
+				<-ctx.Done()
+				close(secondCancelled)
+				return nil, ctx.Err()
+			default:
+				return []byte(`{"content":[{"type":"text","text":"ok"}]}`), nil
+			}
+		}
+
+		cleaned := make(chan string, 4)
+		afterInflightCleanup = func(key string) { cleaned <- key }
+
+		in, w := io.Pipe()
+		out := &syncBuf{}
+		done := make(chan error, 1)
+		go func() { done <- Serve(context.Background(), "test", in, out) }()
+		var closeOnce sync.Once
+		stopServe := func() error {
+			var err error
+			closeOnce.Do(func() {
+				stopFirst()
+				_ = w.Close()
+				select {
+				case err = <-done:
+				case <-time.After(5 * time.Second):
+					err = errors.New("Serve did not stop")
+				}
+			})
+			return err
+		}
+		t.Cleanup(func() {
+			if err := stopServe(); err != nil {
+				t.Errorf("Serve cleanup: %v", err)
+			}
+		})
+		send := func(s string) { _, _ = io.WriteString(w, s+"\n") }
+
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"first","arguments":{}}}`)
+		<-firstStarted
+		send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+		<-firstCancelled
+
+		// Client reuses id 1 while the cancelled first call is still unwinding.
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"second","arguments":{}}}`)
+		<-secondStarted
+
+		// Release the first call and wait deterministically for its inflight cleanup critical section to finish.
+		stopFirst()
+		select {
+		case key := <-cleaned:
+			if key != "1" {
+				t.Fatalf("unexpected cleaned key %q, want %q", key, "1")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("first call did not finish inflight cleanup")
+		}
+
+		// Now cancelling id 1 must cancel the second call.
+		send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+		select {
+		case <-secondCancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("second call was not cancelled after cancelled older call unwound")
+		}
+		if err := stopServe(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("single_cancel_cancels_overlapping_pair_without_affecting_third", func(t *testing.T) {
+		oldDial := dialNode
+		oldCleanup := afterInflightCleanup
+		t.Cleanup(func() {
+			dialNode = oldDial
+			afterInflightCleanup = oldCleanup
+		})
+
+		firstStarted := make(chan struct{})
+		secondStarted := make(chan struct{})
+		thirdStarted := make(chan struct{})
+		firstCancelled := make(chan struct{})
+		secondCancelled := make(chan struct{})
+		thirdCancelled := make(chan struct{})
+		releaseOld := make(chan struct{})
+		var releaseOldOnce sync.Once
+		stopOld := func() { releaseOldOnce.Do(func() { close(releaseOld) }) }
+
+		dialNode = func(ctx context.Context, req any) ([]byte, error) {
+			name, _ := req.(map[string]any)["name"].(string)
+			switch name {
+			case "first":
+				close(firstStarted)
+				<-ctx.Done()
+				close(firstCancelled)
+				<-releaseOld
+				return nil, ctx.Err()
+			case "second":
+				close(secondStarted)
+				<-ctx.Done()
+				close(secondCancelled)
+				<-releaseOld
+				return nil, ctx.Err()
+			case "third":
+				close(thirdStarted)
+				<-ctx.Done()
+				close(thirdCancelled)
+				return nil, ctx.Err()
+			default:
+				return []byte(`{"content":[{"type":"text","text":"ok"}]}`), nil
+			}
+		}
+
+		cleaned := make(chan string, 8)
+		afterInflightCleanup = func(key string) { cleaned <- key }
+
+		in, w := io.Pipe()
+		out := &syncBuf{}
+		done := make(chan error, 1)
+		go func() { done <- Serve(context.Background(), "test", in, out) }()
+		var closeOnce sync.Once
+		stopServe := func() error {
+			var err error
+			closeOnce.Do(func() {
+				stopOld()
+				_ = w.Close()
+				select {
+				case err = <-done:
+				case <-time.After(5 * time.Second):
+					err = errors.New("Serve did not stop")
+				}
+			})
+			return err
+		}
+		t.Cleanup(func() {
+			if err := stopServe(); err != nil {
+				t.Errorf("Serve cleanup: %v", err)
+			}
+		})
+		send := func(s string) { _, _ = io.WriteString(w, s+"\n") }
+
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"first","arguments":{}}}`)
+		<-firstStarted
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"second","arguments":{}}}`)
+		<-secondStarted
+
+		// A single notifications/cancelled must cancel both overlapping calls with id 1.
+		send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+		for _, ch := range []struct {
+			name string
+			c    <-chan struct{}
+		}{{"first", firstCancelled}, {"second", secondCancelled}} {
+			select {
+			case <-ch.c:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s call was not cancelled by single notifications/cancelled", ch.name)
+			}
+		}
+
+		// A 3rd call reusing id 1 arrives before first/second unwind; their cleanup must not drop it.
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"third","arguments":{}}}`)
+		<-thirdStarted
+		stopOld()
+		for range 2 {
+			select {
+			case key := <-cleaned:
+				if key != "1" {
+					t.Fatalf("unexpected cleaned key %q, want %q", key, "1")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for cancelled calls to complete inflight cleanup")
+			}
+		}
+		select {
+		case <-thirdCancelled:
+			t.Fatal("third call was unexpectedly cancelled while older pair unwound")
+		default:
+		}
+
+		// A subsequent notifications/cancelled must still cancel the third call.
+		send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+		select {
+		case <-thirdCancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("third call was not cancelled after older pair unwound")
+		}
+		if err := stopServe(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// Once a call's or Serve's context is cancelled, writeNotificationFor must drop late
+// notifications/progress and notifications/tools/list_changed under mu.
+func TestServeDropsProgressTickAfterCancellation(t *testing.T) {
+	t.Run("progress_tick", func(t *testing.T) {
+		oldDial := dialNode
+		oldTicker := newProgressTicker
+		t.Cleanup(func() {
+			dialNode = oldDial
+			newProgressTicker = oldTicker
+		})
+
+		for range 5 {
+			callStarted := make(chan struct{})
+			callCancelled := make(chan struct{})
+			releaseCall := make(chan struct{})
+			var releaseCallOnce sync.Once
+			stopCall := func() { releaseCallOnce.Do(func() { close(releaseCall) }) }
+			dialNode = func(ctx context.Context, _ any) ([]byte, error) {
+				close(callStarted)
+				<-ctx.Done()
+				close(callCancelled)
+				<-releaseCall
+				return nil, ctx.Err()
+			}
+
+			// Hold Serve's mu inside out.Write on a ping response while keepAlive receives a progress tick
+			// and blocks on mu.Lock(). Cancelling Serve's ctx while mu is held must cause writeNotificationFor
+			// to drop the queued progress notification once mu is released.
+			var mu sync.Mutex
+			var linesOut []string
+			pingWriting := make(chan struct{})
+			allowPingWrite := make(chan struct{})
+			var pingOnce, allowOnce sync.Once
+			unblockPing := func() { allowOnce.Do(func() { close(allowPingWrite) }) }
+			out := writerFunc(func(p []byte) (int, error) {
+				line := string(p)
+				if strings.Contains(line, `"id":50`) {
+					pingOnce.Do(func() { close(pingWriting) })
+					<-allowPingWrite
+				}
+				mu.Lock()
+				linesOut = append(linesOut, line)
+				mu.Unlock()
+				return len(p), nil
+			})
+
+			ticker := &testProgressTicker{ch: make(chan time.Time), stopped: make(chan struct{})}
+			newProgressTicker = func(time.Duration) progressTicker { return ticker }
+
+			sctx, cancelServe := context.WithCancel(context.Background())
+			in, w := io.Pipe()
+			done := make(chan error, 1)
+			go func() { done <- Serve(sctx, "test", in, out) }()
+			var closeOnce sync.Once
+			stopServe := func() error {
+				var err error
+				closeOnce.Do(func() {
+					cancelServe()
+					unblockPing()
+					stopCall()
+					_ = w.Close()
+					select {
+					case err = <-done:
+					case <-time.After(5 * time.Second):
+						err = errors.New("Serve did not stop")
+					}
+				})
+				return err
+			}
+			t.Cleanup(func() {
+				if err := stopServe(); err != nil {
+					t.Errorf("Serve cleanup: %v", err)
+				}
+			})
+			send := func(s string) { _, _ = io.WriteString(w, s+"\n") }
+
+			send(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_user","arguments":{},"_meta":{"progressToken":"pt-race"}}}`)
+			<-callStarted
+			// Block mu inside out.Write via a ping response.
+			send(`{"jsonrpc":"2.0","id":50,"method":"ping"}`)
+			<-pingWriting
+
+			// Deliver a progress tick over the unbuffered channel while mu is held and sctx is still live,
+			// so keepAlive advances past its ctx check into writeNotificationFor and blocks on mu.Lock().
+			ticker.ch <- time.Now()
+
+			// Cancel Serve's context while mu is still held and wait until the tool call observes cancellation.
+			cancelServe()
+			<-callCancelled
+
+			// Release mu and shut down Serve.
+			unblockPing()
+			stopCall()
+			if err := stopServe(); err != nil {
+				t.Fatal(err)
+			}
+
+			mu.Lock()
+			joined := strings.Join(linesOut, "")
+			mu.Unlock()
+			if strings.Contains(joined, `"notifications/progress"`) {
+				t.Fatalf("cancelled call emitted notifications/progress after cancellation: %s", joined)
+			}
+			if strings.Contains(joined, `"id":1`) {
+				t.Fatalf("cancelled call received a response: %s", joined)
+			}
+		}
+	})
+
+	t.Run("watch_tools_list_changed", func(t *testing.T) {
+		oldDial := dialNode
+		t.Cleanup(func() { dialNode = oldDial })
+
+		watchPolling := make(chan struct{})
+		releaseWatch := make(chan struct{})
+		var watchOnce, releaseWatchOnce sync.Once
+		unblockWatch := func() { releaseWatchOnce.Do(func() { close(releaseWatch) }) }
+		dialNode = func(ctx context.Context, req any) ([]byte, error) {
+			cursor, _ := req.(map[string]any)["input"].(map[string]string)
+			if cursor["revision"] == "" {
+				return []byte(`{"revision":"r1","session":"s1","tools":[{"name":"tool_a"}]}`), nil
+			}
+			watchOnce.Do(func() { close(watchPolling) })
+			select {
+			case <-releaseWatch:
+				return []byte(`{"revision":"r2","session":"s1","tools":[{"name":"tool_a"},{"name":"tool_b"}]}`), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		var mu sync.Mutex
+		var linesOut []string
+		pingWriting := make(chan struct{})
+		allowPingWrite := make(chan struct{})
+		var pingOnce, allowOnce sync.Once
+		unblockPing := func() { allowOnce.Do(func() { close(allowPingWrite) }) }
+		out := writerFunc(func(p []byte) (int, error) {
+			line := string(p)
+			if strings.Contains(line, `"id":50`) {
+				pingOnce.Do(func() { close(pingWriting) })
+				<-allowPingWrite
+			}
+			mu.Lock()
+			linesOut = append(linesOut, line)
+			mu.Unlock()
+			return len(p), nil
+		})
+
+		sctx, cancelServe := context.WithCancel(context.Background())
+		in, w := io.Pipe()
+		done := make(chan error, 1)
+		go func() { done <- Serve(sctx, "test", in, out) }()
+		var closeOnce sync.Once
+		stopServe := func() error {
+			var err error
+			closeOnce.Do(func() {
+				cancelServe()
+				unblockWatch()
+				unblockPing()
+				_ = w.Close()
+				select {
+				case err = <-done:
+				case <-time.After(5 * time.Second):
+					err = errors.New("Serve did not stop")
+				}
+			})
+			return err
+		}
+		t.Cleanup(func() {
+			if err := stopServe(); err != nil {
+				t.Errorf("Serve cleanup: %v", err)
+			}
+		})
+		send := func(s string) { _, _ = io.WriteString(w, s+"\n") }
+
+		// Trigger initial tools/list so Serve starts watchTools(ctx, snapshot, writeNotificationFor(ctx)).
+		send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+		select {
+		case <-watchPolling:
+		case <-time.After(2 * time.Second):
+			t.Fatal("watchTools did not start polling")
+		}
+
+		// Hold mu inside out.Write via a ping response while watchTools receives a changed tool list.
+		send(`{"jsonrpc":"2.0","id":50,"method":"ping"}`)
+		<-pingWriting
+		unblockWatch()
+
+		// Cancel Serve's context while mu is held, then release mu.
+		cancelServe()
+		unblockPing()
+		if err := stopServe(); err != nil {
+			t.Fatal(err)
+		}
+
+		mu.Lock()
+		joined := strings.Join(linesOut, "")
+		mu.Unlock()
+		if strings.Contains(joined, `"notifications/tools/list_changed"`) {
+			t.Fatalf("watchTools emitted list_changed after Serve context was cancelled: %s", joined)
+		}
+	})
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

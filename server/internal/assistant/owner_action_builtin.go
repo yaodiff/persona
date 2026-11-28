@@ -13,7 +13,7 @@ import (
 // can approve. Reads, runtime prompts and capture keep their existing paths.
 func ownerBuiltinWrite(tool string) bool {
 	switch tool {
-	case "persona_settings", "model_profile_switch", "model_profile_rollback":
+	case "persona_settings", "model_profile_switch", "model_profile_rollback", "model_profile_deactivate", "model_profile_clear":
 		return true
 	default:
 		return false
@@ -25,6 +25,7 @@ type ownerBuiltinPreparation struct {
 	revision          *int64
 	modelProfileWrite bool
 	profileAfter      map[string]ModelProfile
+	clearsProfiles    bool
 }
 
 type ownerProfilePlan struct {
@@ -43,20 +44,20 @@ func ownerProfilePlanFrom(ctx context.Context) *ownerProfilePlan {
 	return plan
 }
 
-func withoutOwnerProfilePlan(ctx context.Context) context.Context {
-	return context.WithValue(ctx, ownerProfilePlanContextKey{}, (*ownerProfilePlan)(nil))
-}
-
 // advanceOwnerProfilePlan applies one prepared catalog write only to the
 // batch's private planning snapshot. The database remains untouched until each
 // approved direct call passes its exact revision and display checks.
 func advanceOwnerProfilePlan(ctx context.Context, prepared ownerBuiltinPreparation) error {
-	if !prepared.modelProfileWrite {
+	if !prepared.modelProfileWrite && !prepared.clearsProfiles {
 		return nil
 	}
 	plan := ownerProfilePlanFrom(ctx)
-	if plan == nil || !plan.loaded || prepared.revision == nil || len(prepared.profileAfter) == 0 {
+	if plan == nil || !plan.loaded || prepared.revision == nil || (!prepared.clearsProfiles && len(prepared.profileAfter) == 0) {
 		return errors.New("a model-profile batch write did not produce its complete planned after-image")
+	}
+	if prepared.clearsProfiles {
+		plan.profiles = modelProfiles{Revision: *prepared.revision + 1}
+		return nil
 	}
 	for id, after := range prepared.profileAfter {
 		i := -1
@@ -132,13 +133,17 @@ func (s *Service) prepareOwnerBuiltin(ctx context.Context, machine, session, too
 		if err = dec.Decode(&in); err == nil {
 			approval, err = s.prepareModelProfileRollback(ctx)
 		}
+	case "model_profile_deactivate", "model_profile_clear":
+		if err = decodeManagedProfileJSON(input, &struct{}{}); err == nil {
+			approval, err = s.prepareModelProfileRemoval(ctx, tool)
+		}
 	default:
 		return ownerBuiltinPreparation{}, fmt.Errorf("%s is not a supported built-in write", tool)
 	}
 	if err != nil {
 		return ownerBuiltinPreparation{}, err
 	}
-	return ownerBuiltinPreparation{display: approval.display, revision: &approval.revision}, nil
+	return ownerBuiltinPreparation{display: approval.display, revision: &approval.revision, clearsProfiles: tool == "model_profile_clear"}, nil
 }
 
 func ownerChangeMatches(change *ownChange, display string, item ownerActionItem) bool {

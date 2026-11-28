@@ -711,8 +711,8 @@ func (s *Service) todoReport(ctx context.Context) *TodoReport {
 	}
 	completed := map[[2]string]*Todo{}
 	for _, t := range s.todos.todos {
-		// CompletedTodo is a "Completed" navigation label, not a closed-row dump: cancellation is a separate outcome (#5732).
-		if t.DoneAt == nil || t.Cancelled() {
+		// A closed task still identifies its writable Agent conversation. The link carries the cancelled outcome.
+		if t.DoneAt == nil {
 			continue
 		}
 		for _, a := range t.Agents {
@@ -727,7 +727,7 @@ func (s *Service) todoReport(ctx context.Context) *TodoReport {
 		}
 	}
 	for key, t := range completed {
-		r.Completed = append(r.Completed, TodoLink{MachineID: key[0], SessionID: key[1], TodoID: t.ID, Title: t.Title})
+		r.Completed = append(r.Completed, TodoLink{MachineID: key[0], SessionID: key[1], TodoID: t.ID, Title: t.Title, Cancelled: t.Cancelled()})
 	}
 	for key := range s.quietSessionsLocked(now) {
 		r.Quiet = append(r.Quiet, SessionRef{MachineID: key[0], SessionID: key[1]})

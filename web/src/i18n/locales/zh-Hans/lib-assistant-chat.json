@@ -9,5 +9,5 @@
   "info_cwd": "工作目录：{cwd}",
   "info_launcher": "启动器：{launcher}",
   "info_launcher_model": "启动器：{launcher} · 模型：{model}",
-  "info_resume": "在那台机器上接着聊：{command}"
+  "info_resume": "在该机器上继续对话：{command}"
 }

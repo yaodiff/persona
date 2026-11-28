@@ -313,10 +313,10 @@ struct FleetActionRow: View {
                 // Deny / View: the system's neutral fill with primary words (white on gray was 1.6:1 on a light lock
                 // screen); Allow / Approve: a blue dark enough for white words.
                 case .permission:
-                    Button(intent: DenyPermissionIntent(interactionID: id)) { label("Deny", "xmark") }
+                    Button(intent: DenyPermissionIntent(interactionID: id, interactionCreatedAt: item.interactionCreatedAt)) { label("Deny", "xmark") }
                         .buttonStyle(.bordered)
                         .tint(.primary)
-                    Button(intent: AllowPermissionIntent(interactionID: id)) { label("Allow [Notification Actions ce7ef2]", "checkmark") }
+                    Button(intent: AllowPermissionIntent(interactionID: id, interactionCreatedAt: item.interactionCreatedAt)) { label("Allow [Notification Actions ce7ef2]", "checkmark") }
                         .buttonStyle(.borderedProminent)
                         .tint(FleetPalette.button)
                         .foregroundStyle(.white)
@@ -327,7 +327,7 @@ struct FleetActionRow: View {
                             .background(Color.primary.opacity(0.12), in: .capsule)
                     }
                     .foregroundStyle(.primary)
-                    Button(intent: ApprovePlanIntent(interactionID: id)) { label("Approve [Notification Actions 8cbe69]", "checkmark") }
+                    Button(intent: ApprovePlanIntent(interactionID: id, interactionCreatedAt: item.interactionCreatedAt)) { label("Approve [Notification Actions 8cbe69]", "checkmark") }
                         .buttonStyle(.borderedProminent)
                         .tint(FleetPalette.button)
                         .foregroundStyle(.white)

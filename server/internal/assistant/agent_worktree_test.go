@@ -9,6 +9,20 @@ import (
 	"testing"
 )
 
+func TestAgentStartPassesModelAliases(t *testing.T) {
+	s, f := newTaskService(t)
+	if _, err := s.runTool(t.Context(), "server", "conv9", "agent_start", json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"Inspect","model_aliases":{"sonnet_model":"vendor/standard","haiku_model":"vendor/fast"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.starts) != 1 {
+		t.Fatalf("starts: %d", len(f.starts))
+	}
+	raw, _ := json.Marshal(f.starts[0]["model_aliases"])
+	if string(raw) != `{"haiku_model":"vendor/fast","sonnet_model":"vendor/standard"}` {
+		t.Fatalf("node aliases: %s", raw)
+	}
+}
+
 // agent_start with worktree: the machine's engine makes the worktree first (named for the branch the way the dialog
 // names it, from the workspace cwd is in), then the agent starts in it, in that new workspace.
 func TestAgentStartInANewWorktree(t *testing.T) {

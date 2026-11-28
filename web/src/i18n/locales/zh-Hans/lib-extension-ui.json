@@ -1,4 +1,4 @@
 {
-  "not_a_number": "要是一个数",
-  "unreadable_view": "扩展画的界面读不出来"
+  "not_a_number": "必须为数字",
+  "unreadable_view": "无法读取该扩展的界面"
 }

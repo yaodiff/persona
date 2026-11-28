@@ -34,16 +34,22 @@ const shown = (l: Named) => l.display_name?.trim() ?? "";
 export function providerTitle(l: Named): string {
   const d = shown(l);
   if (isTraeCli(l.name)) return normalizeTraeCliName(d || l.name);
-  if (d && d.toLowerCase() !== l.name.toLowerCase()) return d;
-  return Object.hasOwn(BUILTIN_TITLES, l.name) ? BUILTIN_TITLES[l.name] : d || l.name;
+  const builtin = Object.hasOwn(BUILTIN_TITLES, l.name) ? BUILTIN_TITLES[l.name] : undefined;
+  if (d) {
+    const lower = d.toLowerCase();
+    if (lower !== l.name.toLowerCase() && (!builtin || lower !== builtin.toLowerCase())) return d;
+  }
+  return builtin ?? (d || l.name);
 }
 
 /** The startup ID to show as secondary text (small monospace or a tooltip), or "" when the title already is the ID or a built-in title. */
 export function providerIdNote(l: Named): string {
   if (l.name === "traex") return "";
   const d = shown(l);
-  if (!d || d === l.name) return "";
-  if (Object.hasOwn(BUILTIN_TITLES, l.name) && d === BUILTIN_TITLES[l.name]) return "";
+  if (!d) return "";
+  const lower = d.toLowerCase();
+  if (lower === l.name.toLowerCase()) return "";
+  if (Object.hasOwn(BUILTIN_TITLES, l.name) && lower === BUILTIN_TITLES[l.name].toLowerCase()) return "";
   return l.name;
 }
 

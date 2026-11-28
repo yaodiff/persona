@@ -101,6 +101,38 @@ internal class AppNavigator(
         val from = selectedTab()
         // The route's type only, never its arguments (machine, session, item ids).
         ErrorBreadcrumbs.shared.navigation(key::class.simpleName ?: "route")
+        if (key is ChatRoute && key.decisionSource != null) {
+            // To Decide lives in the Assistant (Persona) host. Stack the source over that host only when it is
+            // actually present; a late callback while the user sits on inbox/settings must not append to whatever
+            // tab is selected, otherwise Back returns to an unrelated page (review P1).
+            val personaStack = stacks.getValue(AppTab.Persona)
+            val personaTop = personaStack.lastOrNull()
+            // Already inside an Assistant conversation: stack the source directly above it for one-step Back.
+            // At the Persona root: build root Assistant -> source. Any other top means Persona is on an unrelated
+            // page, so fall through to normal routing rather than mutating an unexpected stack.
+            if (personaTop is ChatRoute || personaTop is AssistantRoute) {
+                // A side session is opened by the source chat after it lands. Put it over the Assistant host, not over
+                // the source task chat, so Back returns to the pager that listed the decision.
+                val host = if (key.side) {
+                    personaStack.indexOfLast {
+                        it is AssistantRoute || it is ChatRoute && it.kind == ConversationKind.Assistant
+                    }
+                } else -1
+                val existing = personaStack.indexOfFirst {
+                    it is ChatRoute && it.machineId == key.machineId && it.sessionId == key.sessionId && it.side == key.side
+                }
+                if (existing >= 0) {
+                    while (personaStack.lastIndex > existing) personaStack.removeAt(personaStack.lastIndex)
+                    val page = personaStack[existing] as ChatRoute
+                    personaStack[existing] = page.copy(decisionSource = key.decisionSource)
+                } else {
+                    if (host >= 0) while (personaStack.lastIndex > host) personaStack.removeAt(personaStack.lastIndex)
+                    if (personaStack.lastOrNull() != key) personaStack.add(key)
+                }
+                onSelectTab(AppTab.Persona)
+                return
+            }
+        }
         val shown = stacks.mapValues { it.value.lastOrNull() }
         // Reopening the unchanged visible route is idempotent, not a new direct open that invalidates its origin.
         val visibleOrigin = shown[from]?.takeIf { it == key }?.let(openedFrom::get)
@@ -204,7 +236,10 @@ internal class AppNavigator(
             if (retained != null) {
                 val stack = stacks.getValue(tab)
                 val restoredAt = stack.indexOfFirst { it == route }
-                if (restoredAt >= 0) stack[restoredAt] = retained
+                if (restoredAt >= 0) {
+                    stack[restoredAt] = if (retained is ChatRoute && route is ChatRoute && route.decisionSource != null)
+                        retained.copy(decisionSource = route.decisionSource) else retained
+                }
             }
             onSelectTab(tab)
             return stacks.getValue(tab).lastOrNull() ?: route

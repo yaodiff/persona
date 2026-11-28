@@ -63,13 +63,13 @@ describe("授权通知上的按钮（#4464）", () => {
       }),
     });
   };
-  const data = { url: "/s/m/a", ix: "p1" };
+  const data = { url: "/s/m/a", ix: "p1", created_at: "2026-01-02T03:04:05.000000001Z" };
 
   it("点「允许」：交给开着的网页，不打开也不切到网页", async () => {
     const p = page(true);
     const c = clients([p]);
     await clickNotification(c, data, "allow", 50);
-    expect(p.sent).toEqual([expect.objectContaining({ type: "persona.notification", action: "allow", ix: "p1" })]);
+    expect(p.sent).toEqual([expect.objectContaining({ type: "persona.notification", action: "allow", ix: "p1", created_at: data.created_at })]);
     expect(p.focus).not.toHaveBeenCalled();
     expect(p.navigate).not.toHaveBeenCalled();
     expect(c.openWindow).not.toHaveBeenCalled();

@@ -59,7 +59,9 @@ describe("更多 in the sidebar", () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
     const more = moreButton()!;
-    expect(more.textContent).toContain("2");
+    expect(more.textContent?.trim()).toBe("更多");
+    expect(more.getAttribute("aria-label")).toContain("2");
+    expect(more.getAttribute("title")).toContain("2");
     expect(more.getAttribute("aria-expanded")).toBe("false");
     // the folded More holds its pages without drawing them (a folded group mounts no rows); opened, they are there
     const kb = () => [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("知识库"));
@@ -139,12 +141,12 @@ describe("设置 › 通用 › 侧栏", () => {
   it("switches a page between the list and 更多, and 设置 cannot be switched off", async () => {
     act(() => root.render(<SidebarPagesGroup />));
     await flush();
-    const sw = (name: string) => host.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="「${name}」放在侧栏上"]`)!;
+    const sw = (name: string) => host.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="在侧边栏显示「${name}」"]`)!;
     expect(sw("知识库").getAttribute("aria-checked")).toBe("true");
     act(() => sw("知识库").click());
     expect(getSidebarPrefs().hidden).toEqual(["kb"]);
     expect(sw("知识库").getAttribute("aria-checked")).toBe("false");
-    expect(host.textContent).toContain("在「更多」里");
+    expect(host.textContent).toContain("位于「更多」中");
     expect(sw("设置").disabled).toBe(true);
     // a built-in page's line says where it is, not its badge's explanation
     const inbox = host.querySelector('li[data-page="inbox"]')!;
@@ -157,7 +159,7 @@ describe("设置 › 通用 › 侧栏", () => {
     const order = () => [...host.querySelectorAll("li[data-page]")].map((li) => li.getAttribute("data-page"));
     const first = order()[0]!;
     const second = order()[1]!;
-    const down = host.querySelector<HTMLButtonElement>(`li[data-page="${first}"] button[aria-label$="下移"]`)!;
+    const down = host.querySelector<HTMLButtonElement>(`li[data-page="${first}"] button[aria-label^="下移"]`)!;
     act(() => down.click());
     expect(order().slice(0, 2)).toEqual([second, first]);
     const reset = [...host.querySelectorAll("button")].find((b) => b.textContent === "恢复默认")!;

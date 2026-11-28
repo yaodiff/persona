@@ -18,6 +18,8 @@ vi.mock("../../lib/ops", () => ({
   }),
 }));
 import { InteractionCard } from "./Interactions";
+import { t } from "../../i18n";
+import { Collapse } from "../../ui/atoms";
 import { getState } from "../../lib/store";
 import type { Interaction, Session } from "../../lib/types";
 import { loadPages } from "../../lib/lazy-page";
@@ -178,5 +180,268 @@ describe("a card answering from the keyboard", () => {
     await act(async () => { await Promise.resolve(); });
     expect(hints().every((n) => n === 0)).toBe(true);
     expect(host.querySelector("[data-card-actions] kbd")).toBeFalsy();
+  });
+
+  it("window digit shortcuts stand down under disabled fieldset, hidden/inert containers, overlays, fixed side panel, other focused card, IME, or nested contentEditable", async () => {
+    const multi = {
+      id: "q_multi_win", machine_id: "m", session_id: "s", kind: "question", tool_name: "AskUserQuestion",
+      questions: [{ question: "多选？", multi_select: true, options: [{ label: "Alpha" }, { label: "Beta" }] }],
+    } as Interaction;
+    const multi2 = {
+      id: "q_multi_win_2", machine_id: "m", session_id: "s", kind: "question", tool_name: "AskUserQuestion",
+      questions: [{ question: "多选二？", multi_select: true, options: [{ label: "Gamma" }, { label: "Delta" }] }],
+    } as Interaction;
+    const pressWindow = (key: string, target: EventTarget = document.body, init: KeyboardEventInit & { keyCode?: number } = {}) => {
+      const ev = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+      if (init.keyCode !== undefined) Object.defineProperty(ev, "keyCode", { value: init.keyCode });
+      act(() => { target.dispatchEvent(ev); });
+    };
+
+    // 1. Disabled fieldset while canApprove is true (e.g. remounted pending lock): global window digit must not pick or submit.
+    act(() => root.render(<fieldset disabled><InteractionCard ix={question} /></fieldset>));
+    pressWindow("1");
+    await flush();
+    expect(calls).toEqual([]);
+    expect(host.querySelectorAll("button[aria-pressed='true']")).toHaveLength(0);
+
+    // 2. Sibling open dialog / alertdialog / menu / native <dialog open> blocks the card behind it, while closing/hidden overlays do not.
+    act(() => root.render(<InteractionCard ix={question} />));
+    for (const make of [
+      () => Object.assign(document.createElement("div"), { role: "dialog" }),
+      () => Object.assign(document.createElement("div"), { role: "alertdialog" }),
+      () => Object.assign(document.createElement("div"), { role: "menu" }),
+      () => { const d = document.createElement("dialog"); d.setAttribute("open", ""); return d; },
+    ]) {
+      const ov = make();
+      document.body.append(ov);
+      try {
+        pressWindow("1");
+        await flush();
+        expect(calls).toEqual([]);
+      } finally {
+        ov.remove();
+      }
+    }
+
+    // Closing overlay (data-closing) does not block.
+    const closingDialog = document.createElement("div");
+    closingDialog.setAttribute("role", "dialog");
+    closingDialog.setAttribute("data-closing", "");
+    document.body.append(closingDialog);
+    try {
+      pressWindow("1");
+      await flush();
+      expect(calls).toHaveLength(1);
+    } finally {
+      closingDialog.remove();
+    }
+    calls.length = 0;
+
+    // 3. IME composition (isComposing and Safari keyCode 229), non-single-digit strings ("10", "!"), and nested contentEditable descendant.
+    act(() => root.render(null));
+    act(() => root.render(<InteractionCard ix={question} />));
+    pressWindow("1", document.body, { isComposing: true });
+    pressWindow("1", document.body, { keyCode: 229 });
+    pressWindow("10");
+    pressWindow("!", document.body, { shiftKey: true });
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const inner = document.createElement("span");
+    editable.append(inner);
+    document.body.append(editable);
+    try {
+      pressWindow("1", inner);
+      await flush();
+      expect(calls).toEqual([]);
+    } finally {
+      editable.remove();
+    }
+
+    // 4. Collapsed (inert) Collapse container, mid-transition Collapse (open=true -> open=false, gridTemplateRows: 0fr before inert settles), and display:none ancestor (lg:hidden SidePanel).
+    act(() => root.render(<Collapse open={false}><InteractionCard ix={question} /></Collapse>));
+    pressWindow("1");
+    await flush();
+    expect(calls).toEqual([]);
+
+    act(() => root.render(<Collapse open={true}><InteractionCard ix={question} /></Collapse>));
+    act(() => root.render(<Collapse open={false}><InteractionCard ix={question} /></Collapse>));
+    expect(host.querySelector("[inert]")).toBeNull();
+    pressWindow("1");
+    await flush();
+    expect(calls).toEqual([]);
+
+    act(() => root.render(<aside data-side-panel="" style={{ display: "none" }}><InteractionCard ix={question} /></aside>));
+    pressWindow("1");
+    await flush();
+    expect(calls).toEqual([]);
+
+    // Non-portal dialog nested inside a hidden (display:none) SidePanel must not lock a visible <main> QuestionCard.
+    act(() => root.render(<InteractionCard ix={question} />));
+    const hiddenSide = document.createElement("aside");
+    hiddenSide.setAttribute("data-side-panel", "");
+    hiddenSide.style.display = "none";
+    const nestedDialog = document.createElement("div");
+    nestedDialog.setAttribute("role", "dialog");
+    hiddenSide.append(nestedDialog);
+    document.body.append(hiddenSide);
+    try {
+      // Also verify AZERTY-style Shift+digit (key === "1", shiftKey: true) works.
+      pressWindow("1", document.body, { shiftKey: true });
+      await flush();
+      expect(calls).toHaveLength(1);
+    } finally {
+      hiddenSide.remove();
+    }
+    calls.length = 0;
+
+    // 5. Visible fixed <aside data-side-panel> covering <main> blocks the covered <main> card, while relative desktop SidePanel and a dialog-hosted card (z-40 above fixed SidePanel z-30) still work.
+    act(() => root.render(null));
+    act(() => root.render(<InteractionCard ix={question} />));
+    const sidePanel = document.createElement("aside");
+    sidePanel.setAttribute("data-side-panel", "");
+    sidePanel.style.position = "fixed";
+    document.body.append(sidePanel);
+    try {
+      pressWindow("1");
+      await flush();
+      expect(calls).toEqual([]);
+      // A QuestionCard inside a modal dialog above the fixed SidePanel still accepts digits.
+      act(() => root.render(<div role="dialog"><InteractionCard ix={question} /></div>));
+      pressWindow("1");
+      await flush();
+      expect(calls).toHaveLength(1);
+      calls.length = 0;
+      act(() => root.render(<InteractionCard ix={question} />));
+      sidePanel.style.position = "relative";
+      pressWindow("1");
+      await flush();
+      expect(calls).toHaveLength(1);
+    } finally {
+      sidePanel.remove();
+    }
+    calls.length = 0;
+
+    // 6. Card rendered INSIDE a dialog works when alone, but is blocked when a sibling menu/dialog opens over it.
+    act(() => root.render(<div role="dialog"><InteractionCard ix={question} /></div>));
+    const overMenu = document.createElement("div");
+    overMenu.setAttribute("role", "menu");
+    document.body.append(overMenu);
+    try {
+      pressWindow("1");
+      await flush();
+      expect(calls).toEqual([]);
+    } finally {
+      overMenu.remove();
+    }
+    pressWindow("1");
+    await flush();
+    expect(calls).toEqual([{ path: "/interactions/q_1/resolve", body: { answers: { "哪个框架？": "Swift Testing" } } }]);
+
+    // 7. Two visible cards: focusing a button inside Card 2 and pressing "2" toggles Card 2 only (Card 1 must not hijack).
+    calls.length = 0;
+    act(() => root.render(<><InteractionCard ix={multi} /><InteractionCard ix={multi2} /></>));
+    const cards = [...host.querySelectorAll<HTMLElement>("[data-card]")];
+    const card1Opts = [...cards[0]!.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
+    const card2Opts = [...cards[1]!.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
+    act(() => card2Opts[0]!.click());
+    act(() => card2Opts[0]!.focus());
+    pressWindow("2", card2Opts[0]!);
+    expect(card1Opts.map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "false"]);
+    expect(card2Opts.map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "true"]);
+  });
+
+  it("cancels the auto-advance slide timer across rapid re-pick, footer navigation, custom focus/typing/Enter, and ix.id swap", async () => {
+    vi.useFakeTimers();
+    try {
+      const option = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((b) => b.textContent?.includes(label))!;
+      const customInput = () => host.querySelector<HTMLInputElement>(`input[aria-label="${t("chat-interactions.custom_answer")}"]`)!;
+
+      // 1. Rapid re-pick A -> B within 380ms advances once (to Q2), not twice (skipping Q2 to Q3).
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => vi.advanceTimersByTime(150));
+      act(() => option("B").click());
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第二题");
+      expect(host.textContent).not.toContain("第三题");
+
+      // 2. Clicking footer Next button within 380ms cancels the pending slide timer.
+      act(() => root.render(null));
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-interactions.next_question")}"]`)!.click());
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第二题");
+      expect(host.textContent).not.toContain("第三题");
+
+      // 3. Clicking a question dot within 380ms cancels the pending slide timer.
+      act(() => root.render(null));
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-interactions.question_n", { n: 2 })}"]`)!.click());
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第二题");
+      expect(host.textContent).not.toContain("第三题");
+
+      // 4. Focusing the custom input (even before typing) cancels the slide timer and stays on Q1.
+      act(() => root.render(null));
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => vi.advanceTimersByTime(100));
+      act(() => customInput().focus());
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第一题");
+
+      // 5. Typing in the custom input within 380ms cancels the slide timer and stays on Q1.
+      act(() => root.render(null));
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => vi.advanceTimersByTime(100));
+      const field = customInput();
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "自定义");
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第一题");
+      expect(customInput().value).toBe("自定义");
+
+      // 6. Pressing Enter in custom input while slide timer is armed advances once (to Q2), not twice.
+      act(() => root.render(null));
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => customInput().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第二题");
+      expect(host.textContent).not.toContain("第三题");
+
+      // 7. Swapping ix.id in place cancels any pending slide timer from the previous question.
+      const followUp = {
+        ...threeQuestions,
+        id: "q_3_next",
+        questions: [
+          { question: "新第一题", multi_select: false, options: [{ label: "X" }] },
+          { question: "新第二题", multi_select: false, options: [{ label: "Y" }] },
+        ],
+      } as Interaction;
+      act(() => root.render(null));
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => root.render(<InteractionCard ix={followUp} />));
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("新第一题");
+      expect(host.textContent).not.toContain("新第二题");
+
+      // 8. Hand back (onDismiss) cancels any pending slide timer.
+      act(() => root.render(null));
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => option("A").click());
+      act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-interactions.hand_back")}"]`)!.click());
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第一题");
+      expect(host.textContent).not.toContain("第二题");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

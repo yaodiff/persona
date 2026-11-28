@@ -133,6 +133,7 @@ func TestLarkCLIRiskMissing(t *testing.T) {
 // method goes by its risk level, and one without a level, a help that only looks like a group's, or a lark-cli that
 // cannot run still shows the card. Each command is checked twice: only a level or "no such command" is cached.
 func TestLarkCLIMissingCommandHasNoCard(t *testing.T) {
+	needsLarkGate(t)
 	get := larkHelp(t, "im-messages-get")
 	helps := map[string]string{
 		"im messages get":         get,

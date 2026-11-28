@@ -103,8 +103,8 @@ afterEach(() => {
 describe("a group title's Mark all seen (#10422)", () => {
   it("FYI's group titles carry it; Needs you's don't", async () => {
     await choose("all");
-    expect(pullDown("fyi", "lark")?.textContent).toBe("全部看过");
-    expect(pullDown("fyi", "mail:acc1")?.textContent).toBe("全部看过");
+    expect(pullDown("fyi", "lark")?.textContent).toBe("全部设为已看");
+    expect(pullDown("fyi", "mail:acc1")?.textContent).toBe("全部设为已看");
     expect(pullDown("action", "lark")).toBeNull();
     expect(pullDown("action", "mail:acc1")).toBeNull();
     expect(head("action", "lark")).toBeTruthy();
@@ -113,7 +113,7 @@ describe("a group title's Mark all seen (#10422)", () => {
   it("the group's items alone, one request with their versions, then Undo brings them back", async () => {
     await choose("fyi");
     await click(pullDown("fyi", "lark"));
-    expect(choices().map((c) => c.textContent)).toEqual(["看过「飞书」的全部 2 条", "看过「知悉即可」的全部 3 条"]);
+    expect(choices().map((c) => c.textContent)).toEqual(["将「飞书」中的全部 2 条标为已看", "将「知悉即可」中的全部 3 条标为已看"]);
     await click(choices()[0]);
     expect(calls.done).toEqual([{ done: true, items: [{ id: "f1", version: "v-f1" }, { id: "f2", version: "v-f2" }] }]);
     expect(rows()).not.toContain("f1");
@@ -129,7 +129,7 @@ describe("a group title's Mark all seen (#10422)", () => {
   it("the whole section from a group's title", async () => {
     await choose("fyi");
     await click(pullDown("fyi", "mail:acc1"));
-    expect(choices()[0].textContent).toBe("看过「邮件 · me@example.com」的全部 1 条");
+    expect(choices()[0].textContent).toBe("将「邮件 · me@example.com」中的全部 1 条标为已看");
     await click(choices()[1]);
     expect(calls.done.map((r) => r.items.map((x) => x.id).sort())).toEqual([["f1", "f2", "f3"]]);
   });
@@ -142,7 +142,7 @@ describe("a group title's Mark all seen (#10422)", () => {
     edit(host.querySelector<HTMLInputElement>("input[aria-label]")!, "weekly");
     await flush();
     await click(pullDown("fyi", "lark"));
-    expect(choices().map((c) => c.textContent)).toEqual(["看过「飞书」的全部 1 条搜索「weekly」", "看过「知悉即可」的全部 2 条搜索「weekly」"]);
+    expect(choices().map((c) => c.textContent)).toEqual(["将「飞书」中的全部 1 条标为已看搜索「weekly」", "将「知悉即可」中的全部 2 条标为已看搜索「weekly」"]);
   });
 
   it("none while selecting, and none where the section has one group", async () => {
@@ -158,7 +158,7 @@ describe("groupClear", () => {
   const section = [lark("f1"), lark("f2"), mail("f3")];
   it("Collapsed clears instead; Needs you and In progress have none", () => {
     const g = { title: "飞书", items: section.slice(0, 2) };
-    expect(groupClear("noise", "已折叠", g, section)?.choices.map((c) => c.label)).toEqual(["清除「飞书」的全部 2 条", "清除「已折叠」的全部 3 条"]);
+    expect(groupClear("noise", "已折叠", g, section)?.choices.map((c) => c.label)).toEqual(["清除「飞书」中的全部 2 条", "清除「已折叠」中的全部 3 条"]);
     expect(groupClear("noise", "已折叠", g, section)?.label).toBe("全部清除");
     expect(groupClear("action", "需要你", g, section)).toBeUndefined();
     expect(groupClear("working", "进行中", g, section)).toBeUndefined();

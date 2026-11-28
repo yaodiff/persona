@@ -259,4 +259,3 @@ export function Thumb({ item, mid, sid, size = 132 }: { item: Item; mid: string;
     </>
   );
 }
-

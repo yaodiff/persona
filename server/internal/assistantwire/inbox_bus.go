@@ -3,7 +3,20 @@ package assistantwire
 import (
 	"encoding/json"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/wireids"
+)
+
+// Typed descriptors for the Inbox bus methods answered by the assistant's kernel.
+var (
+	InboxCollectedMethod     = buswire.Method[InboxRound, InboxAck]{Name: MethodInboxCollected}
+	InboxItemMethod          = buswire.Method[InboxItemParams, InboxItemResult]{Name: MethodInboxItem}
+	InboxForgetMethod        = buswire.Method[InboxForgetParams, InboxForgetResult]{Name: MethodInboxForget}
+	InboxRepoMutesMethod     = buswire.Method[InboxRepoMutes, InboxRepoMutesResult]{Name: MethodInboxRepoMutes}
+	InboxMutesMethod         = buswire.Method[InboxMutesParams, InboxMutesResult]{Name: MethodInboxMutes}
+	InboxPostMethod          = buswire.Method[InboxPostParams, InboxPostResult]{Name: MethodInboxPost}
+	InboxTriagePreviewMethod = buswire.Method[InboxTriagePreview, InboxTriagePreviewResult]{Name: MethodInboxTriagePreview}
+	InboxUnmuteMethod        = buswire.Method[InboxUnmuteParams, InboxAck]{Name: MethodInboxUnmute}
 )
 
 // The Inbox's bus methods are its kernel module's (module_methods.go), in the order its own switch had them.

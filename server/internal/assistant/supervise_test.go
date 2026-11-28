@@ -23,7 +23,21 @@ var shortSuperviseTimings = superviseTimings{gather: 20 * time.Millisecond, ever
 // in-flight digest timers are stopped and drained when the test ends.
 func shortSupervise(t testing.TB, s *Service) {
 	t.Helper()
-	s.superviseTimes = shortSuperviseTimings
+	superviseTimed(t, s, shortSuperviseTimings)
+}
+
+// heldSuperviseTimings are shortSuperviseTimings with an hour's gather: no digest goes out during the test.
+func heldSuperviseTimings() superviseTimings {
+	times := shortSuperviseTimings
+	times.gather = time.Hour
+	return times
+}
+
+// superviseTimed is shortSupervise with times as s's timings. Call it before anything of s can set a digest timer:
+// the timer reads the timings with no lock of their own.
+func superviseTimed(t testing.TB, s *Service, times superviseTimings) {
+	t.Helper()
+	s.superviseTimes = times
 	t.Cleanup(s.stopSuperviseTimers)
 }
 
@@ -477,6 +491,65 @@ func TestTaskPlanSaysDuplicates(t *testing.T) {
 		t.Fatalf("result: %s", res)
 	}
 	waitFor(t, "the task", func() bool { return todoCount(s) == 1 })
+}
+
+func TestTaskPlanSuggestsIdleAgentAfterPreviousTodoClosed(t *testing.T) {
+	ctx := context.Background()
+	agent := proto.Session{MachineID: "box", SessionID: "idle-session-full-id", Cwd: "/code/app",
+		Status: proto.StatusIdle, State: proto.StateIdle}
+	s, f := leadTakeEnv(t, agent)
+	if _, err := runJSON(t, s, "lead0001", "agent_send", map[string]any{
+		"machine": "box", "session_id": agent.SessionID, "text": "Inspect yesterday's logs",
+		"task": map[string]any{"title": "Inspect logs"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previous := onlyTodo(s)
+	if _, err := runJSON(t, s, "lead0001", "task_review", map[string]any{"todo_id": previous.ID, "verdict": "accepted"}); err != nil {
+		t.Fatal(err)
+	}
+	if todoNow(s, previous.ID).DoneAt == nil {
+		t.Fatal("prior to-do is still open")
+	}
+	f.setSessions("box", agent,
+		proto.Session{SessionID: "busy-session", Cwd: agent.Cwd, Status: proto.StatusWorking, State: proto.StateWorking},
+		proto.Session{SessionID: "assigned-session", Cwd: agent.Cwd, Status: proto.StatusIdle},
+		proto.Session{SessionID: "waiting-session", Cwd: agent.Cwd, Status: proto.StatusIdle, PendingInteractions: 1},
+		proto.Session{SessionID: "readonly-session", Cwd: agent.Cwd, Status: proto.StatusIdle, SourceKind: "external"},
+		proto.Session{SessionID: "other-checkout", Cwd: "/code/app-feature", Worktree: "/code/app-feature", Status: proto.StatusIdle},
+		proto.Session{SessionID: "same-worktree", Cwd: "/code/app/test", Worktree: "/code/app", Status: proto.StatusIdle})
+	onBoxTask(t, s, "assigned-session", "conv1", false)
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lead0001", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "other-machine", MachineID: "server", Cwd: agent.Cwd, Status: proto.StatusIdle})
+	// Direction leads can start writable plans directly. Main exercises the approval receipt.
+	for _, tc := range []struct {
+		caller   string
+		readonly bool
+		receipt  string
+	}{
+		{"conv1", false, "nothing has started"},
+		{"lead0001", true, "Queued 1 task"},
+	} {
+		res, err := s.toolTaskPlan(ctx, tc.caller, planArgs(tc.readonly))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`agent_send`, `machine="box" session_id="idle-session-full-id"`, `machine="box" session_id="same-worktree"`} {
+			if !strings.Contains(res, want) {
+				t.Errorf("missing %q in receipt %q", want, res)
+			}
+		}
+		for _, id := range []string{"busy-session", "assigned-session", "waiting-session", "readonly-session", "other-checkout", "other-machine"} {
+			if strings.Contains(res, id) {
+				t.Errorf("unexpected %q in receipt %q", id, res)
+			}
+		}
+		if !strings.Contains(res, tc.receipt) {
+			t.Errorf("expected receipt %q, got %q", tc.receipt, res)
+		}
+	}
 }
 
 // When the main conversation changes, the new main conversation can review older supervised tasks (#4262).

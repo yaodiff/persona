@@ -1,0 +1,16 @@
+{
+  "summary": "有个命令在等你输入：{prompt}",
+  "summary_plain": "有个命令在等你输入",
+  "tool": "命令输入",
+  "field": "你的输入",
+  "placeholder": "输入命令要的内容",
+  "line_empty": "先输入内容：空行不会发送。",
+  "line_too_long": "这一行太长了，什么都没输入。",
+  "line_not_text": "这不是纯文本，什么都没输入。",
+  "line_control": "只能发一行：换行和控制键发不出去，什么都没输入。",
+  "prompt_changed": "命令已经不在等这个了，什么都没输入。",
+  "unreachable": "连不上电脑上的 Antigravity，什么都没输入：再试一次，或者到电脑上回答。",
+  "refused": "Antigravity 没有收下这一行（{reason}），什么都没输入。",
+  "refused_plain": "Antigravity 没有收下这一行，什么都没输入。",
+  "unconfirmed": "Antigravity 没有及时确认收到这一行。再发之前，先在电脑上看一下这个命令。"
+}

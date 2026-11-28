@@ -1,0 +1,6 @@
+{
+  "title": "In Inbox",
+  "done_one": "{count} done",
+  "done_other": "{count} done",
+  "open_item": "Open in Inbox: {title}"
+}

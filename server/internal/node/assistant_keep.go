@@ -220,7 +220,7 @@ func (k *assistantKeeper) keep(owner *Node, procs map[string]*assistantProc, rec
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	for id, p := range procs {
-		if (p.agent == "claude" || p.agent == "codex") && p.alive() {
+		if (p.agent == "claude" || p.agent == "codex" || p.agent == traexAgent) && p.alive() {
 			k.procs[id] = p
 			if recoveries[id] != nil {
 				k.recoveryOwners[id] = owner

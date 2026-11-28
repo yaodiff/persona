@@ -68,6 +68,23 @@ const WORDS = {
     ],
     actions: [["Bo", "补充超限提示文案和回归测试", 900], ["Ada", "分享压测报告", 930]],
     open: [["大小限制按单个条目还是整份录音计算", 1500]],
+    debates: [
+      {
+        question: "导出上限按单条还是按整份录音计算？", topic: "导出", status: "settled", at: 312,
+        positions: [
+          { stance: "按单条算，避免一个大文件拖垮整次导出", at: 312, who: "Ada" },
+          { stance: "按整份录音算，规则更容易解释", at: 340 },
+        ],
+        outcome: { text: "本版先按单条计算，并补充超限提示", at: 600, decision: 0 },
+      },
+      {
+        question: "周报邮件是否默认开启？", status: "open", at: 1260,
+        positions: [
+          { stance: "默认开启，新用户能直接看到纪要回顾", at: 1260, who: "Ada" },
+          { stance: "默认关闭，避免未订阅打扰", at: 1320, who: "Bo" },
+        ],
+      },
+    ],
   },
   en: {
     title: "Example project sprint review", where: "Example room 3", by: "Friday",
@@ -86,6 +103,23 @@ const WORDS = {
     ],
     actions: [["Bo", "Add the warning text and the regression test", 900], ["Ada", "Share the load-test report", 930]],
     open: [["Whether the cap is per entry or per recording", 1500]],
+    debates: [
+      {
+        question: "Should the export cap count items or recordings?", topic: "Export", status: "settled", at: 312,
+        positions: [
+          { stance: "Per item: one large file should not fail the whole export", at: 312, who: "Ada" },
+          { stance: "Per recording: easier to explain", at: 340 },
+        ],
+        outcome: { text: "Per item for this release, with a clear warning", at: 600, decision: 0 },
+      },
+      {
+        question: "Should the weekly digest default to on?", status: "open", at: 1260,
+        positions: [
+          { stance: "Default on so new users see the recap", at: 1260, who: "Ada" },
+          { stance: "Default off to avoid unsolicited email", at: 1320, who: "Bo" },
+        ],
+      },
+    ],
   },
   ja: {
     title: "サンプルプロジェクトのスプリントレビュー", where: "サンプル会議室 3", by: "金曜まで",
@@ -104,19 +138,37 @@ const WORDS = {
     ],
     actions: [["Bo", "警告文と回帰テストを追加する", 900], ["Ada", "負荷テストのレポートを共有する", 930]],
     open: [["上限は項目ごとか録音全体か", 1500]],
+    debates: [
+      {
+        question: "上限は項目ごとか録音全体か？", topic: "エクスポート", status: "settled", at: 312,
+        positions: [
+          { stance: "項目ごとにして1件の大きなファイルで全体を止めない", at: 312, who: "Ada" },
+          { stance: "録音全体の方が説明しやすい", at: 340 },
+        ],
+        outcome: { text: "今版では項目ごとにし、警告を添える", at: 600, decision: 0 },
+      },
+      {
+        question: "週次ダイジェストを既定でオンにするか？", status: "open", at: 1260,
+        positions: [
+          { stance: "既定でオンにして新規ユーザーに届ける", at: 1260, who: "Ada" },
+          { stance: "既定でオフにして通知過多を避ける", at: 1320, who: "Bo" },
+        ],
+      },
+    ],
   },
 };
 
 /** The detail with an overview whose bullets are the points and decisions, one to one, as the hub writes them. */
-function overviewFixture(lang) {
+function overviewFixture(lang, { withDebates = true } = {}) {
   const w = WORDS[lang];
   const detail = fixture();
   detail.meta.title = w.title; detail.meta.language = lang; detail.summary = w.headline;
   const line = ([text, strong, at, extra]) => ({ text, strong: [strong], at, ...(typeof extra === "string" ? { who: extra } : {}), ...(extra === true ? { decision: true } : {}) });
   const groups = w.groups.map(([title, topics]) => ({ title, topics: topics.map(([topic, icon, bullets]) => ({ title: topic, icon, bullets: bullets.map(line) })) }));
   const all = groups.flatMap((g) => g.topics.flatMap((t) => t.bullets)).sort((a, b) => a.at - b.at);
+  const debateLines = withDebates ? w.debates.flatMap((d) => d.positions.map((p) => [p.who ? `${p.who}: ${p.stance}` : p.stance, p.at])) : [];
   // The transcript in the same language: a line at every time the minutes cite, saying what they say of it.
-  const said = new Map([[0, w.title], ...[...w.open, ...w.actions.map(([who, what, at]) => [`${who}: ${what}`, at]), ...all.map((b) => [b.who ? `${b.who}: ${b.text}` : b.text, b.at])].map(([text, at]) => [at, text])]);
+  const said = new Map([[0, w.title], ...[...debateLines, ...w.open, ...w.actions.map(([who, what, at]) => [`${who}: ${what}`, at]), ...all.map((b) => [b.who ? `${b.who}: ${b.text}` : b.text, b.at])].map(([text, at]) => [at, text])]);
   detail.segments = [...said].sort(([a], [b]) => a - b).map(([start, text]) => ({ start, end: start + 25, text }));
   const item = (b) => ({ text: b.text, at: b.at, ...(b.who ? { who: b.who } : {}) });
   Object.assign(detail.minutes, {
@@ -128,8 +180,17 @@ function overviewFixture(lang) {
     ],
     open: w.open.map(([text, at]) => ({ text, at })),
     overview: { headline: w.headline, conclusions: w.conclusions.map(([text, strong, at]) => ({ text, strong: [strong], at })), groups },
+    ...(withDebates ? { debates: structuredClone(w.debates) } : {}),
     markdown: `# ${w.title}\n\n${w.headline}\n`,
   });
+  return detail;
+}
+
+/** Legacy layout (no overview) with synthetic disagreements (#16728) in the requested language. */
+function legacyDebatesFixture(lang) {
+  const detail = overviewFixture(lang, { withDebates: true });
+  delete detail.minutes.overview;
+  detail.minutes.points = detail.minutes.points.slice(0, 2);
   return detail;
 }
 
@@ -143,7 +204,7 @@ let runs = 0;
  * largest it offers) and `zoom` the browser's page zoom, which shows a window `width / zoom` CSS pixels wide at `zoom`
  * times the pixels. `columns` is how many topic cards a full row holds.
  */
-async function run(theme, lang = "zh-Hans", width = 1440, { overview = false, large = false, zoom = 1, columns = 1, shot = width === 1440 } = {}) {
+async function run(theme, lang = "zh-Hans", width = 1440, { overview = false, debates = overview, large = false, zoom = 1, columns = 1, shot = width === 1440 } = {}) {
   // the knowledge page's strings and the recording module's (src/modules/recording, #13407)
   const s = Object.assign(...await Promise.all(["knowledge-kbdetail", "recording"].map(async (ns) => JSON.parse(await readFile(new URL(`../src/i18n/locales/${lang}/${ns}.json`, import.meta.url), "utf8")))));
   const cssWidth = width / zoom;
@@ -154,7 +215,7 @@ async function run(theme, lang = "zh-Hans", width = 1440, { overview = false, la
     localStorage.setItem("persona.theme", theme);
     if (large) localStorage.setItem("persona.text-size", "large");
   }, { theme, lang, large });
-  let detail = overview ? overviewFixture(lang) : fixture();
+  let detail = overview ? overviewFixture(lang, { withDebates: debates }) : debates ? legacyDebatesFixture(lang) : fixture();
   const writes = [], errors = [];
   await context.route("**/*", (route) => new URL(route.request().url()).origin === base.origin ? route.continue() : route.abort());
   await context.route("**/api/v1/**", async (route) => {
@@ -204,6 +265,7 @@ async function run(theme, lang = "zh-Hans", width = 1440, { overview = false, la
   await page.waitForTimeout(350);
   assert.equal(await page.locator("vite-error-overlay").count(), 0);
   const name = overview ? `overview-${lang}-${theme}-${width}${large ? "-large" : ""}${zoom !== 1 ? `-zoom${zoom * 100}` : ""}`
+    : debates ? `debates-legacy-${lang}-${theme}-${width}`
     : lang === "zh-Hans" && width === 1440 ? `minutes-${theme}` : `minutes-${theme}-${lang}-${width}`;
   const fits = async (label) => {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${label}: no page overflow`);
@@ -212,21 +274,22 @@ async function run(theme, lang = "zh-Hans", width = 1440, { overview = false, la
       const range = document.createRange(); range.selectNodeContents(button);
       return getComputedStyle(button).whiteSpace === "nowrap" && range.getBoundingClientRect().width <= button.clientWidth + 1;
     })), `${label}: all button text fits on one line`);
-    // The Card clips what runs past it (overflow-hidden), so each topic card and each line is checked on its own.
-    if (overview) {
-      const wide = await minutes.locator("[data-minutes-topic], [data-minutes-bullet] p, [data-minutes-conclusion] p, [data-minutes-overview] > p")
+    // The Card clips what runs past it (overflow-hidden), so each topic card, disagreement card and line is checked on its own.
+    if (overview || debates) {
+      const wide = await minutes.locator("[data-minutes-topic], [data-minutes-bullet] p, [data-minutes-conclusion] p, [data-minutes-overview] > p, [data-minutes-debate], [data-minutes-debate] h5, [data-minutes-debate] p")
         .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent.slice(0, 40)));
-      assert.deepEqual(wide, [], `${label}: no topic card or line runs past its box`);
+      assert.deepEqual(wide, [], `${label}: no card or line runs past its box`);
     }
   };
   await fits(name);
 
   if (overview) {
     const w = WORDS[lang];
-    // The contract's headings: the headline h3; conclusions, groups, action items and open questions h4; topics h5.
+    // The contract's headings: the headline h3; conclusions, disagreements, groups, action items and open questions h4; debate questions and topics h5.
     const headings = await minutes.locator("h3, h4, h5").evaluateAll((hs) => hs.map((h) => `${h.tagName} ${h.textContent}`));
     assert.deepEqual(headings, [
       `H3 ${w.headline}`, `H4 ${s.minutes_conclusions}`,
+      ...(debates ? [`H4 ${s.minutes_debates}`, ...w.debates.map((d) => `H5 ${d.question}`)] : []),
       ...w.groups.flatMap(([group, topics]) => [`H4 ${group}`, ...topics.map(([topic]) => `H5 ${topic}`)]),
       `H4 ${s.minutes_actions}`, `H4 ${s.minutes_open}`,
     ], `${name}: headings`);
@@ -246,6 +309,17 @@ async function run(theme, lang = "zh-Hans", width = 1440, { overview = false, la
     for (const g of rows) for (const line of g.lines) if (line.length === 1) assert.ok(Math.abs(line[0] - g.width) <= 1, `${name}: a card alone in its row takes all of it`);
     assert.ok(await minutes.locator("strong").count() >= 10, `${name}: bold places`);
     await minutes.getByText(s.minutes_ai_note, { exact: true }).waitFor();
+  } else if (debates) {
+    const w = WORDS[lang];
+    const headings = await minutes.locator("h3, h4, h5").evaluateAll((hs) => hs.map((h) => `${h.tagName} ${h.textContent}`));
+    assert.deepEqual(headings, [
+      `H3 ${w.title}`, `H4 ${s.minutes_points}`, `H4 ${s.minutes_decisions}`, `H4 ${s.minutes_actions}`,
+      `H4 ${s.minutes_debates}`, ...w.debates.map((d) => `H5 ${d.question}`), `H4 ${s.minutes_open}`,
+    ], `${name}: legacy headings with debates`);
+  }
+  if (debates) {
+    await minutes.locator("[data-minutes-debates]").getByText(s.minutes_debate_settled, { exact: true }).waitFor();
+    await minutes.locator("[data-minutes-debates]").getByText(s.minutes_debate_open, { exact: true }).waitFor();
   }
   // The whole page in one picture: the detail scrolls inside its own column, so the window grows to its height.
   const tall = await page.evaluate(() => {
@@ -280,7 +354,18 @@ async function run(theme, lang = "zh-Hans", width = 1440, { overview = false, la
     }
   }
 
-  // Exercise the real app, not just its initial render: timestamp jump, add action, then regenerate.
+  // Exercise the real app, not just its initial render: disagreement jumps, timestamp jump, add action, then regenerate.
+  if (debates) {
+    const posTime = minutes.locator('[data-minutes-debate-position] [aria-controls="recording-line-340"]').first();
+    await posTime.click();
+    await page.waitForFunction(() => document.activeElement?.id === "recording-line-340");
+    const posLine = page.locator('[id="recording-line-340"]');
+    assert.ok(await posLine.evaluate((element) => element.classList.contains("bg-accent-tint")), `${name}: debate position jump highlights line`);
+    const decBtn = minutes.locator('[data-minutes-debate-decision="0"]').first();
+    await decBtn.click();
+    await page.waitForFunction(() => document.activeElement?.id === "recording-decision-0");
+    assert.ok(await page.locator('[id="recording-decision-0"]').evaluate((el) => el.classList.contains("bg-accent-tint")), `${name}: debate outcome jumps to linked decision`);
+  }
   const timestamp = minutes.locator('[aria-controls="recording-line-900"]').first();
   await timestamp.click();
   await page.waitForFunction(() => document.activeElement?.id === "recording-line-900");
@@ -304,15 +389,20 @@ try {
   for (const theme of ["light", "dark"]) await run(theme);
   for (const lang of ["en", "zh-Hans", "ja"]) await run("dark", lang, 390, { shot: true });
   if (process.env.E2E_ONLY !== "legacy") {
+    for (const lang of ["zh-Hans", "en"]) {
+      for (const theme of ["light", "dark"]) {
+        for (const width of [1440, 390]) await run(theme, lang, width, { overview: false, debates: true, shot: true });
+      }
+    }
     for (const lang of ["zh-Hans", "en", "ja"]) {
       for (const theme of ["light", "dark"]) {
-        for (const width of [1440, 390]) await run(theme, lang, width, { overview: true, columns: width === 1440 ? 2 : 1, shot: true });
+        for (const width of [1440, 390]) await run(theme, lang, width, { overview: true, debates: true, columns: width === 1440 ? 2 : 1, shot: true });
       }
     }
     for (const lang of ["zh-Hans", "en"]) {
       for (const theme of ["light", "dark"]) {
-        for (const width of [1440, 390]) await run(theme, lang, width, { overview: true, large: true, columns: width === 1440 ? 2 : 1, shot: true });
-        await run(theme, lang, 1440, { overview: true, large: true, zoom: 2, columns: 2, shot: true });
+        for (const width of [1440, 390]) await run(theme, lang, width, { overview: true, debates: true, large: true, columns: width === 1440 ? 2 : 1, shot: true });
+        await run(theme, lang, 1440, { overview: true, debates: true, large: true, zoom: 2, columns: 2, shot: true });
       }
     }
   }

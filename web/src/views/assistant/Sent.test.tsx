@@ -58,7 +58,7 @@ describe("Persona's messages to agents (#1542)", () => {
       renderToStaticMarkup(<FeedLineView item={{ id: "f3", conversation: "c1", at: iso(0), kind: "routed", ref: "todo_x", body }} />);
     const persona = say({ text: HANDOFF, from: "assistant" });
     expect(persona).toContain('data-testid="sent-line"');
-    expect(persona).toContain("发给「");
+    expect(persona).toContain("已发送给「");
     expect(persona).toContain("· 把后台同步的内存降下来。");
     expect(persona).not.toContain("峰值内存降一半以上");
     expect(persona).not.toContain("items-end");
@@ -66,7 +66,7 @@ describe("Persona's messages to agents (#1542)", () => {
     expect(user).not.toContain("sent-line");
     expect(user).toContain("items-end");
     expect(user).toContain("对「");
-    expect(say({ text: "先停", from: "assistant", interrupted: true })).toContain("打断「");
+    expect(say({ text: "先停", from: "assistant", interrupted: true })).toContain("已中断「");
   });
 
   it("opens to the whole text with Copy", () => {

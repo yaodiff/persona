@@ -149,7 +149,7 @@ test('an Agent question preview names the actual provider, including an assistan
   }
   assert.equal(shown({}, {agent:'claude',launcher:'claude',agent_label:'claude'}),'Claude');
   assert.equal(shown({agent:'codex'},{agent:'claude'}),'Codex');
-  assert.equal(shown({agent:'traex'}),'TRAEX');
+  assert.equal(shown({agent:'traex'}),'TRAE CLI');
   assert.equal(shown({agent:'paseo',agent_label:'Paseo'},{agent:'paseo',agent_label:'Paseo',launcher:'Grok'}),'Grok');
   assert.equal(shown({agent:'paseo',agent_label:'Kimi'},{agent:'paseo',launcher:'Other'}),'Kimi');
   assert.equal(shown({}, {agent:'CaseSensitiveRuntime'}),'CaseSensitiveRuntime');

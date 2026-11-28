@@ -2,6 +2,7 @@ import { useState } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import { field, useFeed } from "../../lib/feed";
+import { safeWebURL } from "../../lib/format";
 import { openTask } from "../../lib/handoff";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { putTodo, refreshTodos } from "../../lib/store";
@@ -37,8 +38,8 @@ export default function WaitingTaskRow({ rowKey, todo, status, countsOpenAttr }:
     : approval ? t("assistant-tasks.delivery_ok") // its own words: no permission card waits (#13191)
       : waitsLabel(todo, status, task?.status === status ? task.wait : undefined);
   const rawPr = todo.pr_url ?? receiptPr;
-  const prUrl = rawPr && /^https?:\/\//i.test(rawPr) ? rawPr : undefined;
-  const prNumber = prUrl ? /\/(?:pull|pulls|merge_requests)\/(\d+)/i.exec(prUrl)?.[1] : undefined;
+  const prUrl = safeWebURL(rawPr);
+  const prNumber = prUrl ? /\/(?:pull|pulls|merge_requests)\/(\d+)(?:\/|$)/i.exec(new URL(prUrl).pathname)?.[1] : undefined;
   // Mark done takes two presses: the first arms it, the second closes the task and leaves an Undo on the toast.
   const [closing, setClosing] = useState<"idle" | "armed" | "busy" | "done">("idle");
   const close = async () => {

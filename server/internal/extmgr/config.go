@@ -27,10 +27,13 @@ type Config struct {
 	Lark lark.Config `json:"lark"`
 	// LarkGate and ConnectorGate: the rules for the assistant's Feishu writes and the connectors' writes
 	// (internal/connector/gate.go).
-	LarkGate      []proto.LarkRule     `json:"lark_gate,omitempty"`
-	ConnectorGate []connector.Rule     `json:"connector_gate,omitempty"`
-	GitHub        *githubwire.Config   `json:"github,omitempty"`
-	IMessage      *imessagewire.Config `json:"imessage,omitempty"`
+	LarkGate      []proto.LarkRule `json:"lark_gate,omitempty"`
+	ConnectorGate []connector.Rule `json:"connector_gate,omitempty"`
+	// ConnectorAutoConfirm: opt-in hub-side policies allowing verified extension installations to participate in
+	// guarded conditional auto-confirm for exact actions (all off by default; internal/connector/auto_confirm.go).
+	ConnectorAutoConfirm []connector.AutoConfirmPolicy `json:"connector_auto_confirm,omitempty"`
+	GitHub               *githubwire.Config            `json:"github,omitempty"`
+	IMessage             *imessagewire.Config          `json:"imessage,omitempty"`
 	// Google and Microsoft: mail's sign-ins (docs/extensions/mail.md).
 	Google           GoogleConfig      `json:"google"`
 	Microsoft        MicrosoftConfig   `json:"microsoft,omitempty"`
@@ -134,6 +137,14 @@ func loadConfig(dir, file string) (*Config, error) {
 			where = file
 		}
 		return cfg, fmt.Errorf("%s: connector_gate: %w", where, err)
+	}
+	if err := connector.ValidateAutoConfirmPolicies(cfg.ConnectorAutoConfirm); err != nil {
+		cfg.ConnectorAutoConfirm = nil
+		where := "hub.json"
+		if file != "" {
+			where = file
+		}
+		return cfg, fmt.Errorf("%s: connector_auto_confirm: %w", where, err)
 	}
 	if err := cfg.Lark.Validate(); err != nil { // was the hub's check at start; now the manager's, which uses it
 		cfg.warnings = append(cfg.warnings, err.Error()+": lark is not read")

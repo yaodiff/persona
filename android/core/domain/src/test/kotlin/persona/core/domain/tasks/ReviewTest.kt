@@ -4,8 +4,11 @@ import org.junit.Test
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.Todo
+import persona.core.contracts.TodoState
+import java.time.Instant
 
 class ReviewTest {
     private fun todo(json: String) = JsonCodec.decodeFromString(Todo.serializer(), json)
@@ -41,8 +44,31 @@ class ReviewTest {
         assertEquals(ReviewStage.UserCheck, waiting.reviewStage)
         assertEquals("user_check", waiting.reviewState)
         assertFalse(waiting.acceptanceStands)
+        assertTrue(waiting.waitsForOwner())
+        assertEquals(TodoState.NeedsYou, waiting.shownState({ null }))
         assertEquals(ReviewStage.Accepted, waiting.copy(doneAt = "2026-11-05T10:00:00Z").reviewStage)
         assertEquals("accepted", waiting.copy(doneAt = "2026-11-05T10:00:00Z").reviewState)
+        assertFalse(waiting.copy(doneAt = "2026-11-05T10:00:00Z").waitsForOwner())
+    }
+
+    @Test
+    fun supervisedPersonalVerificationEntersItsSupervisorsNeedsYouTray() {
+        val at = "2026-11-10T08:00:00Z"
+        val waiting = todo("""{"id":"t-check","title":"Verify the change","origin":"main-chat","created_at":"$at","updated_at":"$at",
+            "supervision":{"supervisor":"direction-chat","state":"user_check","reviews":[{"at":"$at","verdict":"accepted","user_check":true}]},
+            "ask":{"verdict":"Done: please verify","summary":"Open the page and check.","asked_at":"$at"}}""")
+        val entries = assistantEntries(
+            conversation = "direction-chat",
+            main = "main-chat",
+            todos = listOf(waiting),
+            sessions = emptyList(),
+            interactions = emptyList(),
+            plans = emptyList(),
+            feed = emptyList(),
+            now = Instant.parse(at).toEpochMilli(),
+        )
+        assertEquals(listOf("task:t-check"), entries.needsYou.map { it.key })
+        assertEquals("Open the page and check.", waiting.ask?.summary)
     }
 
     @Test

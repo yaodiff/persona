@@ -10,19 +10,19 @@ import persona.core.contracts.api.modelName
 class ModelNameTest {
     @Test fun formatsGptVersionsAndEveryVariantWithoutACatalog() {
         val cases = mapOf(
-            "gpt-6.1-sol" to "6.1 Sol",
-            "gpt-6.1" to "6.1",
-            "gpt-4o-mini" to "4o Mini",
-            "gpt-6.1-codex-max" to "6.1 Codex Max",
-            "GPT-6.1-SOL" to "6.1 SOL",
-            "gpt-4.1-mini-2025-04-14" to "4.1 Mini 2025 04 14",
+            "gpt-6.1-sol" to "GPT-6.1 Sol",
+            "gpt-6.1" to "GPT-6.1",
+            "gpt-4o-mini" to "GPT-4o Mini",
+            "gpt-6.1-codex-max" to "GPT-6.1 Codex Max",
+            "GPT-6.1-SOL" to "GPT-6.1 SOL",
+            "gpt-4.1-mini-2025-04-14" to "GPT-4.1 Mini 2025 04 14",
         )
         cases.forEach { (id, expected) ->
             assertEquals(id, expected, modelName(id))
             assertEquals(expected, AgentModel(id).label)
             assertEquals(expected, AgentModel(id, id).label)
         }
-        assertEquals("6.1 Sol", (AgentModel("GPT-6.1-SOL", "gpt-6.1-sol").label).zhAny())
+        assertEquals("GPT-6.1 Sol", (AgentModel("GPT-6.1-SOL", "gpt-6.1-sol").label).zhAny())
     }
 
     @Test fun explicitAliasesTakePrecedenceEvenWhenTheyLookLikeGptIds() {
@@ -42,14 +42,14 @@ class ModelNameTest {
         assertEquals("", (modelName(null)).zhAny())
         assertEquals("", (modelName("")).zhAny())
         assertEquals("", (AgentModel("").label).zhAny())
-        assertEquals("6.1 Sol", (AgentModel("gpt-6.1-sol", " \t").label).zhAny())
+        assertEquals("GPT-6.1 Sol", (AgentModel("gpt-6.1-sol", " \t").label).zhAny())
         assertEquals(" \t", (modelName(" \t")).zhAny())
     }
 
     @Test fun labelsNeverChangeModelIdsOrSerializedRequests() {
         val model = JsonCodec.decodeFromString<AgentModel>("""{"id":"gpt-6.1-sol","name":"GPT-6.1-sol"}""")
         val encoded = JsonCodec.encodeToString(model)
-        assertEquals("6.1 Sol", (model.label).zhAny())
+        assertEquals("GPT-6.1 Sol", (model.label).zhAny())
         assertEquals("gpt-6.1-sol", (model.id).zhAny())
         assertEquals("GPT-6.1-sol", (model.name).zhAny())
         assertEquals(model, JsonCodec.decodeFromString<AgentModel>(encoded))

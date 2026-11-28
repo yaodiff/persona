@@ -92,6 +92,12 @@ func TestRuntimeHelloAdvertisesAssistantCommandGate(t *testing.T) {
 }
 
 func TestRuntimeAssistantBashRoutesThroughLarkGateAndGrantsProxy(t *testing.T) {
+	oldCtx := larkContextFromCLI
+	larkContextFromCLI = func(context.Context, *Node, proto.AssistantLark, larkCall) larkCardContext {
+		return larkCardContext{}
+	}
+	t.Cleanup(func() { larkContextFromCLI = oldCtx })
+
 	api := newFakeAPI(t)
 	n, hub := runtimeNode(t)
 	t.Cleanup(func() { n.gates().close() })
@@ -744,6 +750,573 @@ func TestRuntimeAssistantBashRoutesThroughLarkGateAndGrantsProxy(t *testing.T) {
 		res3, ok := resAny.(proto.Resolution)
 		if !ok || res3.Allow == nil || !*res3.Allow {
 			t.Fatalf("nil-state runtimeAsk = %#v, want allow=true", resAny)
+		}
+	})
+}
+
+func TestRuntimeAssistantLarkEditRewritesViaGateProxy(t *testing.T) {
+	oldCtx := larkContextFromCLI
+	larkContextFromCLI = func(context.Context, *Node, proto.AssistantLark, larkCall) larkCardContext {
+		return larkCardContext{}
+	}
+	t.Cleanup(func() { larkContextFromCLI = oldCtx })
+
+	const original = "original runtime draft"
+	edited := "Edited $HOME `printf nope` $(printf nope) \\\" ' ;\n第二行 😀"
+	const body = `{"text":"original runtime draft","mentions":[{"key":"@_user_1","id":"ou_example"}],"large":9007199254740993}`
+	const query = "receive_id_type=open_id&tag=a%20b"
+	cmd := `ex POST '/conversations/c1/messages?` + query + `' '` + body + `'`
+
+	t.Run("direct HTTP proxy rewrites body, preserves mentions and large ints, enforces one-use, and reports ledger", func(t *testing.T) {
+		api := newFakeAPI(t)
+		n, hub := runtimeNode(t)
+		t.Cleanup(func() { n.gates().close() })
+		assistantHub(hub)
+		cwd := prepareRuntimeAssistantEnvironment(t, n, true)
+
+		var larkSentMu sync.Mutex
+		var larkSent []proto.LarkSent
+		hub.mu.Lock()
+		baseAnswer := hub.answer
+		hub.answer = func(method string, params json.RawMessage) (any, error, bool) {
+			if method == proto.MethodLarkSent {
+				var s proto.LarkSent
+				if err := json.Unmarshal(params, &s); err != nil {
+					return nil, err, true
+				}
+				larkSentMu.Lock()
+				larkSent = append(larkSent, s)
+				larkSentMu.Unlock()
+				return struct{}{}, nil, true
+			}
+			return baseAnswer(method, params)
+		}
+		hub.mu.Unlock()
+
+		n.mu.Lock()
+		n.larkCfg.Gates[0].Env["EXAMPLE_BASE"] = api.URL
+		n.larkCfg.Gates[0].Rules = []proto.LarkRule{
+			{Method: "GET", Path: "/**", Action: "allow"},
+			{Method: "POST", Path: "/conversations/*/messages", Body: map[string]any{"text": "blocked"}, Action: "deny"},
+		}
+		n.mu.Unlock()
+
+		hello := assistantRuntimeHello()
+		hello["caps"].(map[string]any)["assistant_environment"] = true
+		host := dialRuntime(t, n, hello)
+		sid := startedAssistant(t, n, host)
+		base := runtimeAssistantEnvironment(t, host.got("session.start")[0])["EXAMPLE_BASE"]
+		if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+			{SessionID: sid, Title: "Main Assistant", Cwd: cwd, Status: proto.StatusIdle},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "assistant session listed", func() bool { _, _, ok := n.runtimes.rowOf(sid); return ok })
+
+		ask := func(toolUseID, command string) (proto.Resolution, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var res proto.Resolution
+			err := host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": map[string]any{
+				"kind":        "permission",
+				"session_id":  sid,
+				"tool_name":   "Bash",
+				"tool_use_id": toolUseID,
+				"tool_input":  map[string]any{"command": command},
+				"summary":     command,
+			}}, &res)
+			return res, err
+		}
+
+		// Eligible send declares editable_text; edited Allow rewrites body via proxy while strictly binding original body.
+		hub.mu.Lock()
+		hub.asked = nil
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			allow := true
+			if ix.EditableText != "" {
+				return proto.Resolution{Allow: &allow, EditedText: edited}
+			}
+			return proto.Resolution{Allow: &allow}
+		}
+		hub.mu.Unlock()
+
+		res, err := ask("call-edit-direct", cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Allow == nil || !*res.Allow {
+			t.Fatalf("edited allow resolution = %+v, want allow=true", res)
+		}
+		hub.mu.Lock()
+		if len(hub.asked) != 1 {
+			t.Fatalf("expected 1 card, got %d", len(hub.asked))
+		}
+		card := hub.asked[0]
+		hub.mu.Unlock()
+		if card.EditableText != original {
+			t.Fatalf("card.EditableText = %q, want %q", card.EditableText, original)
+		}
+
+		url := base + "/api/v1/conversations/c1/messages"
+		// Tampered query, mentions, large integer, or pre-edited body must all be rejected (403).
+		if code, _ := send(t, http.MethodPost, url+"?receive_id_type=user_id&tag=a%20b", body); code != http.StatusForbidden {
+			t.Fatalf("tampered query = %d, want 403", code)
+		}
+		if code, _ := send(t, http.MethodPost, url+"?"+query, strings.Replace(body, "ou_example", "ou_other", 1)); code != http.StatusForbidden {
+			t.Fatalf("tampered mention = %d, want 403", code)
+		}
+		if code, _ := send(t, http.MethodPost, url+"?"+query, strings.Replace(body, "9007199254740993", "9007199254740992", 1)); code != http.StatusForbidden {
+			t.Fatalf("adjacent large int = %d, want 403", code)
+		}
+		if code, _ := send(t, http.MethodPost, url+"?"+query, `{"text":"wrong"}`); code != http.StatusForbidden {
+			t.Fatalf("different body = %d, want 403", code)
+		}
+		if len(api.requests()) != 0 {
+			t.Fatalf("rejected probes reached upstream: %+v", api.requests())
+		}
+
+		// Executing the unmodified original command hits the proxy with original body and upstream receives edited text.
+		if code, resp := send(t, http.MethodPost, url+"?"+query, body); code != http.StatusOK || resp != `{"ok":true}` {
+			t.Fatalf("edited proxied write = %d %s, want 200", code, resp)
+		}
+		// One-use grant: replaying original or edited body both return 403.
+		if code, _ := send(t, http.MethodPost, url+"?"+query, body); code != http.StatusForbidden {
+			t.Fatalf("replayed original body = %d, want 403", code)
+		}
+		reqs := api.requests()
+		if len(reqs) != 1 || reqs[0].Query != query {
+			t.Fatalf("upstream requests = %+v, want 1 with query %q", reqs, query)
+		}
+		if code, _ := send(t, http.MethodPost, url+"?"+query, reqs[0].Body); code != http.StatusForbidden {
+			t.Fatalf("replayed rewritten body = %d, want 403", code)
+		}
+
+		oldFields, _, ok := editableTextFields(body)
+		if !ok {
+			t.Fatal("original body not editable")
+		}
+		gotFields, gotText, ok := editableTextFields(reqs[0].Body)
+		if !ok || gotText != edited {
+			t.Fatalf("upstream body text = %q (ok=%v), want %q; raw=%s", gotText, ok, edited, reqs[0].Body)
+		}
+		for _, k := range []string{"mentions", "large"} {
+			if string(gotFields[k]) != string(oldFields[k]) {
+				t.Fatalf("upstream field %s changed: %s -> %s", k, oldFields[k], gotFields[k])
+			}
+		}
+
+		waitFor(t, "edited LarkSent ledger report", func() bool {
+			larkSentMu.Lock()
+			defer larkSentMu.Unlock()
+			return len(larkSent) == 1
+		})
+		larkSentMu.Lock()
+		sentReport := larkSent[0]
+		larkSentMu.Unlock()
+		if sentReport.Text != edited || sentReport.LetThrough.EditedFrom != original ||
+			sentReport.LetThrough.InteractionID != card.ID || sentReport.LetThrough.Kind != proto.LarkThroughCard {
+			t.Fatalf("LarkSent = %+v, want edited text + EditedFrom=%q + InteractionID=%q", sentReport, original, card.ID)
+		}
+
+		// Shorter rewritten body also frames cleanly (Content-Length shrinks without truncation/hang).
+		hub.mu.Lock()
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			allow := true
+			return proto.Resolution{Allow: &allow, EditedText: "ok"}
+		}
+		hub.mu.Unlock()
+		res, err = ask("call-edit-short", cmd)
+		if err != nil || res.Allow == nil || !*res.Allow {
+			t.Fatalf("short edit allow = %+v, %v", res, err)
+		}
+		if code, _ := send(t, http.MethodPost, url+"?"+query, body); code != http.StatusOK {
+			t.Fatalf("short edit proxied write = %d, want 200", code)
+		}
+		reqs = api.requests()
+		if _, gotText, ok := editableTextFields(reqs[len(reqs)-1].Body); !ok || gotText != "ok" {
+			t.Fatalf("short edit upstream text = %q (ok=%v), want ok", gotText, ok)
+		}
+
+		// Edited text matching a deny rule or blank text retires original grant and refuses (403 on original).
+		for _, tc := range []struct {
+			name, id, badEdit string
+		}{
+			{name: "deny rule", id: "call-edit-denied", badEdit: "blocked"},
+			{name: "blank edit", id: "call-edit-blank", badEdit: "   "},
+		} {
+			hub.mu.Lock()
+			hub.resolve = func(ix proto.Interaction) proto.Resolution {
+				allow := true
+				return proto.Resolution{Allow: &allow, EditedText: tc.badEdit}
+			}
+			hub.mu.Unlock()
+			res, err := ask(tc.id, cmd)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			if res.Allow == nil || *res.Allow || res.Reason != "gate_rule" {
+				t.Fatalf("%s resolution = %+v, want allow=false reason=gate_rule", tc.name, res)
+			}
+			if code, _ := send(t, http.MethodPost, url+"?"+query, body); code != http.StatusForbidden {
+				t.Fatalf("%s left original grant usable: %d", tc.name, code)
+			}
+		}
+
+		// Single-quoted literal '$' original body: denied edit leaves ZERO grants (no temporary wildcard leak),
+		// and valid edit pins the exact original '$5' body and rewrites to the edited text.
+		const dollarBody = `{"text":"price $5"}`
+		const dollarCmd = `ex POST /conversations/c1/messages '{"text":"price $5"}'`
+		hub.mu.Lock()
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			allow := true
+			return proto.Resolution{Allow: &allow, EditedText: "blocked"}
+		}
+		hub.mu.Unlock()
+		res, err = ask("call-edit-dollar-denied", dollarCmd)
+		if err != nil || res.Allow == nil || *res.Allow || res.Reason != "gate_rule" {
+			t.Fatalf("dollar denied edit = %+v, %v", res, err)
+		}
+		if code, _ := send(t, http.MethodPost, url, dollarBody); code != http.StatusForbidden {
+			t.Fatalf("dollar denied edit left original usable: %d", code)
+		}
+		if code, _ := send(t, http.MethodPost, url, `{"text":"anything"}`); code != http.StatusForbidden {
+			t.Fatalf("dollar denied edit leaked wildcard grant: %d", code)
+		}
+
+		hub.mu.Lock()
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			allow := true
+			return proto.Resolution{Allow: &allow, EditedText: "price $10"}
+		}
+		hub.mu.Unlock()
+		res, err = ask("call-edit-dollar-ok", dollarCmd)
+		if err != nil || res.Allow == nil || !*res.Allow {
+			t.Fatalf("dollar valid edit = %+v, %v", res, err)
+		}
+		if code, _ := send(t, http.MethodPost, url, `{"text":"price /tmp"}`); code != http.StatusForbidden {
+			t.Fatalf("expanded dollar body matched pinned original grant: %d", code)
+		}
+		if code, _ := send(t, http.MethodPost, url, dollarBody); code != http.StatusOK {
+			t.Fatalf("exact literal-dollar original body = %d, want 200", code)
+		}
+		reqs = api.requests()
+		if _, gotText, ok := editableTextFields(reqs[len(reqs)-1].Body); !ok || gotText != "price $10" {
+			t.Fatalf("dollar edit upstream text = %q (ok=%v), want price $10", gotText, ok)
+		}
+
+		// Hot-reloaded gate reorder + deny rule during card wait rejects cleanly with zero grants leaked.
+		hub.mu.Lock()
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			other := proxiedGate(api.URL)
+			other.Command = "othercmd"
+			n.mu.Lock()
+			moved := n.larkCfg.Gates[0]
+			moved.Rules = append([]proto.LarkRule{
+				{Method: http.MethodPost, Path: "/conversations/*/messages", Body: map[string]any{"text": "hot-denied"}, Action: "deny"},
+			}, moved.Rules...)
+			n.larkCfg.Gates = []proto.CommandGate{other, moved}
+			n.mu.Unlock()
+			allow := true
+			return proto.Resolution{Allow: &allow, EditedText: "hot-denied"}
+		}
+		hub.mu.Unlock()
+		res, err = ask("call-edit-hot-reload", cmd)
+		if err != nil || res.Allow == nil || *res.Allow || res.Reason != "gate_rule" {
+			t.Fatalf("hot-reloaded deny edit = %+v, %v", res, err)
+		}
+		if code, _ := send(t, http.MethodPost, url+"?"+query, body); code != http.StatusForbidden {
+			t.Fatalf("hot-reloaded deny edit leaked original grant: %d", code)
+		}
+		n.mu.Lock()
+		n.larkCfg.Gates = []proto.CommandGate{n.larkCfg.Gates[1]}
+		n.mu.Unlock()
+
+		// Detached approval retry carrying ApprovalID + EditedText skips the unedited grant and rewrites cleanly.
+		const origDetachedID = "ix_detached_orig_1"
+		waitFor(t, "literal-dollar edited LarkSent report", func() bool {
+			larkSentMu.Lock()
+			defer larkSentMu.Unlock()
+			return len(larkSent) >= 3
+		})
+		larkSentMu.Lock()
+		beforeDetachedSent := len(larkSent)
+		larkSentMu.Unlock()
+		hub.mu.Lock()
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			allow := true
+			return proto.Resolution{Allow: &allow, ApprovalID: origDetachedID, EditedText: "detached edited text"}
+		}
+		hub.mu.Unlock()
+		res, err = ask("call-edit-detached-retry", cmd)
+		if err != nil || res.Allow == nil || !*res.Allow {
+			t.Fatalf("detached retry edit = %+v, %v", res, err)
+		}
+		if code, _ := send(t, http.MethodPost, url+"?"+query, body); code != http.StatusOK {
+			t.Fatalf("detached retry proxied write = %d, want 200", code)
+		}
+		reqs = api.requests()
+		if _, gotText, ok := editableTextFields(reqs[len(reqs)-1].Body); !ok || gotText != "detached edited text" {
+			t.Fatalf("detached retry upstream text = %q (ok=%v)", gotText, ok)
+		}
+		waitFor(t, "detached edited LarkSent report", func() bool {
+			larkSentMu.Lock()
+			defer larkSentMu.Unlock()
+			return len(larkSent) >= beforeDetachedSent+1
+		})
+		larkSentMu.Lock()
+		detachedReport := larkSent[len(larkSent)-1]
+		larkSentMu.Unlock()
+		if detachedReport.Text != "detached edited text" || detachedReport.LetThrough.EditedFrom != original ||
+			detachedReport.LetThrough.InteractionID != origDetachedID {
+			t.Fatalf("detached LarkSent = %+v, want ApprovalID=%q EditedFrom=%q", detachedReport, origDetachedID, original)
+		}
+
+		// Ineligible commands must NOT declare editable_text.
+		if err := os.WriteFile(filepath.Join(cwd, "msg.json"), []byte(`{"text":"from file"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		hub.mu.Lock()
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			allow := true
+			return proto.Resolution{Allow: &allow}
+		}
+		hub.mu.Unlock()
+		for _, tc := range []struct {
+			name, id, badCmd string
+		}{
+			{name: "non-message route", id: "call-inelig-route", badCmd: `ex POST /messages/om_1/reactions '{"text":"hi"}'`},
+			{name: "multi-call", id: "call-inelig-multi", badCmd: `ex POST /conversations/c1/messages '{"text":"a"}' && ex POST /conversations/c1/messages '{"text":"b"}'`},
+			{name: "dynamic dollar", id: "call-inelig-dyn", badCmd: `ex POST /conversations/c1/messages "$BODY"`},
+			{name: "at-file", id: "call-inelig-file", badCmd: `ex POST /conversations/c1/messages @msg.json`},
+			{name: "non-object json", id: "call-inelig-arr", badCmd: `ex POST /conversations/c1/messages '["text"]'`},
+		} {
+			hub.mu.Lock()
+			hub.asked = nil
+			hub.mu.Unlock()
+			if _, err := ask(tc.id, tc.badCmd); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			hub.mu.Lock()
+			asked := append([]proto.Interaction(nil), hub.asked...)
+			hub.mu.Unlock()
+			for _, ix := range asked {
+				if ix.EditableText != "" {
+					t.Fatalf("%s unexpectedly set EditableText=%q", tc.name, ix.EditableText)
+				}
+			}
+		}
+	})
+
+	t.Run("relayed gate forwards rewritten body and records ledger", func(t *testing.T) {
+		n, hub := runtimeNode(t)
+		t.Cleanup(func() { n.gates().close() })
+		assistantHub(hub)
+		cwd := prepareRuntimeAssistantEnvironment(t, n, false)
+
+		var mu sync.Mutex
+		var relayed []proto.GateRelayParams
+		var larkSent []proto.LarkSent
+		hub.mu.Lock()
+		baseAnswer := hub.answer
+		hub.answer = func(method string, params json.RawMessage) (any, error, bool) {
+			switch method {
+			case proto.MethodGateRelay:
+				var req proto.GateRelayParams
+				if err := json.Unmarshal(params, &req); err != nil {
+					return nil, err, true
+				}
+				mu.Lock()
+				relayed = append(relayed, req)
+				mu.Unlock()
+				return proto.GateRelayAnswer{
+					Status: http.StatusOK,
+					Header: map[string][]string{"Content-Type": {"application/json"}},
+					Body:   []byte(`{"data":{"message_id":"om_relayed_1"}}`),
+				}, nil, true
+			case proto.MethodLarkSent:
+				var s proto.LarkSent
+				if err := json.Unmarshal(params, &s); err != nil {
+					return nil, err, true
+				}
+				mu.Lock()
+				larkSent = append(larkSent, s)
+				mu.Unlock()
+				return struct{}{}, nil, true
+			}
+			return baseAnswer(method, params)
+		}
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			allow := true
+			return proto.Resolution{Allow: &allow, EditedText: "relayed edited text"}
+		}
+		hub.mu.Unlock()
+
+		g := exampleGate("")
+		g.BaseEnv = "RELAY_BASE"
+		g.SocketEnv = "RELAY_SOCKET"
+		g.Relay = true
+		g.Env = map[string]string{"RELAY_SOCKET": "/run/fake.sock"}
+		cfg := proto.AssistantLark{Gates: []proto.CommandGate{g}}
+		relayGates(&cfg)
+		n.mu.Lock()
+		n.larkCfg, n.larkCfgAt = cfg, time.Now().Add(time.Hour)
+		n.mu.Unlock()
+
+		hello := assistantRuntimeHello()
+		hello["caps"].(map[string]any)["assistant_environment"] = true
+		host := dialRuntime(t, n, hello)
+		sid := startedAssistant(t, n, host)
+		base := runtimeAssistantEnvironment(t, host.got("session.start")[0])["RELAY_BASE"]
+		if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+			{SessionID: sid, Title: "Main Assistant", Cwd: cwd, Status: proto.StatusIdle},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "relay session listed", func() bool { _, _, ok := n.runtimes.rowOf(sid); return ok })
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var res proto.Resolution
+		if err := host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": map[string]any{
+			"kind":        "permission",
+			"session_id":  sid,
+			"tool_name":   "Bash",
+			"tool_use_id": "call-relay-edit",
+			"tool_input":  map[string]any{"command": cmd},
+		}}, &res); err != nil {
+			t.Fatal(err)
+		}
+		if res.Allow == nil || !*res.Allow {
+			t.Fatalf("relay edit resolution = %+v, want allow=true", res)
+		}
+		if code, _ := send(t, http.MethodPost, base+"/api/v1/conversations/c1/messages?"+query, body); code != http.StatusOK {
+			t.Fatalf("relayed edited write = %d, want 200", code)
+		}
+		if code, _ := send(t, http.MethodPost, base+"/api/v1/conversations/c1/messages?"+query, body); code != http.StatusForbidden {
+			t.Fatalf("replayed relayed write = %d, want 403", code)
+		}
+		mu.Lock()
+		gotRelayed := append([]proto.GateRelayParams(nil), relayed...)
+		mu.Unlock()
+		if len(gotRelayed) != 1 {
+			t.Fatalf("relayed count = %d, want 1", len(gotRelayed))
+		}
+		if fields, text, ok := editableTextFields(string(gotRelayed[0].Body)); !ok || text != "relayed edited text" || string(fields["large"]) != "9007199254740993" {
+			t.Fatalf("relayed body = %s, want edited text + preserved large int", gotRelayed[0].Body)
+		}
+		waitFor(t, "relayed LarkSent report", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(larkSent) == 1
+		})
+		mu.Lock()
+		rep := larkSent[0]
+		mu.Unlock()
+		if rep.Text != "relayed edited text" || rep.LetThrough.EditedFrom != original || rep.MessageRef != "om_relayed_1" {
+			t.Fatalf("relayed LarkSent = %+v", rep)
+		}
+	})
+}
+
+func TestRuntimeAssistantLarkPendingAndDenyPropagation(t *testing.T) {
+	oldCtx := larkContextFromCLI
+	larkContextFromCLI = func(context.Context, *Node, proto.AssistantLark, larkCall) larkCardContext {
+		return larkCardContext{}
+	}
+	t.Cleanup(func() { larkContextFromCLI = oldCtx })
+
+	api := newFakeAPI(t)
+	n, hub := runtimeNode(t)
+	t.Cleanup(func() { n.gates().close() })
+	assistantHub(hub)
+	cwd := prepareRuntimeAssistantEnvironment(t, n, true)
+	n.mu.Lock()
+	n.larkCfg.Gates[0].Env["EXAMPLE_BASE"] = api.URL
+	n.larkCfg.Gates[0].Rules = []proto.LarkRule{
+		{Method: "DELETE", Path: "/forbidden", Action: "deny"},
+	}
+	n.mu.Unlock()
+
+	hello := assistantRuntimeHello()
+	hello["caps"].(map[string]any)["assistant_environment"] = true
+	host := dialRuntime(t, n, hello)
+	sid := startedAssistant(t, n, host)
+	if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: sid, Title: "Main Assistant", Cwd: cwd, Status: proto.StatusIdle},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session listed", func() bool { _, _, ok := n.runtimes.rowOf(sid); return ok })
+
+	ask := func(toolUseID, command string) proto.Resolution {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var res proto.Resolution
+		if err := host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": map[string]any{
+			"kind": "permission", "session_id": sid, "tool_name": "Bash", "tool_use_id": toolUseID,
+			"tool_input": map[string]any{"command": command},
+		}}, &res); err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	const sendCmd = `ex POST /conversations/c1/messages '{"text":"hello"}'`
+
+	t.Run("detached pending propagates Pending and Dismiss without Allow", func(t *testing.T) {
+		hub.mu.Lock()
+		hub.resolve = func(ix proto.Interaction) proto.Resolution {
+			return proto.Resolution{Dismiss: true, Pending: true, ApprovalID: ix.ID, Message: "Waiting for owner decision."}
+		}
+		hub.mu.Unlock()
+		res := ask("call-pending", sendCmd)
+		if !res.Pending || !res.Dismiss || res.Allow != nil || res.ApprovalID == "" || !strings.Contains(res.Message, "Waiting") {
+			t.Fatalf("pending resolution = %+v, want dismiss=true pending=true allow=nil", res)
+		}
+	})
+
+	t.Run("plain phone deny without note leaves Message empty and Reason empty", func(t *testing.T) {
+		allow := false
+		hub.mu.Lock()
+		hub.resolve = func(proto.Interaction) proto.Resolution { return proto.Resolution{Allow: &allow} }
+		hub.mu.Unlock()
+		res := ask("call-plain-deny", sendCmd)
+		if res.Allow == nil || *res.Allow || res.Message != "" || res.Reason != "" || res.Pending || res.Dismiss {
+			t.Fatalf("plain deny resolution = %+v, want allow=false empty message/reason", res)
+		}
+	})
+
+	t.Run("phone deny with note preserves trimmed Message and leaves Reason empty", func(t *testing.T) {
+		allow := false
+		hub.mu.Lock()
+		hub.resolve = func(proto.Interaction) proto.Resolution {
+			return proto.Resolution{Allow: &allow, Message: "  Use a shorter reply  "}
+		}
+		hub.mu.Unlock()
+		res := ask("call-note-deny", sendCmd)
+		if res.Allow == nil || *res.Allow || res.Message != "Use a shorter reply" || res.Reason != "" {
+			t.Fatalf("deny-with-note resolution = %+v, want allow=false message='Use a shorter reply' reason=''", res)
+		}
+	})
+
+	t.Run("configured rule deny sets Reason gate_rule", func(t *testing.T) {
+		res := ask("call-rule-deny", `ex DELETE /forbidden`)
+		if res.Allow == nil || *res.Allow || res.Reason != "gate_rule" || res.Message == "" {
+			t.Fatalf("rule deny resolution = %+v, want allow=false reason=gate_rule", res)
+		}
+	})
+
+	t.Run("assistant-attributed deny is not treated as an owner note", func(t *testing.T) {
+		allow := false
+		hub.mu.Lock()
+		hub.resolve = func(proto.Interaction) proto.Resolution {
+			return proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByAssistant, Message: "supervisor refused"}
+		}
+		hub.mu.Unlock()
+		res := ask("call-asst-deny", sendCmd)
+		if res.Allow == nil || *res.Allow || res.Reason != "gate_rule" {
+			t.Fatalf("assistant-attributed deny = %+v, want allow=false reason=gate_rule", res)
 		}
 	})
 }

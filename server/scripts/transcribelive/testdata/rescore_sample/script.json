@@ -1,0 +1,42 @@
+[
+ {
+  "voice": "F",
+  "lang": "zh",
+  "text": "今天我们先看发布计划。",
+  "echo": false,
+  "start": 0,
+  "end": 12
+ },
+ {
+  "voice": "M",
+  "lang": "en",
+  "text": "The backend API is ready for beta.",
+  "echo": false,
+  "start": 12,
+  "end": 24
+ },
+ {
+  "voice": "P",
+  "lang": "zh",
+  "text": "上次会议决定保持不变。",
+  "echo": true,
+  "start": 24,
+  "end": 25
+ },
+ {
+  "voice": "F",
+  "lang": "mixed",
+  "text": "好的，Bo 负责把 dashboard 搭起来。",
+  "echo": false,
+  "start": 25,
+  "end": 37
+ },
+ {
+  "voice": "M",
+  "lang": "en",
+  "text": "Agreed, beta on Wednesday.",
+  "echo": false,
+  "start": 37,
+  "end": 49
+ }
+]

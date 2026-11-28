@@ -3,6 +3,7 @@ package devicewire
 import (
 	"encoding/json"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -13,6 +14,11 @@ const (
 	// MethodReplayHeldStart (manager → hub): replay a held start through the hub's real start/validation path
 	// once the computer reconnects (or finalize post-start todo handoff after node-side op_id reconciliation).
 	MethodReplayHeldStart = "devices.replay_held_start"
+)
+
+var (
+	HoldStartMethod       = buswire.Method[HoldStartRequest, HoldStartReply]{Name: MethodHoldStart}
+	ReplayHeldStartMethod = buswire.Method[ReplayHeldStartRequest, ReplayHeldStartReply]{Name: MethodReplayHeldStart}
 )
 
 const (

@@ -243,6 +243,16 @@ describe('agy acp process lifecycle', () => {
 })
 
 describe('ACP session recovery', () => {
+  it('retains advertised auth method IDs without eagerly signing in and clears them when the process ends', TIMEOUT, async t => {
+    const { client } = fakeClient(t, 'auth-methods', { channelSpec: { id: 'native', authMode: 'oauth', keyMode: false } })
+    await client.ensureStarted()
+    assert.deepEqual(client.authMethods, [{ id: 'oauth-personal' }, { id: 'gemini-api-key' }])
+    assert.equal(client._canRefreshAuth(), true)
+    await client.recycle('test', true)
+    assert.deepEqual(client.authMethods, [])
+    assert.equal(client._canRefreshAuth(), false)
+  })
+
   it('ignores every event from a replaced process', () => {
     const client = new AgyAcpClient()
     const old = {}
@@ -305,7 +315,8 @@ describe('ACP session recovery', () => {
     assert.deepEqual(requests[1].params.additionalDirectories, [process.cwd() + '/../shared'])
   })
 
-  for (const message of ['Session not found', 'Invalid session', 'session_not_found', 'invalid_session']) {
+  // agy 1.5.x says this when its process no longer has the session loaded (after a model service error, for example).
+  for (const message of ['Session not found', 'Invalid session', 'session_not_found', 'invalid_session', 'Failed to read session da824ba1-9904-4416-9917-491d8bcc8fd1; retry, or load it with session/load']) {
     it(`evicts cached sessions after ${message}`, async () => {
       const client = new AgyAcpClient()
       client.ensureStarted = async () => {}
@@ -332,5 +343,57 @@ describe('ACP session recovery', () => {
     client.loadedSessions.set('s1', true)
     await assert.rejects(client.prompt('s1', []), /quota exhausted/)
     assert.equal(client.loadedSessions.has('s1'), true)
+  })
+
+  it('ignores JSON null, primitive, and array stdout frames without crashing the companion', TIMEOUT, async (t) => {
+    const unhandled = watchUnhandled(t)
+    const { client } = fakeClient(t, 'null-frame')
+    await client.ensureStarted()
+    const sessions = await client.listSessions()
+    assert.deepEqual(sessions, [])
+    assert.deepEqual(unhandled, [])
+  })
+
+  it('rejects stale _start() without sending authenticate or clobbering state if stopped or replaced after initialize', TIMEOUT, async (t) => {
+    // Case A: stop() races after initialize resolves while authMethod is set.
+    const { client: c1 } = fakeClient(t, 'ok', { authMethod: 'gemini-api-key' })
+    const rawCalls1 = []
+    const origRaw1 = c1._rawCall.bind(c1)
+    c1._rawCall = async (method, params, timeoutMs) => {
+      rawCalls1.push(method)
+      if (method === 'initialize') {
+        const res = await origRaw1(method, params, timeoutMs)
+        c1.stop()
+        return { ...res, authMethods: [{ id: 'gemini-api-key' }] }
+      }
+      return origRaw1(method, params, timeoutMs)
+    }
+    await assert.rejects(c1.ensureStarted(), /stopped/)
+    assert.deepEqual(rawCalls1, ['initialize'])
+    assert.equal(c1.agentVersion, '')
+
+    // Case B: proc is replaced after initialize resolves; stale _start must not send authenticate to the replacement proc.
+    const { client: c2 } = fakeClient(t, 'ok', { authMethod: 'gemini-api-key' })
+    const rawCalls2 = []
+    const origRaw2 = c2._rawCall.bind(c2)
+    const replacementProc = { pid: 999999, stdin: { writable: true, write() {} } }
+    c2._rawCall = async (method, params, timeoutMs) => {
+      rawCalls2.push(method)
+      if (method === 'initialize') {
+        const res = await origRaw2(method, params, timeoutMs)
+        const old = c2.proc
+        c2._forget(old, new Error('replaced'))
+        c2._kill(old)
+        c2.proc = replacementProc
+        c2.agentVersion = 'replacement-version'
+        return { ...res, authMethods: [{ id: 'gemini-api-key' }] }
+      }
+      return origRaw2(method, params, timeoutMs)
+    }
+    await assert.rejects(c2.ensureStarted(), /process changed during startup/)
+    assert.deepEqual(rawCalls2, ['initialize'])
+    assert.equal(c2.proc, replacementProc)
+    assert.equal(c2.agentVersion, 'replacement-version')
+    c2.proc = null
   })
 })

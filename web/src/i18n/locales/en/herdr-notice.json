@@ -14,5 +14,7 @@
   "node_too_old": "Persona on this computer is too old to start herdr; update it and try again",
   "offline": "This computer is offline",
   "timeout": "herdr is taking a long time to come up; check again in a moment",
-  "no_answer_after_start": "Asked it to start, but herdr isn't answering yet"
+  "no_answer_after_start": "Asked it to start, but herdr isn't answering yet",
+  "orca_not_running": "Orca isn't running on {machine}",
+  "orca_hint": "Open Orca on that computer to see its Agents again and start new ones."
 }

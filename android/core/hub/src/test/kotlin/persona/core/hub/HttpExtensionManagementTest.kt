@@ -197,8 +197,9 @@ class HttpExtensionManagementTest {
     }
 
     // What the phone says of itself in every view's context; a fixed one so the bodies are exact.
-    private val device = ExtensionUiContext(tz = "Asia/Shanghai", locale = "zh-Hans-CN", platform = "android", uiVersion = 2)
-    private val deviceJson = """"tz":"Asia/Shanghai","locale":"zh-Hans-CN","platform":"android","ui_version":2"""
+    private val device = ExtensionUiContext(tz = "Asia/Shanghai", locale = "zh-Hans-CN", platform = "android",
+        uiVersion = 12)
+    private val deviceJson = """"tz":"Asia/Shanghai","locale":"zh-Hans-CN","platform":"android","ui_version":12"""
 
     private val detail = """{"id":"example-notes","name":"Example Notes","kind":"connectors","status":"needs_setup","version":"1.2.0",
         "source":"installed","enabled":true,"description":"同步笔记","contributes":{"connectors":["examplenotes"]},
@@ -453,8 +454,9 @@ class HttpExtensionManagementTest {
     @Test fun theDeviceContextIsThePhones() {
         val context = HttpExtensionManagement.deviceContext()
         assertEquals("android", (context.platform).zhAny())
-        // UI versions 9 and 10 (#9337, #9727): gauge rings and native graph canvases are drawn.
-        assertEquals(10, context.uiVersion)
+        // Android renders the version 12 map and the version 11 scene.
+        assertEquals(12, context.uiVersion)
+        assertTrue(context.unsupported.isNullOrEmpty())
         assertEquals(java.util.TimeZone.getDefault().id, context.tz)
         assertFalse(context.locale.isNullOrEmpty())
     }

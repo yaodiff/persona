@@ -36,7 +36,13 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEve
 	if !ask.Conclusion || text == "" {
 		return false
 	}
-	if !strings.ContainsAny(text, "?？") { // i18n-ignore: question marks in the owner's reply, never shown
+	todo, ok := s.todoNow(id)
+	literal := unquoteOption(text)
+	question := strings.ContainsAny(text, "?？") // i18n-ignore: question marks in the owner's reply, never shown
+	if ask.manualTerminalAnswer(text, todo.Agents) && (!question || literal == ask.Recommend || slices.ContainsFunc(ask.Options, func(o DecisionOption) bool { return o.Label == literal })) {
+		return false // acceptReply refuses the option; a question must repeat the displayed label verbatim
+	}
+	if !question {
 		if passWords.MatchString(text) && (!decideAsk(&ask) || ask.Recommend != "") {
 			return false
 		}
@@ -47,7 +53,6 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEve
 			}
 		}
 	}
-	todo, ok := s.todoNow(id)
 	if !ok {
 		return false
 	}
@@ -127,7 +132,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		} else if err != nil { // the recommendation did not reach the agent: nothing recorded, "OK" can be said again
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		} else if result.undelivered != nil {
-			why := clip(oneLine(i18n.Localize(result.undelivered, l)), 120)
+			why := decisionNotDeliveredReason(result.undelivered, l)
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_decided_not_sent", i18n.Args{"error": why}))
 		} else if result.taken {
 			s.chat().Note(ctx, larkhost.Target{}, messageID, acceptedNote(l, &ask))
@@ -158,9 +163,16 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_gone"))
 		return true
 	}
-	if a, _ := s.acceptAskLocked(id); a == nil || !a.AskedAt.Equal(ask.AskedAt) || acceptAskStale(a, t) {
+	current, present := s.askCopy(id)
+	if !present || !current.AskedAt.Equal(ask.AskedAt) || acceptAskStale(&current, t) ||
+		decideAsk(&current) && (!current.AcceptedAt.IsZero() || acceptAskEnded(&current, t) || !current.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision)) {
 		s.reviewDismissals.actions.release(id)
 		s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
+		return true
+	}
+	if current.manualTerminalAnswer(text, t.Agents) {
+		s.reviewDismissals.actions.release(id)
+		s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.manual_terminal_resume"))
 		return true
 	}
 	// Feedback starts its work round before delivery, which may wait for an offline Agent to resume.
@@ -265,7 +277,7 @@ func (s *Service) decisionNotDelivered(ctx context.Context, id string, askedAt t
 	s.userDecided(ctx, id)
 	s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + askedAt.UTC().Format(time.RFC3339Nano), Handoff: true,
 		Detail: i18n.T(l, "assistant-reports.decision_not_delivered", i18n.Args{"decision": clip(oneLine(choice), 200),
-			"error": clip(oneLine(i18n.Localize(cause, l)), 120)})})
+			"error": decisionNotDeliveredReason(cause, l)})})
 	return acceptResult{taken: true, undelivered: cause}
 }
 
@@ -322,12 +334,33 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return acceptResult{}, nil
 	}
+	if ownerCheck && !decideAsk(a) && !a.Conclusion {
+		if err := s.investigationCloseError(ctx, t); err != nil {
+			b.mu.Unlock()
+			return acceptResult{}, err
+		}
+	}
 	completeDismissal := func() {}
 	if a.OutsideID != "" {
 		asked := a.AskedAt.UTC().Format(timeKeyLayout)
 		recommend := a.Recommend
 		b.mu.Unlock()
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: recommend}, byDefault)
+	}
+	if a.manualTerminalRecommendation(t.Agents) {
+		b.mu.Unlock()
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
+	}
+	if ownerCheck && !resumeOwnerPass {
+		if work := s.unconfirmedTaskClose(ctx, t); work != nil {
+			b.mu.Unlock()
+			return acceptResult{}, errCloseNotConfirmed
+		}
+	}
+	if resumeOwnerPass {
+		// The accepted ask already records the owner's approval. Recovery may
+		// finish its partial write without issuing a second confirmation.
+		ctx = context.WithValue(ctx, ownerCloseKey{}, ownerCloseConfirmation{todo: t.ID, reopened: t.ReopenedAt, recovering: true})
 	}
 	if todoOK && !byDefault {
 		var err error
@@ -336,10 +369,6 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			b.mu.Unlock()
 			return acceptResult{}, err
 		}
-	}
-	if decideAsk(a) && terminalResumeLabel(a.Recommend) {
-		b.mu.Unlock()
-		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	previousDueAt, previousAcceptedAt := a.DueAt, a.AcceptedAt
 	if a.AcceptedAt.IsZero() {
@@ -365,7 +394,7 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			closed := false
 			if t.DoneAt == nil {
 				var err error
-				closed, err = s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
+				closed, err = s.reviewDoneTodoWithSupervision(ctx, id, acceptedNote(s.botLang(ctx), &cp), true, nil, true)
 				if err != nil {
 					b.mu.Lock()
 					if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
@@ -374,7 +403,23 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 					}
 					b.mu.Unlock()
 					s.askChanged(ctx)
+					if isInvestigationGuardError(err) {
+						return acceptResult{}, err
+					}
 					return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
+				}
+			} else if cur, ok := s.todoNow(id); ok {
+				if err := s.investigationCloseError(ctx, cur); err != nil {
+					if !resumeOwnerPass {
+						b.mu.Lock()
+						if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
+							a.AcceptedAt = previousAcceptedAt
+							s.saveAcceptLocked(ctx)
+						}
+						b.mu.Unlock()
+						s.askChanged(ctx)
+					}
+					return acceptResult{}, err
 				}
 			}
 			v, changed, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
@@ -390,6 +435,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			}
 			if closed || changed {
 				s.taskReviewed(ctx, v.Supervisor, id, reviewAccepted, v)
+				// The owner's Pass is the acceptance task_review(user_check) deferred: the terminal cleanup the owner
+				// opted into at Start follows it, under the same checks as a direct acceptance (#16948).
+				s.goFinishTaskTerminal(ctx, t)
 			}
 		}
 		completeDismissal()

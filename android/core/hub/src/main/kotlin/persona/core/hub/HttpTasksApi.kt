@@ -1,5 +1,15 @@
 package persona.core.hub
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.DeserializationStrategy
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
@@ -7,6 +17,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.decodeFromStream
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
@@ -27,7 +38,7 @@ import persona.core.contracts.TodoDecision
 import persona.core.contracts.TodoDecisionResponse
 import persona.core.contracts.TodoDecisionsResponse
 import persona.core.contracts.TodoDue
-import persona.core.contracts.TodosResponse
+import persona.core.contracts.TodosPageResponse
 import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.AssistantViewAnswer
 import persona.core.contracts.api.TasksApi
@@ -38,27 +49,132 @@ import persona.core.contracts.generated.ExtensionViewActionInput
 import persona.core.contracts.generated.ExtensionViewChangedError
 
 private const val START_ANSWER_READ_TIMEOUT_SECONDS = 30L
+private const val TODO_REVISION_FEATURE = "todo_revision"
+private const val TODO_REVISION_HEADER = "X-Persona-Todos-Revision"
+private const val TODO_PAGE_LIMIT = 200
+private const val MAX_TODO_PAGES = 256
+
+internal data class TasksRequestOptions(
+    val headers: Map<String, String> = emptyMap(),
+    val buffered: Boolean = true,
+    val slow: Boolean = false,
+    val allowNotModified: Boolean = false,
+)
 
 /** The unified entry's routes on the active pairing (docs/protocol/protocol.md "Tasks and the chat feed"). */
 class HttpTasksApi internal constructor(
-    private val request: suspend (path: String, method: String, body: JsonElement?) -> Response,
+    private val requestWithOptions: suspend (path: String, method: String, body: JsonElement?, options: TasksRequestOptions) -> Response,
     override val features: kotlinx.coroutines.flow.StateFlow<Set<String>>? = null,
-    private val slowRequest: (suspend (path: String, method: String, body: JsonElement?) -> Response)? = null,
 ) : TasksApi {
+    internal constructor(
+        request: suspend (path: String, method: String, body: JsonElement?) -> Response,
+        features: kotlinx.coroutines.flow.StateFlow<Set<String>>? = null,
+        slowRequest: (suspend (path: String, method: String, body: JsonElement?) -> Response)? = null,
+    ) : this({ path, method, body, options ->
+        (if (options.slow) slowRequest ?: request else request)(path, method, body)
+    }, features)
+
     /** On [connection], whose hello's features say what its cards may do. */
-    constructor(connection: OkHttpHubConnection) : this({ path, method, body ->
-        connection.request(path, method, body?.toString()?.toRequestBody("application/json".toMediaType()))
-    }, connection.serverFeatures, { path, method, body ->
-        connection.request(path, method, body?.toString()?.toRequestBody("application/json".toMediaType()),
-            readTimeoutSeconds = START_ANSWER_READ_TIMEOUT_SECONDS)
-    })
+    constructor(connection: OkHttpHubConnection) : this({ path, method, body, options ->
+        connection.request(
+            path = path,
+            method = method,
+            body = body?.toString()?.toRequestBody("application/json".toMediaType()),
+            headers = options.headers,
+            buffered = options.buffered,
+            readTimeoutSeconds = if (options.slow) START_ANSWER_READ_TIMEOUT_SECONDS else null,
+            allowNotModified = options.allowNotModified,
+        )
+    }, connection.serverFeatures)
+
+    private val todosFetchLock = Mutex()
+    private var lastTodoRevision: String? = null
+    private var lastTodos: List<Todo>? = null
+
+    private sealed interface RevisionCheck {
+        data object NotModified : RevisionCheck
+        data class Current(val tag: String) : RevisionCheck
+        data object Unavailable : RevisionCheck
+    }
 
     private suspend fun call(path: String, method: String = "GET", body: JsonElement? = null, slow: Boolean = false): JsonObject =
-        (if (slow) slowRequest ?: request else request)(path, method, body).use {
+        requestWithOptions(path, method, body, TasksRequestOptions(slow = slow)).use {
             if (!it.isSuccessful) throw HubFailure.from(it)
             val text = it.body?.string().orEmpty()
             if (text.isBlank()) JsonObject(emptyMap()) else JsonCodec.parseToJsonElement(text).jsonObject
         }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun <T> decodeStream(response: Response, deserializer: DeserializationStrategy<T>, empty: () -> T): T {
+        val body = response.body ?: return empty()
+        return body.byteStream().buffered().use { input ->
+            while (true) {
+                input.mark(1)
+                val first = input.read()
+                if (first == -1) return@use empty()
+                if (first != 9 && first != 10 && first != 13 && first != 32) {
+                    input.reset()
+                    break
+                }
+            }
+            JsonCodec.decodeFromStream(deserializer, input)
+        }
+    }
+
+    /**
+     * Stream a potentially large JSON response on [Dispatchers.IO] without buffering the full body or
+     * materializing a whole-response `JsonObject` DOM, serialized behind the shared decode gate (#1446).
+     */
+    private suspend fun <T> streamGet(
+        path: String,
+        deserializer: DeserializationStrategy<T>,
+        empty: () -> T,
+    ): Pair<T, String?> = withContext(Dispatchers.IO) {
+        HttpInboxAssistantTransport.jsonDecodeGate.withPermit {
+            currentCoroutineContext().ensureActive()
+            requestWithOptions(path, "GET", null, TasksRequestOptions(buffered = false)).use { response ->
+                if (!response.isSuccessful) throw HubFailure.from(response)
+                val revision = response.header(TODO_REVISION_HEADER)?.takeIf(String::isNotBlank)
+                decodeStream(response, deserializer, empty) to revision
+            }
+        }
+    }
+
+    private suspend fun checkTodoRevision(ifNoneMatch: String?): RevisionCheck = withContext(Dispatchers.IO) {
+        try {
+            val headers = if (ifNoneMatch != null) mapOf("If-None-Match" to ifNoneMatch) else emptyMap()
+            requestWithOptions(
+                path("todos", "revision"),
+                "GET",
+                null,
+                TasksRequestOptions(headers = headers, buffered = false, allowNotModified = true),
+            ).use { response ->
+                when {
+                    response.code == 304 -> RevisionCheck.NotModified
+                    response.isSuccessful -> {
+                        val headerTag = response.header(TODO_REVISION_HEADER)?.takeIf(String::isNotBlank)
+                            ?: response.header("ETag")?.takeIf(String::isNotBlank)
+                        val bodyTag = if (headerTag != null) null else runCatching {
+                            val text = response.body?.string().orEmpty()
+                            if (text.isBlank()) null
+                            else (JsonCodec.parseToJsonElement(text).jsonObject["revision"] as? JsonPrimitive)
+                                ?.content?.takeIf(String::isNotBlank)
+                        }.getOrNull()
+                        val tag = headerTag ?: bodyTag
+                        if (tag != null) RevisionCheck.Current(tag) else RevisionCheck.Unavailable
+                    }
+                    else -> RevisionCheck.Unavailable
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: HubFailure) {
+            if (failure.kind == HubError.PairingExpired) throw failure
+            RevisionCheck.Unavailable
+        } catch (_: Exception) {
+            RevisionCheck.Unavailable
+        }
+    }
 
     private fun path(vararg segments: String, query: Map<String, String> = emptyMap()): String {
         val url = HttpUrl.Builder().scheme("https").host("example.com").addPathSegments("api/v1")
@@ -86,12 +202,103 @@ class HttpTasksApi internal constructor(
             .sessions.firstOrNull { it.key == key }
     }
 
+    private data class TodosFetchResult(
+        val todos: List<Todo>,
+        val headerRevision: String?,
+        val paginated: Boolean,
+    )
+
+    private suspend fun fetchTodosStreaming(): TodosFetchResult {
+        val (firstPage, firstHeaderRevision) = try {
+            streamGet(
+                path("todos", query = mapOf("limit" to TODO_PAGE_LIMIT.toString())),
+                TodosPageResponse.serializer(),
+            ) { TodosPageResponse() }
+        } catch (failure: HubFailure) {
+            val fallbackUnpaginated = failure.status == 501 ||
+                (failure.status == 400 && failure.code == "todos_pagination_manager_required")
+            if (!fallbackUnpaginated) throw failure
+            val (full, revision) = streamGet(path("todos"), TodosPageResponse.serializer()) { TodosPageResponse() }
+            return TodosFetchResult(full.todos, revision, paginated = false)
+        }
+
+        // Older hubs ignore ?limit and omit has_more while answering the complete list in one stream.
+        val firstHasMore = firstPage.hasMore
+        if (firstHasMore == null) {
+            return TodosFetchResult(firstPage.todos, firstHeaderRevision, paginated = false)
+        }
+        if (!firstHasMore || firstPage.nextCursor.isNullOrEmpty()) {
+            return TodosFetchResult(firstPage.todos, firstHeaderRevision, paginated = true)
+        }
+
+        val collected = LinkedHashMap<String, Todo>(firstPage.todos.size)
+        firstPage.todos.forEach { collected[it.id] = it }
+        val seenCursors = HashSet<String>()
+        var nextCursor: String? = firstPage.nextCursor
+        var pages = 1
+        while (!nextCursor.isNullOrEmpty()) {
+            check(pages < MAX_TODO_PAGES) { "Todos page limit exceeded" }
+            check(seenCursors.add(nextCursor)) { "Repeated todos cursor" }
+            val (page, _) = streamGet(
+                path("todos", query = mapOf("limit" to TODO_PAGE_LIMIT.toString(), "cursor" to nextCursor)),
+                TodosPageResponse.serializer(),
+            ) { TodosPageResponse() }
+            page.todos.forEach { collected[it.id] = it }
+            pages++
+            nextCursor = if (page.hasMore == true) page.nextCursor?.takeIf(String::isNotEmpty) else null
+        }
+        return TodosFetchResult(collected.values.toList(), headerRevision = null, paginated = true)
+    }
+
     // The list is every manager's, each to-do with its `manager` (docs/protocol/protocol.md "Per-manager routing"): noted, so the
     // requests for one name its manager, as an inbox item's do.
-    override suspend fun todos(): List<Todo> =
-        JsonCodec.decodeFromJsonElement<TodosResponse>(call(path("todos"))).todos.onEach {
-            AssistantManagerChoice.noteItem(listOf("todos", it.id), it.manager)
+    override suspend fun todos(): List<Todo> = todosFetchLock.withLock {
+        val supportsRevision = features?.value?.contains(TODO_REVISION_FEATURE) == true
+        var revisionBefore: String? = null
+        if (!supportsRevision) {
+            lastTodoRevision = null
+            lastTodos = null
+        } else {
+            val cachedRevision = lastTodoRevision
+            val cachedTodos = lastTodos
+            if (cachedRevision != null && cachedTodos != null) {
+                when (val check = checkTodoRevision(cachedRevision)) {
+                    RevisionCheck.NotModified -> return@withLock cachedTodos
+                    is RevisionCheck.Current -> revisionBefore = check.tag
+                    RevisionCheck.Unavailable -> {
+                        lastTodoRevision = null
+                        revisionBefore = null
+                    }
+                }
+            } else {
+                revisionBefore = (checkTodoRevision(null) as? RevisionCheck.Current)?.tag
+            }
         }
+
+        val fetched = fetchTodosStreaming()
+        fetched.todos.forEach { AssistantManagerChoice.noteItem(listOf("todos", it.id), it.manager) }
+
+        if (!supportsRevision) {
+            lastTodoRevision = null
+            lastTodos = null
+        } else if (fetched.headerRevision != null) {
+            lastTodoRevision = fetched.headerRevision
+            lastTodos = fetched.todos
+        } else if (fetched.paginated && revisionBefore != null) {
+            // Confirm no write raced the paginated read before caching the lightweight validator.
+            if (checkTodoRevision(revisionBefore) == RevisionCheck.NotModified) {
+                lastTodoRevision = revisionBefore
+                lastTodos = fetched.todos
+            } else {
+                lastTodoRevision = null
+                lastTodos = null
+            }
+        } else {
+            lastTodoRevision = null
+            lastTodos = null
+        }
+        fetched.todos
+    }
 
     // A new to-do is the current assistant's (the client names it on `POST todos`), or the one the caller named for it
     // (a RequestManager: an agent's own assistant when it is linked at once; "" the default's).
@@ -190,6 +397,7 @@ class HttpTasksApi internal constructor(
         return persona.core.contracts.api.FeedPageReader { since, cursor -> readFeed(conversation, since, cursor, owner, paginated = true) }
     }
 
+    @OptIn(ExperimentalSerializationApi::class)
     private suspend fun readFeed(conversation: String, since: String?, cursor: String?, owner: String, paginated: Boolean): FeedResponse {
         val query = buildMap {
             if (paginated) put(ManagerQuery, owner)
@@ -199,7 +407,10 @@ class HttpTasksApi internal constructor(
                 since?.let { put("since", it) }
             }
         }
-        val response: FeedResponse = JsonCodec.decodeFromJsonElement(call(path("assistant", "conversations", conversation, "feed", query = query)))
+        val (response, _) = streamGet(
+            path("assistant", "conversations", conversation, "feed", query = query),
+            FeedResponse.streamingSerializer(),
+        ) { FeedResponse() }
         response.items.forEach { feedOwners.putIfAbsent(it.id, owner) }
         conversationOwners.putIfAbsent(conversation, owner)
         return response

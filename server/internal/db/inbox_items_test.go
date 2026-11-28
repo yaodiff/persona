@@ -148,6 +148,25 @@ func TestInboxItemWithNULRefused(t *testing.T) {
 	}
 }
 
+func TestStoredInboxSourcesIncludesHistoryOutsideTheLoadWindow(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now()
+	old := now.Add(-30 * 24 * time.Hour)
+	rows := []InboxRow{
+		{ID: "legacy", Data: []byte(`{"id":"legacy"}`), UpdatedAt: old, DoneAt: &old},
+		{ID: "lark:old", Data: []byte(`{"id":"lark:old","source":"lark"}`), UpdatedAt: old, DoneAt: &old},
+		{ID: "larkcli:open", Data: []byte(`{"id":"larkcli:open","source":"larkcli"}`), UpdatedAt: now},
+		{ID: "mail:old", Data: []byte(`{"id":"mail:old","source":"mail"}`), UpdatedAt: old, DoneAt: &old},
+	}
+	if err := d.PutInboxItems(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := d.StoredInboxSources(ctx)
+	if err != nil || !slices.Equal(sources, []string{"lark", "larkcli", "mail"}) {
+		t.Fatalf("StoredInboxSources = %v, %v", sources, err)
+	}
+}
+
 // Done items stay stored past the days the manager loads them (history), until they are purged; open ones never are.
 func TestInboxHistoryKeptThenPurged(t *testing.T) {
 	d, ctx := open(t), context.Background()

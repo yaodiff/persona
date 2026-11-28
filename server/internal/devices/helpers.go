@@ -36,17 +36,17 @@ func (d *Devices) HelperDownload(ctx context.Context, goos, arch, name string) (
 		return base + "/" + url.PathEscape(dir) + "/" + url.PathEscape(file)
 	}
 	if v := cfg.HubVersion; v != "" && v != "dev" && safeVersion.MatchString(v) {
-		m, err := d.fetchManifest(ctx, at(v, "manifest.json"))
+		m, err := d.fetchManifest(ctx, at(v, update.ReleaseManifestName(d.edition())))
 		switch {
 		case err == nil:
 			if f, ok := m.HelperFile(name, plat); ok {
-				return []string{at(v, f.Name)}, f, nil
+				return []string{at(v, f.Remote())}, f, nil
 			}
 		case !errors.Is(err, errNoManifest):
 			return nil, update.File{}, err
 		}
 	}
-	latest, err := d.fetchManifest(ctx, at("", "latest.json"))
+	latest, err := d.fetchManifest(ctx, at("", update.FeedName(d.edition())))
 	if errors.Is(err, errNoManifest) {
 		return nil, update.File{}, ErrNoHelper
 	}
@@ -57,9 +57,9 @@ func (d *Devices) HelperDownload(ctx context.Context, goos, arch, name string) (
 	if !ok {
 		return nil, update.File{}, ErrNoHelper
 	}
-	urls := []string{at("", f.Name)}
+	urls := []string{at("", f.Remote())}
 	if safeVersion.MatchString(latest.Version) {
-		urls = append([]string{at(latest.Version, f.Name)}, urls...)
+		urls = append([]string{at(latest.Version, f.Remote())}, urls...)
 	}
 	return urls, f, nil
 }

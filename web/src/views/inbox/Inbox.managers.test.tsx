@@ -158,10 +158,10 @@ describe("the inbox of several managers", () => {
     await flush();
     const state = host.querySelector<HTMLElement>("[data-assistant-offline]");
     expect(state?.dataset.assistantOffline).toBe("m-2");
-    expect(state?.textContent).toContain("家里 离线");
+    expect(state?.textContent).toContain("家里 已离线");
     expect(state?.textContent).toContain("最后同步于");
-    expect(state?.textContent).toContain("它上线后这里会更新。");
-    expect(host.textContent).not.toContain("都处理完了");
+    expect(state?.textContent).toContain("助手恢复在线后页面将自动更新。");
+    expect(host.textContent).not.toContain("已全部处理完毕");
     expect(host.querySelector("[data-inbox-no-sources]")).toBeNull();
     // an online current assistant with nothing: as before
     act(() => chooseManager("m-1"));

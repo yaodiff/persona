@@ -8,7 +8,7 @@
   "registry_help": "詳細設定：id、capacity、mirror（machine、target、任意の port と identity）が必要です。repositories はプロジェクト名と Git URL の対応表です。空のリストを保存すると同期を停止します。",
   "save": "保存",
   "cancel": "キャンセル",
-  "capacity": "{used} 件実行中 / {capacity} スロット",
+  "capacity": "実行中{used}件（上限{capacity}件）",
   "unknown": "不明",
   "never": "同期にまだ成功していません",
   "stale": "同期情報は {seconds} 秒前のものです",

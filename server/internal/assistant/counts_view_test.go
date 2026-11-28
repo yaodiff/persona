@@ -71,7 +71,7 @@ func TestCountsViewFollowsTheSharedFixtures(t *testing.T) {
 					Muted: s.mutedAs(sess.MachineID, sess.SessionID, sess.SpaceName)})
 			}
 			var r fleetRound
-			_, v := r.linkAndCounts("en", agents, c.Input.Interactions, nil, opt.None[assistantwire.TodoCounts]())
+			_, v := r.linkAndCounts("en", agents, c.Input.Interactions, nil, nil, opt.None[assistantwire.TodoCounts]())
 			count := v.Counts.AgentsNeedsYou
 			if count == nil || v.Totals == nil || v.Totals.AgentsNeedsYou == nil {
 				t.Fatalf("no agents_needs_you: %+v", v)
@@ -102,8 +102,9 @@ func TestCountsViewFollowsTheSharedFixtures(t *testing.T) {
 // countsRound is one of liveLoop's rounds over s's fleet, the Live Activity left out: the summary and the counts view
 // made, with the to-dos as the manager last counted them, and the view told.
 func countsRound(s *Service, r *fleetRound) {
-	agents, ixs, told := s.fleetInputs()
-	_, v := r.linkAndCounts("en", agents, ixs, told, s.fleet.live.counts.todos.kept())
+	var quiet []fleetInput
+	agents, ixs, told := s.fleetInputsForRound(nil, &quiet)
+	_, v := r.linkAndCounts("en", agents, ixs, told, quiet, s.fleet.live.counts.todos.kept())
 	s.tellCounts(v)
 }
 
@@ -287,7 +288,7 @@ func TestCountsViewCountsTheToDosAsTheListDoes(t *testing.T) {
 			s := newFleetTestNoStore(t).s
 			s.todosCounted(s.todoViewGen(), p)
 			var r fleetRound
-			_, v := r.linkAndCounts("en", nil, nil, nil, s.fleet.live.counts.todos.kept())
+			_, v := r.linkAndCounts("en", nil, nil, nil, nil, s.fleet.live.counts.todos.kept())
 			got := v.Counts.TodosNeedsYou
 			if got == nil || v.Totals == nil || v.Totals.TodosNeedsYou == nil || got.N != want ||
 				*v.Totals.TodosNeedsYou != want || got.More != want || got.Keys != nil || got.Held != nil {

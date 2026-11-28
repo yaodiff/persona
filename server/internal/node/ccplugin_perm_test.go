@@ -226,6 +226,121 @@ func TestCCPluginPollAuthorizesPermissionsAndBlocksPersonaHooks(t *testing.T) {
 	}
 }
 
+func TestCCPluginClassicPassedOverDisablesPermissionBridge(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	h := withEventHub(t, n)
+	p := bgTranscript(t, home, home, sidA, "policy")
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	c := pluginSocket(t, n)
+
+	poll := func(passedBy bool) (int, map[string]any) {
+		t.Helper()
+		body := map[string]any{
+			"session_id":     sidA,
+			"plugin_version": "0.3.1",
+			"capabilities":   []string{"busy_input", "interrupt", "settings", "permissions"},
+			"wait_ms":        5000,
+		}
+		if passedBy {
+			body["classic_passed_over"] = true
+		}
+		return pluginPost(t, c, "poll", body)
+	}
+
+	// Before the plugin has seen a pass-over, the normal authorization and row are unchanged.
+	status, out := poll(false)
+	if status != http.StatusOK || out["permissions"] != true || !n.ccPluginPermissionsCapable(sidA, os.Getpid()) {
+		t.Fatalf("initial authorized poll: %d %v", status, out)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve {
+		t.Fatalf("normal desktop row lost Approve: %+v", s.Capabilities)
+	}
+
+	type permResult struct {
+		status int
+		out    map[string]any
+	}
+	permDone := make(chan permResult, 1)
+	go func() {
+		st, o := pluginPost(t, c, "permission", map[string]any{
+			"session_id":  sidA,
+			"req_id":      "req-before-passed-over",
+			"tool_name":   "Bash",
+			"tool_use_id": "toolu_before",
+			"tool_input":  map[string]any{"command": "ls"},
+			"wait_ms":     5000,
+		})
+		permDone <- permResult{st, o}
+	}()
+	waitFor(t, "plugin permission card before pass-over", func() bool { asked, _, _ := h.counts(); return asked == 1 })
+
+	// A poll carrying the plugin's observation revokes permission bridging immediately and changes the row.
+	start := time.Now()
+	status, out = poll(true)
+	if status != http.StatusOK || out["permissions"] == true || time.Since(start) > time.Second {
+		t.Fatalf("passed-over poll: %d %v after %v", status, out, time.Since(start))
+	}
+	if n.ccPluginPermissionsCapable(sidA, os.Getpid()) {
+		t.Fatal("passed-over plugin still permissionsCapable")
+	}
+	s := byID(listSessions(t, n))[sidA]
+	if s.Capabilities == nil || s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudePluginPassedOver {
+		t.Fatalf("passed-over desktop row: %+v caps=%+v", s, s.Capabilities)
+	}
+	select {
+	case got := <-permDone:
+		if got.status != http.StatusOK || got.out["action"] != "passthrough" {
+			t.Fatalf("active card after pass-over: %d %v", got.status, got.out)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active plugin permission card did not end on pass-over")
+	}
+	waitFor(t, "active card cancelled on pass-over", func() bool { _, cancelled, _ := h.counts(); return cancelled == 1 })
+
+	// Even a direct permission call cannot create a card after the plugin reported the pass-over.
+	status, out = pluginPost(t, c, "permission", map[string]any{
+		"session_id": sidA,
+		"req_id":     "req-passed-over",
+		"tool_name":  "Bash",
+		"tool_input": map[string]any{"command": "ls"},
+		"wait_ms":    200,
+	})
+	asked, _, _ := h.counts()
+	if status != http.StatusOK || out["action"] != "passthrough" || asked != 1 {
+		t.Fatalf("passed-over /permission: %d %v (cards=%d)", status, out, asked)
+	}
+}
+
+func TestCCPluginClassicPassedOverKeepsQuestionCards(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"ask me"}}`,
+		askCall(sidA, "toolu_question", `{"questions":[{"question":"Which?","header":"Pick","options":[{"label":"A"},{"label":"B"}],"multiSelect":false}]}`))
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	c := pluginSocket(t, n)
+
+	status, out := pluginPost(t, c, "poll", map[string]any{
+		"session_id":          sidA,
+		"plugin_version":      "0.3.1",
+		"capabilities":        []string{"busy_input", "interrupt", "settings", "permissions"},
+		"classic_passed_over": true,
+		"wait_ms":             50,
+	})
+	if status != http.StatusOK || out["permissions"] == true || n.ccPluginPermissionsCapable(sidA, os.Getpid()) {
+		t.Fatalf("passed-over poll enabled plugin permissions: %d %v", status, out)
+	}
+	cards := n.outsideAskCards()
+	if len(cards) != 1 || !strings.HasPrefix(cards[0].ID, outsideAskPrefix) {
+		t.Fatalf("question card changed under pass-over: %+v", cards)
+	}
+}
+
 func TestCCPluginPermissionLongPollRenewalAndDecisions(t *testing.T) {
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)

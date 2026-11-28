@@ -895,11 +895,19 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
 
     func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
         let picked = ReplyText.copyText(attributedText.attributedSubstring(from: range)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !picked.isEmpty, let quote else { return UIMenu(children: suggestedActions) }
-        let ours = UIMenu(options: .displayInline, children: [
-            UIAction(title: String(localized: "Quote"), image: UIImage(systemName: Theme.Icon.quote)) { _ in quote(picked) },
-        ])
-        return UIMenu(children: [ours] + suggestedActions)
+        var items: [UIMenuElement] = []
+        if !picked.isEmpty, let quote {
+            items.append(UIAction(title: String(localized: "Quote"), image: UIImage(systemName: Theme.Icon.quote)) { _ in quote(picked) })
+        }
+        // One word picked, while a text_lookup extension answers: Look Up in <provider> (#10977), the way to it that
+        // needs no tap on the word (VoiceOver, a selection).
+        #if os(iOS)
+        if let lookup = TextLookupMenu.action(for: picked, in: self, range: range, source: "chat") {
+            items.append(lookup)
+        }
+        #endif
+        guard !items.isEmpty else { return UIMenu(children: suggestedActions) }
+        return UIMenu(children: [UIMenu(options: .displayInline, children: items)] + suggestedActions)
     }
 
     /// The words as the chat shows them; a table in it as its Markdown.

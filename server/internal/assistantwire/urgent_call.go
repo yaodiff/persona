@@ -1,9 +1,14 @@
 package assistantwire
 
+import "github.com/nwverse/persona/server/internal/buswire"
+
 // MethodCallRing is call.ring {call} → CallRingResult: a manager has the hub ring the owner's phones for an urgent call
 // (docs/assistant/urgent-call.md). The manager decided the call may ring; the hub only delivers it, as a VoIP push to
 // every phone registered for calls, and answers once APNs or the relay took or refused each one.
 const MethodCallRing = "call.ring"
+
+// CallRingMethod binds an urgent call ring to its delivery result.
+var CallRingMethod = buswire.Method[CallRingRequest, CallRingResult]{Name: MethodCallRing}
 
 // EventToolsChanged is assistant.tools_changed (one way, a manager → the hub): its MCP tools changed (urgent_call comes
 // and goes with the owner's switch), so the hub asks for them again. Conversations started after that list the new

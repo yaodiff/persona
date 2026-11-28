@@ -106,6 +106,16 @@ func TestSpacesMigrationInstallsVerifiedOfficialPackage(t *testing.T) {
 	if err != nil || len(items) != 1 || items[0].ID != "space" {
 		t.Fatalf("contributed kinds: %+v, %v", items, err)
 	}
+	// The assistant is told which extension contributes the kind (assistant/track_space_md.go spaceStateRefusal).
+	raw, err := h.DomainTrackKindsJSON(t.Context())
+	var withOwner []struct {
+		ID        string `json:"id"`
+		Extension string `json:"extension"`
+	}
+	if err != nil || json.Unmarshal(raw, &withOwner) != nil || len(withOwner) != 1 || withOwner[0].ID != "space" ||
+		withOwner[0].Extension != spacesMigrationID {
+		t.Fatalf("contributed kinds for the assistant: %s, %v", raw, err)
+	}
 	// A disabled choice made after installation is never reversed by the next upgrade.
 	if err := h.extensions.reg.SetEnabled(t.Context(), spacesMigrationID, false, "test"); err != nil {
 		t.Fatal(err)

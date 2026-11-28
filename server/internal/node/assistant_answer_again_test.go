@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +18,11 @@ func TestAssistantAnswerAgainRequiresTheSameIdleTurn(t *testing.T) {
 	f := cliTest(t)
 	n := f.n
 	ctx := t.Context()
-	id, err := n.assistantSend(ctx, "", t.TempDir(), "claude", "Check today's usage.", nil, "", "")
+	cwd := filepath.Join(n.home, ".persona", "assistant")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id, err := n.assistantSend(ctx, "", cwd, "claude", "Check today's usage.", nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +89,41 @@ func TestAssistantAnswerAgainRequiresTheSameIdleTurn(t *testing.T) {
 	items = read(1)
 	if len(items) != 4 || items[0].Text != "A new question." || prompts.ParseInjected(items[2].Text) == nil {
 		t.Fatalf("reloaded turn lost its original input or the Persona follow-up: %+v", items)
+	}
+
+	last = items[len(items)-1].ID
+	if _, err := nodeCall(t, n, "session.interrupt", map[string]any{"session_id": id}); err != nil {
+		t.Fatal(err)
+	}
+	assertChanged(send(last, "explicit-stop"))
+
+	const question = "How many requests are left?"
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": id, "text": question, "client_msg_id": "owner-after-stop",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	lines.user("u4", "a3", question).add(map[string]any{
+		"type": "assistant", "uuid": "a4", "parentUuid": "u4",
+		"message": map[string]any{"role": "assistant", "stop_reason": "end_turn", "content": []any{
+			map[string]any{"type": "text", "text": "No response requested."},
+		}},
+	}).write(t, path)
+	items = read(1)
+	last = items[len(items)-1].ID
+	if err := send(last, "after-stop"); err != nil {
+		t.Fatalf("a missing reply to the new input must allow a follow-up: %v", err)
+	}
+	cliWait(t, "the new turn's recovery prompt", func() bool {
+		return strings.Count(f.file("stdin.jsonl"), "persona-answer-again") == 2
+	})
+	f.idle(t, id)
+
+	n.stopAssistantProcess(id)
+	err = send(last, "process-gone")
+	var refused *rpc.Error
+	if err == nil || (errors.As(err, &refused) && refused.Code == assistantwire.CodeAnswerAgainChanged) {
+		t.Fatalf("a missing process on an unchanged turn must allow a manual retry notice: %v", err)
 	}
 }

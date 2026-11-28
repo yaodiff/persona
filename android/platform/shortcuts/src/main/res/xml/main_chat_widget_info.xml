@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Persona main-chat home-screen widget (MainChatWidget.kt): adaptive 2x2 / 4x2 / 4x3, default 4x2, event-driven refresh. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:description="@string/shortcuts_main_chat_widget_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="100dp"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:configure="persona.platform.shortcuts.ConversationWidgetConfigureActivity"
+    android:widgetFeatures="reconfigurable"
+    android:widgetCategory="home_screen"
+    tools:targetApi="s" />

@@ -39,6 +39,11 @@ data class OutboxEntry(
     val applySwitch: Boolean = false,
     /** External provenance ([persona.core.contracts.api.MessageVia]); old rows and typed messages restore null. */
     val via: String? = null,
+    /**
+     * The hub's own sentence for the refusal [error] codes, in the app's language; kept only by the transition that
+     * recorded the refusal ([OutboxStore.transition] with a reason) and cleared by every other one (#16531).
+     */
+    val reason: String? = null,
 ) {
     /** Journal-owned delivery evidence stays out of the public data-class and generated copy signatures. */
     internal var agentHandOff: InboxAgentHandOff? = null
@@ -56,7 +61,8 @@ data class OutboxEntry(
         error: String? = this.error,
         opId: String? = this.opId,
         agentHandOff: InboxAgentHandOff? = this.agentHandOff,
-    ): OutboxEntry = copy(session = session, state = state, error = error, opId = opId)
+        reason: String? = this.reason,
+    ): OutboxEntry = copy(session = session, state = state, error = error, opId = opId, reason = reason)
         .withAgentHandOff(agentHandOff)
 }
 
@@ -90,5 +96,12 @@ interface OutboxStore {
     /** [transition], and the message's next attempt goes under [opId]. */
     suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String): Boolean =
         throw UnsupportedOperationException("Operation ids are not supported by this store")
+    /**
+     * [transition] that also keeps [reason], the hub's own sentence for the refusal [error] codes ([OutboxEntry.reason]);
+     * with an [opId] the next attempt goes under it. The other transitions clear the sentence. A store that cannot keep
+     * it records the code alone, and the app words the refusal by its code.
+     */
+    suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String?, reason: String?): Boolean =
+        if (opId == null) transition(id, from, to, error) else transition(id, from, to, error, opId)
     suspend fun recoverInterrupted()
 }

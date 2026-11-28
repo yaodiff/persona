@@ -157,6 +157,12 @@ func (s *Service) withConn(ctx context.Context, a *MailAccount, op string, fn fu
 // with the account, op, the step and the raw error. When the last try could not reach the server either, the caller
 // gets an UnreachableError, which says so in words; the raw error stays in the log and in its chain.
 func (s *Service) withConnAt(ctx context.Context, a *MailAccount, op string, fn func(c *imapclient.Client, deadline time.Time) error) error {
+	return s.withConnAtRetry(ctx, a, op, fn, nil)
+}
+
+// withConnAtRetry lets a write prevent the operation from being replayed once its first command may have reached
+// the server. A broken connection is still discarded even when the operation cannot be retried.
+func (s *Service) withConnAtRetry(ctx context.Context, a *MailAccount, op string, fn func(c *imapclient.Client, deadline time.Time) error, canRetry func() bool) error {
 	// IMAP is stateful (SELECT), so a cached connection can only serve one
 	// command sequence at a time. The wait for the turn is the caller's ctx's:
 	// a caller that gave up leaves the queue (#2344).
@@ -209,7 +215,7 @@ func (s *Service) withConnAt(ctx context.Context, a *MailAccount, op string, fn 
 			retryable = isConnError(err)
 			lost = retryable && networkError(err)
 		}
-		retry := retryable && try < connTries && ctx.Err() == nil && time.Now().Before(deadline)
+		retry := retryable && try < connTries && ctx.Err() == nil && time.Now().Before(deadline) && (canRetry == nil || canRetry())
 		// A refused login is logged when it starts or its answer changes, not again on every round.
 		if !errors.Is(err, context.Canceled) && (step != "connect" || changed || !loginRefused(err)) {
 			logTry(a.ID, op, step, try, retry, err, why)

@@ -120,6 +120,13 @@ def counts_views():
             yield "CountsView", f"{where}.when.view", c["when"]["view"]
 
 
+def inbox_sources():
+    """(definition, sample) of every stored-source fact whose visibility rule inbox-sources pins (#17399)."""
+    for where, c in domain_cases("inbox-sources"):
+        if stored := c["input"].get("stored_sources"):
+            yield "InboxStoredSources", f"{where}.input.stored_sources", stored
+
+
 def wire_ids():
     """(definition, sample) of every ID and AgentRef in ids/ids.json."""
     for where, c in domain_cases("ids"):
@@ -141,7 +148,17 @@ def todo_waits():
             yield "TodoWait", f"{where}.expected.wait", wait
 
 
-SAMPLES = {"agent-view.schema.json": agent_views, "counts.schema.json": counts_views, "ids.schema.json": wire_ids, "recents.schema.json": recent_setups,
+def integrations_projections():
+    """Catalog and detail samples for the owning assistant's Integrations API."""
+    for where, c in domain_cases("integrations-projection"):
+        for key, name in (("catalog", "IntegrationCatalog"), ("detail", "IntegrationDetail")):
+            if key in c["expected"]:
+                yield name, f"{where}.expected.{key}", c["expected"][key]
+
+
+SAMPLES = {"agent-view.schema.json": agent_views, "counts.schema.json": counts_views, "ids.schema.json": wire_ids,
+           "inbox-sources.schema.json": inbox_sources, "integrations-projection.schema.json": integrations_projections,
+           "recents.schema.json": recent_setups,
            "todo-view.schema.json": todo_views, "todo-wait.schema.json": todo_waits}
 
 

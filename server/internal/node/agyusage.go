@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -26,9 +27,14 @@ var agyModelWindowCache = struct {
 }{byID: map[string]int{}}
 
 type agyMetaEntry struct {
-	file  os.FileInfo
-	path  string
-	usage agyTranscriptUsage
+	file os.FileInfo
+	path string
+	meta agySessionMeta
+}
+
+type agySessionMeta struct {
+	agyTranscriptUsage
+	background agyBackgroundTasks
 }
 
 func firstPositive64(vals ...int64) int64 {
@@ -166,9 +172,13 @@ func extractAgyUsage(steps []agyStep) agyTranscriptUsage {
 		switch step.Type {
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
+				text := agyUserText(step.Content)
+				if isAgyCompactCommand(text) {
+					break
+				}
 				u.turns++
 				if u.first == "" {
-					u.first = agyUserText(step.Content)
+					u.first = text
 				}
 			}
 		case "CHECKPOINT":
@@ -401,7 +411,7 @@ func (n *Node) resolveAgyContext(s *proto.Session, conversation string) {
 	// The companion may have filtered out a rewound tail that is still on disk. Pair the
 	// local category weights with companion counts only when their observed usage agrees.
 	if u, ok := n.agyTranscriptMeta(conversation); ok && proto.Tokens32(u.contextTokens) == s.ContextTokens &&
-		(s.OutputTokens == 0 || u.outputTokens == s.OutputTokens) {
+		(s.OutputTokensValue() == 0 || int32(u.outputTokens) == s.OutputTokensValue()) {
 		setAgyContextBreakdown(s, u.contextStats)
 	}
 }
@@ -421,70 +431,83 @@ func setAgyContextBreakdown(s *proto.Session, stats transcript.ContextStats) {
 	s.SetContextBreakdown(transcript.BuildContextBreakdown(stats, int(s.ContextTokens), int(s.ContextWindow), 0, fullWindow))
 }
 
-// agyTranscriptMeta reads (with stat-based LRU caching) the token usage summary of an agy conversation on disk.
-func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool) {
+// agyTranscriptMeta reads the cached token usage, background work and latest turn of an agy conversation on disk.
+func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
+	return n.agyTranscriptMetaAt(conversation, time.Now().UTC())
+}
+
+func (n *Node) agyTranscriptMetaAt(conversation string, now time.Time) (agySessionMeta, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
-		return agyTranscriptUsage{}, false
+		return agySessionMeta{}, false
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootKnownFor(conversation)
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
-		return agyTranscriptUsage{}, false
+		return agySessionMeta{}, false
 	}
 	defer root.Close()
 	rel := agyTranscriptPath
 	info, err := root.Stat(rel)
-	if err != nil || !info.Mode().IsRegular() {
+	if errors.Is(err, os.ErrNotExist) {
 		rel = agyFullTranscriptPath
 		info, err = root.Stat(rel)
 		if err != nil || !info.Mode().IsRegular() {
-			return agyTranscriptUsage{}, false
+			return agySessionMeta{}, false
 		}
 	}
 	key := filepath.Join(dir, conversation)
 	n.mu.Lock()
 	if n.agyMetas != nil {
-		if cached, ok := n.agyMetas.get(key); ok && cached.path == rel && sameAgyFile(info, cached.file) && time.Since(info.ModTime()) > time.Second {
-			n.mu.Unlock()
-			return cached.usage, true
+		if cached, ok := n.agyMetas.get(key); ok && cached.path == rel && sameAgyFile(info, cached.file) && now.Sub(info.ModTime()) > time.Second {
+			if expiry := cached.meta.background.nextExpiry; expiry.IsZero() || now.Before(expiry) {
+				n.mu.Unlock()
+				return cached.meta, true
+			}
 		}
 	}
 	n.mu.Unlock()
 
 	raw, err := root.ReadFile(rel)
 	if err != nil {
-		return agyTranscriptUsage{}, false
+		return agySessionMeta{}, false
 	}
 	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
 	steps, _ := parseAgySteps(raw, conversation)
 	usage := extractAgyUsage(steps)
+	usage.turn = summarizeAgyTurn(steps)
 	usage.modTime = info.ModTime().UTC()
+	usage.size = info.Size()
+	meta := agySessionMeta{agyTranscriptUsage: usage, background: agyBackgroundAt(steps, conversation, dir, root, now)}
 
 	n.mu.Lock()
 	if n.agyMetas == nil {
 		n.agyMetas = newLRU[string, agyMetaEntry](256)
 	}
-	n.agyMetas.put(key, agyMetaEntry{file: info, path: rel, usage: usage})
+	n.agyMetas.put(key, agyMetaEntry{file: info, path: rel, meta: meta})
 	n.mu.Unlock()
-	return usage, true
+	return meta, true
 }
 
-// mergeAgyTranscript populates an agy pane row from its local transcript.
+// mergeAgyTranscript populates a standalone agy pane row from its local transcript.
 func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 	if s == nil {
 		return
 	}
 	if u, ok := n.agyTranscriptMeta(conversation); ok {
+		u.background.apply(s)
 		if s.Model == "" && u.model != "" {
 			s.Model = u.model
 		}
 		if u.outputTokens > 0 {
-			s.OutputTokens = u.outputTokens
+			s.SetOutputTokens(int(u.outputTokens))
 		}
 		if s.UpdatedAt.IsZero() && !u.modTime.IsZero() {
 			s.UpdatedAt = u.modTime
 		}
-		n.setAgyTranscriptContext(s, u)
+		if s.Rev == 0 && u.size > 0 {
+			s.Rev = u.size
+		}
+		n.setAgyTranscriptContext(s, u.agyTranscriptUsage)
 		return
 	}
 	n.resolveAgyContext(s, "")

@@ -271,7 +271,11 @@ internal class ExtensionCardSlot(val place: ExtensionUiPlace, val state: Extensi
 
 /** The cards of Settings › Extensions, each drawn compact and kept fresh while that page is on screen. */
 @Composable
-internal fun rememberExtensionCards(slots: ExtensionSlots?, onOpen: (persona.core.navigation.ExtensionUiRoute) -> Unit = {}): List<ExtensionCardSlot> {
+internal fun rememberExtensionCards(
+    slots: ExtensionSlots?,
+    onOpen: (persona.core.navigation.ExtensionUiRoute) -> Unit = {},
+    onSettings: ((String) -> Unit)? = null,
+): List<ExtensionCardSlot> {
     slots ?: return emptyList()
     val state by slots.state.collectAsState()
     val cards = state.cards
@@ -284,7 +288,15 @@ internal fun rememberExtensionCards(slots: ExtensionSlots?, onOpen: (persona.cor
             LaunchedEffect(model) { model.load() }
             KeepFresh(model, slots.invalidations)
             ExtensionCardSlot(place, model.state.collectAsState().value,
-                rememberExtensionView(model, onPush = { onOpen(ExtensionViewText.opened(place, it)) })) { scope.launch { model.load() } }
+                rememberExtensionView(model,
+                    appLink = { url ->
+                        val id = ExtensionViewText.settings(place.extension, url)
+                        if (id != null && onSettings != null) {
+                            onSettings(id)
+                            true
+                        } else false
+                    },
+                    onPush = { onOpen(ExtensionViewText.opened(place, it)) })) { scope.launch { model.load() } }
         }
     }
 }
@@ -327,7 +339,7 @@ fun rememberMachineExtensionSections(slots: ExtensionSlots?, machineId: String,
                 JInlineStatus(view.error.text(), Modifier.padding(vertical = Tokens.Space.xs), tone = InlineTone.Failed)
 
             }
-            extensionViewItems(key, view, handle, showTitles = true, compactGraph = true)
+            extensionViewItems(key, view, handle, showTitles = true, compactPreview = true)
         }
     }
 }

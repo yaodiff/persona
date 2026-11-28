@@ -47,6 +47,8 @@ import persona.android.MainActivity
 import persona.android.data.Hub
 import persona.android.navigation.*
 import persona.core.contracts.*
+import persona.core.contracts.api.AssistantConversations
+import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.MainConversationSender
 import persona.core.contracts.api.MessageSender
@@ -238,7 +240,7 @@ private fun PersonaRootContent(
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = Tokens.Space.m))
+                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
             }
         }
     }
@@ -336,6 +338,13 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // The Inbox list this closed, if any, never takes its landing; the next entry opens on Needs you.
         inboxLandings.getValue(AppTab.Persona).clear()
         selected = AppTab.Persona
+    }
+    /** Opens the new-chat page of [manager], keeping that manager's starter draft. */
+    fun showAssistantComposer(manager: String) {
+        val choice = AssistantManagerChoice.current.value
+        if (choice.shown != manager) AssistantManagerChoice.choose(choice.hubId, manager, choice.defaultId)
+        showAssistantHome()
+        persona.feature.assistant.AssistantComposerFocus.request()
     }
     /** Point Persona's navigator at the host now in front. */
     fun showHost(root: NavKey, next: List<NavKey>) {
@@ -685,8 +694,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val decorators = AppTab.entries.associateWith { tab -> key(tab) {
         listOf(rememberSaveableStateHolderNavEntryDecorator<NavKey>(), rememberViewModelStoreNavEntryDecorator<NavKey>())
     } }
-    // The current assistant's cards (ShellCounts): the tab badges and "Needs you now" count them.
-    val shownPending = pending.filter(counts::owned)
+    // The current assistant's authoritative cards (ShellCounts): a display copy stays in its conversation only.
+    val aggregatePending = remember(pending) { pending.filterNot { it.isDisplayMirror } }
+    val shownPending = aggregatePending.filter(counts::owned)
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
     // The Agents tab counts its waiting agents, one per session (ShellCounts.agentsWaiting), as iOS and the web do.
@@ -695,7 +705,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
     // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current
-    val waiting = remember(managerRoster, pending, counts) { counts.waiting(managerRoster, pending) }
+    val waiting = remember(managerRoster, aggregatePending, counts) { counts.waiting(managerRoster, aggregatePending) }
     val othersWaiting = currentAssistant.othersWaiting(waiting)
     // Only when what the count reads changed: the shell recomposes on every push, and the whole list is built to count
     // one group. Of the sessions it reads only which space each is in (for mutes), not their state or activity.
@@ -944,6 +954,11 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val sharedSidebar: @Composable (String, (() -> Unit)?) -> Unit = { stateKey, onFoldColumn ->
             sidebarState.SaveableStateProvider(stateKey) {
                 val sidebarContent: @Composable () -> Unit = {
+                    // The shell draws this sidebar outside AssistantAppHost, so LocalAssistantHost is null here:
+                    // hand the selected group's management down for the conversation menu's Pin/Rename/Archive/End
+                    // actions (#17123).
+                    val chatWiring by chatWiringSource().current.collectAsStateWithLifecycle()
+                    val sidebarManagement = chatWiring?.takeIf { it.scope.path == session.identity }?.assistantManagement
                     AssistantSidebarContent(assistant, session.assistant, sidebar.active, sidebarOperations, session.demo != null,
                         onOpen = { key ->
                             dismissSidebar()
@@ -1059,7 +1074,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         ),
                         onFoldColumn = onFoldColumn,
                         merged = mergedContent,
-                        onSchedule = if (merged) ({ sidebarDestination(SidebarScheduleRoute) }) else null)
+                        onSchedule = if (merged) ({ sidebarDestination(SidebarScheduleRoute) }) else null,
+                        management = sidebarManagement)
                 }
                 if (merged) AssistantAppHost(navigator, sidebarContent) else sidebarContent()
             }
@@ -1189,6 +1205,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
         fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
         val askSubscriptions = rememberSubscriptionAsk(session.sender, shell.feedback)
+        val composeExtensions = rememberExtensionCompose(session.assistant, shell.feedback, ::showAssistantComposer)
         val provider = entryProvider<NavKey>(fallback = { key -> shellFallbackEntry(key, navigator) }) {
             assistantEntries(navigator) {
                 // Persona's conversation offers the next card an Agent waits on you with, as an Agent's chat does (#4339 C18).
@@ -1268,7 +1285,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 entry<persona.core.navigation.AddComputerRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
                 entry<MachineDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
             }
-            settingsDetailEntries(navigator, services, askSubscriptions)
+            settingsDetailEntries(navigator, services, askSubscriptions, composeExtensions)
             // Each module's pages (Modules.kt); in demo mode a module has no services and says why its pages cannot work.
             // What a module's pages use of the core (the knowledge base, the assistant, sending, sessions); none in demo mode.
             val moduleShell = session.knowledge?.let { knowledge ->
@@ -1555,7 +1572,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                       entry<PhoneToolsRoute> { session.phone?.let { PhoneToolsScreen(it, settingsNavigator) }
                           ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), settingsNavigator) }
                       assistantEntries(settingsNavigator)
-                      settingsDetailEntries(settingsNavigator, services, askSubscriptions)
+                      settingsDetailEntries(settingsNavigator, services, askSubscriptions, composeExtensions)
                   }
                   // In a regular window the list of settings stays beside the page it opens, as on an open iPhone Duo
                   // (its divider is not kept: the sheet starts from the usual split each time). Elsewhere one page.
@@ -1760,6 +1777,43 @@ private fun rememberSubscriptionAsk(sender: MessageSender, feedback: AppFeedback
                     throw e
                 } catch (e: Exception) {
                     if (feedback.failure(e) != true) feedback.notice(failed)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * An extension page's compose link: its quick prompt goes to its owner's main conversation draft, or to that owner's
+ * new-chat draft when it has no main conversation. Never creates a conversation and never sends.
+ */
+@Composable
+private fun rememberExtensionCompose(
+    conversations: AssistantConversations,
+    feedback: AppFeedback,
+    showNewConversation: (String) -> Unit,
+): (Navigator, String, String?) -> Unit {
+    val scope = rememberCoroutineScope()
+    val failed = stringResource(persona.feature.chat.R.string.chat_handoff_failed)
+    return remember(conversations, scope, feedback, failed, showNewConversation) {
+        { nav, text, manager ->
+            scope.launch {
+                try {
+                    val handoff = prepareExtensionCompose(conversations, text, manager,
+                        AssistantManagerChoice.current.value.defaultId.ifBlank {
+                            persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
+                        })
+                    val main = handoff.main
+                    if (main == null) {
+                        nav.selectTab(AppTab.Persona)
+                        showNewConversation(handoff.manager)
+                    } else {
+                        nav.navigate(ChatRoute(main.machineId, main.sessionId, ConversationKind.Assistant))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (feedback.failure(error) != true) feedback.notice(failed)
                 }
             }
         }

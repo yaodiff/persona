@@ -12,13 +12,21 @@ import (
 const bashAliasMark = "\x02"
 
 // launcherShell is the shell the launchers are listed and started in (loginShellProgram) and the rc file that defines
-// them there, for the group titles in Settings › Model providers: zsh reads ~/.zshrc; bash run interactively (`bash -ic`, also Git
-// Bash on Windows) reads ~/.bashrc.
+// them there, for the group titles in Settings › Model providers: zsh reads ~/.zshrc; bash run interactively (`bash -ic`,
+// also Git Bash on Windows) reads ~/.bashrc, and as a login shell on macOS (`bash -lic`, shellFlag) ~/.bash_profile.
 func launcherShell() (shell, rcFile string) {
 	if strings.TrimSuffix(filepath.Base(loginShellProgram()), ".exe") == "zsh" {
 		return "zsh", "~/.zshrc"
 	}
-	return "bash", "~/.bashrc"
+	return "bash", bashRCFile(shellFlag("bash"))
+}
+
+// bashRCFile is the file bash started with flag reads the launchers from.
+func bashRCFile(flag string) string {
+	if strings.Contains(flag, "l") {
+		return "~/.bash_profile"
+	}
+	return "~/.bashrc"
 }
 
 // bashAliases is `alias -p` (`alias name='value'`, one a line) as zsh's records: name US word US … RS, the words of

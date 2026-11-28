@@ -7,8 +7,8 @@
   "select_text": "选择文本",
   "quote": "引用",
   "me": "我",
-  "edit": "改后重发",
-  "fork": "开启一个新会话",
+  "edit": "编辑并重发",
+  "fork": "开启新会话",
   "copy_message": "复制消息",
   "copy_reply": "复制回复",
   "more": "更多",
@@ -16,9 +16,9 @@
   "copy_all": "全部复制",
   "use_as_context": "作为上下文",
   "context_title": "{title} · 消息",
-  "fork_chat": "开启一个新对话",
+  "fork_chat": "开启新对话",
   "cut_short": "此回复未完成，内容仅供参考。",
-  "save_as_prompt": "存为常用提示词…",
+  "save_as_prompt": "保存为常用提示词…",
   "pick": "多选",
-  "scroll_to_top": "滚动到本条顶部"
+  "scroll_to_top": "滚动至消息顶部"
 }

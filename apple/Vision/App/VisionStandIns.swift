@@ -22,7 +22,7 @@ import Observation
         fleet = hubState
         resolved = []
     }
-    func resolvedLocally(_ interactionID: String) { resolved.insert(interactionID) }
+    func resolvedLocally(_ interactionID: String, occurrence: String? = nil) { resolved.insert(interactionID) }
     func isResolvedLocally(_ interactionID: String) -> Bool { resolved.contains(interactionID) }
     func endAll() { fleet = nil }
     func look(_ look: FleetLook, force: Bool = false, faces: () -> FleetFaces?) {}

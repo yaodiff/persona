@@ -5172,6 +5172,157 @@
           "rank": 0
         }
       }
+    },
+    {
+      "name": "stopped_unfinished_closeout_needs_followup",
+      "description": "A known unfinished stop over an hour old needs follow-up, even if its ledger still says pending review. It is not Just finished.",
+      "source": [
+        "#9823",
+        "#10174 decision 3",
+        "#10226"
+      ],
+      "input": {
+        "now": "2026-11-18T12:00:00Z",
+        "todo": {
+          "id": "closeout-task",
+          "title": "Check the release",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-18T10:00:00Z",
+          "updated_at": "2026-11-18T10:00:00Z",
+          "origin": "main",
+          "spaces": [],
+          "quiet": false,
+          "agents": [
+            {
+              "machine_id": "box",
+              "session_id": "worker",
+              "linked_at": "2026-11-18T10:00:00Z",
+              "title": "Release check",
+              "cwd": "/example",
+              "agent": "codex",
+              "source": "manual"
+            }
+          ],
+          "supervision": {
+            "supervisor": "main",
+            "state": "pending_review",
+            "reviews": [],
+            "updated_at": "2026-11-18T10:00:00Z"
+          }
+        },
+        "sessions": [
+          {
+            "machine_id": "box",
+            "session_id": "worker",
+            "title": "Release check",
+            "status": "idle",
+            "state": "unread",
+            "state_since": "2026-11-18T10:00:00Z",
+            "updated_at": "2026-11-18T10:00:00Z",
+            "work": {
+              "phase": "",
+              "turn_at": "2026-11-18T10:00:00Z",
+              "closeout": {
+                "status": "not_done",
+                "missing": "release verification"
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "needs_you",
+          "section": "needs_you",
+          "reason": "stopped_unfinished",
+          "line": {
+            "key": "stopped_unfinished",
+            "args": {
+              "run": "Release check",
+              "text": "release verification"
+            }
+          },
+          "since": "2026-11-18T10:00:00Z",
+          "rank": 0
+        }
+      }
+    },
+    {
+      "name": "reported_done_seen_awaits_acceptance",
+      "description": "A read receipt cannot turn a reported finish into acceptance or reset its finish time. The open to-do remains in Just finished during the decided seen window.",
+      "source": [
+        "#9823",
+        "#10174 decision 3",
+        "#10226"
+      ],
+      "input": {
+        "now": "2026-11-18T12:00:00Z",
+        "todo": {
+          "id": "closeout-task",
+          "title": "Check the release",
+          "notes": "",
+          "done_at": null,
+          "created_at": "2026-11-18T10:00:00Z",
+          "updated_at": "2026-11-18T10:00:00Z",
+          "origin": "main",
+          "spaces": [],
+          "quiet": false,
+          "agents": [
+            {
+              "machine_id": "box",
+              "session_id": "worker",
+              "linked_at": "2026-11-18T10:00:00Z",
+              "title": "Release check",
+              "cwd": "/example",
+              "agent": "codex",
+              "source": "manual"
+            }
+          ],
+          "supervision": {
+            "supervisor": "main",
+            "state": "pending_review",
+            "reviews": [],
+            "updated_at": "2026-11-18T10:00:00Z"
+          },
+          "seen_at": "2026-11-18T11:30:00Z"
+        },
+        "sessions": [
+          {
+            "machine_id": "box",
+            "session_id": "worker",
+            "title": "Release check",
+            "status": "idle",
+            "state": "idle",
+            "state_since": "2026-11-18T11:55:00Z",
+            "updated_at": "2026-11-18T11:55:00Z",
+            "work": {
+              "phase": "",
+              "turn_at": "2026-11-18T10:00:00Z",
+              "closeout": {
+                "status": "done"
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "view": {
+          "phase": "ready",
+          "section": "just_finished",
+          "reason": "finished_recent",
+          "line": {
+            "key": "finished",
+            "args": {
+              "run": "Release check"
+            }
+          },
+          "since": "2026-11-18T10:00:00Z",
+          "next_change_at": "2026-11-19T11:30:00Z",
+          "rank": 0,
+          "seen": true
+        }
+      }
     }
   ]
 }

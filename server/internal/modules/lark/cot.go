@@ -17,20 +17,60 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// New private-chat turns show in the progress card (turn.go). A run that already has an agent message keeps
-// using it and sends its answer as a card of its own. Topic runs with topic_cot on also open a native agent message
-// (feishubot's message_cot) at their first thinking or tool event, but keep the progress card beside it for elapsed
-// time, current work, the answer and the web link. When creation or an append fails, the card's folded panel takes over.
+// A run's agent message (feishubot's message_cot) opens at its first thinking or tool event. A topic run does so with
+// topic_cot on, a private-chat run with dm_cot on (#16847); a /read run never gets one. With cot_answer on, a run whose
+// agent message is allowed gets its answer inside that message and no progress or answer card, falling back to cards
+// when the message cannot carry it. Otherwise the progress card stays beside the agent message, and the answer goes
+// into the card. When creation or an append fails, the card's folded panel takes over.
+//
+// A private run that already had an agent message before these switches keeps appending to it on the legacy path and
+// finishes it, with the answer sent as a card of its own.
 //
 // The run's Ext keeps "cot" and "cot_msg" (the agent message's ids, shared by its events as the run id) and
 // "cot_para" (the last paragraph, which the next tool calls hang under and the process ends with); "cot_off" marks a
-// run whose agent message could not be used.
+// run whose agent message could not be used, and "cot_answer" marks one whose answer was confirmed inside it.
 
 // cotResultMost is how much of a tool's output the agent message shows.
 const cotResultMost = 1500
 
+// The scopes a run's agent message would live in (core.cotScope says which is r's).
+const (
+	cotScopeNone  = iota // a /read: never an agent message
+	cotScopeDM           // the owner's private chat: dm_cot
+	cotScopeTopic        // a topic of an opted-in group: topic_cot
+)
+
+// cot_complete's reasons.
+const (
+	cotReasonDone  = "done"
+	cotReasonError = "error"
+)
+
+// cotFinal is a turn's terminal snapshot for the worker.
+type cotFinal struct {
+	end    channel.End
+	answer string // unified mode: the text that goes into the agent message; "" keeps the answer out of it
+}
+
+// cotOutcome is what the worker's terminal work came to.
+type cotOutcome struct {
+	native   bool // the process is in the agent message
+	answered bool // and so is the answer, confirmed
+}
+
+// cotScope: where r's agent message would live. A /read never has one.
+func (s core) cotScope(r *channel.Run) int {
+	if s.runExt(r, readChatKey) != "" {
+		return cotScopeNone
+	}
+	if s.runExt(r, "chat") != "" {
+		return cotScopeTopic
+	}
+	return cotScopeDM
+}
+
 // cotProgress is the native cursor: under chanLive.mu for legacy private runs,
-// owned exclusively by cotWorker for topic turns.
+// owned exclusively by cotWorker for topic and private turns.
 type cotProgress struct {
 	// persist fences asynchronous topic writes against the run generation that owns them.
 	persist func(*channel.Run, string, string)
@@ -47,6 +87,7 @@ type cotProgress struct {
 	// The agent message as this run has it (the answer works on a copy of the run, and may be tried again).
 	cot, msg, para string
 	done, off      bool
+	answered       bool // the answer's text was confirmed inside the agent message (Ext "cot_answer")
 }
 
 // cotChunk is how many events one append carries (the open platform's limit).
@@ -57,6 +98,7 @@ func (s core) loadCot(p *cotProgress, r *channel.Run) {
 	if p.cot == "" {
 		p.cot, p.msg, p.para = s.runExt(r, "cot"), s.runExt(r, "cot_msg"), s.runExt(r, "cot_para")
 		p.done = p.done || s.runExt(r, "cot_done") != ""
+		p.answered = p.answered || s.runExt(r, "cot_answer") != ""
 		if p.calls == nil && p.cot != "" {
 			for _, id := range strings.Split(s.runExt(r, "cot_calls"), ",") {
 				if id != "" {
@@ -91,19 +133,46 @@ func (s core) cotCall(ctx context.Context, method string, params map[string]any)
 	return s.appCall(ctx, method, params, nil)
 }
 
-// topicCotEnabled reads the visible bot switch. An agent message already open is finished even after it is switched
-// off; this gates only creation of a new one.
-func (f feishuSink) topicCotEnabled(ctx context.Context) bool {
+// cotAllowed reads the scope's switch. It gates only creation: an open agent message is finished regardless.
+func (f feishuSink) cotAllowed(ctx context.Context, scope int) bool {
 	features, ready := f.s.feishuFeatures(ctx)
-	return ready && features.TopicCot
+	if !ready {
+		return false
+	}
+	switch scope {
+	case cotScopeTopic:
+		return features.TopicCot
+	case cotScopeDM:
+		return features.DMCot
+	}
+	return false
 }
+
+// cotUnified: cot_answer is on and scope's own switch is.
+func (f feishuSink) cotUnified(ctx context.Context, scope int) bool {
+	features, ready := f.s.feishuFeatures(ctx)
+	return ready && features.CotAnswer && f.cotAllowed(ctx, scope)
+}
+
+// cotEndReason is cot_complete's reason for a run that ended as end: a turn that did not finish normally is closed as
+// done (stopped, recalled, unrelated) or as an error (failed, timed out, gone, offline), never as a finished run.
+func cotEndReason(end channel.End) string {
+	switch end {
+	case channel.EndError, channel.EndGaveUp, channel.EndGone, channel.EndOffline:
+		return cotReasonError
+	}
+	return cotReasonDone
+}
+
+// owned: the cursor is a worker's (it persists through the worker), not the legacy path's.
+func (p *cotProgress) owned() bool { return p.persist != nil }
 
 // cotStart creates r's agent message in its origin chat and topic. False leaves the progress card in charge; a
 // refusal also marks the run so later updates keep the folded-panel fallback.
 func (f feishuSink) cotStart(ctx context.Context, r *channel.Run, p *cotProgress) bool {
 	s := f.s
 	params := map[string]any{"reply_to": r.ReplyTo}
-	to := s.runTo(s.runExts(r, "chat", "thread"))
+	to := runTo(s.runExts(r, "chat", "thread"))
 	if to.ChatID != "" {
 		params["chat_id"], params["in_thread"] = to.ChatID, true
 	}
@@ -238,7 +307,8 @@ func cotIcon(name string) string {
 
 // cotPush adds r's new process to its agent message (finish: and ends it). False when the message can't be used (the
 // run is marked: its card takes over).
-func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *runLive, items []proto.Item, finish bool) bool {
+func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *runLive, items []proto.Item, fin *cotFinal) bool {
+	finish := fin != nil
 	s := f.s
 	l := s.botLang(ctx)
 	cot, msg := p.cot.cot, p.cot.msg
@@ -259,10 +329,18 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *runLive, ite
 			events = append(events, start(para)...)
 			events = append(events, botcard.CotParagraph(para, i18n.T(l, "assistant-feishu.cot_done"))...)
 		}
-		events = append(events, botcard.CotFinish(r.SessionID, cot, para)...)
+		switch {
+		case fin.end != channel.EndDone:
+			events = append(events, botcard.CotReasoningEnd(para))
+		case fin.answer != "":
+			events = append(events, botcard.CotFinishWithAnswer(r.SessionID, cot, para, "a-"+r.ID, fin.answer)...)
+		default:
+			events = append(events, botcard.CotFinish(r.SessionID, cot, para)...)
+		}
 	}
 	// The items are taken now; what of them does not reach Feishu waits in the queue.
 	p.cot.words, p.cot.sent = next.words, len(items)
+	clean := true
 	if !maps.Equal(next.calls, p.cot.calls) && !finish { // at the end: kept until the end got through
 		p.cot.calls = next.calls
 		s.setCotExt(r, &p.cot, "cot_calls", strings.Join(slices.Sorted(maps.Keys(next.calls)), ","))
@@ -285,6 +363,7 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *runLive, ite
 			if s.cotMaybeSent(err) {
 				// The chunk may have reached Feishu (no reply came back): not sent again, which could show it twice;
 				// the end is made sure of with cot_complete (cotFinishNow).
+				clean = false
 				s.logf("bots: agent message %s: an append got no reply (%v); going on after it", cot, err)
 				events = events[len(chunk):]
 				p.cot.queue = events
@@ -300,15 +379,24 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *runLive, ite
 			s.logf("bots: agent message: %v; the progress card takes over", err)
 			s.setCotExt(r, &p.cot, "cot_off", "1")
 			p.cot.off, p.cot.queue = true, nil
-			_ = s.cotCall(ctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": "error"})
+			_ = s.cotCall(ctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": cotReasonError})
 			return false
 		}
 		events = events[len(chunk):]
 	}
-	p.cot.queue, p.cot.done = nil, finish
+	p.cot.queue = nil
+	// A turn that did not finish normally leaves cot_done to cotFinishNowItems, which sets it once cot_complete got
+	// through. The answer counts as delivered only when every append through RUN_FINISHED was confirmed.
+	p.cot.done = finish && fin.end == channel.EndDone
+	if finish && fin.answer != "" && fin.end == channel.EndDone && clean {
+		p.cot.answered = true
+		s.setCotExt(r, &p.cot, "cot_answer", "1")
+	}
 	if finish {
 		p.cot.calls = nil
 		s.setCotExt(r, &p.cot, "cot_calls", "")
+	}
+	if p.cot.done {
 		s.setCotExt(r, &p.cot, "cot_done", "1")
 	}
 	return true
@@ -333,10 +421,10 @@ func (f feishuSink) cotProgressNowItems(ctx context.Context, r *channel.Run, p *
 	if p.cot.off {
 		return false
 	}
-	topic := f.s.runExt(r, "chat") != ""
 	if p.cot.cot == "" {
-		if !topic || !hasProcess(items) || !f.topicCotEnabled(ctx) {
-			return false // a new private turn, a text-only turn, or the card-only setting
+		// Creation is the worker's: a legacy private run only continues the agent message it already has.
+		if !p.cot.owned() || !hasProcess(items) || !f.cotAllowed(ctx, f.s.cotScope(r)) {
+			return false
 		}
 		if !f.cotStart(ctx, r, &p.cot) {
 			return false
@@ -345,10 +433,10 @@ func (f feishuSink) cotProgressNowItems(ctx context.Context, r *channel.Run, p *
 	if ctx.Err() != nil {
 		return false
 	}
-	if !f.cotPush(ctx, r, p, items, false) {
+	if !f.cotPush(ctx, r, p, items, nil) {
 		return false
 	}
-	return !topic
+	return !p.cot.owned() // a legacy private run needs no card; a worker's caller decides about the card itself
 }
 
 // cotFinishNow ends r's agent message as its answer goes out, creating it first when a quick topic turn ended before
@@ -359,11 +447,21 @@ func (f feishuSink) cotFinishNow(ctx context.Context, r *channel.Run) bool {
 		return false
 	}
 	items, _ := f.s.h.RunItems(r.ID)
-	return f.cotFinishNowItems(ctx, r, p, items)
+	return f.cotFinishNowItems(ctx, r, p, items, cotFinal{end: channel.EndDone})
 }
 
-func (f feishuSink) cotFinishNowItems(ctx context.Context, r *channel.Run, p *runLive, items []proto.Item) bool {
+func (f feishuSink) cotFinishNowItems(ctx context.Context, r *channel.Run, p *runLive, items []proto.Item, fin cotFinal) bool {
 	if ctx.Err() != nil {
+		f.s.loadCot(&p.cot, r)
+		if p.cot.cot != "" && !p.cot.done && !p.cot.off {
+			if err := f.cotEnd(ctx, p.cot.cot, p.cot.msg, cotEndReason(fin.end)); err != nil {
+				f.s.logf("bots: agent message %s: not ended: %v", p.cot.cot, err)
+			} else {
+				p.cot.done = true
+				f.s.setCotExt(r, &p.cot, "cot_done", "1")
+			}
+			p.cot.queue = nil
+		}
 		return false
 	}
 	f.s.loadCot(&p.cot, r)
@@ -374,18 +472,18 @@ func (f feishuSink) cotFinishNowItems(ctx context.Context, r *channel.Run, p *ru
 		return false
 	}
 	if p.cot.cot == "" {
-		if f.s.runExt(r, "chat") == "" || !hasProcess(items) || !f.topicCotEnabled(ctx) || !f.cotStart(ctx, r, &p.cot) {
+		if !p.cot.owned() || !hasProcess(items) || !f.cotAllowed(ctx, f.s.cotScope(r)) || !f.cotStart(ctx, r, &p.cot) {
 			return false
 		}
 	}
-	if !f.cotPush(ctx, r, p, items, true) {
+	if !f.cotPush(ctx, r, p, items, &fin) {
 		return false
 	}
 	if !p.cot.done {
 		// The end did not get through for now (a rate limit, a busy server) and the run is over after this answer:
 		// ended without the rest, not left spinning.
 		s := f.s
-		if err := f.cotEnd(ctx, p.cot.cot, p.cot.msg); err != nil {
+		if err := f.cotEnd(ctx, p.cot.cot, p.cot.msg, cotEndReason(fin.end)); err != nil {
 			s.logf("bots: agent message %s: not ended: %v", p.cot.cot, err)
 			p.cot.queue = nil
 			return true // the answer still goes out; a later look of this run cannot end it either (the run is over)
@@ -398,12 +496,12 @@ func (f feishuSink) cotFinishNowItems(ctx context.Context, r *channel.Run, p *ru
 
 // cotEnd ends an agent message with cot_complete, tried a few times on its own deadline (the answer's may be what
 // ran out).
-func (f feishuSink) cotEnd(ctx context.Context, cot, msg string) error {
+func (f feishuSink) cotEnd(ctx context.Context, cot, msg, reason string) error {
 	var err error
 	for _, wait := range f.s.timingList("cot_end_tries") {
 		time.Sleep(wait)
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		err = f.s.cotCall(cctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": "done"})
+		err = f.s.cotCall(cctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": reason})
 		cancel()
 		if err == nil || !(f.s.cotNotSent(err) || f.s.h.Offline(err) || errors.Is(err, rpc.ErrClosed) || f.s.cotMaybeSent(err) || cotPassing(err)) {
 			return err

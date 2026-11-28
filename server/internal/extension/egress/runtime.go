@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"sync"
 	"time"
 )
@@ -85,7 +84,7 @@ func (p *Proxy) runtimeFetch(w http.ResponseWriter, r *http.Request, ext string,
 		return
 	}
 	u, err := url.Parse(in.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || in.Method == "CONNECT" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" || u.User != nil || in.Method == "CONNECT" {
 		http.Error(w, "invalid fetch target", http.StatusBadRequest)
 		return
 	}
@@ -139,6 +138,9 @@ func (w *boundedResponse) Write(b []byte) (int, error) {
 func (p *Proxy) requestLifetime(parent context.Context, ext string, chk *check) (context.Context, func(), bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, nil, false
+	}
 	if _, ok := p.rules[ext]; !ok {
 		return nil, nil, false
 	}
@@ -154,9 +156,14 @@ func (p *Proxy) requestLifetime(parent context.Context, ext string, chk *check) 
 	if len(p.active[ext]) >= 128 {
 		return nil, nil, false
 	}
-	ctx, cancel := context.WithCancel(parent)
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	if chk != nil {
 		ctx, cancel = context.WithDeadline(parent, chk.expires)
+	} else {
+		ctx, cancel = context.WithCancel(parent)
 	}
 	lease := &ioLease{cancel: cancel}
 	p.active[ext][lease] = struct{}{}
@@ -197,11 +204,14 @@ func (p *Proxy) runtimeDial(ctx context.Context, host, port string, configured b
 	if len(ips) == 0 {
 		return nil, errors.New("egress target has no addresses")
 	}
+	if net.ParseIP(host) != nil && isSelfIP(host) && p.ownPort(port) {
+		return nil, errInternal
+	}
 	for _, ip := range ips {
 		if configured && !p.forSettings(ip, port) {
 			return nil, errNotForSettings
 		}
-		if net.ParseIP(host) == nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() || slices.Contains(metadataIPs, ip.String())) {
+		if net.ParseIP(host) == nil && Unreachable(ip) {
 			return nil, errInternal
 		}
 	}

@@ -125,7 +125,7 @@ func (n *Node) withDesktopLauncher(list []proto.Launcher) (out []proto.Launcher,
 	if _, err := desktopClaudeExecutable(n.home); err != nil {
 		return list, false
 	}
-	return append(slices.Clone(list), proto.Launcher{Name: claudeDesktopLauncher, Source: claudeDesktopSource, Agent: "claude"}), true
+	return append(slices.Clone(list), proto.Launcher{Name: claudeDesktopLauncher, Source: claudeDesktopSource, Agent: "claude", DisplayName: "Claude Desktop"}), true
 }
 
 // isDesktopLauncher: name is the desktop app's launcher, not a login shell's of that name.

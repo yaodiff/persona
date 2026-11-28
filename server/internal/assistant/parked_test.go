@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -318,8 +319,8 @@ func TestParkedTaskDoesNotReplayAnUntoldTurnSignal(t *testing.T) {
 	}
 }
 
-// At its time a parked task comes back to its supervisor once: not before, not a second time, not again after a
-// restart once a message carried it, and not lost by a restart before one did.
+// At its time a parked task comes back to its supervisor once: not before, not a second time while the supervisor has
+// time to act on it, not again after a restart once a message carried it, and not lost by a restart before one did.
 func TestParkedDueComesOnceAtItsTimeAndAfterARestart(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	ctx := context.Background()
@@ -362,10 +363,12 @@ func TestParkedDueComesOnceAtItsTimeAndAfterARestart(t *testing.T) {
 		r := todoNow(s, todo.ID).Supervision.parking()
 		return r != nil && !r.DueAt.IsZero()
 	})
-	// Told: a manager that forgot what it told (a restart) does not tell it again, however often it looks.
+	// Told: a manager that forgot what it told (a restart) does not tell it again while the supervisor has time to
+	// act on it (an unanswered reminder is resent later: TestUnansweredParkedDueIsResentAndCapped).
 	forgetSignals(t, s)
-	for _, d := range []time.Duration{time.Hour, 24 * time.Hour, 20 * 24 * time.Hour} {
-		s.superviseWatch(ctx, due.Add(d))
+	told := todoNow(s, todo.ID).Supervision.parking().DueAt
+	for _, d := range []time.Duration{time.Minute, 30 * time.Minute, parkedDueResendAfter - time.Minute} {
+		s.superviseWatch(ctx, told.Add(d))
 	}
 	if got := pendingKinds(s, todo.ID); len(got) != 0 {
 		t.Fatalf("told a second time: %v", got)
@@ -389,6 +392,74 @@ func TestParkedDueComesOnceAtItsTimeAndAfterARestart(t *testing.T) {
 	s.superviseWatch(ctx, time.Now().Add(2*time.Hour))
 	if got := pendingKinds(s, todo.ID); !slices.Equal(got, []string{sigParkedDue}) {
 		t.Fatalf("signals at the new time: %v", got)
+	}
+}
+
+// A parked_due the supervisor never acted on (its turn ended on a model API error, a 429, and wrote no task_review) is
+// told again parkedDueResendAfter later, as a numbered resend, at most maxParkedDueResends times; a task_review that
+// parks it again stops the resends of the old park (#14048).
+func TestUnansweredParkedDueIsResentAndCapped(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	ctx := context.Background()
+	args := waitingPark()
+	args["until"] = "2h"
+	if _, err := reviewErr(s, todo.ID, args); err != nil {
+		t.Fatal(err)
+	}
+	forgetUntold(s)
+	before := len(f.notices())
+	s.superviseWatch(ctx, time.Now().Add(3*time.Hour))
+	waitFor(t, "the first parked_due message", func() bool { return len(f.notices()) > before })
+	waitFor(t, "the mark on the review", func() bool { return !todoNow(s, todo.ID).Supervision.parking().DueAt.IsZero() })
+	if n := f.notices()[before]; strings.Contains(n, "次重发") {
+		t.Fatalf("the first reminder reads as a resend:\n%s", n)
+	}
+	for n := 1; n <= maxParkedDueResends; n++ {
+		forgetSignals(t, s)
+		told := func() time.Time { r := todoNow(s, todo.ID).Supervision.parking(); return laterTime(r.DueAt, r.Until) }()
+		s.superviseWatch(ctx, told.Add(parkedDueResendAfter-time.Minute))
+		if got := pendingKinds(s, todo.ID); len(got) != 0 {
+			t.Fatalf("resend %d before its time: %v", n, got)
+		}
+		forgetUntold(s)
+		s.supervise.mu.Lock()
+		s.supervise.last = time.Time{} // the earlier reminder's watch ran at a later clock than this one
+		s.supervise.mu.Unlock()
+		before = len(f.notices())
+		s.superviseWatch(ctx, told.Add(parkedDueResendAfter+time.Minute))
+		waitFor(t, fmt.Sprintf("resend %d", n), func() bool { return len(f.notices()) > before })
+		msg := f.notices()[before]
+		for _, want := range []string{"signal=parked_due", fmt.Sprintf("第 %d 次重发", n), "The design team has to pick the icon set first"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("resend %d lacks %q:\n%s", n, want, msg)
+			}
+		}
+		waitFor(t, fmt.Sprintf("resend %d marked", n), func() bool {
+			r := todoNow(s, todo.ID).Supervision.parking()
+			return r != nil && r.DueResends == n
+		})
+	}
+	// The cap: no further reminder for this park, however long it stays unanswered.
+	forgetSignals(t, s)
+	told := func() time.Time { r := todoNow(s, todo.ID).Supervision.parking(); return laterTime(r.DueAt, r.Until) }()
+	for _, d := range []time.Duration{2 * parkedDueResendAfter, 24 * time.Hour, 20 * 24 * time.Hour} {
+		s.superviseWatch(ctx, told.Add(d))
+	}
+	if got := pendingKinds(s, todo.ID); len(got) != 0 {
+		t.Fatalf("resent past the cap: %v", got)
+	}
+	// The supervisor parks it again: the new park starts with no reminder told, and the old one's resends are over.
+	args = waitingPark()
+	args["reason"], args["until"] = "The design team moved its review to next week", "1h"
+	if _, err := reviewErr(s, todo.ID, args); err != nil {
+		t.Fatal(err)
+	}
+	if r := todoNow(s, todo.ID).Supervision.parking(); r.DueResends != 0 || !r.DueAt.IsZero() {
+		t.Fatalf("the new park inherited the old reminders: %+v", r)
+	}
+	s.superviseWatch(ctx, time.Now().Add(30*time.Minute))
+	if got := pendingKinds(s, todo.ID); len(got) != 0 {
+		t.Fatalf("signals before the new park's time: %v", got)
 	}
 }
 

@@ -86,7 +86,7 @@ func (d *Devices) restoreRuntimeUsage(ctx context.Context, now time.Time) {
 			d.usage.machines[machine] = m
 		}
 		for _, b := range entries {
-			k := usageKey{b.Minute, b.Model, b.Launcher, b.Agent}
+			k := keyOf(b)
 			if _, exists := m.buckets[k]; !exists {
 				m.buckets[k] = b
 			}
@@ -100,6 +100,7 @@ type usageWrite struct {
 	buckets     []proto.UsageBucket
 	replaceFrom time.Time
 	add         bool
+	dirs        []proto.UsageDir // what the node resolved directories to, kept before the buckets
 }
 
 // onUsage takes a node's "usage" notification: the island's sums (in memory), and Postgres for the charts.
@@ -108,9 +109,14 @@ func (d *Devices) onUsage(machine string, params json.RawMessage, now time.Time)
 		Buckets []proto.UsageBucket `json:"buckets"`
 		Full    bool                `json:"full"`
 		Add     bool                `json:"add"`
+		Dirs    []proto.UsageDir    `json:"dirs"`
 	}
 	if json.Unmarshal(params, &p) != nil {
 		return
+	}
+	dirs := usableDirs(p.Dirs)
+	if len(dirs) < len(p.Dirs) { // a node's bug: never its text, which may hold a path
+		d.logf("[%s] usage: %d of %d directories refused", machine, len(p.Dirs)-len(dirs), len(p.Dirs))
 	}
 	store := d.usageStore()
 	_, additive := store.(additiveUsageStore)
@@ -119,10 +125,10 @@ func (d *Devices) onUsage(machine string, params json.RawMessage, now time.Time)
 		d.logf("[%s] usage: runtime usage requires an additive store", machine)
 		return
 	}
-	if !d.usage.apply(machine, params, now) || store == nil || (len(p.Buckets) == 0 && !p.Full) {
+	if !d.usage.apply(machine, params, now) || store == nil || (len(p.Buckets) == 0 && !p.Full && len(dirs) == 0) {
 		return
 	}
-	w := usageWrite{machine: machine, buckets: p.Buckets, add: p.Add}
+	w := usageWrite{machine: machine, buckets: p.Buckets, add: p.Add, dirs: dirs}
 	if p.Full {
 		w.replaceFrom = now.Add(-usageNodeWindow).Truncate(time.Minute).Add(time.Minute)
 	}
@@ -244,7 +250,7 @@ func (d *Devices) saveUsage(ctx context.Context, st usageStore, writes []usageWr
 	}
 	batch := make([]db.UsageWrite, len(writes))
 	for i, w := range writes {
-		batch[i] = db.UsageWrite{Machine: w.machine, Buckets: w.buckets, ReplaceFrom: w.replaceFrom, Add: w.add}
+		batch[i] = db.UsageWrite{Machine: w.machine, Buckets: w.buckets, ReplaceFrom: w.replaceFrom, Add: w.add, Dirs: w.dirs}
 	}
 	wctx, cancel := context.WithTimeout(ctx, usageWriteTimeout)
 	defer cancel()

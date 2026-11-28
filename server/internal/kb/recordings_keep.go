@@ -74,9 +74,10 @@ func (e *Engine) unlinkRecording(id string, projects []string) {
 	}
 }
 
-// PruneRecordings applies retention to files and the index. Past recording_days, minutes are kept forever or within
+// PruneRecordings applies retention to files and the index. A recording's text is kept for recording_text_days
+// (RecordingDays; forever by default, when nothing is pruned). Past a finite one, minutes are kept forever or within
 // a finite minutes_days window, and the recording is trimmed to them (recording_trim.go); other recordings go.
-// Interrupted trims finish whatever the window. Tombstones older than recording_days go too.
+// Interrupted trims finish whatever the window. Tombstones older than the audio window (AudioDays) go too.
 // It returns how many recordings were deleted, not counting trimmed ones. Then the recording module, when there is
 // one, deletes the hub-mode audio that should be gone and mends what a crash left of a hub transcript
 // (Provider.AfterPrune: sweepTranscriptions). Whether it runs at all without the module is retentionRuns' call
@@ -94,7 +95,8 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 }
 
 func (e *Engine) pruneRecordings(now time.Time) int {
-	cut := now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))
+	textDays := e.RecordingDays()
+	cut, textExpires := RetentionCut(now, textDays)
 	minutesDays := e.MinutesDays()
 	minutesCut := now.UTC().AddDate(0, 0, -minutesDays)
 	st := e.Store
@@ -121,7 +123,7 @@ func (e *Engine) pruneRecordings(now time.Time) int {
 	defer st.recMu.Unlock()
 	var gone []string
 	for _, r := range st.Recordings() {
-		if !r.StartedAt.Before(cut) {
+		if !textExpires || !r.StartedAt.Before(cut) {
 			// Within recording_days only a trimmed one has anything to do: the files an interrupted trim left (a crash
 			// after its meta.json, a failed removal) go even once recording_days made longer lets it back in the window.
 			if r.Trimmed() {
@@ -145,17 +147,18 @@ func (e *Engine) pruneRecordings(now time.Time) int {
 		}
 	}
 	e.unindex(KindRecording, gone)
-	// Tombstones keep the recording_days window, not minutes_days. One only has to outlive the uploads it refuses, and
-	// an upload of a recording that started before that window is expired anyway (putRecording), whether the recording
-	// is gone, trimmed or deleted by the user. A tombstone is never older than its recording's start (it is written when
-	// the recording is deleted), so one that falls out of the window stands for a recording past it: keeping it longer,
-	// as long as a trimmed recording could have stayed, would refuse nothing more. Its other use, the phone dropping a
-	// copy deleted elsewhere, ends with the window too: the phone drops every recording older than days itself.
+	// Tombstones keep the audio window (AudioDays, the phone's), not the text's or minutes_days. One only has to
+	// outlive the uploads it refuses, and the phone never uploads a recording older than that window: it drops every
+	// one older than days itself (its other use, the phone dropping a copy deleted elsewhere, ends with the window too).
+	// A tombstone is never older than its recording's start (it is written when the recording is deleted), so one that
+	// falls out of the window stands for a recording no phone still holds. Forever audio keeps them forever.
 	t := st.tombstones()
 	n := len(t)
-	for id, at := range t {
-		if at.Before(cut) {
-			delete(t, id)
+	if stoneCut, ok := RetentionCut(now, e.AudioDays()); ok {
+		for id, at := range t {
+			if at.Before(stoneCut) {
+				delete(t, id)
+			}
 		}
 	}
 	if len(t) != n {

@@ -10,17 +10,27 @@ import { api } from "../../lib/api";
 import { loadPages } from "../../lib/lazy-page";
 import { listPair, SessionList, type ListCounts } from "../../lib/session-list";
 import type { SessionCatalog } from "../../lib/session-groups";
+import { stateCount } from "../../lib/state-labels";
 import { SESSION_LIST_METRICS } from "../../ui/list-metrics";
 import { PagedSessionList } from "./PagedSessionList";
 
 vi.mock("../../lib/api", async (original) => ({ ...await original<typeof import("../../lib/api")>(), api: vi.fn() }));
-const hub = vi.hoisted(() => ({ handlers: new Set<{ event: string; fn: () => void }>() }));
+const hub = vi.hoisted(() => ({
+  handlers: new Set<{ event: string; fn: () => void }>(),
+  // what a space's + asked New agent for (#13523)
+  opened: [] as unknown[],
+  // the computers the store knows: their names are the list's label, their online state is the store's (#13522)
+  machines: [{ id: "mac", name: "MacBook", online: true }, { id: "pc", name: "Windows PC", online: true },
+    { id: "nas", name: "NAS", online: false, last_seen: "2026-01-01T00:00:00Z" }, { id: "lab", name: "Lab", online: true }],
+}));
+vi.mock("../../lib/new-agent", () => ({ openNewAgent: (preset: unknown) => void hub.opened.push(preset) }));
 vi.mock("../../lib/store", () => ({
   onHubEvent: (event: string, fn: () => void) => {
     const entry = { event, fn };
     hub.handlers.add(entry);
     return () => { hub.handlers.delete(entry); };
   },
+  useStore: <S,>(select: (state: { machines: typeof hub.machines }) => S) => select({ machines: hub.machines }),
 }));
 // jsdom lays nothing out, so the flat list's virtualizer would draw no row: draw every item, in order.
 vi.mock("@tanstack/react-virtual", () => ({
@@ -44,6 +54,8 @@ const ROWS = [
 const NAMES: Record<string, string> = { mac: "MacBook", pc: "Windows PC", nas: "NAS", lab: "Lab" };
 const ORIGIN: Record<string, string> = { [listPair("mac", "/Users/me/code/app")]: "git.example.com/team/app", [listPair("pc", "C:\\code\\App")]: "git.example.com/team/app" };
 const folder = (path: string) => path.replace(/\\/g, "/").split("/").pop() ?? "";
+/** A space's name where it is not `Space <id>`: two of one computer's can share one. */
+const SPACE_NAMES: Record<string, string> = { "w-app": "app", "codex-project:/Users/me/Desktop/app": "app" };
 
 const params = (path: string) => new URL(path, "https://example.com").searchParams;
 /** The rows a read selects: the state, the search, a machine, and the place and space pairs. */
@@ -74,7 +86,8 @@ function catalogOf(rows: Row[]): SessionCatalog {
     const place = p.places.find((x) => x.machine_id === r.machine && x.path === r.project);
     if (place) place.total++; else p.places.push({ machine_id: r.machine, path: r.project, total: 1 });
     projects.set(id, p);
-    const s = spaces.get(listPair(r.machine, r.group)) ?? { machine_id: r.machine, id: r.group, name: r.group ? `Space ${r.group}` : "", total: 0, needs_you: 0 };
+    const s = spaces.get(listPair(r.machine, r.group)) ?? { machine_id: r.machine, id: r.group, name: r.group ? SPACE_NAMES[r.group] ?? `Space ${r.group}` : "",
+      ...(r.group && r.project ? { path: r.project } : {}), total: 0, needs_you: 0 };
     s.total++;
     s.needs_you! += needs;
     spaces.set(listPair(r.machine, r.group), s);
@@ -509,7 +522,8 @@ describe("the list by project, on a hub with the catalog", () => {
     vi.mocked(api).mockClear();
     await browseBy("project");
     // name, how many need the user, count
-    expect(sections().map(summary)).toEqual(["app 1 3", "notes 2", "tool 1", `${t("paged-agents.no_folder")} 1`]);
+    // a project on two computers names neither; one only on Lab names it, the list being on several (#16877)
+    expect(sections().map(summary)).toEqual(["app 1 3", "notes 2", "tool · Lab 1", `${t("paged-agents.no_folder")} 1`]);
     // one read names the projects and counts the ones that need the user
     expect(reads("catalog").map((path) => Object.fromEntries(params(path)))).toEqual([{ catalog: "1" }]);
 
@@ -619,17 +633,147 @@ describe("the list by project, on a hub with the catalog", () => {
 });
 
 describe("the list by space", () => {
-  it("names each computer's space and its computer, and gathers the sessions in no space last", async () => {
+  const computers = () => [...host.querySelectorAll<HTMLElement>("[data-session-computer]")];
+  const computer = (id: string) => computers().find((c) => c.dataset.sessionComputer === id)!;
+  /** A computer's heading as it reads: its name with its state, then what its numbers say. */
+  const computerHeading = (c: HTMLElement) => {
+    const top = c.querySelector<HTMLElement>("[data-sidebar-group-heading]")!;
+    return [heading(c).textContent, ...[...top.querySelectorAll<HTMLElement>(":scope > div > span[title]")].map((el) => el.title)];
+  };
+  const spacesIn = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>("[data-session-group]")];
+  const spaceReads = () => reads("page").map((path) => params(path).getAll("space")).filter((pairs) => pairs.length);
+
+  it("puts each computer's spaces under its heading, with its online state and numbers, its sessions in no space last (#13522)", async () => {
     await show();
+    vi.mocked(api).mockClear();
     await browseBy("group");
-    expect(sections().map((s) => heading(s).textContent)).toEqual(["Space w1 · MacBook", "Space w1 · Windows PC", "Space w2 · Windows PC", t("paged-agents.no_space")]);
+    // the computers in the hub's order (none given here: by id), each named as the list names it, with its state
+    expect(computers().map((c) => c.dataset.sessionComputer)).toEqual(["lab", "mac", "nas", "pc"]);
+    expect(computerHeading(computer("mac"))).toEqual([`MacBook${t("sidebar.online")}`, stateCount("needs_you", 1), t("paged-agents.count", { count: 3 })]);
+    expect(computerHeading(computer("pc"))).toEqual([`Windows PC${t("sidebar.online")}`, t("paged-agents.count", { count: 2 })]);
+    // a computer that is away starts folded, and says so beside its name
+    expect(computerHeading(computer("nas"))).toEqual([`NAS${t("sidebar.offline")}`, t("paged-agents.count", { count: 1 })]);
+    expect(computer("nas").querySelector("[data-sidebar-group-heading]")!.textContent).toContain(t("sidebar.offline"));
+    expect(computers().map((c) => heading(c).getAttribute("aria-expanded"))).toEqual(["true", "true", "false", "true"]);
+    // inside each, its spaces by name, then its sessions in no space; the space headings no longer name the computer
+    expect(spacesIn(computer("mac")).map((s) => heading(s).textContent)).toEqual(["Space w1", t("paged-agents.no_space")]);
+    expect(spacesIn(computer("pc")).map((s) => heading(s).textContent)).toEqual(["Space w1", "Space w2"]);
+    expect(spacesIn(computer("lab")).map((s) => heading(s).textContent)).toEqual([t("paged-agents.no_space")]);
+    expect(spacesIn(computer("nas"))).toEqual([]); // folded: nothing drawn, nothing read
+    expect(spacesIn(computer("mac")).map(rowsIn)).toEqual([["a1", "a2"], ["a3"]]);
+    expect(spacesIn(computer("mac"))[0].querySelector("[data-row]")!.getAttribute("data-within")).toBe("group");
+    // one read for each open space, by its computer's pair; none for the folded computer's
+    expect(spaceReads().map(String).sort()).toEqual([listPair("lab", ""), listPair("mac", ""), listPair("mac", "w1"), listPair("pc", "w1"), listPair("pc", "w2")].sort());
     // no second pill for the computer: a space already is one computer's
     expect(host.querySelector(`button[aria-label="${t("paged-agents.machine")}"]`)).toBeNull();
-    expect(rowsIn(sections()[0])).toEqual(["a1", "a2"]);
-    expect(reads("page").map((path) => params(path).getAll("space")).filter((pairs) => pairs.length)).toContainEqual([listPair("mac", "w1")]);
-    await toggle(sections()[3]);
-    expect(rowsIn(sections()[3])).toEqual(["a3", "c1", "d1"]);
-    expect(params(reads("page").at(-1)!).getAll("space").sort()).toEqual([listPair("lab", ""), listPair("mac", ""), listPair("nas", "")].sort());
+
+    await toggle(computer("nas"));
+    expect(spacesIn(computer("nas")).map(rowsIn)).toEqual([["c1"]]);
+    expect(params(reads("page").at(-1)!).getAll("space")).toEqual([listPair("nas", "")]);
+    // what someone opened or folded is kept
+    act(() => root.unmount());
+    root = createRoot(host);
+    await show();
+    await settle();
+    expect(computers().map((c) => heading(c).getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
+  });
+
+  it("keeps the computer level when a chip leaves one computer's sessions, its numbers the chip's", async () => {
+    await show();
+    await browseBy("group");
+    const needs = [...host.querySelectorAll<HTMLButtonElement>(`[aria-label="${t("sidebar.quick_filters")}"] [role="radio"]`)][1];
+    await act(async () => needs.click());
+    await settle();
+    expect(computers().map((c) => c.dataset.sessionComputer)).toEqual(["mac"]);
+    expect(computerHeading(computer("mac"))).toEqual([`MacBook${t("sidebar.online")}`, t("paged-agents.count", { count: 1 })]);
+    expect(spacesIn(computer("mac")).map(rowsIn)).toEqual([["a1"]]);
+  });
+
+  it("opens by itself the computer and the space the open conversation is in", async () => {
+    await show({ open: "c1" });
+    await browseBy("group");
+    expect(heading(computer("nas")).getAttribute("aria-expanded")).toBe("true");
+    expect(spacesIn(computer("nas")).map(rowsIn)).toEqual([["c1"]]);
+  });
+
+  it("tells apart a computer's spaces of one name by their parent folder (#13522)", async () => {
+    ROWS.push(row("e1", "mac", "/Users/me/Desktop/app", "codex-project:/Users/me/Desktop/app"), row("e2", "mac", "/Users/me/code/app", "w-app"));
+    try {
+      await show();
+      await browseBy("group");
+      expect(spacesIn(computer("mac")).map((s) => heading(s).textContent)).toEqual(["app · ~/Desktop", "app · ~/code", "Space w1", t("paged-agents.no_space")]);
+      expect(spacesIn(computer("mac")).slice(0, 2).map(rowsIn)).toEqual([["e1"], ["e2"]]);
+    } finally {
+      ROWS.splice(-2);
+    }
+  });
+
+  describe("a space's + (#13523)", () => {
+    const plus = (name: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("agents-groupedsessions.new_agent_in", { name })}"]`);
+    const pluses = () => [...host.querySelectorAll<HTMLButtonElement>("[data-space-add] button")];
+    beforeEach(() => { hub.opened.length = 0; });
+
+    it("opens New agent on the space's computer and folder, and only where there is a folder on a computer that is up", async () => {
+      await show();
+      await browseBy("group");
+      // a space of each online computer has one; No project has no folder, and the computer that is away is folded
+      expect(spacesIn(computer("mac")).map((s) => Boolean(s.querySelector(`[data-space-add]`)))).toEqual([true, false]);
+      expect(spacesIn(computer("pc")).map((s) => Boolean(s.querySelector(`[data-space-add]`)))).toEqual([true, true]);
+      expect(spacesIn(computer("lab")).map((s) => Boolean(s.querySelector(`[data-space-add]`)))).toEqual([false]);
+      expect(pluses()).toHaveLength(3);
+      await act(async () => plus("Space w2")!.click());
+      expect(hub.opened).toEqual([{ machineId: "pc", cwd: "D:\\Notes" }]);
+      // it starts nothing and folds nothing: the section stays as it was
+      expect(heading(spacesIn(computer("pc"))[1]).getAttribute("aria-expanded")).toBe("true");
+      // shown under the pointer, on keyboard focus and always on a touch screen; the numbers step aside for it
+      expect(plus("Space w1")!.className).toContain("opacity-0");
+      expect(plus("Space w1")!.className).toContain("group-hover/sec:opacity-100");
+      expect(plus("Space w1")!.className).toContain("focus-visible:opacity-100");
+      expect(plus("Space w1")!.className).toContain("[@media(hover:none)]:opacity-100");
+      const numbers = spacesIn(computer("mac"))[0].querySelector("[data-sidebar-group-heading] span[title]")!.parentElement!;
+      expect(numbers.className).toContain("group-hover/sec:-translate-x-6");
+      expect(numbers.className).toContain("[@media(hover:none)]:mr-6");
+    });
+
+    it("has none on a computer that is away", async () => {
+      const before = hub.machines;
+      // a new list, as the store makes one for a push: the sidebar's projection of it is kept by the list's identity
+      hub.machines = before.map((m) => (m.id === "pc" ? { ...m, online: false } : m));
+      try {
+        await show();
+        await browseBy("group");
+        await toggle(computer("pc"));
+        expect(spacesIn(computer("pc")).map((s) => heading(s).textContent)).toEqual(["Space w1", "Space w2"]);
+        expect(spacesIn(computer("pc")).some((s) => s.querySelector("[data-space-add]"))).toBe(false);
+      } finally {
+        hub.machines = before;
+      }
+    });
+
+    it("names the space it starts in, its parent folder too where another of its computer's has its name", async () => {
+      ROWS.push(row("e1", "mac", "/Users/me/Desktop/app", "codex-project:/Users/me/Desktop/app"), row("e2", "mac", "/Users/me/code/app", "w-app"));
+      try {
+        await show();
+        await browseBy("group");
+        await act(async () => plus("app · ~/code")!.click());
+        expect(hub.opened).toEqual([{ machineId: "mac", cwd: "/Users/me/code/app" }]);
+      } finally {
+        ROWS.splice(-2);
+      }
+    });
+  });
+  it("lists one computer's spaces as before, with no computer level", async () => {
+    const one = ROWS.filter((r) => r.machine === "mac");
+    vi.mocked(api).mockImplementation((path) => {
+      const q = params(path as string);
+      const rows = matching(q).filter((r) => one.includes(r));
+      const answer = q.has("catalog") ? catalogOf(rows) : q.has("counts") ? countsOf(rows) : { sessions: rows, remove: [], has_more: false, total: rows.length, revision: "r" };
+      return Promise.resolve(answer) as ReturnType<typeof api>;
+    });
+    await show();
+    await browseBy("group");
+    expect(computers()).toEqual([]);
+    expect(sections().map((s) => heading(s).textContent)).toEqual(["Space w1", t("paged-agents.no_space")]);
   });
 
   it("on a hub without the catalog groups by the ids it counts, with the computer pill beside", async () => {
@@ -666,7 +810,7 @@ describe("the chosen Browse by", () => {
     await show();
     await settle();
     expect(chosen()).toBe(t("paged-agents.project"));
-    expect(sections().map((s) => heading(s).textContent)).toEqual(["app", "notes", "tool", t("paged-agents.no_folder")]);
+    expect(sections().map((s) => heading(s).textContent)).toEqual(["app", "notes", "tool · Lab", t("paged-agents.no_folder")]);
 
     await browseBy("recent");
     act(() => root.unmount());

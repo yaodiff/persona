@@ -572,6 +572,21 @@ this by changing a locale, allowing an address or rearranging the generated plis
 - Set `--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona` in `native/app-core/scripts/build-apple.sh` for every Apple target. This changes only debug/panic paths, not the runtime code or the privacy scanner's exemptions; verify the actual exported archive with `check_bundle_privacy.py`.
 - A successful archive does not prove the package can ship: the bundle privacy scan runs after it, before export and upload. Keep that gate.
 
+## The Rust core's XCFramework on Linux (2026-11-27, #16944)
+
+- `cargo build -p persona-core-ffi` for an Apple target also links the crate's `cdylib`, which needs an Apple linker
+  that Linux does not have. Leave out only the cdylib (`cargo rustc --lib --crate-type staticlib,rlib`): a staticlib
+  alone gets the release profile's fat LTO, one merged object and a library unlike the Mac's, while with an rlib among
+  the crate types cargo runs no LTO, as on a Mac. The Rust dependencies compile no C, so neither needs an SDK or clang.
+- A home reached through a symbolic link (a devbox's home on another disk) leaks past
+  `--remap-path-prefix=$HOME=…`: rustup and cargo hand rustc the real path of the registry and the checkout. Remap the
+  real paths too.
+- A Linux host is not a Mac with another `uname -m`: a Linux Apple toolchain builds the arm64 simulator on an x86_64
+  machine too, and the framework has no macOS slice. Its cache key names the system, or a cache both could reach would
+  hand a Mac a full entry with no macOS slice.
+- `xcrun --show-sdk-build-version` reports the SDK's `System/Library/CoreServices/SystemVersion.plist`
+  `ProductBuildVersion`; a copy of the Xcode SDKs on Linux holds the same file, so both key the same SDK the same way.
+
 ## Resuming an interrupted TestFlight archive (#8890)
 
 A retained release worktree is not clean just because its source is unchanged: `release.sh` generates
@@ -1231,6 +1246,10 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Within one NavigationStack, pushing view-based `NavigationLink { destination }` then value-based `NavigationLink(value:)` inserts the new page **underneath**:
   taps look ineffective until Back (Settings › Machines › card, machine detail › session; Knowledge search entries also reveal a yellow warning on return, 2026-10-31). Use an entirely value-based chain (`MachineListRoute`,
   `MachineDetailRoute` + `navigationDestination(for:)`) or entirely view-based. `navigationDestination(isPresented:)` is view-based too.
+- A page pushed by view is outside the stack's path, so anything that moves the page by setting the path leaves it in front (2026-11-23, #13156).
+  In the Sidebar layout a pick in the sidebar replaces the root and the path (`SidebarPageRoots`). A task's page pushed from the conversation by
+  `detailPresentation` stayed over the Agent picked next, with the selected row already moved. `probe.sidebar-page` read `path 0, depth 2`:
+  the depth counted the page, the path did not. On a stack whose roots the sidebar swaps, push values only (`TaskDetailRoute`, `TasksStore.takeDetail`).
 - Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
   Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
   (`splitPush`), or give each link its own row.
@@ -3335,3 +3354,12 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
 - Members a deletion leaves constant (a `Bool { false }`, a modifier that returns `self`, a parameter only ever passed
   its default) go with it, or the next reader keeps working around a Mac that is not there (#13399's last PR removed
   `MacHover`, `MacSelectingList`, `DeferredDefaults`, `StyleSpec.MacChrome` and `kbOpenEntry`, which nothing set).
+
+## An App Shortcut inside `#if` is never registered (#17789, 2026-11-28)
+
+The App Intents metadata extractor reads `AppShortcutsProvider.appShortcuts` from the compiler's constant values and
+drops every `AppShortcut` wrapped in `#if` inside the builder, whichever branch is active, with no warning. The Swift
+list still had ten entries (`appShortcuts.count == 10` passed), but `Persona.app/Metadata.appintents/extract.actionsdata`
+held seven: Call Persona and Start Meeting had never reached the iPhone's Spotlight, Siri or Settings › Action Button.
+Put the `#if` around the whole provider (one list per platform) and check the built metadata, not the Swift list:
+`MessagePersonaIntentTests.theBuiltMetadataListsEveryAppShortcut` reads the hosting app's own `extract.actionsdata`.

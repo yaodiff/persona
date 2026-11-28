@@ -26,8 +26,8 @@ describe("AuthGroup", () => {
 
   it("says a switched-off extension has to be on first", () => {
     const html = draw({ title: "飞书登录", state: "unknown" }, false);
-    expect(html).toContain("扩展没在运行");
-    expect(html).toContain("打开扩展后才能登录。");
+    expect(html).toContain("扩展未运行");
+    expect(html).toContain("启用扩展后才能登录。");
     expect(html).toContain("disabled");
   });
 });

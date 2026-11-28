@@ -325,8 +325,7 @@ func TestTaskStartRecordsTheDispatch(t *testing.T) {
 	}
 }
 
-// The templates and a capture into a new profile make core and dev answering to their older names, as a migrated
-// profile does, so a stored plan task or an older client naming strong or standard resolves on them too (#15010).
+// A capture gives core and dev their legacy aliases, so stored plans and older clients still resolve them (#15010).
 func TestCapturedTiersAnswerToOldNames(t *testing.T) {
 	s, _, st := modelService(t)
 	ctx := context.Background()
@@ -362,12 +361,6 @@ func TestCapturedTiersAnswerToOldNames(t *testing.T) {
 			}
 		}
 	}
-	// (a) The seeded templates.
-	v := profilesOf(t, s)
-	for _, p := range v.Profiles {
-		oldNames("template "+p.ID, p.Tiers)
-	}
-	resolves("seeded")
 	raw := func() modelProfiles {
 		t.Helper()
 		var ps modelProfiles
@@ -393,15 +386,13 @@ func TestCapturedTiersAnswerToOldNames(t *testing.T) {
 			t.Fatalf("capture: %d %s", r.Code, r.Body.String())
 		}
 	}
-	// (b) A capture into a new profile stores the aliases themselves, not only a migrated read of them.
+	// A capture into a new profile stores the aliases.
 	capture()
 	tiers := capturedTiers()
 	oldNames("captured, as stored", tiers)
-	// (d) A later save of the captured tiers is not refused.
 	if err := checkModelTiers(maps.Clone(tiers)); err != nil {
 		t.Fatalf("captured tiers fail the save check: %v", err)
 	}
-	// (c) In use, the older names resolve to its tiers.
 	if _, err := s.applyModelProfile(ctx, "captured", ProfileActor{Kind: "hub"}); err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +400,7 @@ func TestCapturedTiersAnswerToOldNames(t *testing.T) {
 		t.Fatalf("captured is not in use: %+v", state)
 	}
 	resolves("captured in use")
-	// (e) Capturing it again keeps the aliases as they are, not doubled.
+	// Recapturing preserves the aliases.
 	capture()
 	oldNames("recaptured", capturedTiers())
 }

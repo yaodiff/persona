@@ -400,9 +400,9 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
 
     def test_a_trimmed_recording_without_minutes_has_nothing_to_talk_about(self):
         """A trimmed recording's material is its minutes alone (the hub's meta.json keeps `chars`): an all-day recording
-        past recording_days keeps its recap and has no minutes. Upload it while it is still inside the retention window."""
-        self.call("PUT", "/api/v1/assistant", {"recording_days": 30})
-        self.addCleanup(self.call, "PUT", "/api/v1/assistant", {"recording_days": 7})
+        past recording_text_days keeps its recap and has no minutes. Upload it while it is still inside the retention window."""
+        self.call("PUT", "/api/v1/assistant", {"recording_text_days": 30})
+        self.addCleanup(self.call, "PUT", "/api/v1/assistant", {"recording_text_days": 7})
         day = str(uuid.uuid4())
         status, uploaded = self.upload(day, kind="day", day="2026-11-10", tz="UTC", part=1, started_at="2026-11-10T08:00:00Z", device="watch",
                                        duration=0, coverage={"to": 10000, "gaps": []}, segments=LINES, complete=True)

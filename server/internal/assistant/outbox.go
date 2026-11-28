@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -160,8 +161,8 @@ func (b *BusHub) sendPush(ctx context.Context, p NotifyRequest) (NotifyResult, e
 	if raw != nil && b.queued() && b.keep(ctx, id, outboxPush, raw) {
 		return NotifyResult{OK: true, Queued: true}, nil
 	}
-	var res NotifyResult
-	err := busError(b.client.Call(ctx, assistantwire.MethodNotify, p, &res))
+	res, err := buswire.Call(ctx, b.client, assistantwire.NotifyMethod, p)
+	err = busError(err)
 	if err != nil && !answered(err) && raw != nil && b.keep(ctx, id, outboxPush, raw) {
 		return NotifyResult{OK: true, Queued: true}, nil
 	}
@@ -332,8 +333,7 @@ func (b *BusHub) deliverOutbox(ctx context.Context, items []assistantwire.Outbox
 		return nil, bus.ErrOffline
 	}
 	if o.legacy.Load() != peer {
-		var res assistantwire.OutboxResult
-		err := peer.Call(ctx, assistantwire.MethodOutbox, assistantwire.Outbox{Items: items}, &res)
+		res, err := buswire.Call(ctx, peer, assistantwire.OutboxMethod, assistantwire.Outbox{Items: items})
 		var re *rpc.Error
 		if !errors.As(err, &re) || re.Code != bus.CodeUnknownMethod {
 			return res.Done, err
@@ -344,7 +344,8 @@ func (b *BusHub) deliverOutbox(ctx context.Context, items []assistantwire.Outbox
 	for _, it := range items {
 		var err error
 		if it.Notification != nil {
-			err = busError(peer.Call(ctx, assistantwire.MethodNotify, NotifyRequest{Notification: *it.Notification}, nil))
+			_, err = buswire.Call(ctx, peer, assistantwire.NotifyMethod, NotifyRequest{Notification: *it.Notification})
+			err = busError(err)
 		} else {
 			err = peer.Notify(assistantwire.EventBroadcast, Broadcast{Message: it.Message})
 		}

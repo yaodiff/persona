@@ -561,3 +561,26 @@ func TestHerdrRetireGuardedNamedSessionRefusesCachedFallback(t *testing.T) {
 		t.Fatalf("default server terminal unexpectedly touched: %v", got)
 	}
 }
+
+// A runtime's session that no runtime lists any more (its companion restarted, the conversation still on disk) is not
+// running here: session.stop and session.retire answer so, instead of refusing its id for not being a hex one, so a
+// continuation that stops its to-do's old Agent first can go on (#16376). An id of another shape is still refused.
+func TestStopOfAnUnlistedRuntimeSessionIsNotRunning(t *testing.T) {
+	n, f, _ := herdrNode(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	const unlisted = "agy-b-a489e5d4-d97e-4a1e-a56b-7e2262c8ddea"
+	res, err := request(t, n, "session.stop", map[string]any{"session_id": unlisted})
+	if err != nil || res["stopped"] != false {
+		t.Fatalf("stop = %v, %v; want not running", res, err)
+	}
+	res, err = request(t, n, "session.retire", map[string]any{"session_id": unlisted})
+	if err != nil || res["closed"] != false {
+		t.Fatalf("retire = %v, %v; want not running", res, err)
+	}
+	if got := withoutAgentReports(f.trace("pane.send_keys", "tab.close", "pane.close")); len(got) != 0 {
+		t.Fatalf("keys or closes sent for a session nothing runs: %v", got)
+	}
+	if _, err := request(t, n, "session.stop", map[string]any{"session_id": "../etc/passwd"}); err == nil || !strings.Contains(err.Error(), "invalid session id") {
+		t.Fatalf("stop of a path-shaped id = %v; want refused", err)
+	}
+}

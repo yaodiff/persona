@@ -89,4 +89,19 @@ class AlwaysOfferTest {
         assertTrue(card.copy(alwaysHonored = null).offersAlways)
         assertFalse(card.copy(agent = "codex", alwaysHonored = null).offersAlways)
     }
+
+    @Test fun runtimeAlwaysKeysExplainScopeWhenManagerHonorsAlways() {
+        val agyWrite = card.copy(
+            agent = "antigravity", agentLabelHint = "Antigravity", toolName = "Write",
+            alwaysHonored = true, alwaysKeys = listOf("tool:Edit(//workspace/docs/**)"),
+        )
+        assertTrue(agyWrite.offersAlways)
+        assertEquals("这段对话中，这个目录里的所有文件编辑", agyWrite.alwaysScopeDetail.zhAny())
+        val agyRead = agyWrite.copy(toolName = "Read", alwaysKeys = listOf("tool:Read(//workspace/docs/**)"))
+        assertEquals("这段对话中，这个目录里的所有读取操作", agyRead.alwaysScopeDetail.zhAny())
+        val agyBash = agyWrite.copy(toolName = "Bash", alwaysKeys = listOf("tool:Bash"))
+        assertEquals("这段对话里的所有命令", agyBash.alwaysScopeDetail.zhAny())
+        // Without always_keys or always_label, non-Claude cards do not invent a whole-tool scope.
+        assertEquals(null, card.copy(agent = "antigravity", alwaysHonored = true).alwaysScopeDetail)
+    }
 }

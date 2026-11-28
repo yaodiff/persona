@@ -1,5 +1,5 @@
 {
-  "syntax_error_line": "这张图有语法错误（第 {line} 行）",
-  "syntax_error": "这张图有语法错误",
-  "render_failed": "这张图画不出来"
+  "syntax_error_line": "图表存在语法错误（第 {line} 行）",
+  "syntax_error": "图表存在语法错误",
+  "render_failed": "无法渲染此图表"
 }

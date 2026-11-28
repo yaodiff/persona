@@ -80,9 +80,15 @@ nonisolated enum Delegated {
     static let kept = 50
 
     /// Whether a card arriving buzzes: not while the assistant is still looking at it; the same card handed to the user
-    /// does, once.
+    /// and a genuinely newer same-ID occurrence each do, once.
     static func announces(_ ix: Interaction, replacing old: Interaction?) -> Bool {
-        !ix.isDelegating && (old == nil || old?.isDelegating == true)
+        guard !ix.isDelegating else { return false }
+        if let old {
+            if let a = ix.createdAtWire, let b = old.createdAtWire,
+               JSON.compareOccurrenceTimes(a, b) == .orderedDescending { return true }
+            if let a = ix.createdAt, let b = old.createdAt, a > b { return true }
+        }
+        return old == nil || old?.isDelegating == true
     }
 
     /// The context the assistant filled in, one line per field it gave, always in the same order; the deadline as a date.

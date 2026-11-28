@@ -12,7 +12,7 @@
   "computer_offline": "This computer is offline. Make sure it's on and connected to the internet and that Persona Link is running, then try again.",
   "computer_dropped": "The connection to this computer dropped. Reconnect it, check whether your last action went through, then try again.",
   "computer_timeout": "The request timed out. The computer may be busy or the network unstable. Check whether it went through, then try again later.",
-  "agent_stopped": "This Agent has stopped and doesn't take messages. Resume it from its terminal page.",
+  "agent_stopped": "This session has ended and can't take messages. Resume it from its terminal page.",
   "dialog_open": "A dialog is open in the Agent's terminal. Close the dialog in the terminal first, then try again.",
   "model_unavailable": "No model is set up that Persona can call directly for this. Add a provider with a key in Settings › Model providers, then pick it in Settings › Model configuration."
 }

@@ -809,7 +809,7 @@ private func gptName(_ label: String) -> String {
     guard let m = firstMatch(label, #"^gpt-([a-z0-9]+(?:\.[a-z0-9]+)*(?:-[a-z0-9]+(?:\.[a-z0-9]+)*)*)$"#, caseInsensitive: true) else {
         return label
     }
-    return m[1].split(separator: "-").enumerated().map { index, part in
+    return "GPT-" + m[1].split(separator: "-").enumerated().map { index, part in
         let text = String(part)
         guard index > 0, let first = text.first, first.isLetter else { return text }
         return String(first).uppercased() + text.dropFirst().lowercased()

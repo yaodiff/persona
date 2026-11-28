@@ -43,6 +43,9 @@ export interface OutboxEntry {
   /** The code its failed send was refused with (dialog_open: a dialog had the terminal, #7343). Kept across a reload
    *  (keepOutgoing); cleared once it is sent, retried or settled by a Check. */
   code?: string;
+  dialog?: string;
+  dialogMachine?: string;
+  dialogSession?: string;
   /** The computer's input box holds text (input_draft): what "Clear and send" clears, when it can. */
   clearable?: string;
   /** The hub keeps this id's definite answer, so an ordinary Retry is another operation. */
@@ -55,6 +58,8 @@ export interface OutboxEntry {
   relay?: string;
   /** Brought back after a reload: even an unconfirmed send can settle by the transcript's words. */
   restored?: boolean;
+  /** A reload recovered the message's words, but its images only lived in the old page. */
+  lostImages?: boolean;
   launcher?: string;
   model?: string;
 }
@@ -157,17 +162,29 @@ function inDoubtReason(code: unknown, relay?: unknown): string | undefined {
   return key ? t(key) : undefined;
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function dialogOpenText(dialog: unknown): string {
+  const title = nonEmptyString(dialog);
+  return title ? t("lib-outbox.dialog_open_named", { dialog: title }) : t("lib-outbox.dialog_open");
+}
+
 /** Why it didn't go, in words. */
 export function failureText(e: unknown): string {
   if (e instanceof ApiError && e.code === "input_draft") return t("lib-outbox.input_draft");
-  if (e instanceof ApiError && e.code === "dialog_open") return t("lib-outbox.dialog_open");
+  if (e instanceof ApiError && e.code === "dialog_open") return dialogOpenText(e.body.dialog);
   if (e instanceof ApiError && e.body.delivered === "unknown") return inDoubtReason(e.code, e.body.relay_reason) ?? t("lib-outbox.delivery_unknown");
   return errorText(e);
 }
 
-/** What a kept entry's bubble says: an uncertain one in the page's current language from its code (one kept from
- *  before a reload, or from a page that only had the generic words), else the words it failed with. */
-export function entryReason(e: Pick<OutboxEntry, "error" | "code" | "inDoubt" | "relay">): string {
+/** What a kept entry's bubble says, using the page's current language for a dialog or a known uncertain send. */
+export function entryReason(e: Pick<OutboxEntry, "error" | "code" | "inDoubt" | "relay" | "dialog" | "lostImages">): string {
+  if (e.code === "dialog_open" && !e.inDoubt) {
+    const reason = dialogOpenText(e.dialog);
+    return e.lostImages && e.error ? `${reason} (${e.error})` : reason;
+  }
   return (e.inDoubt ? inDoubtReason(e.code, e.relay) : undefined) ?? e.error ?? "";
 }
 
@@ -222,17 +239,31 @@ export function settleOutbox(mid: string, sid: string, users: Seen[]) {
   }
 }
 
+const clearFailure = { error: undefined, code: undefined, dialog: undefined, dialogMachine: undefined, dialogSession: undefined };
+type FailureDetails = Pick<OutboxEntry, keyof typeof clearFailure>;
+
+function failureDetails(err: unknown): FailureDetails {
+  const apiError = err instanceof ApiError ? err : undefined;
+  const body = apiError?.code === "dialog_open" ? apiError.body : undefined;
+  return {
+    error: failureText(err),
+    code: apiError?.code,
+    dialog: nonEmptyString(body?.dialog),
+    dialogMachine: nonEmptyString(body?.machine_id),
+    dialogSession: nonEmptyString(body?.session_id),
+  };
+}
+
 /** A failed entry's fields for the error its send ended with. */
-function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "code" | "clearable" | "newId" | "inDoubt" | "relay"> {
+function failedWith(err: unknown): FailureDetails & Pick<OutboxEntry, "state" | "clearable" | "newId" | "inDoubt" | "relay"> {
   const inDoubt = err instanceof ApiError && err.body.delivered === "unknown";
   const relay = err instanceof ApiError && typeof err.body.relay_reason === "string" ? err.body.relay_reason : undefined;
   return {
+    ...failureDetails(err),
     relay,
     // the hub stopped waiting (delivered "unknown"): it may have gone in, and its copy in the transcript settles it (settle)
     inDoubt,
     state: "failed",
-    error: failureText(err),
-    code: err instanceof ApiError ? err.code : undefined,
     clearable: err instanceof ApiError && err.code === "input_draft" && typeof err.body.clearable === "string" ? err.body.clearable : undefined,
     // A definite answer stays on this id, so its ordinary Retry is another operation. An uncertain send has no Retry:
     // Check queries the original operation instead (a network gap with no answer still retries with the same id).
@@ -271,7 +302,7 @@ export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> 
 
 const KEPT_PREFIX = "outbox-msg:";
 const keptKey = (key: string, id: string) => `${KEPT_PREFIX}${key}/${id}`;
-type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "code" | "state" | "wordsOnly" | "acceptedAt" | "clearable" | "relay">>;
+type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at"> & Partial<OutboxEntry>;
 
 // In-memory image payloads (and image-only sends that have no text to persist) kept across client-side
 // conversation switches in the same tab, keyed by keptKey(key, id). Never written to localStorage.
@@ -295,7 +326,11 @@ export function keepOutgoing(key: string, e: Outgoing) {
   }
   keptImageOnly.delete(storageKey);
   try {
-    storeValue(storageKey, JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, relay: e.relay, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
+    storeValue(storageKey, JSON.stringify({
+      id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt,
+      error: e.error, code: e.code, dialog: e.dialog, dialogMachine: e.dialogMachine, dialogSession: e.dialogSession,
+      relay: e.relay, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length,
+    }));
     if (hasImages) keptImages.set(storageKey, cloneImages(e.images));
     else keptImages.delete(storageKey);
   } catch {
@@ -312,17 +347,17 @@ export function acceptOutgoing(key: string, id: string, acceptedAt = Date.now())
   // too; the original component's setPending no longer reaches it. An already settled entry stays absent.
   const entries = list(key);
   if (entries.some((e) => e.id === id && e.state !== "sent")) {
-    setOutbox(key, entries.map((e) => e.id === id ? { ...e, state: "sent", acceptedAt, error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined } : e));
+    setOutbox(key, entries.map((e) => e.id === id ? { ...e, ...clearFailure, state: "sent", acceptedAt, clearable: undefined, newId: undefined, inDoubt: undefined } : e));
   }
   const storageKey = keptKey(key, id);
   const mem = keptImageOnly.get(storageKey);
   if (mem) {
-    keptImageOnly.set(storageKey, { ...mem, state: "sent", acceptedAt, error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined });
+    keptImageOnly.set(storageKey, { ...mem, ...clearFailure, state: "sent", acceptedAt, clearable: undefined, newId: undefined, inDoubt: undefined });
   }
   try {
     const saved = storedValue(storageKey);
     if (saved === null) return;
-    storeValue(storageKey, JSON.stringify({ ...JSON.parse(saved), state: "sent", acceptedAt, error: undefined, code: undefined, newId: undefined, inDoubt: undefined }));
+    storeValue(storageKey, JSON.stringify({ ...JSON.parse(saved), ...clearFailure, state: "sent", acceptedAt, newId: undefined, inDoubt: undefined }));
   } catch {
     // storage unavailable: keep only the current page's bubble
   }
@@ -389,7 +424,12 @@ export function restoreOutbox(mid: string, sid: string, inFlight: string[] = [])
     return true;
   });
   if (!back.length) return;
-  const entries = back.map(({ lostImages, images, ...k }): OutboxEntry => ({ ...k, images, state: k.state === "sent" ? "sent" : "failed", code: k.state === "sent" ? undefined : k.code, restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
+  const entries = back.map(({ lostImages, images, ...k }): OutboxEntry => ({
+    ...k, images, restored: true,
+    ...(k.state === "sent"
+      ? { ...clearFailure, state: "sent" }
+      : { state: "failed", lostImages, error: lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }),
+  }));
   setOutbox(key, [...list(key), ...entries]);
 }
 
@@ -444,7 +484,7 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
       return true;
     }
     flight.finish("delivered");
-    update(key, e.id, { state: "sent", acceptedAt: Date.now(), error: undefined, code: undefined, clearable: undefined });
+    update(key, e.id, { ...clearFailure, state: "sent", acceptedAt: Date.now(), clearable: undefined });
     showLauncherNote(`${mid}/${sid}`, r?.launcher_note);
     // An outside-terminal Claude took it behind a question only the computer can answer (#5890).
     if (r?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
@@ -515,21 +555,19 @@ function messageOperation(op: ClientOperation, mid: string, sid: string, id: str
 }
 
 /** The original HTTP reason on a definite receipt, without putting the operation's internals in the bubble. */
-function operationFailure(op: ClientOperation): Pick<OutboxEntry, "error" | "code"> {
+function operationFailure(op: ClientOperation): FailureDetails {
   const saved = op.result;
   if (saved?.body && typeof saved.status === "number") {
     try {
       const bytes = Uint8Array.from(atob(saved.body), (c) => c.charCodeAt(0));
       const body = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
       const message = typeof body.error === "string" && body.error ? body.error : `HTTP ${saved.status}`;
-      const err = new ApiError(saved.status, message, body);
-      // the receipt's code too: a dialog_open refusal found by a Check lights the terminal button as a live one does
-      return { error: failureText(err), code: err.code };
+      return failureDetails(new ApiError(saved.status, message, body));
     } catch {
       // A receipt without readable original JSON still has its authoritative state below.
     }
   }
-  return { error: t("lib-outbox.delivery_failed"), code: undefined };
+  return { ...clearFailure, error: t("lib-outbox.delivery_failed") };
 }
 
 /** Read-only reconciliation of an uncertain send: query its original operation, then let the open transcript's ordinary
@@ -568,7 +606,7 @@ export function checkOutbox(mid: string, sid: string, id: string): Promise<Outbo
     if (op.state === "done") {
       reread();
       if (!current()) return "stale";
-      update(key, id, { state: "sent", acceptedAt: Date.now(), error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined });
+      update(key, id, { ...clearFailure, state: "sent", acceptedAt: Date.now(), clearable: undefined, newId: undefined, inDoubt: undefined });
       return "applied";
     }
     if (op.state === "failed") {
@@ -605,7 +643,7 @@ export function retryOutboxEntry(mid: string, sid: string, id: string, clearDraf
   if (e.inDoubt) return { id, sent: checkOutbox(mid, sid, id).then((result) => result === "applied") };
   // A gap the hub never answered is retried with the same id (the hub does it at most once). A definite answer stays
   // on the old receipt, so this ordinary Retry is a new operation.
-  const next: OutboxEntry = { ...e, id: e.newId ? uuid() : e.id, newId: false, state: "sending", error: undefined, code: undefined, acceptedAt: undefined, at: Date.now() };
+  const next: OutboxEntry = { ...e, ...clearFailure, id: e.newId ? uuid() : e.id, newId: false, state: "sending", acceptedAt: undefined, at: Date.now() };
   const flight = beginMessageSend(mid, sid, next.id, next.text);
   noteWritten(next.id, next.at);
   write(key, list(key).map((x) => (x.id === id ? next : x)));

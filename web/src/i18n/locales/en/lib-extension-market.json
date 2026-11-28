@@ -23,8 +23,13 @@
   "agree_install": "Allow and install",
   "official_name": "Official extensions",
   "rename_title": "Extension identity change",
-  "rename_detail": "Rename {from} to {to} and upgrade. Your installed settings, secrets and data stay in the same storage slot. This change requires your confirmation, even without new permissions.",
+  "rename_detail": "Rename {from} to {to} and upgrade. Your installed settings, secrets and data stay in the same place. This change requires your confirmation, even without new permissions.",
   "rename_from": "Current ID",
   "rename_to": "New ID",
-  "agree_rename": "Confirm rename"
+  "agree_rename": "Confirm rename",
+  "ext_sig_official": "Official signature",
+  "ext_sig_signed": "Verified",
+  "ext_sig_key_removed": "Verified by a removed key",
+  "ext_sig_unsigned": "Unsigned",
+  "ext_sig_market_invalid": "Market signature failing"
 }

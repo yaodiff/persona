@@ -24,10 +24,53 @@ import { useLarkWrites } from "./lark-write-gate";
 import { LarkInboxContent } from "./LarkInboxContent";
 import { ConnectorReadNotice, ConnectorReplyTarget, conversationFailure, type ConversationFailure } from "./ConnectorReadNotice";
 
+const OPAQUE_SYSTEM_PROTOCOLS = new Set(["sms:", "mailto:", "tel:"]);
+
+function hasControlChar(url: string): boolean {
+  for (let i = 0; i < url.length; i++) {
+    const c = url.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+}
+
+/** Validate a connector/system open URL: credential-free http(s) with an explicit authority, or an allowlisted system deep link. */
+export function safeSystemURL(url?: string): { href: string; external: boolean } | null {
+  const trimmed = url?.trim();
+  if (!trimmed || hasControlChar(trimmed)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.username || parsed.password) return null;
+  if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+    if (/\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) return null;
+    const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
+    if (!auth || auth.includes("@") || auth.includes("\\") || !parsed.hostname) return null;
+    return { href: parsed.href, external: true };
+  }
+  if (parsed.protocol === "tg:") {
+    if (/\s/.test(trimmed) || !/^tg:\/\//i.test(trimmed)) return null;
+    const auth = trimmed.slice(5).split(/[/?#]/, 1)[0];
+    if (!auth || auth.includes("@") || auth.includes("\\") || !parsed.hostname) return null;
+    return { href: parsed.href, external: false };
+  }
+  if (OPAQUE_SYSTEM_PROTOCOLS.has(parsed.protocol)) {
+    if (/^(?:sms|mailto|tel):\/\//i.test(trimmed) || parsed.hostname) return null;
+    if (parsed.pathname === "" && parsed.search === "") return null;
+    return { href: parsed.href, external: false };
+  }
+  return null;
+}
+
 /** A link the system handles (sms:, tg://) goes to it; a web page opens in a tab. */
 export function openSystem(url: string) {
-  if (/^https?:/i.test(url)) window.open(url, "_blank", "noopener,noreferrer");
-  else location.href = url;
+  const target = safeSystemURL(url);
+  if (!target) return;
+  if (target.external) window.open(target.href, "_blank", "noopener,noreferrer");
+  else location.href = target.href;
 }
 
 const clock = (iso: string) => {

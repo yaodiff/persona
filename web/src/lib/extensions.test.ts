@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import {
-  checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, extensionDetail,
+  checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, prefillDraft, extensionDetail,
   machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled, setExtensionSecret, sourceText,
   stateLine, valueAt, morePermissions, extensionUpgrades, setExtensionAutoUpgrade, setExtensionUpgrades, upgradeAction, upgradeDetail, upgradeNote,
   type HubExtension, type ExtensionField, type ExtensionUpgrade, type JsonObject, nodeProgramStatus, exitText, saveFooter, channelOf, sandboxState,
-  entryID, entryItems, entryKey, fieldPath, isEntryList,
+  entryID, entryItems, entryKey, fieldPath, isEntryList, extensionTypeText, permissionTitle, permissionDetail,
 } from "./extensions";
 
 const extension = (status: string, extra: Partial<HubExtension> = {}): HubExtension => ({ id: `p-${status}`, name: status, kind: "connectors", status, ...extra });
@@ -42,11 +42,11 @@ describe("扩展的文字", () => {
     expect(["running", "needs_setup", "error", "incompatible", "disabled", "stopped"].map((s) => extensionTone(extension(s)))).toEqual([
       "green", "orange", "red", "red", "idle", "green",
     ]);
-    expect(["running", "stopped", "disabled", "error"].map((s) => runNote(extension(s)))).toEqual(["正在运行", "现在没在运行，要用时会自己启动", "", ""]);
+    expect(["running", "stopped", "disabled", "error"].map((s) => runNote(extension(s)))).toEqual(["正在运行", "当前未运行，将在需要时自动启动", "", ""]);
     expect(extensionTone(null)).toBe("idle");
     expect(listSummary(null)).toBe("");
-    expect(listSummary([])).toBe("没有");
-    expect(listSummary([extension("running"), extension("needs_setup"), extension("error"), extension("disabled")])).toBe("4 个 · 2 个要处理");
+    expect(listSummary([])).toBe("无");
+    expect(listSummary([extension("running"), extension("needs_setup"), extension("error"), extension("disabled")])).toBe("4 个 · 2 个待确认");
     expect(listSummary([extension("running")])).toBe("1 个");
   });
   it("says the node program's aggregate, not the idle hub process", () => {
@@ -86,6 +86,19 @@ describe("扩展的文字", () => {
     expect(stateLine(extension("running", { source: "hub.json" }))).toBe("启动 · manager.json");
     expect(sourceText("other")).toBeUndefined();
   });
+  it("names extension kinds and permissions in words, without hub keys or socket filenames", () => {
+    expect(extensionTypeText("connectors")).toBe("连接器");
+    expect(extensionTypeText("agent_sources")).toBe("Agent 来源");
+    expect(extensionTypeText("a_new_point")).toBe("其他扩展");
+    expect(extensionTypeText()).toBeUndefined();
+    expect(permissionTitle({ key: "network", title: "访问网络" })).toBe("可访问的外部网站");
+    expect(permissionTitle({ key: "agent_runtimes", title: "接入节点" })).toBe("在 Agents 中显示其管理的 Agent");
+    expect(permissionTitle({ key: "secrets", title: "使用密钥" })).toBe("使用密钥");
+    const runtime = permissionDetail({ key: "agent_runtimes", detail: "only runtime.sock" });
+    expect(runtime).toContain("本地 Agent 服务");
+    expect(runtime).not.toContain("runtime.sock");
+    expect(permissionDetail({ key: "network", detail: "notes.example.com" })).toBe("notes.example.com");
+  });
   it("says whether an attached extension is online, since when, and the version its program says", () => {
     const at = new Date();
     at.setHours(10, 42, 0, 0);
@@ -97,11 +110,11 @@ describe("扩展的文字", () => {
     expect(runNote(attached("starting", { online: false, since }))).toBe("独立运行 · 正在重连，10:42 起离线");
     // past them it is an error, which says why itself
     expect(runNote(attached("error", { online: false, since, error: "连不上" }))).toBe("独立运行 · 10:42 起离线");
-    expect(runNote(attached("stopped", { online: false }))).toBe("独立运行，需要时再连接");
+    expect(runNote(attached("stopped", { online: false }))).toBe("独立运行，需要时自动连接");
     expect(runNote(attached("disabled", { online: false }))).toBe("");
     expect(["running", "starting", "error"].map((s) => extensionTone(attached(s, { online: s === "running", since })))).toEqual(["green", "idle", "red"]);
     expect(stateLine(attached("running", { online: true, since }))).toBe("启动 · 1.0.0");
-    expect(stateLine(attached("error", { online: false, since, version: "1.1.0" }))).toBe("出错了 · 已批准 1.0.0，程序是 1.1.0");
+    expect(stateLine(attached("error", { online: false, since, version: "1.1.0" }))).toBe("出错 · 已批准版本为 1.0.0，当前程序版本为 1.1.0");
   });
   it("marks required fields without a default, and shows the default as a placeholder", () => {
     expect(fieldTitle({ name: "url", type: "string", required: true })).toBe("url（必填）");
@@ -143,6 +156,22 @@ describe("扩展的文字", () => {
     expect(checkError(new ApiError(409, "设置刚被改过", { code: "settings_moved" }))).toBe("设置刚被改过");
     expect(checkError(new ApiError(400, "bad", { code: "invalid_config" }))).toBeNull();
     expect(checkError(new Error("check_failed"))).toBeNull();
+  });
+});
+
+describe("a proposed settings prefill", () => {
+  it("fills only form fields, keeps groups nested and never enters ordinary entry lists", () => {
+    const fields: ExtensionField[] = [
+      { name: "machine", type: "string" },
+      { name: "repos", type: "array", items: { name: "items", type: "string" } },
+      { name: "limits", type: "object", fields: [{ name: "max", type: "integer" }, { name: "label", type: "string" }] },
+      { name: "accounts", type: "array", secret: { name: "entry_key", title: "Key" }, items: { name: "items", type: "object", fields: [{ name: "name", type: "string" }] } },
+    ];
+    expect(prefillDraft(
+      { machine: "old", limits: { label: "Saved" }, accounts: [{ _id: "one", name: "One" }] },
+      { machine: "new", repos: ["~/code"], limits: { max: 4, unknown: "no" }, accounts: [{ name: "Other" }], secret: "no", unknown: "no" },
+      fields,
+    )).toEqual({ machine: "new", repos: ["~/code"], limits: { label: "Saved", max: 4 }, accounts: [{ _id: "one", name: "One" }] });
   });
 });
 
@@ -209,10 +238,10 @@ describe("草稿", () => {
   it("reads numbers as typed", () => {
     expect(readNumber(" 30 ", true)).toEqual({ value: 30 });
     expect(readNumber("", true)).toEqual({});
-    expect(readNumber("1.5", true)).toEqual({ error: "要是一个整数" });
+    expect(readNumber("1.5", true)).toEqual({ error: "必须为整数" });
     expect(readNumber("1.5", false)).toEqual({ value: 1.5 });
-    expect(readNumber("abc", false)).toEqual({ error: "要是一个数" });
-    expect(numberProblems({ every: { text: "x", integer: true }, port: { text: "80", integer: true } })).toEqual({ every: "要是一个数" });
+    expect(readNumber("abc", false)).toEqual({ error: "必须为数字" });
+    expect(numberProblems({ every: { text: "x", integer: true }, port: { text: "80", integer: true } })).toEqual({ every: "必须为数字" });
   });
   it("lists a list field's items, falling back to the default", () => {
     const f: ExtensionField = { name: "tags", type: "array", default: ["a"] };
@@ -304,10 +333,10 @@ describe("an extension's machine switches", () => {
   it("say online or not, and for a computer extension how Cua Driver is", () => {
     const note = "…";
     expect(machineStatus({ ...mac, online: false, computer: { enabled: true, installed: false, note } }, true)).toBe("离线");
-    expect(machineStatus({ ...mac, computer: { enabled: false, installed: false, note } }, true)).toBe("在线 · Cua 没装");
-    expect(machineStatus({ ...mac, computer: { enabled: true, installed: true, daemon: false, note } }, true)).toBe("在线 · Cua 没在运行");
-    expect(machineStatus({ ...mac, computer: { enabled: true, installed: true, daemon: true, screen_recording: "missing", note } }, true)).toBe("在线 · Cua 缺权限");
-    expect(machineStatus({ ...mac, computer: { enabled: true, installed: true, daemon: true, ready: true } }, true)).toBe("在线 · Cua 可以用");
+    expect(machineStatus({ ...mac, computer: { enabled: false, installed: false, note } }, true)).toBe("在线 · 未安装 Cua");
+    expect(machineStatus({ ...mac, computer: { enabled: true, installed: true, daemon: false, note } }, true)).toBe("在线 · Cua 未运行");
+    expect(machineStatus({ ...mac, computer: { enabled: true, installed: true, daemon: true, screen_recording: "missing", note } }, true)).toBe("在线 · Cua 缺少权限");
+    expect(machineStatus({ ...mac, computer: { enabled: true, installed: true, daemon: true, ready: true } }, true)).toBe("在线 · Cua 已就绪");
     expect(machineStatus({ ...mac, computer: { enabled: false } }, true)).toBe("在线");
     expect(machineStatus({ ...mac, computer: { enabled: true, ready: true } }, false)).toBe("在线");
   });
@@ -318,24 +347,24 @@ describe("auto-upgrade (docs/extensions/extensions.md「Auto-upgrade」)", () =>
 
   it("says what happens to a newer version, and what the user does about it", () => {
     const ask = up("needs_permission", { added_permissions: [{ key: "network", title: "访问更多网络", detail: "status.example.com" }] });
-    expect(upgradeDetail(ask)).toBe("要多一项权限：访问更多网络（status.example.com）");
+    expect(upgradeDetail(ask)).toBe("需新增一项权限：访问更多网络（status.example.com）");
     expect(upgradeAction(ask)).toBe("去确认");
     expect(upgradeDetail(up("waiting_idle"))).toBe("扩展空闲时自动升级");
     expect(upgradeAction(up("waiting_idle"))).toBeNull();
-    expect([upgradeDetail(up("off")), upgradeAction(up("off"))]).toEqual(["自动升级关着", "去升级"]);
-    expect(upgradeDetail(up("skipped"))).toBe("上次升级后起不来，已回到 1.0.0，不再自动升级到这个版本");
+    expect([upgradeDetail(up("off")), upgradeAction(up("off"))]).toEqual(["自动升级已关闭", "升级"]);
+    expect(upgradeDetail(up("skipped"))).toBe("上次升级后未能启动，已回退至 1.0.0，将不再自动升级到此版本");
     // A version the user rolled back from by hand (#1826): not "didn't start".
-    expect(upgradeDetail(up("skipped", { skipped_by: "user" }))).toBe("你从这个版本回滚到了 1.0.0，不会再自动升级到它");
-    expect(upgradeAction(up("skipped", { skipped_by: "user" }))).toBe("去升级");
-    expect(upgradeDetail(up("failed", { detail: "下载失败" }))).toBe("没装上：下载失败");
-    expect(morePermissions([])).toBe("要的权限有变化");
-    expect(morePermissions([{ key: "a", title: "甲" }, { key: "b", title: "乙", detail: "x" }])).toBe("要多两项权限：甲、乙（x）");
+    expect(upgradeDetail(up("skipped", { skipped_by: "user" }))).toBe("你已将该版本回滚至 1.0.0，因此不会再自动升级到此版本");
+    expect(upgradeAction(up("skipped", { skipped_by: "user" }))).toBe("升级");
+    expect(upgradeDetail(up("failed", { detail: "下载失败" }))).toBe("安装失败：下载失败");
+    expect(morePermissions([])).toBe("所需权限已变更");
+    expect(morePermissions([{ key: "a", title: "甲" }, { key: "b", title: "乙", detail: "x" }])).toBe("需新增两项权限：甲、乙（x）");
   });
 
   it("tells of the last upgrade only when it is news of its own", () => {
     const at = "2026-11-04T14:34:21.439310005Z";
-    expect(upgradeNote({ kind: "upgraded", from: "0.9.0", to: "1.0.0", at })).toBe("已自动升级到 1.0.0（原来是 0.9.0）");
-    expect(upgradeNote({ kind: "rolled_back", from: "1.0.0", to: "1.1.0", at })).toBe("1.1.0 起不来，已回到 1.0.0");
+    expect(upgradeNote({ kind: "upgraded", from: "0.9.0", to: "1.0.0", at })).toBe("已自动升级至 1.0.0（原版本为 0.9.0）");
+    expect(upgradeNote({ kind: "rolled_back", from: "1.0.0", to: "1.1.0", at })).toBe("1.1.0 无法启动，已回退至 1.0.0");
     expect(upgradeNote({ kind: "needs_permission", from: "1.0.0", to: "1.1.0", at })).toBeNull();
   });
 
@@ -367,27 +396,27 @@ describe("saveFooter", () => {
   it("says nothing when every field is a list of machines (they say so themselves)", () => {
     const machines = { name: "computers", type: "array", items: { name: "items", type: "string", format: "machine" } } as ExtensionField;
     expect(saveFooter([machines])).toBeUndefined();
-    expect(saveFooter([machines, { name: "url", type: "string" } as ExtensionField])).toContain("即时生效；其他项改完点「保存」");
-    expect(saveFooter([{ name: "url", type: "string" } as ExtensionField])).toMatch(/^改完点「保存」/);
+    expect(saveFooter([machines, { name: "url", type: "string" } as ExtensionField])).toContain("立即生效；其余配置修改完成后请点击「保存」");
+    expect(saveFooter([{ name: "url", type: "string" } as ExtensionField])).toMatch(/^修改完成后请点击「保存」/);
   });
 });
 
 describe("nodeProgramStatus", () => {
   it("says how a plugin's program is on a machine switched on for it, in words the user can act on", () => {
-    expect(nodeProgramStatus(undefined)).toBe("等 hub 把程序发过去");
-    expect(nodeProgramStatus({ machine_id: "m", state: "running", version: "1.2.0" })).toBe("程序在运行 · 1.2.0");
+    expect(nodeProgramStatus(undefined)).toBe("等待 hub 下发程序");
+    expect(nodeProgramStatus({ machine_id: "m", state: "running", version: "1.2.0" })).toBe("程序运行中 · 1.2.0");
     expect(nodeProgramStatus({ machine_id: "m", state: "error", error: "exit status 3" })).toBe("程序出错：退出码 3");
     expect(exitText("1.0.0 没有起来：exit status 3")).toBe("1.0.0 没有起来：退出码 3");
-    expect(exitText("signal: killed")).toBe("被信号结束（killed）");
-    expect(nodeProgramStatus({ machine_id: "m", state: "outdated" })).toContain("personad 太旧");
-    expect(nodeProgramStatus({ machine_id: "m", state: "lease_expired" })).toContain("连上后会再启动");
+    expect(exitText("signal: killed")).toBe("被信号终止（killed）");
+    expect(nodeProgramStatus({ machine_id: "m", state: "outdated" })).toContain("personad 版本过旧");
+    expect(nodeProgramStatus({ machine_id: "m", state: "lease_expired" })).toContain("重新连接后将自动启动");
   });
 });
 
 describe("sandbox and channel", () => {
   it("says whether the sandbox is in effect and what went through the egress proxy", () => {
-    expect(sandboxState({ enabled: true, active: true })).toBe("沙箱正在生效");
-    expect(sandboxState({ enabled: true, active: false, why: "no bwrap" })).toBe("要求了沙箱，但现在没开起来");
+    expect(sandboxState({ enabled: true, active: true })).toBe("沙箱已生效");
+    expect(sandboxState({ enabled: true, active: false, why: "no bwrap" })).toBe("已请求启用沙箱，但当前未生效");
     expect(sandboxState({ enabled: false, active: false })).toBe("未启用沙箱");
   });
 

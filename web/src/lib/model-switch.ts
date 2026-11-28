@@ -5,7 +5,7 @@
 // message (server/internal/node/model_switch.go).
 import { t } from "../i18n";
 import { agentId, sessionAgent } from "./agent-kind";
-import { sessionCan, stateOf } from "./format";
+import { activityOf, backgroundWaiting, sessionCan } from "./format";
 import type { AgentModel } from "./launcher-models";
 import type { Session } from "./types";
 
@@ -13,10 +13,10 @@ import type { Session } from "./types";
  * Persona conversations use their own model controls. */
 export function canSwitchModel(s: Session | undefined): boolean {
   if (!s || s.assistant) return false;
-  if (s.capabilities?.model !== undefined) return s.capabilities.model && sessionCan(s, "send") && stateOf(s) !== "offline";
+  if (s.capabilities?.model !== undefined) return s.capabilities.model && sessionCan(s, "send") && activityOf(s) !== "offline";
   if (s.source_kind) return false;
   if (s.agent && s.agent !== "claude") return false;
-  return sessionCan(s, "send") && stateOf(s) !== "offline";
+  return sessionCan(s, "send") && activityOf(s) !== "offline";
 }
 
 /** Why the model cannot be switched right now, "" when it can (the node refuses the same cases). Codex applies model
@@ -24,8 +24,8 @@ export function canSwitchModel(s: Session | undefined): boolean {
 export function modelBusy(s: Session): string {
   if (agentId(sessionAgent(s).agent) === "codex") return "";
   if (s.capabilities?.model && !s.pane_id && (s.source_kind === "claude_desktop" || s.capabilities.plugin_input)) return "";
-  const st = stateOf(s);
-  return st === "working" || st === "needs_you" ? t("composer.busy") : "";
+  const st = activityOf(s);
+  return (st === "working" && !backgroundWaiting(s)) || st === "needs_you" ? t("composer.busy") : "";
 }
 
 /** The node's name for the Codex App's launcher (#5726, server/internal/node/codexapp_new.go). */
@@ -34,12 +34,14 @@ export const CODEX_APP_LAUNCHER = "codex-app";
 /** The node's name for the Claude Desktop launcher (server/internal/node/claudedesktop_new.go). */
 export const CLAUDE_DESKTOP_LAUNCHER = "claude-desktop";
 
-/** The launcher whose list the panel shows first: the session's own; without one, its engine's: the Codex App's for one
- *  of the App's chats (`space_kind` codex_app), plain codex for another Codex session, Claude Desktop for a desktop
- *  session, plain claude otherwise. */
+/** The launcher whose list the panel shows first: the session's own; without one, its engine's: agy for an Antigravity
+ *  session, the Codex App's for one of the App's chats (`space_kind` codex_app), plain codex for another Codex session,
+ *  Claude Desktop for a desktop session, plain claude otherwise. */
 export const sessionLauncher = (s: Partial<Pick<Session, "launcher" | "agent" | "agent_label" | "source_kind" | "agent_surface" | "space_kind">>): string => {
   if (s.launcher) return s.launcher;
-  if (agentId(sessionAgent(s).agent) !== "codex") {
+  const engine = agentId(sessionAgent(s).agent);
+  if (engine === "agy") return "agy";
+  if (engine !== "codex") {
     return s.source_kind === "claude_desktop" || s.space_kind === "claude_desktop" || s.agent_surface === "desktop"
       ? CLAUDE_DESKTOP_LAUNCHER
       : "claude";

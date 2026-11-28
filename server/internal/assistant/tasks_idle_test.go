@@ -76,7 +76,7 @@ func TestIdleAgentIsClosed(t *testing.T) {
 	f.setSessions("box", taskAgent, free)
 	refused, seen := taskCloseRefused{}, idleSeen{idlePrimed("box"): time.Now()}
 
-	s.closeIdleAgents(ctx, refused, seen) // first sight after the hub's first list: the clock starts now
+	s.closeIdleAgents(ctx, refused, nil, seen) // first sight after the hub's first list: the clock starts now
 	if got := f.retires(); len(got) != 0 {
 		t.Fatalf("closed at first sight: %v", got)
 	}
@@ -86,7 +86,7 @@ func TestIdleAgentIsClosed(t *testing.T) {
 	for k := range seen {
 		seen[k] = time.Now().Add(-13 * time.Hour)
 	}
-	s.closeIdleAgents(ctx, refused, seen)
+	s.closeIdleAgents(ctx, refused, nil, seen)
 	if got := f.retires(); len(got) != 1 || got[0] != "free" {
 		t.Fatalf("retired %v, want only the agent of no task", got)
 	}
@@ -98,7 +98,7 @@ func TestIdleAgentIsClosed(t *testing.T) {
 	off := 0
 	setSettings(t, s, func(v *Settings) { v.IdleCloseHours = &off })
 	seen[[2]string{"box", "free"}] = time.Now().Add(-100 * time.Hour)
-	s.closeIdleAgents(ctx, refused, seen)
+	s.closeIdleAgents(ctx, refused, nil, seen)
 	if got := f.retires(); len(got) != 1 {
 		t.Fatalf("closed while off: %v", got)
 	}
@@ -115,7 +115,7 @@ func TestIdleClockSurvivesAHubRestart(t *testing.T) {
 	f.setSessions("box", still)
 	refused, seen := taskCloseRefused{}, idleSeen{} // a fresh hub
 
-	s.closeIdleAgents(ctx, refused, seen)
+	s.closeIdleAgents(ctx, refused, nil, seen)
 	if got := f.retires(); len(got) != 1 || got[0] != "still" {
 		t.Fatalf("after a restart retired %v, want the agent still for 13h", got)
 	}
@@ -124,7 +124,7 @@ func TestIdleClockSurvivesAHubRestart(t *testing.T) {
 	resumed := idleAgent(time.Now().Add(-13 * time.Hour))
 	resumed.SessionID, resumed.PaneID = "resumed", "w3:p1"
 	f.setSessions("box", resumed)
-	s.closeIdleAgents(ctx, refused, seen)
+	s.closeIdleAgents(ctx, refused, nil, seen)
 	if got := f.retires(); len(got) != 1 {
 		t.Fatalf("retired a just-resumed agent: %v", got)
 	}

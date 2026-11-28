@@ -22,6 +22,10 @@ mkdirSync(shots, { recursive: true });
 const watchdog = setTimeout(() => { console.error("TIMEOUT decision-row browser verification (180s)"); process.exit(124); }, 180_000);
 const AT = "2026-11-10T08:00:00Z";
 const sid = "decision-row-demo";
+const direction = "direction-demo";
+const askLabel = { en: "Ask in main chat", "zh-Hans": "在主对话问", ja: "メインチャットで聞く" };
+const discussionContext = { en: "The owner is asking about this pending decision.", "zh-Hans": "用户在询问这项待定决策。" };
+const composerInput = "[data-composer-input]";
 const RESPONSES = ["decide_yourself", "not_what_i_asked", "explain_first"];
 const menuWords = {
   en: ["You decide", "This isn't what I asked for", "Tell me the background first"],
@@ -99,8 +103,12 @@ async function run(browser, size, theme, language) {
     localStorage.setItem("persona.text-size", textSize);
   }, { theme, language, textSize });
   const session = { machine_id: "demo", session_id: sid, title: "Example conversation", assistant: true, state: "idle", status: "idle", updated_at: AT };
+  const lead = { ...session, session_id: direction, title: "Example direction" };
   let list = todos();
-  const agents = list.map((t) => ({ machine_id: "demo", session_id: `${t.id}-worker`, title: `${t.title} Agent`, state: "idle", status: "idle", updated_at: AT, state_since: AT, ...(t.id === "demo-legacy" ? { turn_error: "Synthetic transient runtime error", turn_error_kind: "transient" } : {}) }));
+  list[0] = { ...list[0], quiet: true, supervision: { ...list[0].supervision, supervisor: direction },
+    view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 } };
+  const agents = list.map((t) => ({ machine_id: "demo", session_id: `${t.id}-worker`, title: `${t.title} Agent`, todo: { id: t.id, title: t.title }, state: "idle", status: "idle", updated_at: AT, state_since: AT, ...(t.id === "demo-legacy" ? { turn_error: "Synthetic transient runtime error", turn_error_kind: "transient" } : {}) }));
+  const sessions = [session, lead, ...agents];
   let dismissalGate;
   const writes = [];
   await context.route("**/api/v1/**", async (route) => {
@@ -114,6 +122,10 @@ async function run(browser, size, theme, language) {
     if (request.method() !== "GET") {
       const body = request.postDataJSON();
       writes.push({ path, method: request.method(), body });
+      if (path === `/sessions/demo/${sid}/messages`) {
+        await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
+        return;
+      }
       const dismissal = /^\/todos\/([^/]+)\/decision-(dismiss|undo-dismiss)$/.exec(path);
       if (dismissal) {
         assert.equal(body.review_at, AT);
@@ -142,11 +154,11 @@ async function run(browser, size, theme, language) {
     }
     let body = {};
     if (path === "/machines") body = { machines: [{ id: "demo", name: "Example computer", online: true, os: "linux" }] };
-    else if (path === "/sessions") body = { sessions: [session, ...agents] };
+    else if (path === "/sessions") body = { sessions };
     else if (path === "/interactions") body = { interactions: [] };
-    else if (path === "/assistant") body = { machine_id: "demo", main: sid, conversations: [session], tasks: [], memory: [] };
+    else if (path === "/assistant") body = { machine_id: "demo", main: sid, conversations: [session, lead], tasks: [], memory: [] };
     else if (path === "/todos") body = { todos: list };
-    else if (path === `/sessions/demo/${sid}`) body = { session };
+    else if (path.startsWith("/sessions/demo/") && path.split("/").length === 4) body = { session: sessions.find((s) => s.session_id === path.split("/").at(-1)) };
     else if (path.endsWith("/feed")) body = { items: [] };
     else if (path.endsWith("/items")) body = { items: [], has_more: false };
     else if (path === "/extensions/ui") body = { slots: [] };
@@ -190,7 +202,7 @@ async function run(browser, size, theme, language) {
     assert.equal(await cleanupLink.getAttribute("href"), "https://gitlab.example.com/team/app/-/merge_requests/1468");
     assert.equal(await custom.locator("[data-decision-link]").count(), 0, "redundant self-link is not rendered");
     for (const row of [rollout, cleanup]) {
-      assert.equal(await row.locator("[data-decision-actions] button").count(), 2, "Later and Don't handle stay on the row");
+      assert.equal(await row.locator("[data-decision-actions] button").count(), 3, "Later, Don't handle, and Ask in main chat");
       const buttons = row.locator("div.overflow-hidden > button, div.overflow-hidden > span > button");
       const geometry = await buttons.evaluateAll((els) => els.map((el) => ({ top: Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2), height: el.clientHeight, scroll: el.scrollHeight })));
       assert(geometry.every((g) => g.top === geometry[0].top), `the buttons are on one line: ${JSON.stringify(geometry)}`);
@@ -209,13 +221,85 @@ async function run(browser, size, theme, language) {
     await rollout.scrollIntoViewIfNeeded(); // keep this decision's whole action group in the evidence capture
     await page.waitForTimeout(300); // the entry has turned to its selected colors
     await page.screenshot({ path: name("tray") });
+    const exerciseDiscussion = (size === "wide" && theme === "dark" && language === "zh-Hans") ||
+      (size === "narrow" && theme === "light" && language === "en");
+    const sources = exerciseDiscussion ? [["main", `/persona/${sid}`], ["direction", `/persona/${direction}`], ["agent", "/s/demo/demo-rollout-worker"]] : [];
+    for (const [source, path] of sources) {
+      await page.goto(base + path);
+      if (source !== "agent") {
+        await page.locator('[data-tray-entry="needs"]').click();
+        await rollout.waitFor();
+        await openFolded(page);
+      }
+      const input = page.locator(composerInput);
+      if (source === "main") await input.fill("Existing draft");
+      const askButton = rollout.getByRole("button", { name: askLabel[language], exact: true });
+      await askButton.click();
+      await page.waitForURL(base + `/persona/${sid}`);
+      const draftQuote = page.locator("[data-quotes]").filter({ hasText: "Example rollout" });
+      await draftQuote.waitFor();
+      assert.equal(await page.getByRole("dialog").count(), 0, "the composer opens without a dialog");
+      assert.equal(writes.length, 0, "opening the composer only adds a draft quote");
+      if (source === "main") {
+        assert.equal(await input.textContent(), "Existing draft");
+        await draftQuote.getByRole("button").click();
+        await draftQuote.waitFor({ state: "detached" });
+        assert.equal(await input.textContent(), "Existing draft");
+        await page.locator('[data-tray-entry="needs"]').click();
+        await rollout.waitFor();
+        await openFolded(page);
+        await askButton.click();
+        await draftQuote.waitFor();
+      }
+      const question = `What would change for existing users? (${source})`;
+      await input.fill(question);
+      if (source === "main") await page.screenshot({ path: name("ask-composer") });
+      const response = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/sessions/demo/${sid}/messages`);
+      await page.getByTestId("composer-send").click();
+      assert.equal((await response).status(), 200);
+      await draftQuote.waitFor({ state: "detached" });
+      assert.equal(new URL(page.url()).pathname, `/persona/${sid}`);
+      const write = writes.at(-1);
+      assert.equal(writes.length, 1, "the chat send is the only write");
+      assert.equal(write.path, `/sessions/demo/${sid}/messages`);
+      assert.match(write.body.text, /^> 任务「Example rollout」（todo id: demo-rollout）/);
+      const decision = list.find((todo) => todo.id === "demo-rollout").ask;
+      assert(write.body.text.includes(decision.question));
+      for (const option of decision.options) assert(write.body.text.includes(`${option.label}: ${option.leads_to}`));
+      assert(write.body.text.includes(language === "en" ? `Recommended: ${decision.recommend}` : `推荐：${decision.recommend}`));
+      assert(write.body.text.includes(discussionContext[language]));
+      assert(write.body.text.endsWith(`\n\n${question}`));
+      const message = page.locator("[data-bubble-text]").filter({ hasText: question });
+      await message.waitFor();
+      const quote = message.locator("..").locator("[data-quote]").filter({ hasText: "Example rollout" });
+      await quote.waitFor();
+      if (source === "main") {
+        const expand = quote.locator('button[aria-expanded="false"]');
+        if (await expand.count()) await expand.click();
+        await page.screenshot({ path: name("ask-main-chat") });
+      }
+      writes.length = 0;
+      await page.goto(base + path);
+      if (source !== "agent") {
+        await page.locator('[data-tray-entry="needs"]').click();
+        await rollout.waitFor();
+        await openFolded(page);
+      }
+      await rollout.locator("[data-decision-option]").first().waitFor();
+      assert.equal(decision.asked_at, AT);
+    }
+    if (exerciseDiscussion) {
+      await page.goto(`${base}/`);
+      await page.locator('[data-tray-entry="needs"]').click();
+      await openFolded(page);
+    }
     // Other… opens the originating conversation with this decision routed to its composer, so the owner can add a
     // condition in words instead of choosing an unchanged suggestion (#10760).
     await custom.locator("span[data-decision-tail] button").first().click();
-    await page.locator("textarea").last().waitFor();
+    await page.locator(composerInput).waitFor();
     assert.equal(new URL(page.url()).pathname, `/persona/${sid}`);
     await page.getByText("Example custom decision", { exact: false }).first().waitFor();
-    await page.locator("textarea").last().fill("先 Resume，但把提醒改到周四");
+    await page.locator(composerInput).fill("先 Resume，但把提醒改到周四");
     await page.screenshot({ path: name("custom-answer") });
     const customAnswer = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/assistant/conversations/${sid}/route`);
     await page.getByTestId("composer-send").click();

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -31,12 +32,12 @@ func TestDeliveryMark(t *testing.T) {
 }
 
 func TestJudgedDelivery(t *testing.T) {
-	reply := func(text string) []prompts.TaskDoneReply { return []prompts.TaskDoneReply{{Text: text}} }
+	reply := func(text string) []taskDoneReply { return []taskDoneReply{doneReply(text)} }
 	pr := "开了 https://github.com/o/r/pull/12"
 	for _, tc := range []struct {
 		name                  string
 		state, gate, unblock  string
-		replies               []prompts.TaskDoneReply
+		replies               []taskDoneReply
 		wantState, wantUnhold string
 	}{
 		{"the judge's hold", "pr", "等用户批准合并", "user", reply(pr), deliveryPR, unblockUser},
@@ -76,10 +77,9 @@ func TestAutoFinishHoldsUndeliveredWork(t *testing.T) {
 	deliveryOn(t, s)
 	now := time.Now()
 	putTodo(s, Todo{ID: "todo_d", Title: "修登录", Origin: "conv1", CreatedAt: now.Add(-time.Hour),
-		Agents: []TodoAgent{{MachineID: "box", SessionID: "s9"}}})
+		Agents: []TodoAgent{{MachineID: "box", SessionID: "s9", LinkedAt: now.Add(-time.Minute)}}})
 	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s9", Status: proto.StatusDone})
-	f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant",
-		Text: "修好了，https://github.com/o/r/pull/7\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户"})
+	artifactReportProof(f, todoNow(s, "todo_d"), "修好了，https://github.com/o/r/pull/7\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户", "https://github.com/o/r/pull/7")
 	f.judge = `{"verdict":"done","reason":"开了 PR","delivery":"pr","gate":"等用户批准合并","unblock":"user"}`
 	s.autoFinishTask(todoNow(s, "todo_d"), now, true)
 	got := todoNow(s, "todo_d")
@@ -156,6 +156,7 @@ func TestSupervisedUndeliveredTellsWhereItIsHeld(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	deliveryOn(t, s)
 	f.judge = `{"verdict":"done","reason":"开了 PR","delivery":"pr","gate":"等用户批准合并","unblock":"user"}`
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor", "fix/work", "fix/work", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了，https://github.com/o/r/pull/901 等合并\n交付：停在 PR；卡点：等用户批准合并；谁来解：用户", 0)
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
@@ -165,5 +166,139 @@ func TestSupervisedUndeliveredTellsWhereItIsHeld(t *testing.T) {
 	now := todoNow(s, todo.ID)
 	if now.DoneAt != nil || now.Supervision.State == reviewPending || !now.Delivery.held() {
 		t.Fatalf("todo: %+v %+v", now.Supervision, now.Delivery)
+	}
+}
+
+func TestDefaultOffVerificationRequiresExplicitReport(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply, state string
+	}{
+		{"deployed without a switch", "### Persona 工作报告\n\n- Status: done\n- Merged: yes\n- Deployed: yes\n- Did: Released without a feature switch; effective immediately.\n- Delivery: live\n- Verified: Production returned names for 5/5 records.\n\n---", deliveryLive},
+		{"legacy live report", "交付：已上线并实测；卡点：无；谁来解：无", deliveryLive},
+		{"deployed closeout", "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\n</closeout>", deliveryLive},
+		{"explicit off", "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndelivery: off\nmissing: Feature disabled by default; enable it in settings.\n</closeout>", deliveryOff},
+		{"legacy explicit off", "交付：默认关待启用；卡点：功能默认关闭，需启用；谁来解：用户", deliveryOff},
+		{"mislabeled deployed closeout", "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndelivery: off\nmissing: Offline data backfill is pending.\n</closeout>", deliveryLive},
+		{"original report shape", "<closeout status=\"done\">\ndelivery: off\nverified: Online HTTP 200; 5/5 names present.\nmissing: Offline data backfill needs the data team.\n</closeout>", deliveryMerged},
+		{"unknown deployment", "The change was deployed; verification is pending.", deliveryMerged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			delivery := judgedDelivery(deliveryOff, "Enable the feature", unblockUser, []taskDoneReply{{TaskDoneReply: prompts.TaskDoneReply{Text: tc.reply}}})
+			if delivery.State != tc.state {
+				t.Fatalf("state = %q, want %q", delivery.State, tc.state)
+			}
+			title := verdictText(i18n.ZhHans, &acceptAsk{}, &delivery)
+			if strings.Contains(title, "默认关着") != (tc.state == deliveryOff) {
+				t.Fatalf("unexpected default-off title: %q", title)
+			}
+			if tc.state == deliveryLive && title != "✅ 做完了：已部署，按下面验收" {
+				t.Fatalf("live title = %q", title)
+			}
+		})
+	}
+}
+
+func TestDefaultOffJudgeChecksUseNormalizedDelivery(t *testing.T) {
+	model := &cannedJSON{answer: `{"verdict":"done","delivery":"off","gate":"Data backfill pending","unblock":"other"}`}
+	check, err := judgeTaskDoneWith(context.Background(), model, taskDoneInput{
+		Title: "Release the name fix", Delivery: true, Checks: true,
+		Replies: []taskDoneReply{{TaskDoneReply: prompts.TaskDoneReply{Text: "<closeout status=\"done\" deployed=\"yes\">\ndelivery: live\nverified: HTTP 200, 5/5 records have names.\n</closeout>"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if check.Delivery == nil || check.Delivery.State != deliveryLive || check.AutoCheck == nil || check.AutoCheck.Delivery != deliveryMerged {
+		t.Fatalf("unsupported default-off or automatic live check: %+v / %+v", check.Delivery, check.AutoCheck)
+	}
+}
+
+func TestHistoricalDefaultOffWithoutFeatureEvidenceIsNeutral(t *testing.T) {
+	delivery := &TodoDelivery{State: deliveryOff, Gate: "Offline data backfill is pending"}
+	title := verdictText(i18n.ZhHans, &acceptAsk{}, delivery)
+	if strings.Contains(title, "默认关着") || strings.Contains(title, "已部署") {
+		t.Fatalf("unsupported deployment or feature claim: %q", title)
+	}
+}
+
+func TestDefaultOffGateDoesNotTreatNegationAsEvidence(t *testing.T) {
+	for _, gate := range []string{"The feature is not off by default", "The feature is not disabled by default", "the new flag isn't off by default", "the new flag aren't off by default", "the new flag wasn't off by default", "the new flag won't off by default", "the new flag doesn't off by default", "the new flag hasn't off by default", "并非默认关闭", "没有默认关闭", "既定でオフではない"} {
+		if hasDefaultOffGate(gate) {
+			t.Fatalf("negation accepted: %q", gate)
+		}
+		title := verdictText(i18n.ZhHans, &acceptAsk{}, &TodoDelivery{State: deliveryOff, Gate: gate})
+		if strings.Contains(title, "默认关着") {
+			t.Fatalf("negated gate in title: %q", title)
+		}
+	}
+}
+
+func TestDefaultOffGateSeparatorsAndWordBoundaries(t *testing.T) {
+	type gateCase struct {
+		gate string
+		want bool
+	}
+	cases := []gateCase{
+		{"Feature is default.off", true},
+		{"Feature is default-off", true},
+		{"Feature is default off", true},
+		{"Feature is default_off", true},
+		{"The default office location needs review", false},
+		{"The default.offset needs review", false},
+		{"The nodefault.off value needs review", false},
+		{"The new flag won't be off-by-default", false},
+		{"The new flag hasn't been disabled-by-default", false},
+		{"The new flag doesn't default-off", false},
+		{"The new flag isn’t off by default", false},
+	}
+	for _, first := range []string{"-", ".", "_", " "} {
+		phrases := []string{"default" + first + "off"}
+		for _, second := range []string{"-", ".", "_", " "} {
+			phrases = append(phrases, "off"+first+"by"+second+"default", "disabled"+first+"by"+second+"default")
+		}
+		for _, phrase := range phrases {
+			cases = append(cases,
+				gateCase{"Feature is " + phrase + "; enable it in settings.", true},
+				gateCase{strings.ToUpper(phrase), true},
+				gateCase{"prefix" + phrase, false},
+				gateCase{phrase + "suffix", false},
+			)
+			for _, negation := range []string{
+				"not", "never", "no longer", "cannot",
+				"isn't", "aren't", "wasn't", "weren't", "don't", "doesn't", "didn't",
+				"won't", "wouldn't", "can't", "couldn't", "shouldn't", "mustn't",
+				"needn't", "shan't", "hasn't", "haven't", "hadn't", "mightn't", "oughtn't",
+			} {
+				cases = append(cases, gateCase{"The new flag " + negation + " " + phrase, false})
+				if strings.Contains(negation, "'") {
+					cases = append(cases,
+						gateCase{"The new flag " + strings.ReplaceAll(negation, "'", "’") + " " + phrase, false},
+						gateCase{"The new flag " + strings.ReplaceAll(negation, "'", "") + " " + phrase, false},
+					)
+				}
+			}
+		}
+	}
+	for _, phrase := range []string{"offset by default", "office by default", "disabled by defaulted"} {
+		cases = append(cases, gateCase{phrase, false})
+	}
+	for _, test := range cases {
+		t.Run(test.gate, func(t *testing.T) {
+			if got := hasDefaultOffGate(test.gate); got != test.want {
+				t.Errorf("hasDefaultOffGate(%q) = %v, want %v", test.gate, got, test.want)
+			}
+			title := verdictText(i18n.ZhHans, &acceptAsk{}, &TodoDelivery{State: deliveryOff, Gate: test.gate})
+			if got := strings.Contains(title, "默认关着"); got != test.want {
+				t.Errorf("default-off claim in title %q = %v, want %v", title, got, test.want)
+			}
+			reply := "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndelivery: off\nmissing: " + test.gate + "\n</closeout>"
+			delivery := judgedDelivery(deliveryOff, test.gate, unblockUser, []taskDoneReply{{TaskDoneReply: prompts.TaskDoneReply{Text: reply}}})
+			wantState := deliveryLive
+			if test.want {
+				wantState = deliveryOff
+			}
+			if delivery.State != wantState {
+				t.Errorf("judgedDelivery(%q) = %q, want %q", test.gate, delivery.State, wantState)
+			}
+		})
 	}
 }

@@ -1,6 +1,16 @@
 package assistant
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/connector"
+)
+
+// InboxMention binds an exact @name in a reply suggestion or reply attempt to a verified external user ID.
+type InboxMention = connector.InboxMention
+
+// InboxMentionUserID is the verified external user ID an InboxMention binds.
+type InboxMentionUserID = connector.MentionUserID
 
 // The processing conversation bound to an event (InboxItem.Handling) and the manager's suggestion on it
 // (InboxItem.Suggestion), docs/assistant/inbox.md "Events and handling chain".
@@ -49,10 +59,11 @@ type InboxSuggestion struct {
 	MachineID string `json:"machine_id,omitempty"`
 	// SessionID and TargetTitle name the existing conversation a handoff suggestion targets (#13562).
 	// Conversation remains the author conversation that submitted a write-back suggestion.
-	SessionID   string      `json:"session_id,omitempty"`
-	TargetTitle string      `json:"target_title,omitempty"`
-	Changes     []DocChange `json:"changes,omitempty"`
-	At          time.Time   `json:"at"`
+	SessionID   string         `json:"session_id,omitempty"`
+	TargetTitle string         `json:"target_title,omitempty"`
+	Mentions    []InboxMention `json:"mentions,omitempty"`
+	Changes     []DocChange    `json:"changes,omitempty"`
+	At          time.Time      `json:"at"`
 	// Cwd is where an agent suggestion's Agent starts (the tool's cwd; "" home): kept, not listed.
 	Cwd string `json:"cwd,omitempty"`
 	// MailTarget is the message a reply suggestion answered when it was created: kept, not listed. Reading that mail

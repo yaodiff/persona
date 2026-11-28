@@ -98,6 +98,8 @@ export interface VoiceAudio {
   setMuted(on: boolean): void;
   /** PCM16 little-endian at `rate`, after what is already queued, with no gap. */
   play(pcm: ArrayBuffer, rate: number): void;
+  /** Optional: marks a protocol-2 reply's start or end so playback buffers a small cushion and drains on end. */
+  reply?(open: boolean): void;
   /** Drops everything queued and playing. */
   clear(): void;
   cue(cue: VoiceCue): void;
@@ -506,6 +508,9 @@ export class VoiceConversation {
       case "link":
         if (frame.state === "reconnecting" && this.snap.link !== "reconnecting") this.audio?.cue("reconnecting");
         this.set({ link: frame.state });
+        return;
+      case "reply":
+        if (this.ready) this.audio?.reply?.(frame.state === "start");
         return;
       case "error":
         if (frame.failure.fatal) this.end({ kind: "failed", code: frame.failure.code, message: frame.failure.message });

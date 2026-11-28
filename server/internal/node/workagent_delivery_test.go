@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -154,5 +155,145 @@ func TestAgySendWatchCompleteLinesAndReplacement(t *testing.T) {
 	}
 	if watch.took() || !watch.lost {
 		t.Fatal("a replacement transcript was treated as the append-only file being watched")
+	}
+}
+
+func TestAgyPaneSendTagsClientMsgIDOnItemsAndWatch(t *testing.T) {
+	const (
+		tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB9sAAAAASUVORK5CYII="
+		prompt1 = "Inspect the failing screen layout"
+		prompt2 = "Verify the proposed fix plan"
+		prompt3 = "Retry after dismissing the dialog"
+		prompt4 = "Check the final status via companion route"
+	)
+	n, f, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, ""))
+
+	// Reading session.items before the conversation binds returns the placeholder notice (Seq: 1).
+	// That placeholder must never run echo matching or advance scanned past step_index 0.
+	notice, _ := agyTestItems(t, n, agyTestRow, nil)
+	if len(notice) != 1 || notice[0].Kind != proto.KindNotice {
+		t.Fatalf("unbound session.items = %+v, want placeholder notice", notice)
+	}
+
+	hub := withHub(t, n)
+	agyTestCall(t, n, "session.watch", agyTestRow, map[string]any{"since_seq": 0})
+	t.Cleanup(func() { n.unwatch(agyTestRow) })
+
+	file := agyTestFile(t, n.agyDataRoot(), agyTestID, "")
+	appendUser := func(step int, body string) error {
+		line := fmt.Sprintf(`{"step_index":%d,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":%q,"content":"<USER_REQUEST>\n%s\n</USER_REQUEST>"}`+"\n",
+			step, time.Now().UTC().Format(time.RFC3339Nano), body)
+		out, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+		_, err = out.WriteString(line)
+		if closeErr := out.Close(); err == nil {
+			err = closeErr
+		}
+		return err
+	}
+
+	// 1. First send carries an image attachment and binds the conversation late; transcript omits media.
+	f.handle("agent.prompt", func(map[string]any) any {
+		n.mu.Lock()
+		n.agyReports = map[string]agyHookReport{agyTestPane: {conversation: agyTestID, event: "PreInvocation", at: time.Now()}}
+		n.mu.Unlock()
+		if err := appendUser(0, prompt1); err != nil {
+			return herdrFail{Code: "test_write_failed", Message: err.Error()}
+		}
+		return map[string]any{}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := requestCtx(t, ctx, n, "session.send", map[string]any{
+		"session_id":    agyTestRow,
+		"text":          prompt1,
+		"client_msg_id": "msg-launch-1",
+		"images":        []map[string]any{{"mime": "image/png", "data": tinyPNG}},
+	}); err != nil {
+		t.Fatalf("first agy send: %v", err)
+	}
+	waitFor(t, "watch push with first client_msg_id", func() bool {
+		for _, it := range hub.got() {
+			if it.ClientMsgID == "msg-launch-1" {
+				return true
+			}
+		}
+		return false
+	})
+	items, _ := agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 1 || items[0].ClientMsgID != "msg-launch-1" {
+		t.Fatalf("first session.items = %+v, want single item tagged msg-launch-1", items)
+	}
+
+	// 2. Plan-mode follow-up written by agy with a "/plan " prefix tags the new item without touching step 0.
+	f.handle("agent.prompt", func(map[string]any) any {
+		if err := appendUser(1, "/plan "+prompt2); err != nil {
+			return herdrFail{Code: "test_write_failed", Message: err.Error()}
+		}
+		return map[string]any{}
+	})
+	if _, err := requestCtx(t, ctx, n, "session.send", map[string]any{
+		"session_id":    agyTestRow,
+		"text":          prompt2,
+		"client_msg_id": "msg-plan-2",
+	}); err != nil {
+		t.Fatalf("plan-mode agy send: %v", err)
+	}
+	waitFor(t, "watch push with plan-mode client_msg_id", func() bool {
+		for _, it := range hub.got() {
+			if it.ClientMsgID == "msg-plan-2" {
+				return true
+			}
+		}
+		return false
+	})
+	items, _ = agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 2 || items[0].ClientMsgID != "msg-launch-1" || items[1].ClientMsgID != "msg-plan-2" {
+		t.Fatalf("plan-mode session.items = %+v, want [msg-launch-1, msg-plan-2]", items)
+	}
+
+	// 3. A definite host refusal forgets its echo so a later identical prompt is not claimed by the refused id.
+	f.handle("agent.prompt", func(map[string]any) any {
+		return herdrFail{Code: "agent_blocked", Message: "interactive input required"}
+	})
+	_, err := requestCtx(t, ctx, n, "session.send", map[string]any{
+		"session_id":    agyTestRow,
+		"text":          prompt3,
+		"client_msg_id": "msg-refused-3",
+	})
+	var re *rpc.Error
+	if !errors.As(err, &re) || deliveredOf(re) != deliveredNone {
+		t.Fatalf("refused send err = %v, want delivered=none", err)
+	}
+	if err := appendUser(2, prompt3); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 3 || items[2].ClientMsgID != "" {
+		t.Fatalf("refused send wrongly tagged later user input: %+v", items)
+	}
+
+	// 4. A send to the companion session id agy-<conversation> routed to the live pane preserves client_msg_id and source.
+	f.handle("agent.prompt", func(map[string]any) any {
+		if err := appendUser(3, prompt4); err != nil {
+			return herdrFail{Code: "test_write_failed", Message: err.Error()}
+		}
+		return map[string]any{}
+	})
+	if _, err := requestCtx(t, ctx, n, "session.send", map[string]any{
+		"session_id":     agyAgent + "-" + agyTestID,
+		"text":           prompt4,
+		"client_msg_id":  "msg-companion-4",
+		"message_source": map[string]any{"kind": proto.InjectedTaskNotice},
+	}); err != nil {
+		t.Fatalf("companion-routed agy send: %v", err)
+	}
+	items, _ = agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 4 || items[3].ClientMsgID != "msg-companion-4" || items[3].Source == nil || items[3].Source.Kind != proto.InjectedTaskNotice {
+		t.Fatalf("companion-routed session.items = %+v, want msg-companion-4 with task_notice source", items)
 	}
 }

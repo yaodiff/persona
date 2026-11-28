@@ -268,6 +268,7 @@ func AttachWithTransport(ctx context.Context, newNode func() (*Node, error), ext
 			}
 			if runtimes != nil {
 				n.runtimeHost = runtimes // Serve attaches it for this connection
+				n.runtimes = runtimes.reg
 			}
 			n.adoptBgScans(scans)
 			n.share.Store(switches)

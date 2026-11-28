@@ -123,8 +123,15 @@ var goTypes = map[string]any{
 	"KBPutRecordingParams": recordingwire.RecordingWrite{},
 	"KBPutRecordingResult": recordingwire.RecordingWriteResult{},
 	"KBOwner":              assistantwire.KBOwner{},
-	"KBChangedEvent":       assistantwire.KBChanged{},
-	"KBForgottenEvent":     assistantwire.KBForgottenEvent{},
+	// The selected import provider's reads (extmgr/extension_kb_provider.go): the manager decodes kb.sent_markers'
+	// params into assistantwire.KBImportQuery, takes kb.import_checkpoint's only as an empty object, and the assistant
+	// answers both with the generated wire results (assistant/kb_provider.go).
+	"KBImportCheckpointParams": struct{}{},
+	"KBImportCheckpointResult": wire.KBImportCheckpointResult{},
+	"KBSentMarkersParams":      assistantwire.KBImportQuery{},
+	"KBSentMarkersResult":      wire.KBSentMarkersResult{},
+	"KBChangedEvent":           assistantwire.KBChanged{},
+	"KBForgottenEvent":         assistantwire.KBForgottenEvent{},
 
 	"AssistantEventParams":         assistantwire.AssistantEventParams{},
 	"AssistantEventResult":         assistantwire.AssistantEventResult{},
@@ -179,6 +186,11 @@ var goTypes = map[string]any{
 	"OffloadRunResult":       wire.OffloadRunResult{},
 	"OffloadJobParams":       wire.OffloadJobParams{},
 	"OffloadJob":             wire.OffloadJob{},
+
+	// The manager asks a routine_facts contribution with the generated wire params and reads its answer into the
+	// generated result (extmgr/routine_contributions.go), re-checking it before the routine uses it.
+	"RoutineFactsParams": wire.RoutineFactsParams{},
+	"RoutineFactsResult": wire.RoutineFactsResult{},
 
 	"MachinesPairLinkParams": wire.MachinesPairLinkParams{},
 	"MachinesPairLinkResult": wire.MachinesPairLinkResult{},
@@ -245,6 +257,8 @@ var channelCalls = []string{channel.MReceive, channel.MStatus, channel.MSend, ch
 var kbCalls = []string{assistantwire.MethodKBList, assistantwire.MethodKBGet, assistantwire.MethodKBDay,
 	assistantwire.MethodKBSearch, assistantwire.MethodKBUpdate, assistantwire.MethodKBOwner, assistantwire.MethodKBRecent,
 	assistantwire.MethodKBPutRecording,
+	// The selected import provider's reads; extmgr answers them itself (extmgr/extension_kb_provider.go).
+	"kb.import_checkpoint", "kb.sent_markers",
 	"event." + assistantwire.EventKBChanged, "event." + assistantwire.EventKBForgotten}
 
 // The model call the hub forwards for extensions granted models (models.schema.json).
@@ -270,6 +284,10 @@ var leaderCalls = []string{"event." + assistantwire.EventLeaderChanged, "event."
 // The calls the manager makes to a repository_providers contribution's program (repository.schema.json).
 var repoCalls = []string{ext.RepositoryNamespace + ".parse", ext.RepositoryNamespace + ".check", ext.RepositoryNamespace + ".link",
 	ext.RepositoryNamespace + ".describe", ext.RepositoryNamespace + ".pr_status"}
+
+// The call the manager makes to a routine_facts contribution's program (routine.schema.json;
+// extmgr/routine_contributions.go).
+var routineCalls = []string{"routine_facts.collect"}
 
 // The calls the manager makes to a disk_offload contribution's program (offload.schema.json).
 var offloadCalls = []string{ext.OffloadNamespace + ".inventory", ext.OffloadNamespace + ".run", ext.OffloadNamespace + ".job",
@@ -297,6 +315,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	want = append(want, storageCalls...)
 	want = append(want, repoCalls...)
 	want = append(want, offloadCalls...)
+	want = append(want, routineCalls...)
 	for _, name := range want {
 		if _, ok := wire.Calls[name]; !ok {
 			t.Errorf("%s: the server has it, schema/extension does not list it (x-methods / x-events)", name)
@@ -304,7 +323,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	}
 	for name := range wire.Calls {
 		if (strings.HasPrefix(name, serve.Namespace+".") || strings.HasPrefix(name, channel.Namespace+".") ||
-			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "event.leader.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "transcription.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.") || strings.HasPrefix(name, ext.RepositoryNamespace+".") || strings.HasPrefix(name, ext.OffloadNamespace+".")) &&
+			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "event.leader.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "transcription.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.") || strings.HasPrefix(name, ext.RepositoryNamespace+".") || strings.HasPrefix(name, ext.OffloadNamespace+".") || strings.HasPrefix(name, "routine_facts.")) &&
 			!slices.Contains(want, name) {
 			t.Errorf("%s: schema/extension lists it, the server has no such call", name)
 		}
@@ -599,6 +618,9 @@ func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect
 	}
 	switch node["type"] {
 	case nil:
+		if asString(node["x-opaque"]) != "" && g.Implements(marshalerType) && reflect.PointerTo(g).Implements(unmarshalerType) {
+			return
+		}
 		if g != rawType && g.Kind() != reflect.Interface {
 			t.Errorf("%s: the schema says any JSON, Go has %s", at, g)
 		}
@@ -630,8 +652,11 @@ func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect
 		}
 		kind(reflect.Bool)
 	case "array":
-		kind(reflect.Slice)
-		if g.Kind() == reflect.Slice {
+		if g.Implements(marshalerType) && reflect.PointerTo(g).Implements(unmarshalerType) && node["items"] == nil {
+			return
+		}
+		kind(reflect.Slice, reflect.Array)
+		if g.Kind() == reflect.Slice || g.Kind() == reflect.Array {
 			items, _ := node["items"].(map[string]any)
 			s.compare(t, at+"[]", items, g.Elem(), seen)
 		}

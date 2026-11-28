@@ -143,8 +143,8 @@ class Router(
             else -> return null
         }
         val resolved = resolve(key) ?: return null
-        // Only the Persona tab has a composer to focus; elsewhere the parameter means nothing.
-        return if (parameters["focus"] == "composer" && resolved.key == AssistantRoute) {
+        // Both the Persona tab (main chat) and an explicit ChatRoute have a composer to focus.
+        return if (parameters["focus"] == "composer" && (resolved.key == AssistantRoute || resolved.key is ChatRoute)) {
             ResolvedRoute(resolved.tab, resolved.key, resolved.pairingLink, focusComposer = true)
         } else resolved
     }
@@ -216,8 +216,8 @@ internal fun linkedPage(name: String): NavKey? = when (name.lowercase()) {
 fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: NewTodoRequests = NewTodoOpen): AppTab {
     val stack = stacks.getValue(tab)
     if (stack.isEmpty()) stack.add(tabRoot(tab))
-    // The card is listed on the tab's root and the composer to focus sits there: pages left open on top are closed first.
-    if (card != null || focusComposer) while (stack.size > 1) stack.removeAt(stack.lastIndex)
+    // The card is listed on the tab's root and the Persona tab's composer sits there: pages left open on top are closed first.
+    if (card != null || (focusComposer && key == tabRoot(tab))) while (stack.size > 1) stack.removeAt(stack.lastIndex)
     if (key == tabRoot(tab)) return tab
     // Conversations have one owning tab; secondary pages can legitimately remain open in both stacks.
     if (key is ChatRoute || key is InteractionRoute) {
@@ -230,12 +230,14 @@ fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: New
         while (stack.lastIndex > existing) stack.removeAt(stack.lastIndex)
         // Preserve the existing NavKey and its UI state when only provenance changed.
         val previous = stack[existing]
+        val withDecisionSource = if (previous is ChatRoute && key is ChatRoute)
+            previous.copy(decisionSource = key.decisionSource ?: previous.decisionSource) else previous
         if (previous == ConnectionSettingsRoute ||
             previous is ChatRoute && key is ChatRoute && previous.kind != key.kind ||
             // A notification about one request of a conversation already open: that page shows this request first.
             key is InteractionRoute && previous != key) {
             stack[existing] = key
-        }
+        } else if (withDecisionSource != previous) stack[existing] = withDecisionSource
     }
     if (parent != null && !stack.contains(parent)) stack.add(stack.lastIndex, parent)
     // Keep the serialized Sent key compatible, but make its parent explicit for links and history restores.

@@ -351,12 +351,14 @@ internal val AgentListGroup.stateSectionCounts: List<Pair<Status, Int>>?
             "muted", "idle" -> Status.Idle
             else -> return null
         }
-        return listOf(status to (totalCount ?: rows.count { !it.isNestedSubtask }))
+        return listOf(status to (totalCount ?: rows.count { !it.isNestedSubtask && it.seenPlace == null }))
     }
 
 /** "By to-do"'s "Opened by hand" and "No to-do": one count of their agents, as iOS's sections without a to-do. */
 internal val AgentListGroup.todoLooseCounts: List<Pair<Status, Int>>?
-    get() = if (id == TodoManualGroup || id == TodoNoneGroup) listOf(Status.Idle to rows.count { !it.isNestedSubtask }) else null
+    get() = if (id == TodoManualGroup || id == TodoNoneGroup) listOf(Status.Idle to rows.count(AgentSession::countsInHeading)) else null
+
+internal fun AgentSession.countsInHeading(): Boolean = !isNestedSubtask && seenPlace == null
 
 /** A to-do's count in its state's color (iOS `todoTone`): needing you, unread, working, else plain. */
 internal val TodoState?.countTone: Status
@@ -371,7 +373,7 @@ internal val TodoState?.countTone: Status
 private fun AgentListGroup.agentsIn(state: AgentState): Int =
     // A repository with working trees holds no rows itself (its trees do): it counts from stateCounts.
     if (totalCount != null || rows.isEmpty()) stateCounts?.get(state) ?: 0
-    else rows.count { !it.isNestedSubtask && it.state == state }
+    else rows.count { it.countsInHeading() && it.state == state }
 
 /**
  * A section's counts (Pinned, a history project): needing you, working, unread. The agents that only wait in the background
@@ -399,7 +401,7 @@ internal val AgentListGroup.headingCounts: List<Pair<Status, Int>>
  * Machine groups; the feature layer counts here for `MachineSectionHeader`.
  */
 internal fun machineHeadingCounts(group: AgentListGroup): List<Pair<Status, Int>> {
-    fun inState(state: AgentState) = group.rows.count { !it.isNestedSubtask && it.state == state }
+    fun inState(state: AgentState) = group.agentsIn(state)
     val waiting = group.waitingInBackground
     val section = listOf(AgentState.NeedsYou, AgentState.Working, AgentState.Unread).map { state ->
         val count = inState(state)

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { assistantEntries, type AssistantEntries } from "../../lib/assistant-entries";
+import { isBackgroundSupervisorInteraction } from "../../lib/background-supervisor";
 import { directUserInteraction, directUserWaiting, directWaitingCount } from "../../lib/direct-waiting";
 import { loadFeed, useFeed, type FeedItem } from "../../lib/feed";
 import { useShownManager } from "../../lib/manager-choice";
@@ -12,7 +13,7 @@ import { answeredLookup, answeredSessions } from "./answered-lookup";
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 const EMPTY_ASKS: Interaction[] = [];
-const EMPTY_ENTRIES: AssistantEntries = { needsYou: [], running: [], shelved: [], parked: [], review: [], finished: [] };
+const EMPTY_ENTRIES: AssistantEntries = { needsYou: [], verify: [], running: [], shelved: [], parked: [], review: [], finished: [] };
 
 /** The main conversation's own waiting list, shared by its sidebar row and the in-chat tray. */
 export function useMainWaiting(main?: Session) {
@@ -29,7 +30,8 @@ export function useMainWaiting(main?: Session) {
   const taskRows = useStore((s) => s.taskRows);
   const interactions = useStore((s) => s.interactions);
   const answered = useStore((s) => s.answered);
-  const mainId = useStore((s) => s.assistant?.main);
+  const assistantInfo = useStore((s) => s.assistant);
+  const mainId = assistantInfo?.main;
   const [restored] = useRestoredTodos();
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -40,18 +42,19 @@ export function useMainWaiting(main?: Session) {
   const lookup = useMemo(() => answeredLookup(taskSessionLookup({ sessions, sessionSummaries, taskRows }), interactions, answered),
     [sessions, sessionSummaries, taskRows, interactions, answered]);
   const entries = useMemo(() => conversation ? assistantEntries({
-    conversation, main: mainId, manager, todos, sessions: answeredSessions(sessionRows, interactions, answered),
+    conversation, conversationMachine: main?.machine_id, main: mainId, manager, todos, sessions: answeredSessions(sessionRows, interactions, answered),
     interactions, plans, feed, cards: metadata, deferred, lookup, restored, now: Date.now(),
   }) : EMPTY_ENTRIES,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick refreshes time-based buckets once a minute
-    [conversation, mainId, manager, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick]);
+    [conversation, main?.machine_id, mainId, manager, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick]);
   const waiting = useMemo(() => directUserWaiting(entries.needsYou, deferred), [entries.needsYou, deferred]);
   const ownInteractions = useMemo(() => {
     if (!main) return EMPTY_ASKS;
     return interactions.filter((ix) =>
       (ix.machine_id === main.machine_id && (ix.session_id === main.session_id || ix.folded_side === main.session_id)) ||
-      ((ix.folded_under_machine_id || ix.machine_id) === main.machine_id && ix.folded_under === main.session_id));
-  }, [main, interactions]);
+      ((ix.folded_under_machine_id || ix.machine_id) === main.machine_id && ix.folded_under === main.session_id) ||
+      isBackgroundSupervisorInteraction(assistantInfo, ix, manager));
+  }, [main, interactions, assistantInfo, manager]);
   const ownAsks = useMemo(() => ownInteractions.filter(directUserInteraction), [ownInteractions]);
   const projectedCount = directWaitingCount(waiting, ownAsks);
   // Older hubs and the first snapshot may expose only a scalar. Once cards are

@@ -14,6 +14,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
+import persona.core.domain.engines.Engines
 import persona.core.domain.sort.*
 import java.time.Instant
 
@@ -62,7 +63,9 @@ internal fun MachineSpacesScreen(
         projectSection("idle", idle, Status.Idle, shown.idle, busy = false, preferences, resources, now, agentsOf, onOpenSpace, onOpenAgent, visibleSessions, visibleSessionsByKey, onOpenSide)
         if (loaded && shown.projects == 0) item("empty", contentType = "empty") {
             JEmptyState(stringResource(R.string.agents_projects_empty_title),
-                stringResource(if (machine?.online == false) R.string.agents_projects_empty_offline else R.string.agents_projects_empty_hint),
+                // the computer's own engine, by name (#17054): herdr, Orca…
+                if (machine?.online == false) stringResource(R.string.agents_projects_empty_offline)
+                else stringResource(R.string.agents_projects_empty_hint, machine?.takeUnless(Engines::isNone)?.let(Engines::currentName) ?: Engines.DEFAULT),
                 icon = machine?.deviceIcon ?: PersonaIcons.machine)
         }
     }

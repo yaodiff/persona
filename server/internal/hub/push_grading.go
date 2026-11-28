@@ -160,9 +160,12 @@ type pushPolicy struct {
 	// and remembered per device, so the card's end withdraws the push.
 	cardID string
 	// derivedLevel is true when a NotifyPush notification omitted its level and the hub derived
-	// it (so notify_user.main / notify_user.others apply when grading is active); mainConv records
-	// whether the notification originated from the assistant's main conversation.
+	// it; asked is true when the conversation explicitly requested the push via notify_user
+	// (so notify_user.main / notify_user.others apply only to explicit notify_user alerts when
+	// grading or attention mode is active); mainConv records whether the notification originated
+	// from the assistant's main conversation.
 	derivedLevel bool
+	asked        bool
 	mainConv     bool
 }
 

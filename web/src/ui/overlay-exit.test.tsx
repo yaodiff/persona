@@ -211,4 +211,3 @@ describe("toasts' motion and hold", () => {
     expect(rows()).toHaveLength(0);
   });
 });
-

@@ -86,6 +86,7 @@ func TestAssistantBypassCommandGate(t *testing.T) {
 		{"credential guard", proto.ModeBypass, "echo $EXAMPLE_TOKEN", true, false, "deny", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			needsLarkGateForCommand(t, tc.command)
 			n := codexTestNode(t)
 			fh := withFakeHub(t, n)
 			const sid = "11111111-1111-4111-8111-111111111111"
@@ -352,6 +353,7 @@ func TestAssistantBypassReviewCommands(t *testing.T) {
 }
 
 func TestAssistantBypassCodexUnknownCommand(t *testing.T) {
+	needsLarkGate(t)
 	n := codexTestNode(t)
 	fh := withFakeHub(t, n)
 	cwd := t.TempDir()
@@ -608,6 +610,7 @@ func TestAssistantBypassShellNames(t *testing.T) {
 
 func assertAssistantBypassClassification(t *testing.T, command string, cards int, gates ...proto.CommandGate) {
 	t.Helper()
+	needsLarkGateForCommand(t, command)
 
 	for _, adapter := range []string{"claude", "codex"} {
 		t.Run(adapter, func(t *testing.T) {
@@ -754,6 +757,7 @@ func TestAssistantBypassRespectsConfiguredAllowRules(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			needsLarkGateForCommand(t, tc.command)
 			n := codexTestNode(t)
 			fh := withFakeHub(t, n)
 			const sid = "22222222-2222-4222-8222-222222222222"

@@ -99,9 +99,24 @@ A raise document contains the required question and its context, 2–4 options w
 
 `get` prints the same durable polling view. Its `decision.state` is `pending`, `answered` or `withdrawn`; after an answer, `decision.answer` carries the selected `option`, fixed `response` or owner's `text`, and `answered_by` is `owner` or `default`. `explain_first` is a recorded fixed response but deliberately leaves the state pending and stops the default, allowing a later final answer. The existing Needs-you card offers all options, the recommendation and the three fixed answers; its background names the authenticated script source. No answer is relayed to an Agent or supervisor, and Persona never invokes a model to answer one of these decisions on the owner's behalf.
 
+An option may also carry a stable `id`, independently of its localizable `label`. IDs are unique ASCII protocol values. `recommend` may name an ID when no option label matches exactly; the owner still sees the label. After an answer, `answer.option` preserves that label and `answer.option_id` carries the stable ID. Automation should authorize only an exact expected ID (for example `Approve`), never a translation, prefix or case-folded label. Options without an ID preserve the original label-only response.
+
 `withdraw` removes a pending decision from Needs you and fences later answers. Repeating withdrawal is idempotent. Withdrawing an answered decision fails with `decision_closed`; an answer that arrives after withdrawal is refused. Only the same connected computer can poll or withdraw its script's decision.
 
 Unlike `ask`, these commands never wait for an answer, reconnect to a blocking interaction, spool in standby or fall back to the terminal. A script polls with `get` at its own cadence. Raise documents and ids are bounded (64 KiB JSON input, 30-second request timeout); question text still goes to the owner's devices, so do not put secrets in it. The equivalent HTTP routes, complete response fields and `decisions.raise` extension scope are in `../protocol/protocol.md` ("Decisions raised outside a supervisor").
+
+### User-mode CLIs, including `feishu-cli --as user`
+
+A user-mode CLI that talks to Lark directly does not pass through Persona's node command gate. Prefer routing the operation through that gate and a standard Agent API: ordinary reads need no card, a write gets the owner card derived from its real method and path, and the node's one-use grant authorizes exactly the approved request. The upstream needs no Persona-specific approval header, callback or consumption endpoint.
+
+For an operation that cannot be migrated yet, an administrator can install a fixed wrapper around the real binary:
+
+1. Map each supported subcommand to the real operation and target. Reject unknown subcommands instead of guessing whether they read or write. Do not put message text, document contents, tokens or keys in the decision document.
+2. Raise an ordinary `personad decision` with that derived operation and target, option IDs `Deny` and `Approve`, independently localized labels and outcome text, `recommend:"Deny"`, `reversible:false` and `allow_default:false`. Use a stable `ref` when retrying a lost raise response; a different operation needs a different ref.
+3. Poll `personad decision get <id>`. Execute the original, unchanged argv only when the state is `answered`, `answer.answered_by` is `owner` and `answer.option_id` is exactly `Approve`. A missing ID, a translated label without that ID, denial, withdrawal, timeout and malformed replies execute nothing. Do not automatically execute again after an uncertain process exit.
+4. Expose only the wrapper to the calling environment. For example, its final step after those verified answers may be `exec feishu-cli --as user "$@"`; reaching this line without all three checks is a wrapper bug.
+
+This wrapper is **advisory**, not a hard security boundary, while the original binary, its credentials or another user-mode API remain directly callable. For a hard boundary, remove those direct entries and credentials from the Agent environment and expose only the wrapper, or route the operation through Persona's gate. The repository does not install or configure this wrapper; deployment is an administrator's explicit local choice.
 
 | Exit code | `decision` |
 | --- | --- |

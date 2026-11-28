@@ -228,8 +228,9 @@ func TestTodoWriteOutcomeFixtures(t *testing.T) {
 }
 
 // The accept route answers words that may be with the Agent as the asks route does (502 send_in_doubt), never
-// "nothing was changed"; a send that typed nothing stays 502 accept_not_taken, now saying delivered "none", and a
-// node's refusal 423. Either way the decision still waits: the button works again.
+// "nothing was changed"; a send that failed for a reason the hub cannot tell stays 502 accept_not_taken, saying
+// delivered "none", and a node's refusal 423. Either way the decision still waits: the button works again. (A send
+// that never went out is recorded for the supervisor instead: TestDecisionWithoutLiveAgentIsRecordedForSupervisor.)
 func TestAcceptRouteSaysWhatItTyped(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -243,7 +244,7 @@ func TestAcceptRouteSaysWhatItTyped(t *testing.T) {
 		{"an option in doubt", rpc.ErrClosed, "Kaede", http.StatusBadGateway, codeSendInDoubt, "unknown"},
 		{"the node not sure", &rpc.Error{Code: "peer_unconfirmed", Message: "the inbox read it",
 			Data: json.RawMessage(`{"delivered":"unknown"}`)}, "Kaede", http.StatusBadGateway, codeSendInDoubt, "unknown"},
-		{"never sent", rpc.NotSent(context.Canceled), "Kaede", http.StatusBadGateway, "accept_not_taken", "none"},
+		{"failed, nothing typed", errors.New("the link dropped"), "Kaede", http.StatusBadGateway, "accept_not_taken", "none"},
 		{"refused by the node", &rpc.Error{Code: "dialog_open", Message: "a dialog is open"}, "", http.StatusLocked,
 			"dialog_open", "none"},
 		{"refused with a code it does not word", &rpc.Error{Code: "held_full", Message: "too many held"}, "Kaede",
@@ -376,7 +377,7 @@ func TestOwnerOKInDoubtTakesNoDefaultAtTheDeadline(t *testing.T) {
 		sent int // what reaches the Agent at the deadline
 	}{
 		{"in doubt", context.DeadlineExceeded, 0},
-		{"never sent", rpc.NotSent(context.Canceled), 1},
+		{"failed, nothing typed", errors.New("the link dropped"), 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f, todo, _, _ := conclusionService(t, false)

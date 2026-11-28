@@ -107,9 +107,9 @@ describe("New agent in Claude's desktop app (#5480)", () => {
   it("with no folder picked is a temporary session: Start is ready and the start carries no folder", async () => {
     await open();
     expect(temporary()?.textContent).toContain("临时会话");
-    expect(temporary()?.textContent).toContain("在 Claude 桌面版侧边栏里归为一组");
+    expect(temporary()?.textContent).toContain("在 Claude 桌面版侧边栏中归为一组");
     expect(folderInput().value).toBe(""); // the last start's folder is not this one's
-    expect(q('[data-testid="new-agent-desktop-hint"]')?.textContent).toContain("在 Claude 桌面版里新建会话");
+    expect(q('[data-testid="new-agent-desktop-hint"]')?.textContent).toContain("将在 Claude 桌面版中启动会话");
     // browsing starts where the app's projects are; no engine host to pick
     expect(listed).toContain("/Users/me/code");
     expect(q('[data-testid="start-host"]')).toBeNull();
@@ -139,12 +139,12 @@ describe("New agent in Claude's desktop app (#5480)", () => {
     await act(async () => vi.dynamicImportSettled());
     await flush();
     const name = q<HTMLInputElement>('[data-testid="new-agent-naming"] input')!;
-    expect(q('[data-testid="new-agent-naming"]')?.textContent).toContain("会话开始时在“code”里创建。");
+    expect(q('[data-testid="new-agent-naming"]')?.textContent).toContain("会话启动时将在「code」中创建。");
     // not one folder's name: nothing to use
     act(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "a/b"); name.dispatchEvent(new Event("input", { bubbles: true })); });
-    expect(button("采用")!.disabled).toBe(true);
+    expect(button("使用")!.disabled).toBe(true);
     act(() => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "site"); name.dispatchEvent(new Event("input", { bubbles: true })); });
-    act(() => button("采用")!.click());
+    act(() => button("使用")!.click());
     expect(q('[data-testid="new-agent-naming"]')).toBeNull();
     expect(folderInput().value).toBe("/Users/me/code/site");
     act(() => button("启动")!.click());
@@ -172,8 +172,8 @@ describe("New agent in the Codex App (#5726)", () => {
     localStorage.setItem("new.launcher.mac", "codex-app");
     state.sessions = { mac: [desktop("/Users/me/Documents/Codex/2026-11-12/a", "codex"), desktop("/Users/me/Documents/Codex/2026-11-13/b", "codex"), desktop("/Users/me/work/svc", "codex")] };
     await open();
-    expect(temporary()?.textContent).toContain("在 Codex App 的“无项目”对话里");
-    expect(q('[data-testid="new-agent-desktop-hint"]')?.textContent).toContain("在 Codex App 里新开对话");
+    expect(temporary()?.textContent).toContain("在 Codex App 的「无项目」对话中");
+    expect(q('[data-testid="new-agent-desktop-hint"]')?.textContent).toContain("将在 Codex App 中启动对话");
     expect(listed).toContain("/Users/me/work");
   });
 });

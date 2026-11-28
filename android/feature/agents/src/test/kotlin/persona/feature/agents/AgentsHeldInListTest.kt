@@ -36,6 +36,7 @@ import persona.core.contracts.ServerEvent
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.domain.sort.AgentGrouping
+import persona.core.domain.sort.AgentSeenRows
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.machineProjects
 import persona.core.domain.sort.AgentPreferences
@@ -173,6 +174,7 @@ class AgentsHeldInListTest {
         return AgentsPreferences(store, hub).also { runBlocking {
             it.grouping(AgentGrouping.State)
             it.range("", AgentRange.All)
+            it.setSeenRows(AgentSeenRows.Leave)
         } }
     }
 

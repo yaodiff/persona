@@ -83,6 +83,14 @@ func Acquire(rows *[]Lease, in Request, now time.Time, id string, seq int64) (Re
 			return Reply{Status: "cached", Lease: l}, nil
 		}
 	}
+	if in.ID != "" {
+		id = in.ID
+	}
+	for _, l := range *rows {
+		if l.ID == id {
+			return Reply{}, errors.New("request ID already used")
+		}
+	}
 	n := 0
 	pending := []string{}
 	for _, l := range *rows {
@@ -93,9 +101,6 @@ func Acquire(rows *[]Lease, in Request, now time.Time, id string, seq int64) (Re
 	}
 	if n >= 2 {
 		return Reply{Status: "refused", Pending: pending}, nil
-	}
-	if in.ID != "" {
-		id = in.ID
 	}
 	l := Lease{Priority: in.Priority, ID: id, Seq: seq, Resource: in.Resource, Key: key, State: "queued", Holder: in.Holder, CreatedAt: now, HeartbeatUntil: now.Add(90 * time.Second), WaitUntil: now.Add(90 * time.Minute)}
 	if CacheOK(in.Cached, now) {
@@ -129,14 +134,17 @@ func Mutate(rows []Lease, in Request, now time.Time) (Reply, error) {
 			return Reply{}, errors.New("only the holder may change a lease")
 		}
 		if in.Action == "cancel" && l.State == "queued" {
+			if (!l.HeartbeatUntil.IsZero() && !now.Before(l.HeartbeatUntil)) || (!l.WaitUntil.IsZero() && !now.Before(l.WaitUntil)) {
+				return Reply{Status: "fenced"}, nil
+			}
 			l.State = "cancelled"
 			return Reply{Status: l.State, Lease: l}, nil
 		}
-		if in.Action == "renew" && l.State == "queued" && in.Token == 0 && now.Before(l.HeartbeatUntil) {
+		if in.Action == "renew" && l.State == "queued" && in.Token == 0 && now.Before(l.HeartbeatUntil) && (l.WaitUntil.IsZero() || now.Before(l.WaitUntil)) {
 			l.HeartbeatUntil = now.Add(90 * time.Second)
 			return Reply{Status: l.State, Lease: l}, nil
 		}
-		if l.State != "granted" || l.Token != in.Token || !now.Before(l.HeartbeatUntil) {
+		if l.State != "granted" || l.Token != in.Token || !now.Before(l.HeartbeatUntil) || (!l.HoldUntil.IsZero() && !now.Before(l.HoldUntil)) {
 			return Reply{Status: "fenced"}, nil
 		}
 		switch in.Action {

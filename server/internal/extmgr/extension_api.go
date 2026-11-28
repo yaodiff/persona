@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
 
 // The api extension point (docs/extensions/extensions.md "App endpoints"): a plugin serves a part of the app's API under
@@ -110,6 +111,10 @@ func (h *Manager) features() []string {
 		}
 		for _, a := range p.Manifest.APIs() {
 			for _, f := range a.Features {
+				if reservedModuleFeature(f) {
+					h.reservedFeatureDropped(p.Record.ID, f)
+					continue
+				}
 				if !slices.Contains(out, f) {
 					out = append(out, f)
 				}
@@ -117,6 +122,21 @@ func (h *Manager) features() []string {
 		}
 	}
 	return out
+}
+
+// reservedModuleFeature: f is the modules marker or a module's flag, which only the host announces (the built-in
+// modules in the hello, the approved installed ones through Report.Modules: module_providers.go). An extension's
+// api.features never carry them.
+func reservedModuleFeature(f string) bool {
+	return f == moduleswitch.Marker || strings.HasPrefix(f, moduleswitch.FlagPrefix)
+}
+
+// reservedFeatureDropped logs, once per extension and feature, that an extension's reserved feature was left out.
+func (h *Manager) reservedFeatureDropped(id, f string) {
+	if _, seen := h.reservedLogged.LoadOrStore(id+" "+f, true); seen {
+		return
+	}
+	h.logf("extensions: %s publishes the reserved feature %q in api.features; only the host announces module flags, so it is left out", id, f)
 }
 
 // apiBroadcast passes a plugin's event to the apps: only of a type its api contributions declare.

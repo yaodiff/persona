@@ -72,7 +72,7 @@ func (e *Engine) PutExtensionRecording(w RecordingWrite, extension string, now t
 	}
 	r.Revision++
 	r.StartedAt, r.EndedAt, r.Duration = w.StartedAt.UTC(), nil, 0
-	if w.EndedAt != nil {
+	if !w.EndedAt.IsZero() {
 		end := w.EndedAt.UTC()
 		r.EndedAt, r.Duration = &end, end.Sub(r.StartedAt).Seconds()
 	} else if n := len(segs); n > 0 {
@@ -84,7 +84,7 @@ func (e *Engine) PutExtensionRecording(w RecordingWrite, extension string, now t
 	// was, and spends no model call of the user's.
 	r.MatchedRev, r.SummarizedRev = r.Revision, r.Revision
 	if w.Meeting != nil {
-		it, _ := st.Item(w.Meeting.Kind, string(w.Meeting.ID))
+		it, _ := st.Item(string(w.Meeting.Kind), string(w.Meeting.ID))
 		for _, old := range []*recordingwire.MeetingRef{r.Meeting, r.ImportedMeeting} {
 			if old != nil {
 				r.Items = removeStrings(r.Items, []string{old.Kind + "/" + old.ID})
@@ -150,7 +150,7 @@ func (e *Engine) checkRecordingWrite(w *RecordingWrite) ([]RecordingSegment, err
 	if w.StartedAt.IsZero() {
 		return nil, badRecording("started_at is required")
 	}
-	if w.EndedAt != nil && w.EndedAt.Before(w.StartedAt) {
+	if !w.EndedAt.IsZero() && w.EndedAt.Before(w.StartedAt) {
 		return nil, badRecording("ended_at is before started_at")
 	}
 	if len(w.Transcript) > recordingwire.RecordingWriteMaxSegments {
@@ -161,7 +161,7 @@ func (e *Engine) checkRecordingWrite(w *RecordingWrite) ([]RecordingSegment, err
 		if sg.Start < 0 || sg.End < sg.Start {
 			return nil, badRecording("a transcript segment ends before it starts")
 		}
-		if sg.Text, sg.N, sg.Source, sg.Echo = strings.TrimSpace(sg.Text), 0, "", false; sg.Text != "" {
+		if sg.Text, sg.N, sg.Source, sg.Echo, sg.Speaker, sg.SpeakerUnsure = strings.TrimSpace(sg.Text), 0, "", false, "", false; sg.Text != "" {
 			segs = append(segs, sg)
 		}
 	}
@@ -198,10 +198,10 @@ func (e *Engine) checkRecordingWrite(w *RecordingWrite) ([]RecordingSegment, err
 	}
 	w.Projects = slices.Compact(slices.Sorted(slices.Values(w.Projects)))
 	if mt := w.Meeting; mt != nil {
-		if mt.Kind != KindEvent && mt.Kind != KindMeeting || strings.TrimSpace(string(mt.ID)) == "" {
+		if !mt.Kind.Valid() || strings.TrimSpace(string(mt.ID)) == "" {
 			return nil, badRecording("meeting needs kind %q or %q and an id", KindEvent, KindMeeting)
 		}
-		if _, ok := e.Store.Item(mt.Kind, string(mt.ID)); !ok {
+		if _, ok := e.Store.Item(string(mt.Kind), string(mt.ID)); !ok {
 			return nil, badRecording("no %s item %q", mt.Kind, mt.ID)
 		}
 	}

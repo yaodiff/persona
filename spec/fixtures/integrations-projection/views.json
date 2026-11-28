@@ -1,0 +1,79 @@
+{
+  "cases": [
+    {
+      "name": "catalog with readable capabilities and mixed availability",
+      "expected": {
+        "catalog": {
+          "items": [
+            {
+              "ref": {"manager": "m-example", "kind": "connector", "id": "calendar"},
+              "name": "Calendar",
+              "origin": "standalone_connector",
+              "capabilities": ["data"],
+              "availability": {"state": "available"},
+              "relationship_issue": "ambiguous_owner"
+            },
+            {
+              "ref": {"manager": "m-example", "kind": "extension", "id": "bridge"},
+              "name": "Example Bridge",
+              "origin": "installed_extension",
+              "capabilities": ["channels", "data", "tools"],
+              "availability": {"state": "available"},
+              "capability_availability": [
+                {"capability": "channels", "availability": {"state": "unavailable", "reason": "read_failed"}}
+              ]
+            }
+          ],
+          "counts": {"all": 2, "channels": 1, "data": 2, "tools": 1},
+          "availability": [
+            {"source": "extensions", "availability": {"state": "available"}},
+            {"source": "channels", "availability": {"state": "unavailable", "reason": "read_failed"}},
+            {"source": "connectors", "availability": {"state": "available"}},
+            {"source": "subscriptions", "availability": {"state": "available"}},
+            {
+              "source": "service",
+              "ref": {"manager": "m-example", "kind": "service", "id": "mail"},
+              "module_feature": "module.mail",
+              "availability": {"state": "module_off"}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "detail groups refer to the extension and its own connector",
+      "expected": {
+        "detail": {
+          "item": {
+            "ref": {"manager": "assistant", "kind": "extension", "id": "bridge"},
+            "name": "Personal Bridge",
+            "origin": "builtin_extension",
+            "capabilities": ["data", "tools"],
+            "availability": {"state": "available"}
+          },
+          "sections": [
+            {
+              "kind": "connection",
+              "ref": {"manager": "assistant", "kind": "connector", "id": "messages"},
+              "availability": {"state": "needs_setup"},
+              "edit": "settings"
+            },
+            {
+              "kind": "extension_configuration",
+              "ref": {"manager": "assistant", "kind": "extension", "id": "bridge"},
+              "availability": {"state": "read_only", "reason": "managed_elsewhere"},
+              "edit": "read_only",
+              "configuration_groups": ["advanced", "general"]
+            }
+          ],
+          "availability": [
+            {"source": "extensions", "availability": {"state": "available"}},
+            {"source": "channels", "availability": {"state": "available"}},
+            {"source": "connectors", "availability": {"state": "available"}},
+            {"source": "subscriptions", "availability": {"state": "available"}}
+          ]
+        }
+      }
+    }
+  ]
+}

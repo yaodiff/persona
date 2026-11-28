@@ -1,6 +1,7 @@
 {
   "confirm_reply": "等你确认回复",
   "confirm_agent": "等你启动 Agent",
+  "confirm_handoff": "等待你确认转交",
   "decide": "等你拿主意",
   "queued": "排队中，等 AI 看",
   "looking": "AI 正在看",

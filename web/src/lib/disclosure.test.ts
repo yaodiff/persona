@@ -109,9 +109,9 @@ describe("following the end", () => {
     expect(leavesOnScrollbarDrag({ dragging: false, delta: -300 })).toBe(false);
   });
 
-  it("the pill says 有新消息 when something came in, else 跳到底部", () => {
+  it("the pill says 有新消息 when something came in, else 回到底部", () => {
     expect(jumpLabel(true)).toBe("有新消息");
-    expect(jumpLabel(false)).toBe("跳到底部");
+    expect(jumpLabel(false)).toBe("回到底部");
   });
 });
 

@@ -103,5 +103,6 @@
   "host_placeholder": "Address, e.g. rss.example.org or rss.example.org:8443",
   "host_field_label": "Address to allow {name}",
   "host_allowed": "Allowed {host}",
-  "host_revoked": "Revoked {host}"
+  "host_revoked": "Revoked {host}",
+  "signature_key": "Verified with key {key}"
 }

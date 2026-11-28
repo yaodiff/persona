@@ -1,6 +1,6 @@
 // The Agents work can be handed to and the row each is picked by, shared by the Inbox's Hand to AI and a meeting's Hand
 // to Agent (#8852), so both offer the same Agents the same way.
-import { stateOf } from "../../lib/format";
+import { activityOf } from "../../lib/format";
 import { byTime } from "../../lib/times";
 import type { Machine, Session } from "../../lib/types";
 import { cx } from "../../ui/atoms";
@@ -13,7 +13,7 @@ export const TARGET_SUB = "block truncate text-submeta text-ink-3";
 export function handOffAgents(sessions: Record<string, Session[]>, machines: Machine[]): Session[] {
   const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
   return Object.values(sessions).flat()
-    .filter((s) => !s.assistant && online.has(s.machine_id) && stateOf(s) !== "offline")
+    .filter((s) => !s.assistant && online.has(s.machine_id) && activityOf(s) !== "offline")
     .sort((a, b) => byTime(b.updated_at, a.updated_at));
 }
 

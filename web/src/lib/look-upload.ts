@@ -2,7 +2,7 @@
 // square (with the circle the avatar shows), names it, and the hub makes a package of it (POST /looks/uploads), which
 // it then chooses. Uploaded looks can be deleted again (DELETE /looks/uploads/{id}). The crop's geometry, the export's
 // size and encoding and the requests are here; the dialog is views/assistant/LookUpload.tsx.
-import { ApiError, CLIENT_PLATFORM, CLIENT_VERSION, api, enc, errorText, getToken } from "./api";
+import { ApiError, CLIENT_PLATFORM, CLIENT_VERSION, HubUnreachableError, api, enc, errorText, getToken } from "./api";
 import { BASE } from "./base";
 import { CLIENT_HEADERS, compatibleEnvelope } from "./compatibility";
 import type { LookCurrent, LookView } from "./persona";
@@ -201,7 +201,7 @@ export interface UploadAnswer {
 }
 
 /** Sends a JSON body and reports the bytes sent (fetch cannot). Rejects with an ApiError carrying the hub's code and
- *  words, a TypeError when the hub can't be reached, or an AbortError. */
+ *  words, a HubUnreachableError (a TypeError) when the hub can't be reached, or an AbortError. */
 export type ProgressPost = <T>(path: string, json: unknown, opts: { onProgress?: (sent: number, total: number) => void; signal?: AbortSignal; method?: "POST" | "PATCH" }) => Promise<T>;
 
 export const xhrPost: ProgressPost = <T,>(path: string, json: unknown, opts: { onProgress?: (sent: number, total: number) => void; signal?: AbortSignal; method?: "POST" | "PATCH" }) =>
@@ -244,7 +244,8 @@ export const xhrPost: ProgressPost = <T,>(path: string, json: unknown, opts: { o
       const msg = typeof data.error === "string" && data.error ? data.error : `HTTP ${xhr.status}`;
       finish(() => reject(new ApiError(xhr.status, msg, data, isJson, xhr.getResponseHeader("X-Request-Id") ?? undefined)));
     };
-    xhr.onerror = () => finish(() => reject(new TypeError("network")));
+    // the connection failed: "Can't reach the hub", not a bug in the page (lib/network-failure.ts)
+    xhr.onerror = () => finish(() => reject(new HubUnreachableError("network")));
     xhr.onabort = () => finish(() => reject(new DOMException("aborted", "AbortError")));
     opts.signal?.addEventListener("abort", cancel, { once: true });
     xhr.send(body);

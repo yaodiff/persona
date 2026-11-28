@@ -75,6 +75,12 @@ class ShortcutTextTest {
         assertEquals("abc…", ShortcutText.excerpt("abcdef", 3))
     }
 
+    @Test fun displayCopiesAreNotShortcutTargets() {
+        val mirror = permission.copy(id = "display", machineId = "hub", sessionId = "main", mirrorOf = permission.id)
+        assertEquals(permission, ShortcutText.pending(listOf(mirror, permission)))
+        assertNull(ShortcutText.pending(listOf(mirror)))
+    }
+
     @Test fun failuresSayWhatToDoAndNeverCallAnUnknownSendUndelivered() {
         assertEquals("配对已失效，打开 Persona 重新配对。", ShortcutText.loadFailure(res, HubFailure(HubError.PairingExpired, status = 401)))
         assertEquals("连不上 hub，确认手机能访问 hub（同一个网络或 VPN）。", ShortcutText.loadFailure(res, ConnectException("refused")))

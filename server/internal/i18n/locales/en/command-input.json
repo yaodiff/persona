@@ -1,0 +1,16 @@
+{
+  "summary": "A command is waiting for your input: {prompt}",
+  "summary_plain": "A command is waiting for your input",
+  "tool": "Command input",
+  "field": "Your input",
+  "placeholder": "Type what the command asks for",
+  "line_empty": "Type something first: an empty line isn't sent.",
+  "line_too_long": "That's too long for one line. Nothing was typed.",
+  "line_not_text": "That isn't plain text. Nothing was typed.",
+  "line_control": "One line only: a line break or a control key can't be sent. Nothing was typed.",
+  "prompt_changed": "The command isn't waiting for this anymore. Nothing was typed.",
+  "unreachable": "Couldn't reach Antigravity on the computer. Nothing was typed: try again, or answer the command there.",
+  "refused": "Antigravity didn't take the line ({reason}). Nothing was typed.",
+  "refused_plain": "Antigravity didn't take the line. Nothing was typed.",
+  "unconfirmed": "Antigravity didn't confirm the line in time. Check the command on the computer before sending it again."
+}

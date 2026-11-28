@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // Channels: how a binary was built, which decides whether it updates itself.
@@ -28,13 +30,16 @@ type Build struct {
 	// Commit is the commit it was built from (full hex id), with "-dirty" after it when the tree had changes not
 	// committed; empty when the build did not say (Hold).
 	Commit string
+	// Edition is the edition it was built as (ThisEdition, which Make records): the only release feed it reads and the
+	// only edition it installs or sends. The zero value is the full build (Edition.OrFull).
+	Edition nodeproto.Edition
 }
 
 // Make turns what the build wrote into the binary (-X main.version, main.channel, main.build, main.updateURL) into a
 // Build. An unknown channel is Dev; a release without a valid build number is Dev too (it could not tell newer from
 // older, so it must not update).
 func Make(version, channel, number, updateURL string) Build {
-	b := Build{Version: version, Channel: Dev, UpdateURL: updateURL}
+	b := Build{Version: version, Channel: Dev, UpdateURL: updateURL, Edition: ThisEdition}
 	n, err := ParseNumber(number)
 	if err == nil {
 		b.Number = n

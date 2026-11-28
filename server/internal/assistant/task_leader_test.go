@@ -164,10 +164,29 @@ func TestTaskLeaderGetsRestrictedTaskPlanAndWorkersDoNot(t *testing.T) {
 			restricted = append(restricted, tl)
 		}
 	}
-	if len(restricted) != 1 || !strings.Contains(restricted[0].Description, "Hand part of your own task to workers") ||
-		strings.Contains(string(restricted[0].InputSchema), "todo_id") || !strings.Contains(string(restricted[0].InputSchema), `"role"`) ||
-		!strings.Contains(string(restricted[0].InputSchema), `"worker"`) {
+	if len(restricted) != 1 || !strings.Contains(restricted[0].Description, "Hand part of your own task to workers") {
 		t.Fatalf("the leader's tools: %+v", restricted)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(restricted[0].InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	taskSchema := schema["properties"].(map[string]any)["tasks"].(map[string]any)
+	item := taskSchema["items"].(map[string]any)
+	fields := item["properties"].(map[string]any)
+	// A nested distinct_from.todo_id explains separation; it cannot select a worker's to-do.
+	if fields["todo_id"] != nil || item["additionalProperties"] != false {
+		t.Fatalf("the leader must not be able to select an existing worker to-do: %+v", item)
+	}
+	role, ok := fields["role"].(map[string]any)
+	if !ok || !reflect.DeepEqual(role["enum"], []any{"worker"}) ||
+		!slices.Contains(item["required"].([]any), any("role")) {
+		t.Fatalf("the leader's task must require role=worker: %+v", item)
+	}
+	override, _ := fields["distinct_from"].(map[string]any)
+	distinct, _ := override["items"].(map[string]any)
+	if !reflect.DeepEqual(distinct["required"], []any{"todo_id", "reason"}) {
+		t.Fatalf("the duplicate override needs a to-do ID and reason: %+v", distinct)
 	}
 	if got := leaderToolNames(s.sessionMCPTools(ctx, "box", "someone-else", false, false)); slices.Contains(got, "task_plan") {
 		t.Fatalf("an agent of no task got task_plan: %v", got)
@@ -284,6 +303,30 @@ func TestTaskLeaderTaskPlanCallEnforcement(t *testing.T) {
 		t.Fatalf("closing the leader's task: %v %v", ok, err)
 	}
 	refused("a closed task's leader", call("s1", workerArgs(nil)))
+}
+
+func TestLeaderTaskPlanStartHost(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f := newQuietServiceOn(t, st)
+	f.launcherList = companionLaunchers()
+	startTaskLeader(t, s, f)
+
+	args := workerArgs(map[string]any{"launcher": "agy", "host": "tmux"})
+	res := s.mcpCall(context.Background(), "box", "s1", "task_plan", args, false)
+	if !res.IsError || !strings.Contains(res.Content[0].Text, `host "tmux" is not where an Agent can start`) {
+		t.Fatalf("invalid host: %+v", res)
+	}
+	if got := startHosts(f); !slices.Equal(got, []string{""}) {
+		t.Fatalf("session.start hosts after refusal = %q, want only the leader's start", got)
+	}
+
+	planWorker(t, s, f, map[string]any{"launcher": "agy", "host": " herdr "})
+	putTierProfiles(t, s, "economy", map[string]ModelTier{"agy-work": {Launcher: "agy", Host: new(proto.EngineHerdr)}}, nil)
+	planWorker(t, s, f, map[string]any{"tier": "agy-work"})
+	planWorker(t, s, f, map[string]any{"tier": "agy-work", "host": "agy"})
+	if got := startHosts(f); !slices.Equal(got, []string{"", "herdr", "herdr", "agy"}) {
+		t.Fatalf("session.start hosts = %q, want leader followed by explicit, inherited and overridden worker hosts", got)
+	}
 }
 
 // A worker whose own supervision ledger cannot be stored never starts. The leader is linked directly so its setup

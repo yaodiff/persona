@@ -37,7 +37,7 @@ export class LocalStore {
   }
   revision(key: string): number { return this.keyEpoch(key); }
   accepts(key: string, revision: number): boolean { return revision === this.keyEpoch(key) && !this.retiredKey(key); }
-  async open(context: common.UIAbilityContext): Promise<void> {
+  async open(context: common.Context): Promise<void> {
     this.store = await relationalStore.getRdbStore(context, { name: this.name, securityLevel: relationalStore.SecurityLevel.S3 });
     await this.store.executeSql('CREATE TABLE IF NOT EXISTS client_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   }

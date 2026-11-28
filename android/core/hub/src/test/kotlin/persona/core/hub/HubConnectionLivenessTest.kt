@@ -121,6 +121,7 @@ class HubConnectionLivenessTest {
             val hello = socket.sent.first { it["type"]?.jsonPrimitive?.content == "client_hello" }
             assertEquals("test-device", (hello["device_id"]?.jsonPrimitive?.content).zhAny())
             assertEquals(JsonPrimitive(7), hello["build"])
+            assertTrue("approval_mirrors" in hello["features"]!!.jsonArray.map { it.jsonPrimitive.content })
             assertEquals("Android", (hello["os"]?.jsonObject?.get("name")?.jsonPrimitive?.content).zhAny())
             fixture.connection.setForeground(false)
             fixture.scheduler.runCurrent()

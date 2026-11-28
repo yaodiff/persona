@@ -1,0 +1,6 @@
+<resources>
+    <string name="agents_seen_rows_notice">看过的 Agent 会留在原处并标为已看，直到你下拉刷新列表。</string>
+    <plurals name="agents_clear_seen">
+        <item quantity="other">清除已看（%d）</item>
+    </plurals>
+</resources>

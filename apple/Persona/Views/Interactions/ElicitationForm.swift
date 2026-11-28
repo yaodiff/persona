@@ -220,7 +220,7 @@ struct ElicitationForm: View {
                     .themedButton(prominent: true)
                     .disabled(!ready)
                     .accessibilityIdentifier(isLink ? "elicitation.continue" : "elicitation.submit")
-                } else {
+                } else if interaction.noHandBack != true {
                     Button { handBack() } label: {
                         Text("Hand Back to Computer").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
                     }

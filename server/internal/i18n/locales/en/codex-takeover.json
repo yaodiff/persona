@@ -9,5 +9,7 @@
   "shared_unavailable": "A shared Codex app-server could not be started. The original process was left untouched.",
   "user_only": "Only a signed-in device can confirm a Codex takeover.",
   "token_required": "A takeover confirmation token is required.",
-  "not_ready": "Codex opened in the new terminal, but its shared connection is not ready. Check that terminal before sending."
+  "not_ready": "Codex opened in the new terminal, but its shared connection is not ready. Check that terminal before sending.",
+  "app_running": "The Codex App is running and may still load this chat. Quit the Codex App first, or continue in a new session instead.",
+  "app_confirmation_required": "Confirm taking over this Codex App chat in a Persona terminal: the Codex App will no longer own it."
 }

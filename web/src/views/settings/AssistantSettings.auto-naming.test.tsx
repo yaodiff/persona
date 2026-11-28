@@ -11,6 +11,7 @@ vi.mock("../../lib/managers", () => ({
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }), PersonaAvatar: () => null }));
 vi.mock("./Skills", () => ({ SkillsGroup: () => null }));
 vi.mock("./StandingAuthorizations", () => ({ StandingAuthorizations: () => null }));
+vi.mock("./OutboundMessages", () => ({ OutboundMessages: () => null }));
 vi.mock("../../lib/store", () => ({ useStore: () => [], refreshAssistant: vi.fn() }));
 import { initI18n, t } from "../../i18n";
 import { chooseManager, MANAGER_HEADER, resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";

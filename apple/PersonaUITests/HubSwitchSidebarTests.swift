@@ -156,10 +156,13 @@ final class HubSwitchSidebarTests: XCTestCase {
         XCTAssertTrue(button.waitForExistence(timeout: 10), "no menu \(menu):\n\(app.debugDescription)")
         button.tap()
         let item = app.buttons[name].firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 10), "no \(name) in the menu:\n\(app.debugDescription)")
-        // The Agents menu is long: its hub section is further down.
-        for _ in 0..<4 where !item.isHittable { app.swipeUp() }
-        XCTAssertTrue(item.isHittable, "\(name) cannot be reached in the menu:\n\(app.debugDescription)")
+        // iOS creates the lower menu rows as its collection scrolls. Scroll the menu itself
+        // until the hub is present and reachable on a short screen.
+        let picker = app.collectionViews.firstMatch
+        for _ in 0..<6 where !(item.exists && item.isHittable) {
+            if picker.exists { picker.swipeUp(velocity: .slow) } else { app.swipeUp(velocity: .slow) }
+        }
+        XCTAssertTrue(item.exists && item.isHittable, "\(name) cannot be reached in the menu:\n\(app.debugDescription)")
         item.tap()
         sleep(2) // the new hub's lists
     }

@@ -1,0 +1,8 @@
+{
+  "completed": "所属待办已完成。",
+  "cancelled": "所属待办已取消。",
+  "continue": "你仍可在这里继续对话。",
+  "archived": "此 Agent 已归档。恢复即可将其放回 Agent 列表，发送新消息也会自动恢复。",
+  "resume": "恢复",
+  "resume_failed": "未能恢复此 Agent。{error}"
+}

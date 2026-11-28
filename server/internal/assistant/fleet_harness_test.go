@@ -33,6 +33,7 @@ type fleetDevs struct {
 	capacity     proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
 	accounts     []proto.UsageAccount   // what UsageAccounts answers (candidate_headroom_test.go)
 	gatewayRetry func(source, provider string, now time.Time) time.Time
+	gateways     proto.GatewayAccounts
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
 	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
@@ -274,6 +275,12 @@ func (d *fleetDevs) UsageAccounts(context.Context) []proto.UsageAccount {
 	return append([]proto.UsageAccount(nil), d.accounts...)
 }
 
+func (d *fleetDevs) UsageGatewayAccounts() proto.GatewayAccounts {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.gateways
+}
+
 func (d *fleetDevs) GatewayRetryAt(source, provider string, now time.Time) time.Time {
 	if d.gatewayRetry != nil {
 		return d.gatewayRetry(source, provider, now)
@@ -363,10 +370,21 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 	}
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
-	if _, ok := m.status[ix.ID]; !ok {
-		m.status[ix.ID] = "pending"
-		m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != ix.ID {
+			continue
+		}
+		same := sameDurableApprovalOccurrence(ix, m.recs[i].Interaction)
+		startupRelist := same && !ix.Resumable && m.recs[i].Status == "cancelled" && m.recs[i].Resolution == nil
+		if ix.CreatedAt.After(m.recs[i].Interaction.CreatedAt) || startupRelist {
+			m.recs[i] = db.InteractionRecord{Interaction: ix, Status: "pending"}
+			m.status[ix.ID], m.res[ix.ID] = "pending", nil
+			delete(m.endedBy, ix.ID)
+		}
+		return nil
 	}
+	m.status[ix.ID] = "pending"
+	m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
 	return nil
 }
 
@@ -413,6 +431,10 @@ func (m *fleetMem) InsertResolvedInteraction(ctx context.Context, ix proto.Inter
 	}
 	now := time.Now().UTC()
 	m.status[ix.ID], m.res[ix.ID] = "resolved", res
+	if m.endedBy == nil {
+		m.endedBy = map[string]string{}
+	}
+	m.endedBy[ix.ID] = db.EndedBy(ctx)
 	m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "resolved", Resolution: res, ResolvedAt: &now})
 	return nil
 }
@@ -479,6 +501,35 @@ func (m *fleetMem) FinishInteraction(ctx context.Context, id, status string, res
 		}
 	}
 	return nil
+}
+
+func (m *fleetMem) FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (bool, bool, error) {
+	if err := m.InsertInteraction(ctx, ix); err != nil {
+		return false, false, err
+	}
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != ix.ID {
+			continue
+		}
+		if !sameDurableApprovalOccurrence(ix, m.recs[i].Interaction) {
+			return false, m.status[ix.ID] != "pending", nil
+		}
+		if m.status[ix.ID] == "pending" {
+			m.status[ix.ID], m.res[ix.ID] = status, res
+			if m.endedBy == nil {
+				m.endedBy = map[string]string{}
+			}
+			m.endedBy[ix.ID] = db.EndedBy(ctx)
+			m.recs[i].Status, m.recs[i].Resolution = status, res
+		}
+		if m.status[ix.ID] != status {
+			return false, true, errors.New("interaction occurrence already has a different terminal status")
+		}
+		return true, true, nil
+	}
+	return false, false, errors.New("interaction occurrence is missing after its insert")
 }
 
 // endedAs is who or what ended interaction id, as the history keeps it.

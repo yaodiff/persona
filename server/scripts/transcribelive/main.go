@@ -131,14 +131,95 @@ func trim(pcm []byte) []byte {
 	return pcm[2*max(0, a-1600) : 2*min(n, b+1600)]
 }
 
+func fail(format string, args ...any) {
+	fmt.Printf("FAIL "+format+"\n", args...)
+	os.Exit(1)
+}
+
+func timeoutExit(format string, args ...any) {
+	fmt.Printf("TIMEOUT "+format+"\n", args...)
+	os.Exit(1)
+}
+
+type hubSegmentsFile struct {
+	Pass     string        `json:"pass"`
+	Segments []hubSentence `json:"segments"`
+}
+
+func waitForMeta(kbDir, id string, timeout time.Duration) bool {
+	p := filepath.Join(kbDir, "recordings", id, "meta.json")
+	if _, err := os.Stat(p); err == nil {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	t := time.NewTicker(500 * time.Millisecond)
+	defer t.Stop()
+	for time.Now().Before(deadline) {
+		<-t.C
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func rescore(dir string) (string, error) {
+	sb, err := os.ReadFile(filepath.Join(dir, "script.json"))
+	if err != nil {
+		return "", fmt.Errorf("read script.json: %w", err)
+	}
+	script, err := parseScriptJSON(sb)
+	if err != nil {
+		return "", fmt.Errorf("parse script.json: %w", err)
+	}
+	hb, err := os.ReadFile(filepath.Join(dir, "hub_segments.json"))
+	if err != nil {
+		return "", fmt.Errorf("read hub_segments.json: %w", err)
+	}
+	var hs hubSegmentsFile
+	if err := json.Unmarshal(hb, &hs); err != nil {
+		return "", fmt.Errorf("parse hub_segments.json: %w", err)
+	}
+	var live []hubSentence
+	fb, err := os.ReadFile(filepath.Join(dir, "frames.json"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read frames.json: %w", err)
+		}
+	} else {
+		var all []frame
+		if err := json.Unmarshal(fb, &all); err != nil {
+			return "", fmt.Errorf("parse frames.json: %w", err)
+		}
+		live = liveSentencesFromFrames(all)
+	}
+	timing, labels := scoreAll(script, live, hs.Segments)
+	out := map[string]any{
+		"timing": timing,
+		"labels": labels,
+	}
+	rb, err := json.MarshalIndent(out, "", " ")
+	if err != nil {
+		return "", fmt.Errorf("marshal rescore.json: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rescore.json"), rb, 0o600); err != nil {
+		return "", fmt.Errorf("write rescore.json: %w", err)
+	}
+	return formatResultLine(timing, labels, ""), nil
+}
+
 // synthesize has the hub read every line aloud (POST /api/v1/extensions/voice/speak) and lays them out with short
 // silences; it reuses <out>/meeting.pcm and <out>/script.json when they are there.
 func synthesize(c *client, m *meeting, voices map[string]string, out string) []byte {
 	pcmPath, scriptPath := filepath.Join(out, "meeting.pcm"), filepath.Join(out, "script.json")
 	if b, err := os.ReadFile(pcmPath); err == nil {
-		if s, err := os.ReadFile(scriptPath); err == nil && json.Unmarshal(s, &m.Lines) == nil {
-			log.Printf("reusing %s (%.1f s)", pcmPath, float64(len(b))/32000)
-			return b
+		if s, err := os.ReadFile(scriptPath); err == nil {
+			if lines, err := parseScriptJSON(s); err == nil {
+				m.Lines = lines
+				log.Printf("reusing %s (%.1f s)", pcmPath, float64(len(b))/32000)
+				return b
+			}
 		}
 	}
 	var buf bytes.Buffer
@@ -167,7 +248,7 @@ func synthesize(c *client, m *meeting, voices map[string]string, out string) []b
 			pcm = trim(to16k(b, rate))
 		}
 		if pcm == nil {
-			log.Fatalf("could not have line %d read aloud", i)
+			fail("could not have line %d read aloud", i)
 		}
 		l.Start = float64(buf.Len()) / 32000
 		buf.Write(pcm)
@@ -199,7 +280,16 @@ func main() {
 	price := flag.Float64("price-per-minute", 0, "the upstream's price per billed minute, for the cost line")
 	keep := flag.Bool("keep", false, "keep the recording afterwards")
 	synthOnly := flag.Bool("synth-only", false, "only make the meeting's audio")
+	rescoreDir := flag.String("rescore", "", "recompute timing and label scores from <dir>/{script,frames,hub_segments}.json with no hub")
 	flag.Parse()
+	if *rescoreDir != "" {
+		resLine, err := rescore(*rescoreDir)
+		if err != nil {
+			fail("rescore: %v", err)
+		}
+		fmt.Println(resLine)
+		return
+	}
 	home := os.Getenv("PERSONA_HOME")
 	if home == "" {
 		home = filepath.Join(os.Getenv("HOME"), ".persona")
@@ -218,7 +308,7 @@ func main() {
 	if *tokenFile != "" {
 		b, err := os.ReadFile(*tokenFile)
 		if err != nil {
-			log.Fatal(err)
+			fail("%v", err)
 		}
 		c.token = strings.TrimSpace(string(b))
 	}
@@ -226,7 +316,7 @@ func main() {
 		*kbDir = filepath.Join(home, "data")
 	}
 	if c.base == "" || c.token == "" {
-		log.Fatal("no hub address or token: pass -hub and -token-file")
+		fail("no hub address or token: pass -hub and -token-file")
 	}
 	voices := map[string]string{}
 	for _, kv := range strings.Split(*voiceFlag, ",") {
@@ -236,20 +326,27 @@ func main() {
 	}
 	var m meeting
 	if err := json.Unmarshal(meetingJSON, &m); err != nil {
-		log.Fatal(err)
+		fail("%v", err)
 	}
 	os.MkdirAll(*out, 0o700)
 	pcm := synthesize(c, &m, voices, *out)
 	if *synthOnly {
+		fmt.Printf("RESULT synth-only: %d lines (%.1f s)\n", len(m.Lines), float64(len(pcm))/32000)
 		return
 	}
-	report := run(c, &m, pcm, *lang, *role, *kbDir, *out, *keep)
+	report, resLine := run(c, &m, pcm, *lang, *role, *kbDir, *out, *keep)
 	if u, ok := report["usage_seconds"].(float64); ok && *price > 0 {
 		report["cost"] = u / 60 * *price
 	}
-	rb, _ := json.MarshalIndent(report, "", " ")
-	os.WriteFile(filepath.Join(*out, "report.json"), rb, 0o600)
+	rb, err := json.MarshalIndent(report, "", " ")
+	if err != nil {
+		fail("marshal report: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(*out, "report.json"), rb, 0o600); err != nil {
+		fail("write report.json: %v", err)
+	}
 	fmt.Println(string(rb))
+	fmt.Println(resLine)
 }
 
 // uploadBody is a hub-mode meeting upload as the phone sends it (docs/assistant/meeting-minutes.md "Choosing the
@@ -260,20 +357,29 @@ func uploadBody(m *meeting, lang, role string, started time.Time, rev int64, tim
 		"segments": []any{}, "revision": rev, "timeline": timeline}
 }
 
-func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep bool) map[string]any {
+func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep bool) (map[string]any, string) {
 	dur := float64(len(pcm)) / 32000
 	report := map[string]any{"language": lang, "audio_seconds": dur}
 	st, b, _ := c.do("GET", "/api/v1/assistant", nil)
 	var as map[string]any
 	json.Unmarshal(b, &as)
-	log.Printf("assistant %d: default %v, ready %v", st, as["meeting_transcription_default"], as["meeting_transcription_ready"])
+	ext, _ := as["meeting_transcription_extension"].(string)
+	report["meeting_transcription_extension"] = ext
+	log.Printf("assistant %d: default %v, ready %v, extension %q", st, as["meeting_transcription_default"], as["meeting_transcription_ready"], ext)
+	if ext != "" {
+		log.Printf("WARNING: meeting_transcription_extension is %q (measuring that extension instead of the built-in adapter)", ext)
+	}
 	if as["meeting_transcription_ready"] != true {
-		log.Fatal("hub transcription is not ready (meeting_transcription_ready)")
+		fail("hub transcription is not ready (meeting_transcription_ready)")
 	}
 	c.do("PUT", "/api/v1/assistant", map[string]any{"meeting_glossary": m.Glossary})
 
 	id := newID()
 	report["recording_id"] = id
+	deleteRec := func() {
+		st, b, _ := c.do("DELETE", "/api/v1/recordings/"+id, nil)
+		log.Printf("delete: %d %s", st, string(b))
+	}
 	started := time.Now().UTC()
 	var mu sync.Mutex // the timeline and the upload revision
 	spans := []map[string]any{}
@@ -300,7 +406,11 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 	first := upload(nil)
 	report["upload_200"] = map[string]any{"transcription": first["transcription"], "transcription_problem": first["transcription_problem"], "room": first["room"]}
 	if first["transcription"] != "hub" {
-		log.Fatalf("the hub did not take hub mode: %v", first)
+		fail("the hub did not take hub mode: %v", first)
+	}
+	if !waitForMeta(kbDir, id, time.Minute) {
+		deleteRec()
+		fail("no meta.json for the recording within 60 s: check -kb")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -314,7 +424,7 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 		if res != nil {
 			code = res.StatusCode
 		}
-		log.Fatalf("audio socket: %v (%d)", err, code)
+		fail("audio socket: %v (%d)", err, code)
 	}
 	ws.SetReadLimit(1 << 20)
 	send := func(v any) { b, _ := json.Marshal(v); ws.Write(ctx, websocket.MessageText, b) }
@@ -362,7 +472,7 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 	case r := <-ready:
 		report["ready_frame"] = r
 	case <-time.After(30 * time.Second):
-		log.Fatal("no ready frame in 30 s")
+		fail("no ready frame in 30 s")
 	}
 	// Real time, as the phone sends it: 100 ms frames on a monotonic clock, an upload every 15 s with the timeline.
 	t0 = time.Now()
@@ -386,7 +496,7 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 			}
 		}
 		if err := ws.Write(ctx, websocket.MessageBinary, pcm[off:min(off+frameBytes, len(pcm))]); err != nil {
-			log.Fatalf("audio: %v", err)
+			fail("audio: %v", err)
 		}
 		if sec >= nextUpload {
 			nextUpload += 15
@@ -415,9 +525,21 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 			break
 		}
 	}
+	if tr == nil {
+		if !keep {
+			deleteRec()
+		}
+		timeoutExit("final pass did not finish within 40 minutes")
+	}
 	report["transcription"] = tr
 	report["final_pass_seconds"] = finalAt.Sub(completeAt).Seconds()
 	log.Printf("transcription %v after %.0f s", tr, finalAt.Sub(completeAt).Seconds())
+	if tr["state"] == "failed" {
+		if !keep {
+			deleteRec()
+		}
+		fail("final pass failed: %v", tr)
+	}
 
 	dir := filepath.Join(kbDir, "recordings", id)
 	var meta map[string]any
@@ -431,21 +553,19 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 			}
 		}
 	}
+	minutesState, _ := meta["minutes_state"].(string)
 	report["minutes_state"] = meta["minutes_state"]
-	report["minutes_after_final_seconds"] = minutesAt.Sub(finalAt).Seconds()
+	if !minutesAt.IsZero() {
+		report["minutes_after_final_seconds"] = minutesAt.Sub(finalAt).Seconds()
+	} else {
+		report["minutes_after_final_seconds"] = nil
+	}
 	minutes, _ := os.ReadFile(filepath.Join(dir, "minutes.md"))
 	report["minutes_md"] = string(minutes)
 	report["minutes_han_share"] = hanShare(string(minutes))
-	var hs struct {
-		Pass     string `json:"pass"`
-		Segments []struct {
-			Start float64 `json:"start"`
-			End   float64 `json:"end"`
-			Text  string  `json:"text"`
-			Echo  bool    `json:"echo"`
-		} `json:"segments"`
-	}
+	var hs hubSegmentsFile
 	if b, err := os.ReadFile(filepath.Join(dir, "hub_segments.json")); err == nil {
+		os.WriteFile(filepath.Join(out, "hub_segments.json"), b, 0o600)
 		json.Unmarshal(b, &hs)
 	}
 	var mj struct {
@@ -532,6 +652,9 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 		}
 		perLine = append(perLine, map[string]any{"lang": l.Lang, "echo": l.Echo, "script": l.Text, "hub": said, "cer": best})
 	}
+	liveSents := liveSentencesFromFrames(all)
+	timing, labels := scoreAll(m.Lines, liveSents, hs.Segments)
+
 	report["per_line"] = perLine
 	report["live_lines"] = lines
 	report["final_pass"] = hs.Pass
@@ -544,9 +667,10 @@ func run(c *client, m *meeting, pcm []byte, lang, role, kbDir, out string, keep 
 	report["echo_in_live"] = echoKey != "" && strings.Contains(normalize(live.String()), head(echoKey))
 	report["line_latency"] = summary(lineLat)
 	report["caption_latency_from_sentence_start"] = summary(captionLat)
+	report["timing"] = timing
+	report["labels"] = labels
 	if !keep {
-		st, b, _ := c.do("DELETE", "/api/v1/recordings/"+id, nil)
-		log.Printf("delete: %d %s", st, string(b))
+		deleteRec()
 	}
-	return report
+	return report, formatResultLine(timing, labels, minutesState)
 }

@@ -2,7 +2,7 @@
 // its machine, absolute path and kind under a custom type; the target types `@path ` (the agents read that as the
 // file). The pure parts — what a row carries, the path as the target sees it, whether the drop goes through. The
 // terminal's side is in views/session/terminal/feed.ts, the composer's in views/chat/Composer.tsx.
-import { dragHasFiles, escapePastePath } from "./terminal-clipboard";
+import { dragHasFiles, escapePastePath } from "./paste-path";
 import { below } from "./files";
 import { t } from "../i18n";
 

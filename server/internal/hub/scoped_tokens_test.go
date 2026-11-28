@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -167,6 +168,12 @@ func TestScopedDeviceToken(t *testing.T) {
 			}
 			break
 		}
+	}
+	h.reported.mu.Lock()
+	viewing := append([]assistantwire.SessionRef(nil), h.reported.clients.Viewing...)
+	h.reported.mu.Unlock()
+	if len(viewing) != 0 {
+		t.Fatalf("a scoped subscription was reported as owner viewing: %+v", viewing)
 	}
 	h.broadcast(map[string]any{"type": "sessions", "machine_id": "m1", "sessions": []proto.Session{
 		{SessionID: "s1", Title: "Changed title", Cwd: "/private-dir", Status: proto.StatusWorking},

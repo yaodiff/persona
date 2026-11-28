@@ -99,6 +99,9 @@ type webPusher struct {
 	retryWaits []time.Duration
 	// sent tells tests a push's outcome, after it is noted.
 	sent func(device string, status int, err error)
+	// revoked reports whether a credential has been revoked (Hub.isDeviceRevoked).
+	// Must acquire only leaf locks (h.devtok.mu).
+	revoked func(credential string) bool
 	// storeTimeout bounds each settings read or write.
 	storeTimeout time.Duration
 
@@ -257,21 +260,47 @@ func (w *webPusher) get(device string) (webSub, bool) {
 // save stores the list change makes of the current one, then makes it current: a write that fails changes nothing.
 // change returns false to store nothing.
 func (w *webPusher) save(change func(map[string]webSub) bool) error {
+	return w.saveChecked(func(next map[string]webSub) (bool, error) {
+		return change(next), nil
+	}, nil)
+}
+
+// saveChecked holds saveMu continuously across cloning the current list, mutating it, persisting to the store,
+// running an optional postWriteCheck before publishing w.subs (rolling back the store to prev on rejection), and
+// finally updating w.subs.
+func (w *webPusher) saveChecked(change func(map[string]webSub) (bool, error), postWriteCheck func() error) error {
 	w.saveMu.Lock()
 	defer w.saveMu.Unlock()
 	w.mu.Lock()
-	next := maps.Clone(w.subs)
+	prev := maps.Clone(w.subs)
 	w.mu.Unlock()
-	if !change(next) {
+	next := maps.Clone(prev)
+	ok, err := change(next)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return nil
 	}
-	if w.store != nil {
-		list := slices.SortedFunc(maps.Values(next), func(a, b webSub) int { return strings.Compare(a.Device, b.Device) })
+	put := func(subs map[string]webSub) error {
+		if w.store == nil {
+			return nil
+		}
+		list := slices.SortedFunc(maps.Values(subs), func(a, b webSub) int { return strings.Compare(a.Device, b.Device) })
 		ctx, cancel := context.WithTimeout(context.Background(), w.storeTimeout)
 		err := w.store.PutSetting(ctx, webPushSubsSetting, list)
 		cancel()
-		if err != nil {
-			w.logf("web push: save subscriptions: %v", err)
+		return err
+	}
+	if err := put(next); err != nil {
+		w.logf("web push: save subscriptions: %v", err)
+		return err
+	}
+	if postWriteCheck != nil {
+		if err := postWriteCheck(); err != nil {
+			if rerr := put(prev); rerr != nil {
+				w.logf("web push: rollback subscriptions: %v", rerr)
+			}
 			return err
 		}
 	}
@@ -294,11 +323,18 @@ func (w *webPusher) save(change func(map[string]webSub) bool) error {
 // errWebPushOwned: the device's subscription is another credential's, and the request does not hold its endpoint.
 var errWebPushOwned = errors.New("web push: another device's subscription")
 
+func (w *webPusher) isRevoked(credential string) bool {
+	return w != nil && credential != "" && w.revoked != nil && w.revoked(credential)
+}
+
 // subscribe keeps s for its device. A subscription made with another credential is replaced only by a request that
 // presents its endpoint (the same browser, signed in again); at webPushMax the one renewed longest ago goes.
 func (w *webPusher) subscribe(s webSub) error {
 	s.UpdatedAt = w.now().UTC()
-	return w.saveErr(func(next map[string]webSub) (bool, error) {
+	return w.saveChecked(func(next map[string]webSub) (bool, error) {
+		if w.isRevoked(s.Credential) {
+			return false, errCredentialRevoked
+		}
 		cur, had := next[s.Device]
 		if had && cur.Credential != "" && cur.Credential != s.Credential && cur.Endpoint != s.Endpoint {
 			return false, errWebPushOwned
@@ -325,18 +361,17 @@ func (w *webPusher) subscribe(s webSub) error {
 			delete(next, oldest)
 		}
 		return true, nil
+	}, func() error {
+		if w.isRevoked(s.Credential) {
+			return errCredentialRevoked
+		}
+		return nil
 	})
 }
 
 // saveErr is save with a change that may refuse (its error, nothing stored).
 func (w *webPusher) saveErr(change func(map[string]webSub) (bool, error)) error {
-	var refused error
-	err := w.save(func(next map[string]webSub) bool {
-		ok, err := change(next)
-		refused = err
-		return ok && err == nil
-	})
-	return cmp.Or(refused, err)
+	return w.saveChecked(change, nil)
 }
 
 // unsubscribe drops device's subscription for credential (or for whoever presents its endpoint). ok false: there was

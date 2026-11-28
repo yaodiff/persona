@@ -10,8 +10,9 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// These fixtures exercise the owner's standing authorization and revocation.
 func alwaysIx(id, session string, keys ...string) proto.Interaction {
-	return proto.Interaction{ID: id, MachineID: "mac", SessionID: session, Kind: proto.IxPermission, ToolName: "Bash",
+	return proto.Interaction{ID: id, MachineID: "mac", SessionID: session, Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		ExpiresAt: time.Now().Add(time.Hour), Resumable: true, AlwaysKeys: keys}
 }
 
@@ -415,6 +416,181 @@ func TestInboxWholeBashHardeningEdgeCases(t *testing.T) {
 		}
 		<-firstDone
 	})
+}
+
+func TestAGYRuntimeAlwaysAllowLifecycleAndRevocation(t *testing.T) {
+	ft := newFleetTest(t)
+	s := ft.s
+	ctx := context.Background()
+	yes := true
+
+	const agySid = "antigravity-0c7d2c4e-5b1a-4f3e-9a6d-2f8b1c3d4e5f"
+	m, _ := s.fleetMachine("mac")
+	ft.sessions("mac", proto.Session{
+		SessionID: agySid, Agent: "antigravity", AgentLabel: "Antigravity",
+		Cwd: m.assistantCwd(), Status: proto.StatusWorking,
+	})
+
+	agyCard := func(id, tool string, keys ...string) proto.Interaction {
+		return proto.Interaction{
+			ID: id, MachineID: "mac", SessionID: agySid, Kind: proto.IxPermission, OutwardWrite: true,
+			Agent: "antigravity", AgentLabel: "Antigravity", Cwd: m.assistantCwd(),
+			ToolName: tool, ExpiresAt: time.Now().Add(time.Hour), Resumable: true, AlwaysKeys: keys,
+		}
+	}
+
+	// 1. AGY Assistant Write card gets AlwaysHonored=true and stores directory-scoped key on Always=true.
+	firstDone := make(chan proto.Resolution, 1)
+	go func() {
+		r, _ := s.nodeInteraction(ctx, agyCard("ix_agy_w1", "Write", "tool:Edit(//tmp/work/**)"))
+		firstDone <- r
+	}()
+	firstPending := ft.waitPending(1)
+	if firstPending[0].AlwaysHonored == nil || !*firstPending[0].AlwaysHonored {
+		t.Fatalf("AGY Write card AlwaysHonored = %v, want true", firstPending[0].AlwaysHonored)
+	}
+	if err := s.resolve("ix_agy_w1", proto.Resolution{Allow: &yes, Always: true}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-firstDone; r.Allow == nil || !*r.Allow || !r.Always || r.Remembered {
+		t.Fatalf("first AGY Write resolution = %+v, want allow+always (not remembered)", r)
+	}
+	ft.waitPending(0)
+
+	// 2. Second Write in the same directory is immediately auto-allowed with Remembered=true and no card.
+	second := ask(t, s, agyCard("ix_agy_w2", "Write", "tool:Edit(//tmp/work/**)"), nil)
+	if second.Allow == nil || !*second.Allow || !second.Always || !second.Remembered {
+		t.Fatalf("second AGY Write resolution = %+v, want remembered allow", second)
+	}
+	if n := len(s.pendingInteractions()); n != 0 {
+		t.Fatalf("remembered AGY Write left %d pending cards", n)
+	}
+
+	// 3. Write in a different directory is NOT covered and raises a fresh card.
+	otherDone := make(chan proto.Resolution, 1)
+	go func() {
+		r, _ := s.nodeInteraction(ctx, agyCard("ix_agy_w_other", "Write", "tool:Edit(//tmp/other/**)"))
+		otherDone <- r
+	}()
+	ft.waitPending(1)
+	if err := s.resolve("ix_agy_w_other", proto.Resolution{Allow: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-otherDone; r.Remembered {
+		t.Fatalf("different directory Write was unexpectedly remembered: %+v", r)
+	}
+	ft.waitPending(0)
+
+	// 4. Revoking the grant immediately forces a fresh card on the next matching Write.
+	if err := (&grantTestStore{fleetMem: ft.st}).RevokeAlways(ctx, agySid, grantHash("tool:Edit(//tmp/work/**)")); err != nil {
+		t.Fatal(err)
+	}
+	afterRevokeDone := make(chan proto.Resolution, 1)
+	go func() {
+		r, _ := s.nodeInteraction(ctx, agyCard("ix_agy_w3", "Write", "tool:Edit(//tmp/work/**)"))
+		afterRevokeDone <- r
+	}()
+	ft.waitPending(1)
+	if err := s.resolve("ix_agy_w3", proto.Resolution{Allow: &yes}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-afterRevokeDone; r.Remembered {
+		t.Fatalf("revoked AGY Write grant was still auto-allowed: %+v", r)
+	}
+	ft.waitPending(0)
+
+	// 5. Defense-in-depth: Inbox runtime whole-tool Bash keys (runtime:antigravity:tool:Bash) are stripped and never match.
+	const inboxSid = "antigravity-inbox-99"
+	s.originSet(ctx, "mac", inboxSid, OriginInbox, "item-agy", "")
+	if err := s.fleetStore().AllowAlways(ctx, inboxSid, "Bash", []string{"runtime:antigravity:tool:Bash"}); err != nil {
+		t.Fatal(err)
+	}
+	inboxCard := proto.Interaction{
+		ID: "ix_agy_inbox_rt", MachineID: "mac", SessionID: inboxSid, Kind: proto.IxPermission, OutwardWrite: true,
+		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: m.assistantCwd(),
+		ToolName: "Bash", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
+		AlwaysKeys: []string{"runtime:antigravity:tool:Bash"},
+	}
+	inboxDone := make(chan proto.Resolution, 1)
+	go func() {
+		r, _ := s.nodeInteraction(ctx, inboxCard)
+		inboxDone <- r
+	}()
+	inboxPending := ft.waitPending(1)
+	if inboxPending[0].AlwaysHonored == nil || *inboxPending[0].AlwaysHonored || len(inboxPending[0].AlwaysKeys) != 0 {
+		t.Fatalf("inbox runtime:antigravity:tool:Bash honored=%v keys=%q, want false/none", inboxPending[0].AlwaysHonored, inboxPending[0].AlwaysKeys)
+	}
+	if err := s.resolve("ix_agy_inbox_rt", proto.Resolution{Allow: &yes, Always: true}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-inboxDone; r.Always || r.Remembered {
+		t.Fatalf("inbox runtime whole-Bash kept always/remembered: %+v", r)
+	}
+	ft.waitPending(0)
+
+	// 6. Space confirm-outbound policy (health) must never auto-allow from a stale grant.
+	const healthSid = "antigravity-health-99"
+	if err := s.fleetStore().AllowAlways(ctx, healthSid, "Write", []string{"tool:Edit(//tmp/work/**)"}); err != nil {
+		t.Fatal(err)
+	}
+	healthCard := proto.Interaction{
+		ID: "ix_agy_health", MachineID: "mac", SessionID: healthSid, Kind: proto.IxPermission, OutwardWrite: true,
+		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: "/home/me/.persona/health",
+		ToolName: "Write", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
+		AlwaysKeys: []string{"tool:Edit(//tmp/work/**)"},
+	}
+	healthDone := make(chan proto.Resolution, 1)
+	go func() {
+		r, _ := s.nodeInteraction(ctx, healthCard)
+		healthDone <- r
+	}()
+	healthPending := ft.waitPending(1)
+	if healthPending[0].AlwaysHonored == nil || *healthPending[0].AlwaysHonored {
+		t.Fatalf("health space AGY card honored=%v, want false", healthPending[0].AlwaysHonored)
+	}
+	if err := s.resolve("ix_agy_health", proto.Resolution{Allow: &yes, Always: true}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-healthDone; r.Always || r.Remembered {
+		t.Fatalf("health space AGY card kept always/remembered: %+v", r)
+	}
+	ft.waitPending(0)
+
+	// 7. keepAlways must re-check ConfirmOutbound on both the source card and any waiting sibling card
+	// (even legacy cards with AlwaysHonored == nil).
+	const siblingSid = "antigravity-sibling-confirm"
+	legacyWaiting := proto.Interaction{
+		ID: "ix_agy_wait_health", MachineID: "mac", SessionID: siblingSid, Kind: proto.IxPermission,
+		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: "/home/me/.persona/health",
+		ToolName: "Write", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
+		AlwaysKeys: []string{"tool:Edit(//tmp/work/**)"},
+	}
+	nonSpaceSibling := proto.Interaction{
+		ID: "ix_agy_nonspace", MachineID: "mac", SessionID: siblingSid, Kind: proto.IxPermission,
+		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: m.assistantCwd(),
+		ToolName: "Write", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
+		AlwaysKeys: []string{"tool:Edit(//tmp/work/**)"},
+	}
+	// Source card under ConfirmOutbound must not record any grant in the store.
+	s.keepAlways(legacyWaiting, proto.Resolution{Allow: &yes, Always: true})
+	if _, ok := s.alwaysAllowed(ctx, nonSpaceSibling); ok {
+		t.Fatal("keepAlways persisted a grant from a ConfirmOutbound source card")
+	}
+
+	s.fleet.mu.Lock()
+	mWait := s.ixMapLocked()
+	waitPending := &pending{ix: legacyWaiting, done: make(chan proto.Resolution, 1), resolved: make(chan struct{})}
+	mWait[legacyWaiting.ID] = waitPending
+	s.fleet.mu.Unlock()
+	t.Cleanup(func() { s.finishInteraction(legacyWaiting.ID) })
+
+	// Trigger keepAlways from a non-space sibling card with the same session & key.
+	s.keepAlways(nonSpaceSibling, proto.Resolution{Allow: &yes, Always: true})
+	select {
+	case <-waitPending.resolved:
+		t.Fatal("keepAlways woke a waiting ConfirmOutbound legacy card")
+	default:
+	}
 }
 
 // The same completion must not push twice: a Stop whose reply was already pushed for, with no prompt since, is the same

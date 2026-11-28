@@ -107,6 +107,7 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 		n++
 		id := fmt.Sprintf("ix_own%d", n)
 		ix.ID, ix.MachineID, ix.SessionID, ix.Kind = id, "mac", "conv", proto.IxPermission
+		ix.OutwardWrite = true // these cases exercise explicit owner grants, not internal tool review
 		ix.ExpiresAt = time.Now().Add(time.Hour)
 		go func() { _, _ = s.AskCard(ctx, ix) }()
 		got := ft.waitPending(1)[0]
@@ -118,7 +119,7 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 	honestID := "ix_honest"
 	heard := make(chan proto.Resolution, 1)
 	go func() {
-		r, _ := s.AskCard(ctx, proto.Interaction{ID: honestID, MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission,
+		r, _ := s.AskCard(ctx, proto.Interaction{ID: honestID, MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission, OutwardWrite: true,
 			ToolName: "iphone_do", ExpiresAt: time.Now().Add(time.Hour)})
 		heard <- r
 	}()
@@ -150,7 +151,7 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = s.ask(ctx, proto.Interaction{ID: "ix_todo", MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission,
+		_, _ = s.ask(ctx, proto.Interaction{ID: "ix_todo", MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission, OutwardWrite: true,
 			ToolName: "todo_delete", ExpiresAt: time.Now().Add(time.Hour)})
 	}()
 	deadline := time.Now().Add(5 * time.Second)

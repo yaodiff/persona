@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { BrowserWindow, Menu, app, dialog, nativeTheme, protocol, screen, shell, powerMonitor, Notification } from "electron";
-import { parseDeepLink, parseHubAddress, externalBrowserURL, inHub } from "./urls.js";
+import { parseDeepLink, parseHubAddress, inHub } from "./urls.js";
+import { AdminWindow, keepNavigation, openNewWindowLink } from "./hub-links.js";
 import type { HubAddress } from "./urls.js";
 import { appPairingURL } from "./pairing.js";
 import { parseConnectInput } from "./connect-input.js";
@@ -8,6 +9,8 @@ import { classifyConnectError } from "./connect-errors.js";
 import { allowPinnedSessionRequest, isValidPin, verifyPinnedCertificate } from "./tls-pin.js";
 import type { HubPin } from "./tls-pin.js";
 import { installDesktopIPC, DesktopNotifications } from "./ipc.js";
+import { applyDesktopThemeSource, parseDesktopThemeSource } from "./theme-source.js";
+import { applyMacSurfaceStyle, liquidGlassVibrancy, seedMacSurfaceState } from "./surface-style.js";
 import { PageRoutes } from "./page-routes.js";
 import { installSetupIPC, installSetupProtocol } from "./setup-ipc.js";
 import type { ConnectResponse } from "./setup-ipc.js";
@@ -55,6 +58,10 @@ function windowBackground(surface: "hub" | "setup" = "hub"): string {
   }
   // Match the Web shell canvas and its prepaint background.
   return nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f1f1f4";
+}
+function applySurfaceStyle(window: BrowserWindow, style: DesktopSurfaceStyle): void {
+  if (process.platform !== "darwin") return;
+  applyMacSurfaceStyle(window, style, nativeTheme.shouldUseDarkColors, windowBackground());
 }
 // Each hub window's routes wait until its page listens (page-routes.ts, #10282): no route is sent around them.
 const pageRoutes = new WeakMap<BrowserWindow, PageRoutes>();
@@ -119,25 +126,19 @@ function navigateFromDeepLink(raw: string): void {
   mainWindow?.show();
 }
 
-function secureHubWindow(window: BrowserWindow): void {
+/** `openAdmin`: the Assistant window sends Hub Admin to its own window (hub-links.ts, #16992); the admin window has none. */
+function secureHubWindow(window: BrowserWindow, openAdmin?: (url: string) => void): void {
   const contents = window.webContents;
+  const targets = { admin: openAdmin, browser: (url: string) => { void shell.openExternal(url); } };
   contents.setWindowOpenHandler(({ url }) => {
-    const external = externalBrowserURL(url);
-    if (external && (!hub || !inHub(hub, url))) void shell.openExternal(external);
-    else if (hub && inHub(hub, url)) void window.loadURL(url);
+    openNewWindowLink(hub, url, { ...targets, here: page => { void window.loadURL(page); } });
     return { action: "deny" };
   });
   contents.on("will-navigate", (event, url) => {
-    if (hub && inHub(hub, url)) return;
-    event.preventDefault();
-    const external = externalBrowserURL(url);
-    if (external) void shell.openExternal(external);
+    if (!keepNavigation(hub, url, targets)) event.preventDefault();
   });
   contents.on("will-redirect", (event, url) => {
-    if (hub && inHub(hub, url)) return;
-    event.preventDefault();
-    const external = externalBrowserURL(url);
-    if (external) void shell.openExternal(external);
+    if (!keepNavigation(hub, url, targets)) event.preventDefault();
   });
   contents.on("will-attach-webview", event => event.preventDefault());
   contents.session.setPermissionRequestHandler((_contents, permission, callback) => {
@@ -145,6 +146,40 @@ function secureHubWindow(window: BrowserWindow): void {
     callback(permission === "notifications");
   });
   contents.session.setPermissionCheckHandler((_contents, permission) => permission === "notifications");
+}
+
+/** Hub Admin's window (#16992): the Assistant window's hub session (its sign-in cookies, TLS pin and permission
+ *  handlers) and the same link rules, but no preload, since the admin page uses no desktop capability, and the
+ *  system's standard title bar, so no inset under the window controls is needed. */
+function createAdminWindow(owner: HubAddress | undefined): BrowserWindow {
+  const admin = new BrowserWindow({
+    width: 1180,
+    height: 800,
+    minWidth: 760,
+    minHeight: 560,
+    show: false,
+    title: "Persona",
+    autoHideMenuBar: true,
+    backgroundColor: windowBackground(),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: !app.isPackaged,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      webviewTag: false,
+      spellcheck: true,
+      ...(owner ? { partition: hubPartition(owner) } : {}),
+    },
+  });
+  secureHubWindow(admin);
+  admin.once("ready-to-show", () => {
+    if (!quitting && !admin.isDestroyed()) admin.show();
+  });
+  return admin;
 }
 
 // A different hub needs a new window and its own persistent session, not navigation of the old window.
@@ -187,15 +222,27 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     mainWindow.show();
     return mainWindow;
   }
-  const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
+  const saved = await store().read<{ window?: unknown; surfaceStyle?: unknown; themeSource?: unknown }>();
+  const state = restoreWindow(saved?.window, screen.getAllDisplays().map(d => d.workArea));
   if (owner !== hub || generation !== hubWindow.generation) return undefined;
+  const savedTheme = parseDesktopThemeSource(saved?.themeSource);
+  if (savedTheme && nativeTheme.themeSource !== savedTheme) nativeTheme.themeSource = savedTheme;
+  const initialStyle: DesktopSurfaceStyle = saved?.surfaceStyle === "liquid-glass" ? "liquid-glass" : "default";
+  const initialVibrancy = liquidGlassVibrancy(nativeTheme.shouldUseDarkColors);
+  const initialBackground = initialStyle === "liquid-glass" ? "#00000000" : windowBackground();
   const current = new BrowserWindow({
     ...DEFAULT_WINDOW,
     ...state,
     show: false,
     title: "Persona",
     autoHideMenuBar: true,
-    backgroundColor: windowBackground(),
+    backgroundColor: initialBackground,
+    ...(process.platform === "darwin" ? {
+      titleBarStyle: "hiddenInset" as const,
+      trafficLightPosition: { x: 14, y: 19 },
+      ...(initialStyle === "liquid-glass" ? { vibrancy: initialVibrancy } : {}),
+      visualEffectState: "active" as const,
+    } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
@@ -213,6 +260,29 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     },
   });
   mainWindow = current;
+  let surfaceStyle: DesktopSurfaceStyle = initialStyle;
+  if (process.platform === "darwin") {
+    seedMacSurfaceState(current, {
+      vibrancy: initialStyle === "liquid-glass" ? initialVibrancy : null,
+      background: initialBackground,
+    });
+  }
+  const readWindowChrome = (): DesktopWindowChrome => ({
+    unifiedTitlebar: process.platform === "darwin",
+    fullScreen: !current.isDestroyed() && current.isFullScreen(),
+    focused: !current.isDestroyed() && current.isFocused(),
+  });
+  const publishChrome = () => {
+    if (!current.isDestroyed()) current.webContents.send("desktop:window-chrome-changed", readWindowChrome());
+  };
+  current.on("enter-full-screen", publishChrome);
+  current.on("leave-full-screen", publishChrome);
+  const onThemeUpdated = () => {
+    if (current.isDestroyed()) return;
+    if (process.platform === "darwin") applySurfaceStyle(current, surfaceStyle);
+    else current.setBackgroundColor(windowBackground());
+  };
+  nativeTheme.on("updated", onThemeUpdated);
   const routes = new PageRoutes(route => {
     if (!current.isDestroyed()) current.webContents.send("desktop:notification-open", route);
   });
@@ -231,7 +301,9 @@ async function showMain(): Promise<BrowserWindow | undefined> {
       void current.webContents.executeJavaScript("({title: document.title, text: document.body.innerText.slice(0, 500), html: document.body.innerHTML.slice(0, 500)})").then(value => log(value));
     });
   }
-  secureHubWindow(current);
+  // Hub Admin opens beside this window, never in it; it closes with this window, whose hub it belongs to.
+  const admin = new AdminWindow(() => createAdminWindow(owner));
+  secureHubWindow(current, url => { admin.open(url); });
   closeToTray(current, () => quitting);
   const removeIPC = installDesktopIPC(current, {
     // The partition is immutable, so derive authorization from this window's actual origin, never a later global hub.
@@ -257,6 +329,16 @@ async function showMain(): Promise<BrowserWindow | undefined> {
       current.focus();
       routes.open(route);
     }),
+    windowChrome: readWindowChrome,
+    setSurfaceStyle: style => {
+      surfaceStyle = style;
+      applySurfaceStyle(current, style);
+      void store().update({ surfaceStyle: style });
+    },
+    setThemeSource: theme => {
+      applyDesktopThemeSource(nativeTheme, theme, () => applySurfaceStyle(current, surfaceStyle));
+      void store().update({ themeSource: theme });
+    },
   });
   const save = () => {
     if (current.isDestroyed() || current.isMinimized()) return;
@@ -279,7 +361,7 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   // The island's state is this page's (#7669): once the page is gone (a hub change destroys this window, its renderer
   // crashed), the island forgets it, so nothing of this hub stays at the notch; a newer page's state stays.
   current.webContents.on("render-process-gone", () => island.forget(page));
-  current.once("closed", () => { removeIPC(); island.forget(page); if (mainWindow === current) mainWindow = undefined; });
+  current.once("closed", () => { nativeTheme.removeListener("updated", onThemeUpdated); removeIPC(); island.forget(page); admin.close(); if (mainWindow === current) mainWindow = undefined; });
   if (owner) {
     await applySessionPin(current, owner);
     const targetURL = pendingInitialURL && pendingInitialURL.origin === owner.url.origin && inHub(owner, pendingInitialURL.href)
@@ -586,4 +668,5 @@ app.on("window-all-closed", () => {
 
 // Developing Persona (#9675): the shell's own record while the page's switch is on (dev-diagnostics.ts).
 import { installDevDiagnostics } from "./dev-diagnostics.js";
+import type { DesktopSurfaceStyle, DesktopThemeSource, DesktopWindowChrome } from "../../spec/desktop-bridge.js";
 installDevDiagnostics();

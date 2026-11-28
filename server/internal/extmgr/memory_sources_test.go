@@ -396,3 +396,21 @@ func TestMemoryPageStandingBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestReadMemoryPagesMaxPagesBound(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeMemoryCaller{pages: map[string]json.RawMessage{
+		"":   json.RawMessage(`{"entries": [], "tagged": true, "has_more": true, "after": "p2"}`),
+		"p2": json.RawMessage(`{"entries": [], "tagged": true, "has_more": false}`),
+	}}
+	b := memoryTestBounds()
+	b.MaxPages = 1
+	if _, err := readMemoryPages(ctx, f, "memory", b); err == nil || !strings.Contains(err.Error(), "over 1 pages") {
+		t.Fatalf("MaxPages=1: err=%v", err)
+	}
+	b.MaxPages = 2
+	pages, err := readMemoryPages(ctx, f, "memory", b)
+	if err != nil || len(pages) != 2 {
+		t.Fatalf("MaxPages=2: pages=%d err=%v", len(pages), err)
+	}
+}

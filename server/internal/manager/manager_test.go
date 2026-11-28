@@ -11,16 +11,21 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -917,4 +922,298 @@ func TestJoinRefusesADanglingManagerJSONFirst(t *testing.T) {
 	if !errors.As(err, &ce) || !strings.Contains(err.Error(), "link to nothing") || j.trades.Load() != 0 {
 		t.Fatalf("%v, %d trades", err, j.trades.Load())
 	}
+}
+
+// A 3xx redirect from the hub (or an intermediary) must never be followed: Go's http.Client would otherwise replay the
+// POST body containing the one-time install code on 307/308 to another origin or downgrade https:// to plaintext http://.
+func TestJoinDoesNotFollowRedirects(t *testing.T) {
+	docker := func(context.Context) error { return nil }
+	statuses := []int{
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusSeeOther,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	}
+	for _, status := range statuses {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			isolate(t)
+			var hubHits, targetHits atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				targetHits.Add(1)
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "m-stolen", "name": "evil", "token": "jb_evil", "hub_id": "h1"})
+			}))
+			defer target.Close()
+
+			hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hubHits.Add(1)
+				http.Redirect(w, r, target.URL+bus.JoinPath, status)
+			}))
+			defer hub.Close()
+
+			wantCode := strconv.Itoa(status)
+
+			dir := filepath.Join(t.TempDir(), "mgr")
+			_, _, err := Join(context.Background(), JoinOptions{
+				Hub:         hub.URL,
+				Code:        "mi_secret",
+				Dir:         dir,
+				CheckDocker: docker,
+			})
+			if err == nil || !strings.Contains(err.Error(), wantCode) {
+				t.Fatalf("Join(%d): err = %v, want error containing %q", status, err, wantCode)
+			}
+			if hits := hubHits.Load(); hits != 1 {
+				t.Fatalf("hub received %d request(s) from Join, want 1", hits)
+			}
+			if hits := targetHits.Load(); hits != 0 {
+				t.Fatalf("redirect target received %d request(s) from Join", hits)
+			}
+			if _, err := os.Stat(filepath.Join(dir, assistant.ManagerFile)); !os.IsNotExist(err) {
+				t.Fatalf("manager.json written after %d redirect", status)
+			}
+
+			// Custom HTTPClient must not follow redirects and must not be mutated in place.
+			custom := &http.Client{Timeout: 5 * time.Second}
+			_, _, err = Join(context.Background(), JoinOptions{
+				Hub:         hub.URL,
+				Code:        "mi_secret",
+				Dir:         dir,
+				CheckDocker: docker,
+				HTTPClient:  custom,
+			})
+			if err == nil || !strings.Contains(err.Error(), wantCode) {
+				t.Fatalf("Join(custom HTTPClient, %d): err = %v, want error containing %q", status, err, wantCode)
+			}
+			if custom.CheckRedirect != nil {
+				t.Fatal("Join mutated caller's HTTPClient.CheckRedirect")
+			}
+			if hits := hubHits.Load(); hits != 2 {
+				t.Fatalf("hub received %d request(s) after custom HTTPClient, want 2", hits)
+			}
+			if hits := targetHits.Load(); hits != 0 {
+				t.Fatalf("redirect target received %d request(s) from custom HTTPClient", hits)
+			}
+			if _, err := os.Stat(filepath.Join(dir, assistant.ManagerFile)); !os.IsNotExist(err) {
+				t.Fatalf("manager.json written after custom HTTPClient %d redirect", status)
+			}
+
+			// JoinBuiltin must also refuse redirects without leaking the built-in install code or writing manager.json.
+			home := filepath.Join(t.TempDir(), "builtin")
+			_, err = JoinBuiltin(context.Background(), JoinOptions{
+				Hub:  hub.URL,
+				Code: "mi_builtin_secret",
+			}, home)
+			if err == nil || !strings.Contains(err.Error(), wantCode) {
+				t.Fatalf("JoinBuiltin(%d): err = %v, want error containing %q", status, err, wantCode)
+			}
+			if hits := hubHits.Load(); hits != 3 {
+				t.Fatalf("hub received %d request(s) after JoinBuiltin, want 3", hits)
+			}
+			if hits := targetHits.Load(); hits != 0 {
+				t.Fatalf("redirect target received %d request(s) from JoinBuiltin", hits)
+			}
+			if _, err := os.Stat(managerconf.DefaultFile(home)); !os.IsNotExist(err) {
+				t.Fatalf("JoinBuiltin wrote %s after %d redirect", managerconf.DefaultFile(home), status)
+			}
+		})
+	}
+
+	t.Run("https-to-http-downgrade", func(t *testing.T) {
+		isolate(t)
+		var hubHits, targetHits atomic.Int32
+		plaintextTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			targetHits.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "m-stolen", "name": "evil", "token": "jb_evil", "hub_id": "h1"})
+		}))
+		defer plaintextTarget.Close()
+
+		tlsHub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hubHits.Add(1)
+			http.Redirect(w, r, plaintextTarget.URL+bus.JoinPath, http.StatusTemporaryRedirect)
+		}))
+		defer tlsHub.Close()
+
+		hc := tlsHub.Client()
+		dir := filepath.Join(t.TempDir(), "tls-mgr")
+		_, _, err := Join(context.Background(), JoinOptions{
+			Hub:         tlsHub.URL,
+			Code:        "mi_tls_secret",
+			Dir:         dir,
+			CheckDocker: docker,
+			HTTPClient:  hc,
+		})
+		if err == nil || !strings.Contains(err.Error(), "307") {
+			t.Fatalf("Join(https->http): err = %v, want error containing 307", err)
+		}
+		if hc.CheckRedirect != nil {
+			t.Fatal("Join mutated tlsHub.Client().CheckRedirect")
+		}
+		if hits := hubHits.Load(); hits != 1 {
+			t.Fatalf("tlsHub received %d request(s), want 1", hits)
+		}
+		if hits := targetHits.Load(); hits != 0 {
+			t.Fatalf("plaintext target received %d request(s) after https->http downgrade", hits)
+		}
+		if _, err := os.Stat(filepath.Join(dir, assistant.ManagerFile)); !os.IsNotExist(err) {
+			t.Fatal("manager.json written after https->http downgrade redirect")
+		}
+	})
+
+	t.Run("pinned-tls-fingerprint", func(t *testing.T) {
+		isolate(t)
+		var hubHits, targetHits atomic.Int32
+		plaintextTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			targetHits.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "m-stolen", "name": "evil", "token": "jb_evil", "hub_id": "h1"})
+		}))
+		defer plaintextTarget.Close()
+
+		tlsHub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hubHits.Add(1)
+			http.Redirect(w, r, plaintextTarget.URL+bus.JoinPath, http.StatusTemporaryRedirect)
+		}))
+		defer tlsHub.Close()
+
+		fp := link.Pin(tlsHub.Certificate())
+		dir := filepath.Join(t.TempDir(), "pinned-mgr")
+		_, _, err := Join(context.Background(), JoinOptions{
+			Hub:         tlsHub.URL,
+			Code:        "mi_pinned_secret",
+			Dir:         dir,
+			Fingerprint: fp,
+			CheckDocker: docker,
+		})
+		if err == nil || !strings.Contains(err.Error(), "307") {
+			t.Fatalf("Join(pinned): err = %v, want error containing 307", err)
+		}
+		if hits := hubHits.Load(); hits != 1 {
+			t.Fatalf("pinned tlsHub received %d request(s), want 1 (pin handshake must succeed)", hits)
+		}
+		if hits := targetHits.Load(); hits != 0 {
+			t.Fatalf("plaintext target received %d request(s) from pinned Join", hits)
+		}
+		if _, err := os.Stat(filepath.Join(dir, assistant.ManagerFile)); !os.IsNotExist(err) {
+			t.Fatal("manager.json written after pinned TLS 307 redirect")
+		}
+	})
+}
+
+// probeToken sends the manager's long-lived Bearer token to the hub's bus endpoint; it must never follow 3xx redirects,
+// which would otherwise leak the token across ports/subdomains or HTTPS->HTTP downgrades and accept a spoofed 101.
+func TestProbeTokenDoesNotFollowRedirects(t *testing.T) {
+	statuses := []int{
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusSeeOther,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	}
+	for _, status := range statuses {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var hubHits, targetHits atomic.Int32
+			var leakedAuth atomic.Value
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				targetHits.Add(1)
+				leakedAuth.Store(r.Header.Get("Authorization"))
+				ws, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				_ = ws.Close(websocket.StatusNormalClosure, "spoofed")
+			}))
+			defer target.Close()
+
+			hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hubHits.Add(1)
+				http.Redirect(w, r, target.URL+bus.Path, status)
+			}))
+			defer hub.Close()
+
+			err := probeToken(context.Background(), &assistant.ManagerConfig{
+				Hub:   hub.URL,
+				Token: "jb_live_secret",
+			})
+			if err == nil {
+				t.Fatalf("probeToken accepted spoofed 101 via %d redirect", status)
+			}
+			if hits := hubHits.Load(); hits != 1 {
+				t.Fatalf("hub received %d request(s), want 1", hits)
+			}
+			if hits := targetHits.Load(); hits != 0 {
+				t.Fatalf("redirect target received %d request(s) (leaked Authorization=%q)", hits, leakedAuth.Load())
+			}
+		})
+	}
+
+	t.Run("pinned-https-to-http-downgrade", func(t *testing.T) {
+		var hubHits, targetHits atomic.Int32
+		plaintextTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			targetHits.Add(1)
+			ws, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				return
+			}
+			_ = ws.Close(websocket.StatusNormalClosure, "spoofed")
+		}))
+		defer plaintextTarget.Close()
+
+		tlsHub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hubHits.Add(1)
+			http.Redirect(w, r, plaintextTarget.URL+bus.Path, http.StatusTemporaryRedirect)
+		}))
+		defer tlsHub.Close()
+
+		err := probeToken(context.Background(), &assistant.ManagerConfig{
+			Hub:         tlsHub.URL,
+			Token:       "jb_pinned_secret",
+			Fingerprint: link.Pin(tlsHub.Certificate()),
+		})
+		if err == nil {
+			t.Fatal("pinned probeToken followed https->http redirect")
+		}
+		if hits := hubHits.Load(); hits != 1 {
+			t.Fatalf("tlsHub received %d request(s), want 1", hits)
+		}
+		if hits := targetHits.Load(); hits != 0 {
+			t.Fatalf("plaintext target received %d request(s) after pinned https->http downgrade", hits)
+		}
+	})
+
+	t.Run("unpinned-https-to-http-downgrade", func(t *testing.T) {
+		var hubHits, targetHits atomic.Int32
+		var leakedAuth atomic.Value
+		plaintextTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			targetHits.Add(1)
+			leakedAuth.Store(r.Header.Get("Authorization"))
+			ws, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				return
+			}
+			_ = ws.Close(websocket.StatusNormalClosure, "spoofed")
+		}))
+		defer plaintextTarget.Close()
+
+		tlsHub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hubHits.Add(1)
+			http.Redirect(w, r, plaintextTarget.URL+bus.Path, http.StatusTemporaryRedirect)
+		}))
+		defer tlsHub.Close()
+
+		hc := probeTokenClient("")
+		hc.Transport = tlsHub.Client().Transport
+		ws, err := bus.Dial(context.Background(), tlsHub.URL, "jb_unpinned_secret", hc)
+		if ws != nil {
+			_ = ws.Close(websocket.StatusNormalClosure, "unexpected")
+		}
+		if err == nil {
+			t.Fatal("unpinned probeTokenClient followed https->http redirect to spoofed 101")
+		}
+		if hits := hubHits.Load(); hits != 1 {
+			t.Fatalf("tlsHub received %d request(s), want 1", hits)
+		}
+		if hits := targetHits.Load(); hits != 0 {
+			t.Fatalf("plaintext target received %d request(s) (leaked Authorization=%q)", hits, leakedAuth.Load())
+		}
+	})
 }

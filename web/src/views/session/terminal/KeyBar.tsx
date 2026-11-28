@@ -1,11 +1,13 @@
 // The terminal's key bar (iOS TerminalKeyBar): keys a phone's keyboard lacks — and a browser on a phone cannot send —
 // in one row that scrolls sideways when it does not fit: ctrl / alt / shift (a tap arms one for the next key, a quick
-// second tap locks it, holding keeps it down), esc, tab, a ⌃C that goes out at once, the saved commands, copy and paste, then
-// the arrows and return. The keys keep the focus in the terminal, so a phone's keyboard stays up.
+// second tap locks it, holding keeps it down), esc, tab, a ⌃C that goes out at once, the saved commands, a hidden line
+// (LineBox: a password or a token for a prompt in the pane, #14527), copy and paste, then the arrows and return. The keys
+// keep the focus in the terminal, so a phone's keyboard stays up.
 import { useEffect, useRef, useState } from "react";
 import type { ModifierKey, ModifierState, Modifiers } from "../../../lib/terminal";
 import { cx } from "../../../ui/atoms";
 import { Icon, type IconName } from "../../../ui/icons";
+import { LineBox } from "./LineBox";
 import { ShortcutsPopover } from "./Shortcuts";
 import { t } from "../../../i18n";
 
@@ -134,10 +136,14 @@ function ModifierKeyCap({ k, label, name, feed, state, disabled }: { k: Modifier
 
 export function KeyBar({ feed, v, onEditShortcuts }: { feed: KeyFeed; v: KeyView; onEditShortcuts: () => void }) {
   const [shortcuts, setShortcuts] = useState(false);
+  const [lineBox, setLineBox] = useState(false);
   const off = v.control !== "active";
   const k = (name: string) => () => feed.pressKey(name);
   useEffect(() => {
-    if (off) setShortcuts(false);
+    if (off) {
+      setShortcuts(false);
+      setLineBox(false);
+    }
   }, [off]);
 
   return (
@@ -155,13 +161,15 @@ export function KeyBar({ feed, v, onEditShortcuts }: { feed: KeyFeed; v: KeyView
           onClose={() => setShortcuts(false)}
         />
       )}
+      {lineBox && <LineBox onSend={(line) => feed.typeText(line, true)} onClose={() => setLineBox(false)} />}
       <div role="toolbar" aria-label={t("session-terminal-keybar.title")} className="flex items-center gap-1">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none">
           <ModifierKeyCap k="ctrl" label="Ctrl" name="Control" feed={feed} state={v.mods.ctrl} disabled={off} />
           <Key label="Esc" title="Esc" disabled={off} onPress={k("esc")} />
           <Key label="Tab" title="Tab" disabled={off} onPress={k("tab")} />
           <Key label="⌃C" title={t("session-terminal-keybar.send_ctrl_c")} disabled={off} onPress={() => feed.pressBare("ctrl+c")} />
-          <Key icon="bolt" title={t("session-terminal-keybar.shortcuts")} disabled={off} active={shortcuts} onPress={() => setShortcuts((s) => !s)} />
+          <Key icon="bolt" title={t("session-terminal-keybar.shortcuts")} disabled={off} active={shortcuts} onPress={() => { setLineBox(false); setShortcuts((s) => !s); }} />
+          <Key icon="key" title={t("session-terminal-keybar.line")} disabled={off} active={lineBox} onPress={() => { setShortcuts(false); setLineBox((o) => !o); }} />
           <Key icon="copy" title={t("session-terminal-keybar.copy_selection")} disabled={off || !v.selection} onPress={() => feed.copySelection()} />
           <Key icon="paste" title={t("session-terminal-keybar.paste")} disabled={off} onPress={() => void feed.pasteClipboard()} />
           <ModifierKeyCap k="alt" label="Alt" name="Option" feed={feed} state={v.mods.alt} disabled={off} />

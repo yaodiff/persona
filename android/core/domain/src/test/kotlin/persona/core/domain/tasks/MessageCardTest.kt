@@ -37,7 +37,7 @@ class MessageCardTest {
     @Test fun sentIsReadFromTheCard() {
         assertNull(card().sent)
         assertEquals("修好了", (card(extra = mapOf("sent_at" to "2026-11-04T10:23:00Z", "sent" to "修好了")).sent?.text).zhAny())
-        assertEquals("在修了", (card(extra = mapOf("sent_at" to "2026-11-04T10:23:00Z")).sent?.text).zhAny()) // from before the record
+        assertEquals("", card(extra = mapOf("sent_at" to "2026-11-04T10:23:00Z")).sent?.text)
     }
 
     @Test fun aCardFiledElsewhereOffersNoSend() {

@@ -1,4 +1,7 @@
 {
+  "lark_sender_bot": "ボットとして「{chat}」に返信します。チャットの全員に表示されます。",
+  "lark_sender_user": "あなたとして「{chat}」に返信します。チャットの全員に表示されます。",
+  "lark_sender_default": "設定した送信者で「{chat}」に返信します。チャットの全員に表示されます。",
   "title_moment": "Moments にコメント",
   "title_comment": "{title}にコメント",
   "title_reply_to": "{title}に返信",

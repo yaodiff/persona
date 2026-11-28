@@ -1,12 +1,12 @@
 {
-  "name_empty": "名字不能是空的",
-  "name_dots": "名字不能是 . 或 ..",
-  "name_slash": "名字里不能有 / 或 \\",
-  "read_only": "这里不能改：只有个人文件夹以内可以写，~/.persona、~/.persona、~/Library 和存放密钥的位置除外",
-  "exists": "「{name}」已经有了",
-  "node_outdated": "这台电脑上的 personad 太旧，不支持改文件，重新部署后再试",
-  "too_large": "文件太大，一次最多 2 GB",
-  "not_found": "找不到了：可能已经被移走或删掉",
-  "unreachable": "连不上这台电脑：它可能离线了",
-  "hub_outdated": "hub 太旧，还不支持改文件，更新 hub 后再试"
+  "name_empty": "名称不能为空",
+  "name_dots": "名称不能为 . 或 ..",
+  "name_slash": "名称不能包含 / 或 \\",
+  "read_only": "此位置不可修改：仅支持写入主目录内的文件（~/.persona、~/Library 及存放密钥的目录除外）。",
+  "exists": "「{name}」已存在",
+  "node_outdated": "该电脑上的 personad 版本过旧，暂不支持修改文件。请重新部署后重试。",
+  "too_large": "文件体积过大，上限为 2 GB",
+  "not_found": "文件已不存在，可能已被移动或删除",
+  "unreachable": "无法连接该电脑，它可能已离线",
+  "hub_outdated": "hub 版本过旧，暂不支持修改文件。请更新 hub 后重试。"
 }

@@ -70,10 +70,28 @@ function drawDecision(row: BriefRow) {
 const rows = (kind: string) => [...host.querySelectorAll(`[data-brief-row=${kind}]`)];
 
 describe("a brief item", () => {
+  it("shows the provider's facts and report as text and skips unreadable contributions", () => {
+    const provider = { extension_id: "example", contribution_id: "library", title: "Library" };
+    draw(item(body({ contributions: [
+      { ...provider, facts: ["Two books due", null], sections: [
+        { title: "Due today", body: "<b>Field guide</b>\nReturn before noon" }, { title: "Incomplete" }, null,
+      ] },
+      { ...provider, contribution_id: "empty", title: "Empty" }, null, { facts: ["Unknown provider"] },
+    ] })));
+    const section = [...host.querySelectorAll("section")].find((s) => s.textContent?.includes("Library"));
+    expect(section?.textContent).toContain("Two books due");
+    expect(section?.textContent).toContain("Due today");
+    expect(section?.textContent).toContain("<b>Field guide</b>");
+    expect(section?.querySelector("b")).toBeNull();
+    expect(host.textContent).not.toMatch(/Incomplete|Empty|Unknown provider/);
+    draw(item());
+    expect(host.textContent).not.toContain("Library");
+  });
+
   it("draws the sections: what waits, the last hours (failed first), what is to be verified", () => {
     draw(item());
     const text = host.textContent ?? "";
-    for (const want of ["早报", "等你处理（1）", "先发预发还是直接上线？", "已等 1 小时 20 分", "已催过", "过去 12 小时：做完 4 · 没成 2", "修登录崩溃", "没开起来", "machine offline", "巡检", "被跳过", "整理周报", "待验收（1）", "改设置页", "设置页多了一个开关"]) {
+    for (const want of ["早报", "待你处理（1）", "先发预发还是直接上线？", "已等待 1 小时 20 分", "已催促", "过去 12 小时：已完成 4 · 未成功 2", "修登录崩溃", "未能启动", "machine offline", "巡检", "已跳过", "整理周报", "待验收（1）", "改设置页", "设置页多了一个开关"]) {
       expect(text, want).toContain(want);
     }
     expect(text.indexOf("修登录崩溃")).toBeLessThan(text.indexOf("整理周报"));
@@ -83,7 +101,14 @@ describe("a brief item", () => {
   });
 
   it("draws a link only when it is a web address", () => {
-    draw(item(body({ waiting: [{ id: "ix1", title: "一个问题", waited_s: 60, link: "javascript:alert(1)" }, { id: "ix2", title: "另一个", waited_s: 60, link: "https://hub.example/s/box/ag2" }] })));
+    draw(item(body({
+      waiting: [
+        { id: "ix1", title: "一个问题", waited_s: 60, link: "javascript:alert(1)" },
+        { id: "ix2", title: "另一个", waited_s: 60, link: "https://hub.example/s/box/ag2" },
+        { id: "ix3", title: "带凭据", waited_s: 60, link: "https://user:pass@hub.example/s/box/ag3" },
+        { id: "ix4", title: "反斜杠", waited_s: 60, link: "https://evil.example\\@hub.example/s/box/ag4" },
+      ],
+    })));
     expect([...host.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://hub.example/s/box/ag2"]);
   });
 
@@ -102,23 +127,23 @@ describe("a brief item", () => {
 
   it("says so when nothing is there, and does not say that nothing waits when the cards were not read", () => {
     draw(item(body({ waiting: [], failed: [], failed_total: 0, done: [], done_total: 0, accept: [] })));
-    expect(host.textContent).toContain("等你处理（0）");
+    expect(host.textContent).toContain("待你处理（0）");
     expect(host.querySelectorAll("[data-brief-section]")).toHaveLength(3);
     expect(host.textContent).not.toContain("还有");
     draw(item(body({ waiting: [], waiting_unknown: true })));
-    expect(host.textContent).toContain("还没读到等你处理的卡片");
-    expect(host.textContent).not.toContain("等你处理（0）");
+    expect(host.textContent).toContain("暂未读取待你处理的卡片");
+    expect(host.textContent).not.toContain("待你处理（0）");
   });
 
   it("draws the questions that can wait after what is to be verified and before what is in progress, with how many more", () => {
     draw(item(body({ later: askedLater(), later_total: 3, progress: [{ id: "todo_w1", title: "重构设置页" }], progress_total: 1 })));
     const text = host.textContent ?? "";
-    for (const want of ["可以晚点答（3）", "新接口用 snake_case 还是 camelCase？", "已等 26 小时", "来自 Agent「网络层」", "图标要不要换？", "还有 1 项"]) {
+    for (const want of ["可稍后处理（3）", "新接口用 snake_case 还是 camelCase？", "已等待 26 小时", "来自 Agent「网络层」", "图标要不要换？", "还有 1 项"]) {
       expect(text, want).toContain(want);
     }
-    expect(text.indexOf("待验收（1）")).toBeLessThan(text.indexOf("可以晚点答（3）"));
-    expect(text.indexOf("可以晚点答（3）")).toBeLessThan(text.indexOf("进行中（1）"));
-    expect(text).not.toContain("还有 1 项，到任务页看"); // the queue's rest is not on the Tasks page
+    expect(text.indexOf("待验收（1）")).toBeLessThan(text.indexOf("可稍后处理（3）"));
+    expect(text.indexOf("可稍后处理（3）")).toBeLessThan(text.indexOf("进行中（1）"));
+    expect(text).not.toContain("还有 1 项，前往任务页查看"); // the queue's rest is not on the Tasks page
     expect(rows("later")).toHaveLength(2);
     expect(host.querySelector<HTMLAnchorElement>("a[href='https://hub.example/s/box/ag7']")).not.toBeNull(); // the Agent's chat
   });
@@ -167,11 +192,11 @@ describe("a brief item", () => {
 
   it("has no such section without questions, as for a hub that does not know them", () => {
     draw(item());
-    expect(host.textContent).not.toContain("晚点答");
+    expect(host.textContent).not.toContain("可稍后处理");
     expect(rows("later")).toHaveLength(0);
     draw(item(body({ later: "x", later_total: 5 }))); // not a list: nothing to draw
     expect(rows("later")).toHaveLength(0);
-    expect(host.textContent).not.toContain("晚点答");
+    expect(host.textContent).not.toContain("可稍后处理");
   });
 
   it("Handled posts the question's id, then says it is marked", async () => {
@@ -180,7 +205,7 @@ describe("a brief item", () => {
     await act(async () => btn.click());
     expect(api).toHaveBeenCalledWith("/later/lt_1/handled", { method: "POST" });
     expect(host.querySelectorAll("[data-brief-marked=marked]")).toHaveLength(1);
-    expect(host.querySelector("[data-brief-marked=marked]")?.textContent).toBe("已标记为处理过");
+    expect(host.querySelector("[data-brief-marked=marked]")?.textContent).toBe("已标记为已处理");
     expect([...host.querySelectorAll("button")].filter((b) => b.textContent === "已处理")).toHaveLength(1); // the other one is still there
   });
 
@@ -188,7 +213,7 @@ describe("a brief item", () => {
     draw(item(body({ later: askedLater(), later_total: 2 })));
     api.mockRejectedValueOnce(new ApiError(409, "已经处理过了", {}));
     await act(async () => [...host.querySelectorAll("button")].filter((b) => b.textContent === "已处理")[0].click());
-    expect(host.querySelector("[data-brief-marked=handled]")?.textContent).toBe("已经处理过了");
+    expect(host.querySelector("[data-brief-marked=handled]")?.textContent).toBe("已处理过");
 
     draw(item(body({ later: askedLater(3), later_total: 2 }))); // other ids: a new row, not the one that was marked
     api.mockRejectedValueOnce(new ApiError(500, "boom", {}));
@@ -216,16 +241,16 @@ describe("a brief item", () => {
   it("says when the decision is recorded for the supervisor because no Agent can take it", async () => {
     api.mockResolvedValueOnce({ ok: true, delivered: "none" });
     drawDecision({ id: "todo_stopped", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
-    const take = [...rows("accept")[0].querySelectorAll("button")].find((b) => b.textContent === "按推荐来")!;
+    const take = [...rows("accept")[0].querySelectorAll("button")].find((b) => b.textContent === "采用推荐")!;
     await act(async () => take.click());
-    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记下，Agent 已停，督办会接手");
+    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记录。没能送到 Agent，将由督办接手转交");
   });
 
   it("a round that is over (409) says it was handled; another failure keeps the button for a retry", async () => {
     draw(item());
     api.mockRejectedValueOnce(new ApiError(409, "已经处理过了", {}));
     await act(async () => [...host.querySelectorAll("button")].find((b) => b.textContent === "通过")!.click());
-    expect(host.querySelector("[data-brief-accepted=handled]")?.textContent).toBe("已经处理过了");
+    expect(host.querySelector("[data-brief-accepted=handled]")?.textContent).toBe("已处理过");
 
     draw(item(body({ accept: [{ id: "todo_v2", title: "另一件", waited_s: 60, asked_at: ASKED }] })));
     api.mockRejectedValueOnce(new ApiError(500, "boom", {}));
@@ -249,10 +274,10 @@ describe("a brief item", () => {
     expect(cannot.querySelector("[data-brief-verdict=cannot]")?.textContent).toBe("⛔ 做不了：对方接口不对外开放");
     expect([...cannot.querySelectorAll("button")].map((b) => b.textContent)).toContain("知道了");
     expect(decide.textContent).toContain("推荐：先灰度 10%");
-    const take = [...decide.querySelectorAll("button")].find((b) => b.textContent === "按推荐来")!;
+    const take = [...decide.querySelectorAll("button")].find((b) => b.textContent === "采用推荐")!;
     await act(async () => take.click());
     expect(api).toHaveBeenCalledWith("/todos/todo_d1/accept", { method: "POST", json: { asked_at: ASKED } });
-    expect(decide.querySelector("[data-brief-accepted=accepted]")?.textContent).toBe("已按推荐来");
+    expect(decide.querySelector("[data-brief-accepted=accepted]")?.textContent).toBe("已采用推荐方案");
     expect(none.textContent).toContain("用哪个库");
     expect([...none.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["打开"]); // a historical snapshot cannot finish a newer run
     expect(host.textContent).not.toContain("直接完成");
@@ -289,15 +314,15 @@ describe("a brief item", () => {
     try {
       drawDecision({ ...todo, ...ask, waited_s: 60 });
       const buttons = [...rows("accept")[0].querySelectorAll("button")];
-      expect(buttons.map((b) => b.textContent)).toEqual(["打开", "直接完成", "按推荐来"]);
+      expect(buttons.map((b) => b.textContent)).toEqual(["打开", "直接完成", "采用推荐"]);
       expect(buttons[1].classList).toContain("shadow-btn");
       expect(buttons[2].classList).toContain("bg-ink");
       await act(async () => buttons[1].click());
       expect(api.mock.calls.filter(([, opts]) => opts?.method && opts.method !== "GET")).toEqual([["/todos/todo_finish", { method: "PATCH", json: { done: true } }]]);
       expect(getState().todos[0].done_at).toBe(ASKED);
       expect(getState().todos[0].ask).toBeUndefined();
-      expect(host.querySelector("[data-brief-accepted=finished]")?.textContent).toBe("已完成，不再交给 Agent");
-      expect(toast).toHaveBeenCalledWith("已完成，不再交给 Agent", "ok");
+      expect(host.querySelector("[data-brief-accepted=finished]")?.textContent).toBe("已完成，不再交由 Agent 处理");
+      expect(toast).toHaveBeenCalledWith("已完成，不再交由 Agent 处理", "ok");
       expect([...rows("accept")[0].querySelectorAll("button")].map((b) => b.textContent)).toEqual(["打开"]);
     } finally {
       getState().todos = before;
@@ -386,7 +411,7 @@ describe("a row's meta line", () => {
     expect(row.from).toBeUndefined();
     drawDecision(row);
     const meta = host.querySelector("[data-brief-meta]")!.textContent!;
-    expect(meta).toBe("已等 12 小时 30 分");
+    expect(meta).toBe("已等待 12 小时 30 分");
     expect(host.textContent).not.toContain("[object Object]");
     expect(host.querySelector("[data-brief-recommend]")!.textContent).toContain("先合入");
   });
@@ -411,9 +436,9 @@ describe("a row's meta line", () => {
     const spread: BriefRow = { id: "todo_ce", title: "搭 persona PR watcher", waited_s, ...ASK };
     expect(typeof spread.from).toBe("object");
     const row = askRow({ id: "todo_ce", title: "搭 persona PR watcher" }, ASK, Date.parse(ASKED) + waited_s * 1000);
-    expect(meta(row)).toBe("已等 38 小时 3 分");
+    expect(meta(row)).toBe("已等待 38 小时 3 分");
     drawDecision(row);
-    expect(host.querySelector("[data-brief-meta]")!.textContent).toBe("已等 38 小时 3 分");
+    expect(host.querySelector("[data-brief-meta]")!.textContent).toBe("已等待 38 小时 3 分");
     expect(host.textContent).not.toContain("[object Object]");
   });
 

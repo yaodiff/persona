@@ -114,12 +114,12 @@ func (n *Node) setExtraPath(dirs []string) {
 		}
 	}
 	extraPath.mu.Lock()
-	defer extraPath.mu.Unlock()
 	if extraPath.base == nil {
 		base := os.Getenv("PATH")
 		extraPath.base = &base
 	}
 	if slices.Equal(keep, extraPath.dirs) {
+		extraPath.mu.Unlock()
 		return
 	}
 	extraPath.dirs = keep
@@ -128,6 +128,8 @@ func (n *Node) setExtraPath(dirs []string) {
 		list = append(list, *extraPath.base)
 	}
 	os.Setenv("PATH", strings.Join(list, string(os.PathListSeparator)))
+	extraPath.mu.Unlock()
+	invalidateLauncherCache()
 }
 
 // herdrToolDirs are what the herdr server's login shell starts with after the system's directories

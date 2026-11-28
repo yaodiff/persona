@@ -1,0 +1,7 @@
+The agy terminal pane isn't linked to its conversation.
+Persona couldn't read the reply because the agy terminal pane box/agy-w1-p1 isn't linked to its conversation. No candidate conversations were found.
+
+The agy terminal pane isn't linked to its conversation.
+Persona couldn't read the reply because the agy terminal pane box/agy-w1-p1 isn't linked to its conversation. Possible conversation: box/agy-conversation. Check it before using it as the task's reply.
+
+Persona couldn't verify candidate conversations for the unlinked agy terminal pane.

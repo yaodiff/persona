@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -55,6 +56,11 @@ func NewBusMethod[P, R any](name string, fn func(context.Context, P) (R, error))
 		}
 		return encode(reply)
 	}}
+}
+
+// NewTypedBusMethod binds a module handler to the request and reply types of a bus method descriptor.
+func NewTypedBusMethod[P, R any](m buswire.Method[P, R], fn func(context.Context, P) (R, error)) BusMethod {
+	return NewBusMethod(m.Name, fn)
 }
 
 // dotted says whether name is two or more words of [a-z0-9_], each starting with a letter, joined by single dots.

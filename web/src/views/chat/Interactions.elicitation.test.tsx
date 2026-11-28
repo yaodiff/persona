@@ -155,7 +155,7 @@ describe("MCP 表单卡片", () => {
     render(formIx(schema));
     expect(button("提交")!.disabled).toBe(true);
     expect([...host.querySelectorAll("[role=alert]")].map((e) => e.textContent)).toEqual(["请填写这一项", "请填写这一项"]);
-    expect(host.textContent).toContain("此项不会保存，离开后需重新填写");
+    expect(host.textContent).toContain("此项内容不会保存，离开页面后需重新填写。");
     expect(input("数量").inputMode).toBe("numeric");
     expect(input("偏移").inputMode).toBe(""); // may be negative: the phone keypad has no minus
     type(input("环境"), "prod");

@@ -39,3 +39,29 @@ func TestOriginOnlyChangeInvalidatesViews(t *testing.T) {
 		t.Fatalf("removed counters: %+v", all)
 	}
 }
+
+func TestAgentsTabFilterCountsOnlyCurrentTabMembership(t *testing.T) {
+	var i Index
+	live, ended := testItem("live", 1), testItem("ended", 2)
+	live.PaneSource, ended.PaneSource = "terminal", "terminal"
+	live.State, ended.State = "idle", "offline"
+	i.Replace("owner", []Item{live, ended})
+	filter := Options{AgentsOnly: true, PaneSource: "terminal"}
+	page := mustQuery(t, &i, filter)
+	counts, err := i.Counts(Options{AgentsOnly: true})
+	if err != nil || counts.Total != 2 || counts.PaneSource["terminal"] != 1 || page.Total != 1 || len(page.Sessions) != 1 {
+		t.Fatalf("agents counts: %+v (%v), tab page: %+v", counts, err, page)
+	}
+	if all := mustQuery(t, &i, Options{PaneSource: "terminal"}); all.Total != 2 {
+		t.Fatalf("general session query lost the ended session's origin: %+v", all)
+	}
+
+	live.State = "offline"
+	i.Replace("owner", []Item{live, ended})
+	filter.Since = page.Revision
+	delta := mustQuery(t, &i, filter)
+	counts, err = i.Counts(Options{AgentsOnly: true})
+	if err != nil || counts.PaneSource["terminal"] != 0 || delta.Total != 0 || !reflect.DeepEqual(delta.Remove, []string{"live"}) {
+		t.Fatalf("agents counts: %+v (%v), tab delta: %+v", counts, err, delta)
+	}
+}

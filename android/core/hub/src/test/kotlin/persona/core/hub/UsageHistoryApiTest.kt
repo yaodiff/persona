@@ -5,6 +5,7 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -102,6 +103,106 @@ class UsageHistoryApiTest {
                 }
             }
             assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test fun projectsDecodeRangesProjectsAndNotSplitForTheSelectedManager() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient()).forManager("work") as UsageHistoryApi
+            server.enqueue(MockResponse().setBody("""{"usage":{"zone":"Asia/Shanghai","stored":true,"ranges":[
+                {"days":1,"total":{"in":10,"cache_write":20,"cache_read":40,"out":80,"req":3},
+                 "projects":[{"key":"repo:1","kind":"repo","group":"development","name":"acme/app","host":"git.example",
+                              "machines":2,"share":0.6,"tokens":{"in":1,"cache_write":2,"cache_read":4,"out":8,"req":2}},
+                             {"key":"odd","kind":"mystery","group":"mystery","name":"","machines":1,"share":0.1,"tokens":{"in":5}}],
+                 "not_split":{"in":7,"cache_write":8}},
+                {"days":3,"total":{},"projects":[],"not_split":{}},
+                {"days":7,"total":{},"projects":[],"not_split":{}}
+            ]}}"""))
+
+            val answer = requireNotNull(api.usageProjects())
+            assertEquals("Asia/Shanghai", answer.zone)
+            assertTrue(answer.stored)
+            assertEquals(listOf(1, 3, 7), answer.ranges.map { it.days })
+            val project = answer.ranges.first().projects.first()
+            assertEquals("acme/app", project.name)
+            assertEquals("git.example", project.host)
+            assertEquals(2, project.machines)
+            assertEquals(0.6, project.share, 0.0)
+            assertEquals(15L, project.tokens.total)
+            assertEquals("mystery", answer.ranges.first().projects.last().kind)
+            assertEquals(15L, answer.ranges.first().notSplit.total)
+
+            val request = server.takeRequest()
+            assertEquals("GET", request.method)
+            assertEquals("/api/v1/usage/projects", request.requestUrl?.encodedPath)
+            assertEquals("work", request.requestUrl?.queryParameter(ManagerQuery))
+            assertEquals("work", request.getHeader(ManagerHeader))
+        }
+    }
+
+    @Test fun anOlderHubWithoutProjectsHidesTheSectionWhileOtherErrorsFail() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not found"}"""))
+            assertNull(api.usageProjects())
+
+            server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"broken"}"""))
+            try {
+                api.usageProjects()
+                fail("a non-404 project answer must fail")
+            } catch (failure: HubFailure) {
+                assertEquals(500, failure.status)
+            }
+        }
+    }
+
+    @Test fun projectDetailDecodesEveryBreakdownAndEncodesTheOpaqueKey() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"usage":{"zone":"Asia/Shanghai","stored":true,
+                "project":{"key":"team/repo & app","kind":"repo","group":"development","name":"acme/app","host":"git.example",
+                           "machines":2,"share":0.4,"tokens":{"in":5,"cache_write":6,"cache_read":7,"out":8}},
+                "ranges":[{"days":1,"total":{"in":1,"cache_write":2,"cache_read":3,"out":4,"req":9},"share":0.25,"cache_hit":0.875,
+                           "machines":[{"key":"mac","name":"MacBook","tokens":{"in":1}}],
+                           "agents":[{"key":"codex","tokens":{"in":2}}],
+                           "models":[{"key":"gpt-6.2-sol","tokens":{"in":3}}],
+                           "launchers":[{"key":"","tokens":{"in":4}}],
+                           "places":[{"machine":"mac","machine_name":"MacBook","place":"src/app","worktree":true,"tokens":{"in":4}}]},
+                          {"days":3,"total":{},"share":0,"cache_hit":0},
+                          {"days":7,"total":{},"share":0,"cache_hit":0}],
+                "days":[{"date":"2026-11-16","tokens":{"in":2}},{"date":"2026-11-17","tokens":{"in":3}}],
+                "hours":[{"t":1760000000,"hour":9,"tokens":{"in":4}}]}}"""))
+
+            val answer = api.usageProjectDetail("team/repo & app")
+            assertEquals("team/repo & app", answer.project.key)
+            assertEquals(26L, answer.project.tokens.total)
+            assertEquals(10L, answer.ranges.first().total.total)
+            assertEquals(0.875, answer.ranges.first().cacheHit, 0.0)
+            assertEquals("MacBook", answer.ranges.first().machines.single().name)
+            assertEquals("codex", answer.ranges.first().agents.single().key)
+            assertEquals("gpt-6.2-sol", answer.ranges.first().models.single().key)
+            assertEquals("", answer.ranges.first().launchers.single().key)
+            assertTrue(answer.ranges.first().places.single().worktree)
+            assertEquals(listOf("2026-11-16", "2026-11-17"), answer.days.map { it.date })
+            assertEquals(9, answer.hours.single().hour)
+
+            val request = server.takeRequest()
+            assertEquals("/api/v1/usage/projects/detail", request.requestUrl?.encodedPath)
+            assertEquals("team/repo & app", request.requestUrl?.queryParameter("key"))
+        }
+    }
+
+    @Test fun anUnknownProjectKeepsTheDetails404AsAnError() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"no such project"}"""))
+
+            try {
+                api.usageProjectDetail("gone")
+                fail("a project no machine resolves to must fail")
+            } catch (failure: HubFailure) {
+                assertEquals(404, failure.status)
+            }
         }
     }
 }

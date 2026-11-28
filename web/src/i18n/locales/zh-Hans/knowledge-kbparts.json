@@ -1,10 +1,10 @@
 {
-  "importance": "重要级 {level}",
+  "importance": "重要程度 {level}",
   "importance_P0": "P0 最重要",
   "importance_P1": "P1 重要",
   "importance_P2": "P2 一般",
   "importance_P3": "P3 次要",
-  "relevance_title": "和我有多相关，0–100，越大越相关",
+  "relevance_title": "与我的相关程度（0–100，数值越高越相关）",
   "relevance": "与我相关 {value} 分",
   "collapse": "收起",
   "project_kind": "{kind}项目",

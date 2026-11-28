@@ -111,6 +111,7 @@
   "read_only_claude_inbox": "Persona can’t use this Claude session’s message channel (unknown version or missing key): view only here; reply on the computer",
   "attention_claude_computer": "It’s waiting on a question or a permission prompt that can only be answered on the computer. Next time, start Claude in tmux or from Persona to answer from your phone",
   "attention_claude_desktop_computer": "It’s waiting on a Claude Desktop safety review or computer-only prompt that Claude Code only allows approving on the computer. Handle it on the computer",
+  "attention_claude_plugin_passed_over": "Claude Code’s managed settings policy bypassed Persona’s plugin permission hooks, so this request can only be approved on the computer. Approve it on the computer, or start the session from Persona in a terminal engine to approve from your phone",
   "attention_claude_answer": "It’s asking you a question: answer it on its card, or reply to answer",
   "work_agent_first_dialog": "A dialog is open in the terminal and blocked retrying the first message. Handle the dialog in the terminal and check whether the first message already started before resending.",
   "model_refusal": "Claude Code refusal notice ({subtype}).",

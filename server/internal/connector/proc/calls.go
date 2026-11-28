@@ -147,9 +147,27 @@ func (c *Conn) Actions() []proto.Tool {
 }
 
 func (c *Conn) Describe(ctx context.Context, name string, args json.RawMessage) (connector.Action, string, error) {
+	act, summary, _, err := c.DescribeWithApproval(ctx, name, args, "")
+	return act, summary, err
+}
+
+// DescribeWithApproval calls actions.describe, optionally advertising approvalProtocol when the hub gate has a matching
+// guarded auto-confirm policy for this call. Any unnegotiated auto_confirm grant is dropped.
+func (c *Conn) DescribeWithApproval(ctx context.Context, name string, args json.RawMessage, approvalProtocol string) (connector.Action, string, *connector.AutoConfirmGrant, error) {
 	var out serve.DescribeResult
-	err := c.call(ctx, serve.MDescribe, serve.CallParams{Name: name, Args: args, CallFrom: serve.CallFromContext(ctx)}, &out)
-	return out.Action, out.Summary, err
+	err := c.call(ctx, serve.MDescribe, serve.CallParams{
+		Name:             name,
+		Args:             args,
+		ApprovalProtocol: approvalProtocol,
+		CallFrom:         serve.CallFromContext(ctx),
+	}, &out)
+	if err != nil {
+		return connector.Action{}, "", nil, err
+	}
+	if approvalProtocol == "" {
+		return out.Action, out.Summary, nil, nil
+	}
+	return out.Action, out.Summary, out.AutoConfirm, nil
 }
 
 // Do sends the write once, with an id of its own: the program runs one id at most once, and Do never sends it again
@@ -162,10 +180,29 @@ func (c *Conn) Do(ctx context.Context, name string, args json.RawMessage) (strin
 // DoRef is Do with the message_ref the program answered, when it did (connector.RefActions): a program that does not
 // know the field answers the text alone, and the ref is empty.
 func (c *Conn) DoRef(ctx context.Context, name string, args json.RawMessage) (connector.DoResult, error) {
+	return c.DoWithApproval(ctx, name, args, connector.AutoConfirmApproval{})
+}
+
+// DoWithApproval sends actions.do with optional guarded auto-confirm approval fields (approval_mode and approval_token),
+// preserving exact raw args JSON and a fresh hub-generated request_id.
+func (c *Conn) DoWithApproval(ctx context.Context, name string, args json.RawMessage, approval connector.AutoConfirmApproval) (connector.DoResult, error) {
+	if (approval.Mode == "") != (approval.Token == "") {
+		return connector.DoResult{}, errors.New("actions.do requires approval_mode and approval_token together")
+	}
+	if approval.Mode != "" && approval.Mode != connector.ApprovalModeAutoConfirm {
+		return connector.DoResult{}, fmt.Errorf("actions.do: unsupported approval_mode %q", approval.Mode)
+	}
 	var id [16]byte
 	_, _ = rand.Read(id[:])
 	var out serve.CallResult
-	err := c.call(ctx, serve.MDo, serve.DoParams{Name: name, Args: args, RequestID: hex.EncodeToString(id[:]), CallFrom: serve.CallFromContext(ctx)}, &out)
+	err := c.call(ctx, serve.MDo, serve.DoParams{
+		Name:          name,
+		Args:          args,
+		RequestID:     hex.EncodeToString(id[:]),
+		ApprovalMode:  approval.Mode,
+		ApprovalToken: approval.Token,
+		CallFrom:      serve.CallFromContext(ctx),
+	}, &out)
 	return connector.DoResult{Text: out.Text, MessageRef: out.MessageRef}, err
 }
 
@@ -235,23 +272,25 @@ func (c *Conn) HistoryAnchors(ctx context.Context, q connectorwire.HistoryAnchor
 
 // The capabilities Conn answers for: what the hub's pipes look for.
 var (
-	_ connector.Accounts       = (*Conn)(nil)
-	_ connector.Login          = (*Conn)(nil)
-	_ connector.Archive        = (*Conn)(nil)
-	_ connector.Inbox          = (*Conn)(nil)
-	_ connector.ReadTools      = (*Conn)(nil)
-	_ connector.Actions        = (*Conn)(nil)
-	_ connector.RefActions     = (*Conn)(nil)
-	_ connector.Threads        = (*Conn)(nil)
-	_ connector.Events         = (*Conn)(nil)
-	_ connector.Runner         = (*Conn)(nil)
-	_ connector.Items          = (*Conn)(nil)
-	_ connector.ArchiveMedia   = (*Conn)(nil)
-	_ connector.Snapshot       = (*Conn)(nil)
-	_ connector.Grouper        = (*Conn)(nil)
-	_ connector.EventWriter    = (*Conn)(nil)
-	_ connector.History        = (*Conn)(nil)
-	_ connector.HistoryAnchors = (*Conn)(nil)
+	_ connector.Accounts            = (*Conn)(nil)
+	_ connector.Login               = (*Conn)(nil)
+	_ connector.Archive             = (*Conn)(nil)
+	_ connector.Inbox               = (*Conn)(nil)
+	_ connector.ReadTools           = (*Conn)(nil)
+	_ connector.Actions             = (*Conn)(nil)
+	_ connector.RefActions          = (*Conn)(nil)
+	_ connector.ApprovalActions     = (*Conn)(nil)
+	_ connector.IdentifiedConnector = (*Conn)(nil)
+	_ connector.Threads             = (*Conn)(nil)
+	_ connector.Events              = (*Conn)(nil)
+	_ connector.Runner              = (*Conn)(nil)
+	_ connector.Items               = (*Conn)(nil)
+	_ connector.ArchiveMedia        = (*Conn)(nil)
+	_ connector.Snapshot            = (*Conn)(nil)
+	_ connector.Grouper             = (*Conn)(nil)
+	_ connector.EventWriter         = (*Conn)(nil)
+	_ connector.History             = (*Conn)(nil)
+	_ connector.HistoryAnchors      = (*Conn)(nil)
 )
 
 // Snapshot is the program's live state (snapshot.get).

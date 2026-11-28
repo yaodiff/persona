@@ -1,6 +1,6 @@
 // A model's setup flyout (#5032, after Cindy's ModelConfigFlyout and UnifiedFlyoutHost): 264 px, outside the panel's left
 // edge (right when the left has no room), its top a little above the row's. From the top: the model's name and a star;
-// the provider and the context window; the effort slider (two levels or more) and Fast (where the model has it); the
+// the provider and the context window; the effort slider (two levels or more) and Speed (where the model offers it); the
 // Agent that runs it; and a footer that is as tall in its three states: recommended, customized (with "Reset to
 // recommended"), a saved favorite (with "Remove from favorites"). Opened by Customize, a right-click or ←, never by
 // hover; a click outside closes it, and so does Esc (the panel's key handler, which gives the focus back to the row).
@@ -12,13 +12,14 @@ import { contextSize, flyoutPlace, priceAmount, priceTier, shownEffort, type Eng
 import { AgentMark } from "../AgentMark";
 import { cx } from "../atoms";
 import { Icon } from "../icons";
+import { SpeedSwitch } from "./Columns";
 import { EffortSlider } from "./EffortSlider";
 
 const FLYOUT_WIDTH = 264;
 
 export type FlyoutMode = "recommended" | "customized" | "favorite";
 
-export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, setupElsewhere, onEngine, onEffort, onFast, onReset, onStar, onClose }: {
+export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, setupElsewhere, onEngine, onEffort, onSpeed, onReset, onStar, onClose }: {
   /** The row it belongs to, and the panel it sits beside. */
   rowEl: HTMLElement;
   panelEl: HTMLElement;
@@ -37,11 +38,11 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
   /** The engines the model runs with here (lib/model-panel.ts engineChoices), its own first: more than one draws them as
    *  small pills, the others picked on a click; absent or one: the row's engine as a static block. */
   engines?: EngineChoice[];
-  /** The panel's columns hold the effort and Fast (#12315): the flyout keeps the rarer setup only. */
+  /** The panel's columns hold the effort and speed (#12315): the flyout keeps the rarer setup only. */
   setupElsewhere?: boolean;
   onEngine?: (choice: EngineChoice) => void;
   onEffort: (effort: string) => void;
-  onFast: (on: boolean) => void;
+  onSpeed: (speed: string) => void;
   onReset: () => void;
   onStar: () => void;
   onClose: () => void;
@@ -87,7 +88,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
 
   useEffect(() => {
     if (!focusOnOpen) return;
-    const first = ['[role="slider"]:not([aria-disabled])', "[data-fast-toggle]:not(:disabled)", "button:not(:disabled)"];
+    const first = ['[role="slider"]:not([aria-disabled])', "[data-panel-speed]:not([aria-disabled])", "button:not(:disabled)"];
     for (const sel of first) {
       const el = ref.current?.querySelector<HTMLElement>(sel);
       if (!el) continue;
@@ -98,7 +99,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
   }, [row.key]);
 
   const slider = !setupElsewhere && model.efforts.length > 1;
-  const fast = !setupElsewhere && model.fast;
+  const speeds = !setupElsewhere && model.speeds;
   // none set and no default known (a Claude Code model for a new Agent): the slider says so rather than sit on the lowest
   const effort = shownEffort(setup, model);
   const name = model.name;
@@ -132,26 +133,14 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
         {provider.name}
         {model.context ? ` · ${t("ui-modelpanel.context", { value: contextSize(model.context) })}` : ""}
       </div>
-      {(slider || fast) && (
-        <div className="flex items-center gap-2 pt-3.5">
-          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.variants ? undefined : model.defaultEffort} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />}
-          {fast && (
-            <button
-              type="button"
-              data-fast-toggle
-              disabled={disabled}
-              aria-pressed={Boolean(setup.fast)}
-              title={t("ui-modelpanel.fast")}
-              aria-label={t("ui-modelpanel.fast")}
-              onClick={() => onFast(!setup.fast)}
-              className={cx(
-                "ml-auto flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-                setup.fast ? "border-transparent bg-fast-tint text-fast" : "border-line-strong text-ink-3 enabled:hover:bg-hover-2",
-              )}
-            >
-              <Icon name="bolt" size={14} className="fill-current" />
-            </button>
-          )}
+      {slider && (
+        <div className="pt-3.5">
+          <EffortSlider stops={model.efforts} value={effort} recommended={model.variants ? undefined : model.defaultEffort} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />
+        </div>
+      )}
+      {speeds && (
+        <div className="pt-2">
+          <SpeedSwitch options={speeds} speed={setup.speed} disabled={disabled} onSpeed={onSpeed} />
         </div>
       )}
       {!setupElsewhere && (model.effortUnavailable || model.effortNote) && (

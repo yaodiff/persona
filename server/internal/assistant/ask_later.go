@@ -58,6 +58,7 @@ type askLaterBook struct {
 // askLaterStart puts ix up without waiting for its answer: its record first (a card whose answer could reach nobody
 // after a restart is not raised), then the card. It returns what the tool says.
 func (s *Service) askLaterStart(ctx context.Context, ix proto.Interaction) (string, error) {
+	// Decision rights live in ToolInput; publication and restart use the same source classifier.
 	ix.Resumable = true // it outlives a manager restart and its node's connection: no call waits on it
 	ix = s.ownCard(ctx, ix)
 	s.loadAskLater(ctx) // the ones a manager before this one left go back first: this read must not stand in for theirs
@@ -217,7 +218,7 @@ func (s *Service) askLaterEnded(ctx context.Context, q *question, r proto.Resolu
 	title := "提问「" + clip(oneLine(questionLine(ix)), 40) + "」" // i18n-ignore: a label of the relay queue, as a task notice's
 	// The owner's answer goes in though they are talking in the conversation (relayMsg.Owner); a card that closed or
 	// ran out is the system's to tell and waits for them as any late answer does (relay_presence.go).
-	answered := !r.Cancel && !r.Dismiss && len(r.Answers) > 0
+	answered := r.AnsweredBy == "" && !r.Cancel && !r.Dismiss && len(r.Answers) > 0
 	if err := s.relayToAsker(ctx, a, title, text, answered); err != nil {
 		if time.Since(ix.ExpiresAt) < askLaterKeep {
 			return err
@@ -270,7 +271,7 @@ func (s *Service) askLaterMessage(ctx context.Context, ix proto.Interaction, r p
 
 // renderAskLater writes the message for r, the end of ix's card.
 func (s *Service) renderAskLater(ctx context.Context, ix proto.Interaction, r proto.Resolution) string {
-	m := prompts.AskLater{When: ix.CreatedAt.In(s.location(ctx)).Format("01-02 15:04")}
+	m := prompts.AskLater{Internal: questionOwnerSource(ix) == "", When: ix.CreatedAt.In(s.location(ctx)).Format("01-02 15:04")}
 	for _, q := range ix.Questions {
 		m.Questions = append(m.Questions, contextText(q.Question))
 	}
@@ -283,6 +284,8 @@ func (s *Service) renderAskLater(ctx context.Context, ix proto.Interaction, r pr
 			}
 		}
 		m.Missing = len(m.Answers) < len(ix.Questions)
+	case s.askLaterExpired(ix, r) && questionOwnerSource(ix) == "":
+		// An internal timeout cannot manufacture an owner decision or take a default.
 	case s.askLaterExpired(ix, r) && s.askLaterSpokeOf(ix.ID):
 		// The owner wrote in the conversation while the card was up, which may have been their answer (a waiting
 		// question is taken back at that point): no to-do, and no default taken at a deadline.

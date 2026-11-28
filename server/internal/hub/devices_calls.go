@@ -8,18 +8,23 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // ---- calls through the manager ----
 
-// deviceBusMethod keeps cancellation scoped to the long file operations whose node side supports it.
-func deviceBusMethod(method string) string {
-	if method == "file.copy" || method == "file.zip" {
-		return devicewire.MethodFileCall
+// deviceBusMethod keeps cancellation scoped to guarded retirement and the long file operations the node can cancel.
+func deviceBusMethod(method string) buswire.Method[devicewire.NodeCall, json.RawMessage] {
+	if method == nodeproto.StopIfIdle {
+		return devicewire.RetireCallMethod
 	}
-	return devicewire.MethodCall
+	if method == "file.copy" || method == "file.zip" {
+		return devicewire.FileCallMethod
+	}
+	return devicewire.CallMethod
 }
 
 // busNode is a machine's node as the hub reaches it: through the manager.
@@ -70,15 +75,14 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 	if dl, ok := ctx.Deadline(); ok {
 		p.TimeoutMS = managerTimeout(time.Until(dl)).Milliseconds()
 	}
-	var res json.RawMessage
 	busMethod := deviceBusMethod(method)
-	err = b.h.callBusAsIs(ctx, owner, busMethod, p, &res)
+	caller := managerBusCaller{id: owner, call: b.h.callBusAsIs}
+	res, err := buswire.Call(ctx, caller, busMethod, p)
 	var rpcErr *rpc.Error
-	if busMethod == devicewire.MethodFileCall && errors.As(err, &rpcErr) && rpcErr.Code == bus.CodeUnknownMethod {
+	if busMethod == devicewire.FileCallMethod && errors.As(err, &rpcErr) && rpcErr.Code == bus.CodeUnknownMethod {
 		// An older manager rejects file_call before reaching the node. Preserve its existing copy / zip behavior;
 		// only this explicit refusal may repeat the request, and the fallback intentionally does not propagate cancel.
-		res = nil
-		err = b.h.callBusAsIs(ctx, owner, devicewire.MethodCall, p, &res)
+		res, err = buswire.Call(ctx, caller, devicewire.CallMethod, p)
 	}
 	if err != nil {
 		return deviceError(b.id, err)

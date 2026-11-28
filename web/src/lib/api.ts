@@ -10,6 +10,7 @@ import { HubUnreachableError, isNetworkFailure, isProgramError } from "./network
 import type { Item } from "./types";
 import { clearFeedCache } from "./feed-cache";
 import { credentialEpoch, renewCredentialEpoch } from "./credential-epoch";
+import { clientInstance } from "./device-id";
 
 let ownerToken: string | undefined;
 let ownerEpoch: string | undefined;
@@ -129,8 +130,9 @@ export function handleUnauthorized(fn: () => void): () => void {
 
 /**
  * Who this page is to the hub: the platform and version its socket's client_hello names, and every request's
- * X-Persona-Client. The hub answers a request with what this page's socket declared (MCP forms and links: only to a
- * request whose platform and version match a connection that declared them, docs/protocol/protocol.md "MCP elicitation").
+ * X-Persona-Client and X-Persona-Features. X-Persona-Client-Instance names this tab and matches client_hello.instance,
+ * so approval_mirrors cannot be borrowed from another tab. MCP forms and links are answered only to a request whose
+ * platform and version match a connection that declared them (docs/protocol/protocol.md "MCP elicitation").
  */
 export const CLIENT_PLATFORM = "web";
 export const CLIENT_VERSION = "1";
@@ -146,7 +148,8 @@ export const CLIENT_VERSION = "1";
  * limit, so a dead link is still dropped. Only the timeout is asked for: the 20 s interval stays the hub's.
  */
 export const CLIENT_PONG_TIMEOUT = 45;
-export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring", "closeout.markdown.v1", "agent_message_hold", "tool_views"];
+// Keep the socket replay features at 4–6 so the store can reuse them without repeating their strings.
+export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "approval_mirrors", "persona_card_ring", "closeout.markdown.v1", "agent_message_hold", "tool_views"];
 
 // A read the hub has not answered by then fails instead of loading forever (#4492): a restarting hub, a stuck node or a
 // half-dead network. Longer than the hub's own cut-offs for asking a computer (30–40 s), so when the hub has an error
@@ -169,7 +172,7 @@ export class HubTimeoutError extends Error {
   }
 }
 
-type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; isAuthContextCurrent?: () => boolean; onResponse?: (headers: Headers, status: number) => void; readBlob?: (response: Response, signal?: AbortSignal | null) => Promise<Blob>; allowHtmlResponse?: boolean; dedupe?: boolean };
+type ApiOptions = RequestInit & { json?: unknown; query?: Record<string, string>; token?: string; tokenOwner?: string; isAuthContextCurrent?: () => boolean; onResponse?: (headers: Headers, status: number) => void; readBlob?: (response: Response, signal?: AbortSignal | null) => Promise<Blob>; allowHtmlResponse?: boolean; dedupe?: boolean };
 
 /** Detach in-flight GET entries so subsequent reads issue a fresh request (writes, store mutations, resets). */
 export function invalidateInFlightGets(prefix?: string): void {
@@ -194,6 +197,7 @@ function buildHeaders(path: string, init: ApiOptions): Headers {
   // the hub writes its error and status text in the interface language (docs/protocol/i18n.md "Protocol")
   if (!headers.has("Accept-Language")) headers.set("Accept-Language", currentLanguage());
   CLIENT_HEADERS.forEach(name => headers.set(name, `${CLIENT_PLATFORM}/${CLIENT_VERSION}`));
+  headers.set(CLIENT_HEADERS[0] + "-Instance", clientInstance);
   if (!headers.has("X-Persona-Features")) headers.set("X-Persona-Features", CLIENT_FEATURES.join(","));
   const op = OP_HEADERS.map(name => headers.get(name)).find(Boolean);
   if (op) OP_HEADERS.forEach(name => headers.set(name, op));
@@ -206,6 +210,11 @@ function buildHeaders(path: string, init: ApiOptions): Headers {
 function dedupeKey(path: string, owner: string | undefined, init: ApiOptions, headers: Headers): string {
   const entries = [...headers.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify([path, owner ?? "", init.token ?? "", init.allowHtmlResponse ? 1 : 0, init.credentials ?? "", init.cache ?? "", entries]);
+}
+
+function withQuery(path: string, query?: Record<string, string>): string {
+  const q = new URLSearchParams(query);
+  return q.size ? `${path}${path.includes("?") ? "&" : "?"}${q}` : path;
 }
 
 /** `tokenOwner`: explicit credentials opt into 401 recovery only while both the token and credential generation are current.
@@ -224,15 +233,16 @@ export function apiBlob(path: string, init: ApiOptions & { timeout?: number } = 
 }
 
 async function call<T>(path: string, init: ApiOptions & { timeout?: number }, binary: boolean): Promise<T> {
-  const { timeout, dedupe, ...rest } = init;
+  const { timeout, dedupe, query, ...rest } = init;
+  const requestPath = withQuery(path, query);
   const read = (init.method ?? "GET").toUpperCase() === "GET";
   if (!read) inFlightGets.clear();
   const limit = timeout ?? (read ? READ_TIMEOUT_MS : 0);
   const canDedupe = !binary && read && dedupe !== false && init.body === undefined && init.json === undefined && !init.isAuthContextCurrent;
-  if (canDedupe) return callSharedGet<T>(path, rest, limit);
+  if (canDedupe) return callSharedGet<T>(requestPath, rest, limit);
   if (!limit) {
     try {
-      return await request<T>(path, rest, binary);
+      return await request<T>(requestPath, rest, binary);
     } finally {
       if (!read) inFlightGets.clear();
     }
@@ -251,7 +261,7 @@ async function call<T>(path: string, init: ApiOptions & { timeout?: number }, bi
   try {
     for (let tries = 0; ; tries++) {
       try {
-        return await request<T>(path, { ...rest, signal: controller.signal }, binary);
+        return await request<T>(requestPath, { ...rest, signal: controller.signal }, binary);
       } catch (e) {
         // asking again is safe for a read: a gap gets a couple more tries, all inside the read's own time limit
         if (!read || tries >= readRetryMs().length || !isTransient(e)) throw e;
@@ -543,6 +553,13 @@ async function bodyText(res: Response): Promise<string> {
   }
 }
 
+/** The hub itself answered with a sentence for the reader: a to-do write's refusal (it says what reached the Agent,
+ *  `delivered`) with its own error and a business code. Other coded 5xx bodies keep the generic line. */
+function hubWorded(e: ApiError): boolean {
+  return e.isJson && typeof e.body.error === "string" && e.body.error.trim() !== "" && !!e.code && e.code !== "internal"
+    && typeof e.body.delivered === "string";
+}
+
 export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
     const business = businessFailureText(e);
@@ -554,7 +571,12 @@ export function errorText(e: unknown): string {
     if (e.status === 404 || e.code === "not_found" || /^not[ _]found$/i.test(e.message.trim())) {
       return t("lib-api.not_found", { detail });
     }
-    if (e.status === 502 || e.status === 503 || e.status === 504) return t("lib-api.hub_unavailable", { detail });
+    // The hub's own answer says why in the reader's language (an accept its Agent did not take, #17431): that, not
+    // "the service couldn't complete this request". The generic line is for what stands in front of the hub (an empty
+    // or non-JSON gateway page) and for an internal error, whose words are not for the reader.
+    if (e.status === 502 || e.status === 503 || e.status === 504) {
+      return hubWorded(e) ? e.message : t("lib-api.hub_unavailable", { detail });
+    }
     if (e.status >= 500 && e.status < 600) return t("lib-api.server_error", { detail });
     return e.message;
   }

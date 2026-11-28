@@ -55,10 +55,10 @@ afterEach(() => {
 
 describe("auto-upgrade switch", () => {
   it.each([
-    { name: "on, its switch on", enabled: true, own: true, paused: undefined, checked: "true", greyed: false, footer: "扩展空闲时自动装上" },
-    { name: "on, its switch off", enabled: true, own: false, paused: undefined, checked: "false", greyed: false, footer: "扩展空闲时自动装上" },
-    { name: "off, its switch on", enabled: false, own: true, paused: "disabled", checked: "true", greyed: true, footer: "恢复你原来的自动升级设置" },
-    { name: "off, its switch off", enabled: false, own: false, paused: "disabled", checked: "false", greyed: true, footer: "恢复你原来的自动升级设置" },
+    { name: "on, its switch on", enabled: true, own: true, paused: undefined, checked: "true", greyed: false, footer: "扩展空闲时自动安装" },
+    { name: "on, its switch off", enabled: true, own: false, paused: undefined, checked: "false", greyed: false, footer: "扩展空闲时自动安装" },
+    { name: "off, its switch on", enabled: false, own: true, paused: "disabled", checked: "true", greyed: true, footer: "恢复原有的自动升级设置" },
+    { name: "off, its switch off", enabled: false, own: false, paused: "disabled", checked: "false", greyed: true, footer: "恢复原有的自动升级设置" },
   ])("$name", async ({ enabled, own, paused, checked, greyed, footer }) => {
     detail = { ...BASE, enabled, status: enabled ? "running" : "disabled", auto_upgrade: own, auto_upgrade_paused: paused };
     act(() => root.render(<Extensions open="example-ui" onOpen={() => {}} />));

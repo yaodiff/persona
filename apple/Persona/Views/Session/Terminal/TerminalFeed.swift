@@ -57,6 +57,8 @@ final class TerminalFeed {
     @ObservationIgnored private var epoch: String?
     @ObservationIgnored private var seq = 0
     @ObservationIgnored private var subscribed = false
+    /// Hub page presence survives an unsupported stream until this page leaves.
+    @ObservationIgnored private var viewing = false
     /// Stream unavailable for this session (old node / herdr): stay on polling.
     @ObservationIgnored private var unsupported = false
     @ObservationIgnored private var takeover = false
@@ -104,6 +106,7 @@ final class TerminalFeed {
         case .stream:
             guard model.isLive(key.group) else {
                 subscribed = false // the connection's hello subscribes again
+                viewing = false
                 if failure == nil { failure = Self.linkDown }
                 // The hub no longer knows who drives it: taking it over again, no keys until it says so (as the web).
                 if control == .active { control = .starting }
@@ -126,13 +129,21 @@ final class TerminalFeed {
                 lastOK = now()
             }
         case .poll:
+            if !model.isLive(key.group) {
+                subscribed = false
+                viewing = false
+            } else if !viewing, now() >= nextTry {
+                subscribe(model, continuing: false)
+            }
             if !paused, now() >= nextTry { await refresh(model) }
         }
     }
 
     func stop(_ model: AppModel) {
-        if mode == .stream { model.terminalUnsubscribe(key) }
+        model.terminalUnsubscribe(key)
         subscribed = false
+        viewing = false
+        unsupported = false // a retained page registers again when it becomes visible
         waitingSince = nil // back on screen it asks afresh, with a wait of its own
     }
 
@@ -172,21 +183,24 @@ final class TerminalFeed {
     }
 
     private func subscribe(_ model: AppModel, continuing: Bool) {
-        let drive = willDrive(model)
+        let stream = !unsupported && model.canStreamTerminal(key.group)
+        if !stream, viewing { return }
+        let drive = stream && willDrive(model)
         if drive, control == .off { control = .starting }
         // Answered for sure: a stream from its whole frame, and taking it over (terminal_control). One continuing from
         // the frame it has may hear nothing of an idle pane, which is no failure.
         let fresh = !continuing || epoch == nil
-        if waitingSince == nil, fresh || control == .starting { waitingSince = now() }
+        if stream, waitingSince == nil, fresh || control == .starting { waitingSince = now() }
         framed = !fresh
-        let sent = model.terminalSubscribe(key, epoch: continuing ? epoch : nil, after: seq, grid: drive ? phoneGrid : nil, takeover: takeover) {
+        let sent = model.terminalSubscribe(key, epoch: continuing ? epoch : nil, after: seq, grid: drive ? phoneGrid : nil, takeover: drive && takeover) {
             [weak self, weak model] event in
             guard let self, let model else { return }
             self.receive(event, model)
         }
         subscribed = sent
+        viewing = sent
         if !sent { // nothing went out (no socket yet, the session's row not in yet): again in a moment, still bounded
-            if waitingSince == nil { waitingSince = now() }
+            if stream, waitingSince == nil { waitingSince = now() }
             nextTry = now().addingTimeInterval(1)
             return
         }
@@ -306,7 +320,9 @@ final class TerminalFeed {
             // until the next try is answered (with "Wrap" between tries, it read as a mirror that had given up, #6327).
             if offline, control == .active || control == .starting { control = .off } else if control == .active { control = .starting }
         case .reconnected:
-            if mode == .stream { subscribe(model, continuing: true) }
+            subscribed = false
+            viewing = false
+            subscribe(model, continuing: true)
         case .control(let state, _, _, let why):
             controlChanged(state, why: why)
         }

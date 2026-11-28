@@ -76,7 +76,7 @@ describe("launcher quota", () => {
     expect(quotaUnlimited({ gateway: "g" })).toBe(true);
     expect(quotaUnlimited({ gateway: "g", note: "n" })).toBe(false);
     const footer = quotaFooter({ machine: "m1", checked_at: "t", quota: { gateway: "g", key_name: "k" } }, () => "示例电脑", () => "刚刚");
-    expect(footer).toBe("网关上的 Key 名：k；由 示例电脑 读取，Key 不离开那台电脑；刚刚读的，一分钟内再打开用这次的。");
+    expect(footer).toBe("网关 Key 名称：k；由 示例电脑 读取，Key 始终保留在该电脑本地；刚刚读取，1 分钟内再次打开将沿用此结果。");
     expect(quotaFooter({}, (x) => x, () => "")).toBe("");
   });
 });

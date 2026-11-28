@@ -566,7 +566,7 @@ export function buildRepoMachineTree(all: Session[], machines: Machine[], option
       foldKey: `repo-machine:${m.id}`,
       repos,
       sessions: sessions ?? [],
-      needs: (sessions ?? []).filter((s) => stateOf(s) === "needs_you").length,
+      needs: (sessions ?? []).filter((s) => s.view ? s.view.counted : stateOf(s) === "needs_you").length,
     });
   }
   return out;

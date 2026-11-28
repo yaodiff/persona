@@ -1,10 +1,10 @@
 {
-  "details": "Agent 行显示详情",
-  "details_hint": "Agent 行多一行：模型、上下文、多久没动、目录。默认关。",
+  "details": "显示 Agent 详情",
+  "details_hint": "在每个 Agent 列表项下方增加一行，显示模型、上下文、空闲时长与目录。默认关闭。",
   "label": "上下文 {percent}%",
   "current_tokens": "当前上下文 {tokens} 个 token",
-  "summary": "上下文 {used}%（已用），还剩 {left}%",
-  "hint_ok": "上下文是 Agent 在这段对话里能记住的量，用完会自动压缩：较早的内容只留摘要。",
-  "hint_warn": "快满了，满了会自动压缩，较早的内容只留摘要。想先收个尾，可以发 /compact 主动压缩，或者开一个新 Agent 接着做。",
+  "summary": "上下文已用 {used}%，剩余 {left}%",
+  "hint_ok": "上下文表示 Agent 在当前对话中能够记住的内容容量。用满后会自动压缩，较早的对话内容将仅保留摘要。",
+  "hint_warn": "上下文即将用满。用满后会自动压缩，较早的内容将仅保留摘要。如需先整理收尾，可发送 /compact 手动压缩，或新建一个 Agent 继续处理。",
   "tokens": "{used} / {window} token"
 }

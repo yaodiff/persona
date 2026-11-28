@@ -34,6 +34,8 @@ export function sidebarActiveKey(route: Route, main?: string, from?: string): st
       return "machines";
     case "agents":
       return r.id ? `a:${r.id}` : "agents";
+    case "terminal":
+      return r.mid && r.id ? `term:${r.mid}/${r.id}` : "terminal";
     case "extension":
       return extensionNavKey(r.extension, r.ui);
     default:

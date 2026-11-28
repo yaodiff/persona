@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/botport"
+	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
@@ -22,6 +23,15 @@ func needsLarkModule(t testing.TB) {
 func needsLarkLayer(t testing.TB) {
 	t.Helper()
 	if !larkhost.InBuild(moduleswitch.Set{}) {
+		t.Skip("the lark module is not in this build")
+	}
+}
+
+// needsLarkCLI skips a test that runs lark-cli (the knowledge base's Lark import) in a build without the lark module:
+// the adapter is the module's (internal/cliport).
+func needsLarkCLI(t testing.TB) {
+	t.Helper()
+	if !cliport.Available(moduleswitch.Set{}) {
 		t.Skip("the lark module is not in this build")
 	}
 }

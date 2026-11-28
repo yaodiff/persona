@@ -3,6 +3,14 @@ import Observation
 import UIKit
 import PersonaWire
 
+/// The predicate a retention sentence uses: kept for 14 days, or kept forever. `0` is forever (#16412).
+nonisolated enum RecordingRetentionText {
+    static func kept(_ days: Int) -> String {
+        days == 0 ? String(localized: "kept forever")
+            : String(localized: "kept for \(days) days")
+    }
+}
+
 /// The hub's side of a recording (docs/protocol/protocol.md「Recording sync」, #3235): what `PUT /api/v1/recordings/{id}` takes.
 /// Text only: the audio never leaves the device.
 nonisolated struct RecordingUpload: Encodable, Sendable {
@@ -153,7 +161,8 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
 
 /// Keeps the knowledge base's copy of each recording's transcript in step with this device: uploads every new revision
 /// (partial transcripts too), deletes what is deleted here, retries with backoff while the hub is away, and drops
-/// recordings (audio included) once they are older than the hub's retention (`days`, 14 by default).
+/// recordings (audio included) once they are older than the hub's audio retention (`audio_days`, 14 by default; `days`
+/// from an older hub).
 /// What was sent is kept in `sync.json` beside the recordings, so a relaunch only sends what changed.
 @Observable
 final class RecordingSync {
@@ -166,11 +175,18 @@ final class RecordingSync {
         var rejected: [UUID: Int64] = [:]
         /// Deleted here, the hub not told yet.
         var deletes: Set<UUID> = []
-        /// The hub's retention in days (`GET /api/v1/recordings`).
+        /// The hub's legacy `days` (`GET /api/v1/recordings`, 1–365), kept for this app on both sides of an upgrade:
+        /// an older build reads this field and must never see 0 or a window past 365.
         var days = RecordingSync.defaultDays
         /// `days` came from the hub at least once: until then nothing here is dropped for its age (the hub may keep
         /// recordings longer than the default).
         var daysKnown = false
+        /// The hub's exact audio window (`audio_days`, 0 is forever). nil from an older hub, whose `days` is the
+        /// audio window.
+        var audioDays: Int? = nil
+        /// The hub's text retention (`text_days`, else the older `days`; 0 is forever). nil only before a hub has said
+        /// it, when `textRetentionDays` falls back to the stored `days`.
+        var textDays: Int? = nil
         /// All-day recordings: the hub ids of each day's parts past its first (whose id is the day's own), so deleting the
         /// day deletes every part there (docs/assistant/day-recap.md "Parts"). nil in a file from before.
         var dayParts: [UUID: [UUID]]? = nil
@@ -187,6 +203,14 @@ final class RecordingSync {
     }
 
     nonisolated static let defaultDays = 14
+    nonisolated static let maxRetentionDays = 3650
+
+    /// How long this device keeps its own copies of recordings: the hub's `audio_days`, else the older `days` (0 is
+    /// forever).
+    var audioRetentionDays: Int { store.audioDays ?? store.days }
+
+    /// How long Knowledge keeps a recording's text: the exact `text_days` (0 is forever), else the older hub's `days`.
+    var textRetentionDays: Int { store.textDays ?? store.days }
 
     private(set) var store: Store
     private(set) var uploading: UUID?
@@ -237,8 +261,8 @@ final class RecordingSync {
     @ObservationIgnored private let now: () -> Date
     /// All-day recordings go their own way (`RecordingDaySync`): this hands them over.
     @ObservationIgnored private let daySync: () -> RecordingDaySync
-    /// The hub's `recording_days` changed: the watch is told how long it may keep audio (`recordingDayKeepDays`).
-    @ObservationIgnored private let recordingDaysChanged: (Int) -> Void
+    /// The hub's audio retention changed: the watch is told how long it may keep audio (`recordingDayKeepDays`).
+    @ObservationIgnored private let audioDaysChanged: (Int) -> Void
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var again = false
     /// `worker` is only waiting out a backoff: a new reason to sync cuts it short.
@@ -251,12 +275,12 @@ final class RecordingSync {
 
     init(library: RecordingLibrary = .shared, api: @escaping () -> APIClient? = { AppModel.shared.api },
          now: @escaping () -> Date = { .now }, daySync: @escaping () -> RecordingDaySync = { RecordingDaySync.shared },
-         recordingDaysChanged: @escaping (Int) -> Void = { RecordingDayPhoneCapabilities.shared.recordingDaysChanged($0) },
+         audioDaysChanged: @escaping (Int) -> Void = { RecordingDayPhoneCapabilities.shared.audioDaysChanged($0) },
          hubFeatures: @escaping () -> Set<String> = { AppModel.shared.hubFeatures },
          recording: @escaping () -> RecordingAllowance = { RecordingModule.allowance }) {
         self.library = library; self.api = api; self.now = now; self.daySync = daySync; self.hubFeatures = hubFeatures
         self.recording = recording
-        self.recordingDaysChanged = recordingDaysChanged
+        self.audioDaysChanged = audioDaysChanged
         file = library.root.appendingPathComponent("sync.json")
         store = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Store.self, from: $0) } ?? Store()
     }
@@ -335,10 +359,12 @@ final class RecordingSync {
         attendanceChanged(id)
     }
 
-    /// Past the hub's retention. An all-day recording never is here: `RecordingDayKeeper` purges it by its day, whether
-    /// or not it is still open.
+    /// Past the hub's audio retention. An all-day recording never is here: `RecordingDayKeeper` purges it by its day,
+    /// whether or not it is still open. Forever (`0`) never expires.
     func isExpired(_ entry: RecordingEntry) -> Bool {
-        store.daysKnown && !entry.isDay && !entry.active && entry.createdAt < now().addingTimeInterval(-Double(store.days) * 86_400)
+        let days = audioRetentionDays
+        return store.daysKnown && days > 0 && !entry.isDay && !entry.active
+            && entry.createdAt < now().addingTimeInterval(-Double(days) * 86_400)
     }
 
     /// Deleted by the user: gone here at once (audio and text), and from the knowledge base when the hub is reachable.
@@ -462,15 +488,24 @@ final class RecordingSync {
         lastProblem = nil
     }
 
-    /// `GET /api/v1/recordings`: the hub's retention, what it already has, and what was deleted elsewhere.
+    /// `GET /api/v1/recordings`: the hub's audio and text retentions, what it already has, and what was deleted
+    /// elsewhere.
     private func reconcile(_ api: APIClient) async -> Bool {
         do {
             let answer: ReconcileAnswer = try await api.get("/api/v1/recordings")
-            if let days = answer.days, (1...365).contains(days), !store.daysKnown || store.days != days {
+            let hadAudio = store.daysKnown ? audioRetentionDays : nil
+            // Keep the old field readable by an older build after a downgrade: it stays the 1–365 cap.
+            if let days = Self.legacyDays(answer.days) {
                 store.days = days
                 store.daysKnown = true
-                recordingDaysChanged(days)
             }
+            // Exact audio_days wins (#16412): 0 and windows past 365 are exact values, not caps.
+            store.audioDays = Self.retentionDays(answer.audioDays)
+            if store.audioDays != nil { store.daysKnown = true }
+            if store.daysKnown, hadAudio != audioRetentionDays { audioDaysChanged(audioRetentionDays) }
+            // An older hub sends no text_days: its days is the text window too. A partial response still falls back to
+            // the legacy field rather than borrowing the exact audio window.
+            store.textDays = Self.retentionDays(answer.textDays) ?? Self.legacyDays(answer.days)
             let rows = answer.recordings ?? []
             let have = Dictionary(rows.filter { $0.kind != "day" }.compactMap { r in UUID(uuidString: r.id).map { ($0, r.revision) } },
                                   uniquingKeysWith: max)
@@ -494,6 +529,18 @@ final class RecordingSync {
             note(error)
             return false
         }
+    }
+
+    /// A 0–3650 retention: 0 is forever.
+    private nonisolated static func retentionDays(_ days: Int?) -> Int? {
+        guard let days, (0...maxRetentionDays).contains(days) else { return nil }
+        return days
+    }
+
+    /// The older hub's `days`: finite and at most 365, as it capped forever and longer windows there.
+    private nonisolated static func legacyDays(_ days: Int?) -> Int? {
+        guard let days, (1...365).contains(days) else { return nil }
+        return days
     }
 
     /// What the hub calls a recording now (#8873, #8877): a name the owner gave on the web becomes its own title (uploaded
@@ -547,8 +594,15 @@ final class RecordingSync {
         }
 
         var days: Int?
+        var audioDays: Int?
+        var textDays: Int?
         var recordings: [Row]?
         var deleted: [String]?
+
+        private nonisolated enum CodingKeys: String, CodingKey {
+            case days, recordings, deleted
+            case audioDays = "audio_days", textDays = "text_days"
+        }
     }
 
     /// Day recordings go to their own upload: each local day with the rows of its parts (none when the hub listed none).

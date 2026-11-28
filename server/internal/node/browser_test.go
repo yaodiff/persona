@@ -3,13 +3,177 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+func fakeEgoTarget(t *testing.T, current, app string) {
+	t.Helper()
+	oldOS, oldVersion, oldApp := installOS, macOSProductVersion, egoApp
+	installOS = "darwin"
+	macOSProductVersion = func(context.Context) string { return current }
+	egoApp = func() string { return app }
+	t.Cleanup(func() { installOS, macOSProductVersion, egoApp = oldOS, oldVersion, oldApp })
+}
+
+func fakeEgoBundle(t *testing.T, required string) string {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("requires macOS plutil")
+	}
+	app := filepath.Join(t.TempDir(), "ego lite.app")
+	contents := filepath.Join(app, "Contents")
+	if err := os.MkdirAll(contents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleShortVersionString</key><string>1.2.3</string>
+<key>LSMinimumSystemVersion</key><string>%s</string>
+</dict></plist>`, required)
+	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), []byte(plist), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return app
+}
+
+func TestVersionLess(t *testing.T) {
+	for _, tc := range []struct {
+		current, required string
+		want              bool
+	}{
+		{"12.7.4", "13.0", true},
+		{"13.0", "13.0", false},
+		{"12.10", "12.7.4", false},
+		{"12.7.4", "12.10", true},
+		{"13", "13.0.0", false},
+		{"13", "13.0.1", true},
+		{"14.0 ", "13.0", false},
+		{"", "13.0", false},
+		{"12.7.4", "", false},
+		{"12.beta", "13.0", false},
+		{"12.7.4", "13.0.beta", false},
+		{"12..4", "13.0", false},
+	} {
+		if got := versionLess(tc.current, tc.required); got != tc.want {
+			t.Errorf("versionLess(%q, %q) = %v, want %v", tc.current, tc.required, got, tc.want)
+		}
+	}
+}
+
+func TestEgoUnsupportedOS(t *testing.T) {
+	for _, tc := range []struct {
+		name, current string
+		unsupported   bool
+	}{
+		{"older", "12.7.4", true},
+		{"at minimum", "13.0", false},
+		{"unknown", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeEgoTarget(t, tc.current, "")
+			if cur, req, bad := egoUnsupportedOS(t.Context(), ""); cur != tc.current || req != "13.0" || bad != tc.unsupported {
+				t.Fatalf("pre-install minimum: current %q, required %q, unsupported %v", cur, req, bad)
+			}
+		})
+	}
+	t.Run("non macOS", func(t *testing.T) {
+		fakeEgoTarget(t, "12.7.4", "")
+		installOS = "linux"
+		macOSProductVersion = func(context.Context) string {
+			t.Fatal("read the product version off macOS")
+			return ""
+		}
+		if _, _, bad := egoUnsupportedOS(t.Context(), ""); bad {
+			t.Fatal("applied the macOS check off macOS")
+		}
+	})
+	t.Run("installed bundle minimum", func(t *testing.T) {
+		app := fakeEgoBundle(t, "12.7.4")
+		fakeEgoTarget(t, "12.10", app)
+		if cur, req, bad := egoUnsupportedOS(t.Context(), app); cur != "12.10" || req != "12.7.4" || bad {
+			t.Fatalf("bundle minimum: current %q, required %q, unsupported %v", cur, req, bad)
+		}
+	})
+}
+
+func TestBrowserStatusReportsUnsupportedOSBeforeProbing(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup bool
+	}{{"before setup", false}, {"after setup", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeEgoHome(t, tc.setup, false, false, "#!/bin/sh\nprintf 'ready 1\\n'\n")
+			fakeEgoTarget(t, "12.7.4", t.TempDir())
+			egoProbe.mu.Lock()
+			at, ok, note := egoProbe.at, egoProbe.ok, egoProbe.note
+			egoProbe.at = time.Time{}
+			egoProbe.mu.Unlock()
+			t.Cleanup(func() {
+				egoProbe.mu.Lock()
+				egoProbe.at, egoProbe.ok, egoProbe.note = at, ok, note
+				egoProbe.mu.Unlock()
+			})
+			b := browserStatus(t.Context())
+			const want = "当前 macOS 12.7.4 低于 ego lite 要求的 13.0，无法运行"
+			if !b.Installed || b.SetUp != tc.setup || b.Ready || b.Note != want {
+				t.Fatalf("browser status = %+v", b)
+			}
+			egoProbe.mu.Lock()
+			probed := !egoProbe.at.IsZero()
+			egoProbe.mu.Unlock()
+			if probed {
+				t.Fatal("probed an unsupported browser")
+			}
+		})
+	}
+}
+
+func TestOpenEgoChecksBundleMinimum(t *testing.T) {
+	app := fakeEgoBundle(t, "14.1")
+	fakeEgoTarget(t, "14.0", app)
+	err := openEgo(t.Context(), func(step string) { t.Fatalf("reached open step %q", step) })
+	if err == nil || err.Error() != "当前 macOS 14.0 低于 ego lite 要求的 14.1，无法运行" {
+		t.Fatalf("open = %v", err)
+	}
+}
+
+func TestInstallEgoChecksOSBeforeDownloadAndCopy(t *testing.T) {
+	oldFetch := fetchEgo
+	t.Cleanup(func() { fetchEgo = oldFetch })
+	t.Run("before download", func(t *testing.T) {
+		fakeEgoTarget(t, "12.7.4", "")
+		fetchEgo = func(context.Context, func(string)) (string, func(), error) {
+			t.Fatal("fetched the DMG on unsupported macOS")
+			return "", nil, nil
+		}
+		err := installEgo(t.Context(), func(step string) { t.Fatalf("reached install step %q", step) })
+		if err == nil || err.Error() != "当前 macOS 12.7.4 低于 ego lite 要求的 13.0，无法运行" {
+			t.Fatalf("install = %v", err)
+		}
+	})
+	t.Run("mounted app requires newer macOS", func(t *testing.T) {
+		app := fakeEgoBundle(t, "14.1")
+		fakeEgoTarget(t, "13.0", "")
+		cleanups := 0
+		fetchEgo = func(context.Context, func(string)) (string, func(), error) {
+			return app, func() { cleanups++ }, nil
+		}
+		err := installEgo(t.Context(), func(step string) { t.Fatalf("reached copy step %q", step) })
+		if err == nil || err.Error() != "当前 macOS 13.0 低于 ego lite 要求的 14.1，无法运行" {
+			t.Fatalf("install = %v", err)
+		}
+		if cleanups != 1 {
+			t.Fatalf("DMG cleanup ran %d times", cleanups)
+		}
+	})
+}
 
 // fakeEgoHome is a home with ego's first-run setup done (Local State, ego-browser) or not, and the statistics' consent.
 func fakeEgoHome(t *testing.T, setUp, imported, stats bool, cli string) string {
@@ -57,17 +221,17 @@ func TestEgoSetUpIsReadFromItsLocalState(t *testing.T) {
 }
 
 func TestBrowserScriptWrapsTheAssistants(t *testing.T) {
-	s := browserScript("persona-1a2b3c4d", "await page.goto(\"https://example.com\");\nreturn 1;", false, false, true, "/tmp/x/page.png")
+	s := browserScript("persona-1a2b3c4d", "await page.goto(\"https://example.com\");\nreturn 1;", false, false, true, "/tmp/x/page.png", "")
 	for _, want := range []string{`taskSpace("persona-1a2b3c4d")`, `task.page("p1")`, "return 1;", `page.screenshot({ path: "/tmp/x/page.png" })`, "__r.error"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("no %q in\n%s", want, s)
 		}
 	}
-	look := browserScript("persona-1", "", true, true, true, "/tmp/x/page.png")
+	look := browserScript("persona-1", "", true, true, true, "/tmp/x/page.png", "")
 	if !strings.Contains(look, `page.snapshot({ scope: "full_page" })`) || strings.Contains(look, "__r.value") {
 		t.Fatal(look)
 	}
-	viewport := browserScript("persona-1", "", true, false, false, "/tmp/x/page.png")
+	viewport := browserScript("persona-1", "", true, false, false, "/tmp/x/page.png", "")
 	if !strings.Contains(viewport, `page.snapshot({ scope: "only_within_viewport" })`) {
 		t.Fatalf("ego's viewport scope: %s", viewport)
 	}
@@ -92,7 +256,17 @@ case "$script" in *throwme*) echo "TypeError: nope" >&2; exit 1 ;; esac
 printf 'log line\n'
 printf '@@persona-browser@@{"value":"done","url":"https://example.com/","title":"Example Domain"}\n'
 `
-	fakeEgoHome(t, true, false, false, cli)
+	home := fakeEgoHome(t, true, false, false, cli)
+	downloads := filepath.Join(home, ".persona", "browser-downloads")
+	if got := browserDownloadsDir(); got != downloads {
+		t.Errorf("browser downloads directory = %q, want %q", got, downloads)
+	}
+	if _, err := browserCall(t.Context(), json.RawMessage(`{"session": "persona-1", "look": true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(downloads); !os.IsNotExist(err) {
+		t.Fatalf("look call should leave the downloads directory absent: %v", err)
+	}
 	res, err := browserCall(context.Background(), json.RawMessage(`{"session": "persona-1", "script": "return 'done'"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +274,11 @@ printf '@@persona-browser@@{"value":"done","url":"https://example.com/","title":
 	var out map[string]any
 	if json.Unmarshal(res.Output, &out) != nil || out["value"] != "done" || out["console"] != "log line" || out["title"] != "Example Domain" {
 		t.Fatalf("%s", res.Output)
+	}
+	if info, err := os.Stat(downloads); err != nil {
+		t.Error(err)
+	} else if !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
+		t.Errorf("browser downloads directory has mode %v, want a private directory", info.Mode())
 	}
 	if _, err := browserCall(context.Background(), json.RawMessage(`{"session": "persona-1", "script": "throwme"}`)); err == nil || !strings.Contains(err.Error(), "TypeError: nope") {
 		t.Fatalf("what it said: %v", err)

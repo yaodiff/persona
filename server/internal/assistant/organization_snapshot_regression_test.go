@@ -315,7 +315,28 @@ func TestOrganizationSnapshotOwnerUsesFinishedMainState(t *testing.T) {
 
 func TestOrganizationSnapshotOwnerOnlyMethodsAndRepeatedReads(t *testing.T) {
 	store := &memStore{}
-	e := orgRegressionEnv(t, store)
+	e := directionEnv(t, store)
+	setSettings(t, e.s, func(v *Settings) { v.Main, v.Timezone = "conv_main", "UTC" })
+	e.title("conv_lead_a", "Direction A")
+	e.title("conv_lead_b", "Direction B")
+	e.leaders("conv_lead_a", "conv_lead_b")
+	published := make(chan struct{}, 1)
+	e.f.mu.Lock()
+	e.f.onTell = func() {
+		select {
+		case published <- struct{}{}:
+		default:
+		}
+	}
+	e.f.mu.Unlock()
+	e.syncLeaders()
+	// syncLeaders publishes its new direction records asynchronously. Let that
+	// seed write finish before the read-only measurement window starts.
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the seed direction publish did not finish")
+	}
 	orgPutTask(e, "todo_worker", "conv_lead_a", TodoAgent{MachineID: "mac", SessionID: "worker", Title: "Worker"})
 	e.f.setSessions("mac", orgWorkingSession("mac", "worker"))
 	e.f.answerNode(DeviceSessionItems, func(string, json.RawMessage) (any, error) { return historyPage{}, nil })
@@ -348,8 +369,10 @@ func TestOrganizationSnapshotOwnerOnlyMethodsAndRepeatedReads(t *testing.T) {
 	pushes, told := len(e.f.pushes), len(e.f.told)
 	e.f.mu.Unlock()
 	puts := store.putCount()
+	e.s.admission.mu.Lock()
 	claims := maps.Clone(e.s.admission.machineClaims)
 	directionClaims := maps.Clone(e.s.admission.directionClaims)
+	e.s.admission.mu.Unlock()
 	for range 2 {
 		recorder := httptest.NewRecorder()
 		e.s.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, organizationSnapshotRoute, nil))
@@ -375,8 +398,12 @@ func TestOrganizationSnapshotOwnerOnlyMethodsAndRepeatedReads(t *testing.T) {
 		starts == len(e.f.starts) && sends == len(e.f.sends) && agentSent == len(e.f.agentSent) && sentOnce == len(e.f.sentOnce) &&
 		pushes == len(e.f.pushes) && told == len(e.f.told)
 	e.f.mu.Unlock()
-	if !unchanged || puts != store.putCount() || !maps.Equal(claims, e.s.admission.machineClaims) || !maps.Equal(directionClaims, e.s.admission.directionClaims) {
-		t.Fatalf("repeated reads caused side effects: puts %d/%d claims %v/%v direction %v/%v", puts, store.putCount(), claims, e.s.admission.machineClaims, directionClaims, e.s.admission.directionClaims)
+	e.s.admission.mu.Lock()
+	afterClaims := maps.Clone(e.s.admission.machineClaims)
+	afterDirectionClaims := maps.Clone(e.s.admission.directionClaims)
+	e.s.admission.mu.Unlock()
+	if !unchanged || puts != store.putCount() || !maps.Equal(claims, afterClaims) || !maps.Equal(directionClaims, afterDirectionClaims) {
+		t.Fatalf("repeated reads caused side effects: puts %d/%d claims %v/%v direction %v/%v", puts, store.putCount(), claims, afterClaims, directionClaims, afterDirectionClaims)
 	}
 	for _, call := range e.f.calls {
 		switch call.Method {

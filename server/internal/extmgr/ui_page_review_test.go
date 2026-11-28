@@ -241,7 +241,7 @@ func TestPageCloseCancelsAwaitingMount(t *testing.T) {
 		h.uiPages.mu.Lock()
 		defer h.uiPages.mu.Unlock()
 		for _, s := range h.uiPages.sessions {
-			if s.mountDone != nil {
+			if s.mountDone != nil && s.run != 0 {
 				session, epoch = s.id, s.epoch
 				return true
 			}

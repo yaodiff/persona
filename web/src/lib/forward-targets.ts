@@ -1,6 +1,6 @@
 // Forward to's lists (#3899, iOS ForwardTargets): which chats a forward may go to, the recent ones first, the rest by
 // computer, and what a search finds. Built from the sessions this page already holds; nothing is fetched. No DOM here.
-import { sessionCan, stateOf } from "./format";
+import { sessionCan, activityOf } from "./format";
 import { agentLabel, displayTitle, folderName } from "./mentions";
 import type { Session } from "./types";
 
@@ -24,7 +24,7 @@ export const keyOf = (s: Pick<Session, "machine_id" | "session_id">) => `${s.mac
 export function takesForward(s: Session, from: string, ended: boolean, online: (mid: string) => boolean): boolean {
   if (keyOf(s) === from || !sessionCan(s, "send") || s.space === "health" || s.archived) return false;
   if (s.assistant) return true;
-  return online(s.machine_id) && (ended || stateOf(s) !== "offline");
+  return online(s.machine_id) && (ended || activityOf(s) !== "offline");
 }
 
 /** A row's second line: who answers there and its project, and its computer where rows mix computers. */

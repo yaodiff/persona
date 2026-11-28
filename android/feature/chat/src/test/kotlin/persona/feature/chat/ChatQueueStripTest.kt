@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +29,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.ImagePayload
+import persona.core.contracts.ProtocolCompatibility
 import persona.core.contracts.QueueEdit
 import persona.core.contracts.Session
 import persona.core.contracts.api.ChatAction
@@ -38,6 +40,9 @@ import persona.core.contracts.api.HubCodedFailure
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.R as DesignSystemR
+import persona.core.designsystem.resolve
+import persona.core.domain.contextSummary
+import persona.core.domain.hasContextTag
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
@@ -327,17 +332,22 @@ class ChatQueueStripTest {
         val video = "<persona-file kind=\"video\" path=\"/tmp/take 1.mov\"/>"
         val context = "<persona-context kind=\"context\" title=\"Notes\">Keep [Image #9] literally</persona-context>"
         val words = "Check these screens $video\n$context"
-        state.restoreQueued("[Image #1] [Image #2]\n\n\n$words\n<attached_images>\npath: /tmp/first.jpg\n/tmp/first.jpg\npath: /tmp/second screen.jpg\nnot a path\n</attached_images>")
-        // Its video comes back as a video already on the machine (iOS `VideoAttachments.restore`), not as its tag.
-        assertEquals("Keep this draft\nCheck these screens\n$context", state.value.text)
+        val restoredContexts = state.restoreQueued("[Image #1] [Image #2]\n\n\n$words\n<attached_images>\npath: /tmp/first.jpg\n/tmp/first.jpg\npath: /tmp/second screen.jpg\nnot a path\n</attached_images>")
+        // Its video comes back as a video already on the machine (iOS `VideoAttachments.restore`), and its context goes to
+        // the context bar rather than dumping raw XML into the text field.
+        assertEquals("Keep this draft\nCheck these screens", state.value.text)
         assertEquals(state.value.text.length, state.value.selection.end)
+        assertEquals(1, restoredContexts.size)
+        assertEquals(listOf("context", "Notes", "Keep [Image #9] literally"),
+            listOf(restoredContexts.single().kind, restoredContexts.single().title, restoredContexts.single().text))
         assertEquals(existing, state.attachments.first())
         assertEquals(listOf("/tmp/original.jpg", "/tmp/first.jpg", "/tmp/second screen.jpg", "/tmp/take 1.mov"), state.attachments.map { it.path })
         assertTrue(state.attachments.last().video)
         assertTrue(state.attachments.all { it.uploadState == DraftUploadState.Uploaded })
         assertTrue(state.ready)
-        assertEquals("Keep this draft\nCheck these screens\n$context\n\n<persona-file kind=\"video\" path=\"/tmp/take 1.mov\" name=\"take 1.mov\" size=\"0\"/>" +
-            "\n\n<attached_images>\n/tmp/original.jpg\n/tmp/first.jpg\n/tmp/second screen.jpg\n</attached_images>", state.message())
+        assertEquals("${restoredContexts.single().xml()}\n\nKeep this draft\nCheck these screens\n\n<persona-file kind=\"video\" path=\"/tmp/take 1.mov\" name=\"take 1.mov\" size=\"0\"/>" +
+            "\n\n<attached_images>\n/tmp/original.jpg\n/tmp/first.jpg\n/tmp/second screen.jpg\n</attached_images>",
+            linkMessage(state.message(), restoredContexts, res))
     }
 
     @Test fun photoOnlyQueueStandInsAreNotRestoredAsUserWords() {
@@ -474,5 +484,248 @@ class ChatQueueStripTest {
             rule.onNodeWithText("看看这两张\n\n[图片]").assertExists()
             rule.onAllNodesWithText(two).assertCountEquals(0)
         }
+    }
+
+    private fun canonicalAndLegacy(canonical: String): List<String> {
+        val legacy = ProtocolCompatibility.messageForHub(canonical)
+        assertTrue(hasContextTag(legacy))
+        assertFalse(legacy.contains("<persona-context"))
+        return listOf(canonical, legacy)
+    }
+
+    @Test fun queuedPreviewAndCopyStripCanonicalAndLegacyContextBlocks() {
+        val quote1 = ChatLinkContext.quote("First quoted snippet", "Antigravity", "3599@0")
+        val quote2 = ChatLinkContext.quote("Second quoted snippet", "Claude", "3600@0")
+        val emptyQuote = ChatLinkContext("quote", "", "", "")
+        val editCtx = ChatLinkContext("edit", "Release Notes", "https://example.com/notes", "Draft line")
+        val wholeDoc = ChatLinkContext("context", "Plan Doc", "https://example.com/doc", ChatLinkContext.WHOLE)
+        val forward = ChatLinkContext(ChatLinkContext.FORWARD, "转发自 Claude · Build", "persona://session/m/s?at=1",
+            "Build passed on main", msg = "1", extra = mapOf("role" to "agent", "author" to "Claude", "chat" to "Build"))
+        val file = "<persona-file kind=\"file\" path=\"/tmp/spec.pdf\" name=\"spec.pdf\" size=\"120\"/>"
+        val video = "<persona-file kind=\"video\" path=\"/tmp/clip.mov\" name=\"clip.mov\" size=\"4096\"/>"
+
+        // Single quote + user body (both canonical and legacy wire spelling).
+        for (raw in canonicalAndLegacy("${quote1.xml()}\n\n帮我看下这个问题")) {
+            val preview = composerMessagePreview(raw, "[图片]", "[视频]", res)
+            assertEquals("帮我看下这个问题", preview)
+            assertEquals("上下文 · Antigravity", composerContextNote(raw, preview) { contextSummary(it).resolve(res) })
+            assertEquals("帮我看下这个问题", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+
+        // Multiple quotes (including mixed canonical + legacy) + user body.
+        val mixedQuotes = "${ProtocolCompatibility.messageForHub(quote1.xml())}\n${quote2.xml()}\n\n对比这两段"
+        val mixedPreview = composerMessagePreview(mixedQuotes, "[图片]", "[视频]", res)
+        assertEquals("对比这两段", mixedPreview)
+        assertEquals("上下文 · 2 项", composerContextNote(mixedQuotes, mixedPreview) { contextSummary(it).resolve(res) })
+        assertEquals("对比这两段", composerMessageCopyText(mixedQuotes, "[图片]", "[视频]", res))
+
+        // Single quote ONLY (with cross-client stand-ins and with empty body).
+        for (standIn in listOf("", "参考上面的内容。", "See the content above.", "See the context above.",
+            "Refer to the content above.", "上の内容を参考にしてください。", "上の内容を参照してください。")) {
+            val base = if (standIn.isEmpty()) quote1.xml() else "${quote1.xml()}\n\n$standIn"
+            for (raw in canonicalAndLegacy(base)) {
+                val preview = composerMessagePreview(raw, "[图片]", "[视频]", res)
+                assertEquals("上下文 · Antigravity", preview)
+                assertNull(composerContextNote(raw, preview) { contextSummary(it).resolve(res) })
+                assertEquals("First quoted snippet", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+            }
+        }
+
+        // Multiple quotes ONLY, untitled quote, edit context, whole-page context, and forward-only stand-ins.
+        for (raw in canonicalAndLegacy("${quote1.xml()}\n${quote2.xml()}\n\n参考上面的内容。")) {
+            assertEquals("上下文 · 2 项", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertEquals("First quoted snippet\n\nSecond quoted snippet", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+        for (raw in canonicalAndLegacy(emptyQuote.xml())) {
+            assertEquals("上下文 · 引用", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertEquals("上下文 · 引用", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+        for (raw in canonicalAndLegacy(editCtx.xml())) {
+            assertEquals("要改的内容 · Release Notes", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertEquals("Draft line", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+        for (raw in canonicalAndLegacy("${wholeDoc.xml()}\n\n参考上面的内容。")) {
+            assertEquals("上下文 · Plan Doc", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertEquals("上下文 · Plan Doc", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+        for (standIn in listOf("请看上面转发的消息。", "Please look at the forwarded message above.", "请看上面转发的这些消息。")) {
+            for (raw in canonicalAndLegacy("${forward.xml()}\n\n$standIn")) {
+                assertEquals("上下文 · 转发自 Claude · Build", composerMessagePreview(raw, "[图片]", "[视频]", res))
+                assertEquals("Build passed on main", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+            }
+        }
+
+        // Plain stand-in text without any context or attachment stays verbatim.
+        assertEquals("参考上面的内容。", composerMessagePreview("参考上面的内容。", "[图片]", "[视频]", res))
+        assertEquals("参考上面的内容。", composerMessageCopyText("参考上面的内容。", "[图片]", "[视频]", res))
+
+        // Mixed quote + file + video + photos, with body and with stand-in only.
+        for (raw in canonicalAndLegacy("[Image #1]\n\n${quote1.xml()}\n\n看下附件\n\n$video\n$file\n\n<attached_images>\npath: /tmp/shot.jpg\n</attached_images>")) {
+            assertEquals(1, composerPhotoCount(raw))
+            assertEquals("看下附件\n\n[图片]\n[视频]\nspec.pdf", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertEquals("看下附件\n[视频]\nspec.pdf", composerMessagePreview(raw, "", "[视频]", res))
+            assertEquals("看下附件", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+        for (raw in canonicalAndLegacy("${quote1.xml()}\n\n请看图片\n\n<attached_images>\n/tmp/shot.jpg\n</attached_images>")) {
+            assertEquals("[图片]", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertEquals("上下文 · Antigravity", composerMessagePreview(raw, "", "[视频]", res))
+            assertEquals("First quoted snippet", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+        for (raw in canonicalAndLegacy("${quote1.xml()}\n\n请看附件\n\n$file")) {
+            assertEquals("spec.pdf", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertEquals("上下文 · Antigravity", composerContextNote(raw, "spec.pdf") { contextSummary(it).resolve(res) })
+            assertEquals("First quoted snippet", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+
+        // Internal hub metadata blocks (message-source, skill-instructions, interject) are stripped without adding context notes.
+        val meta = "<persona-context kind=\"message-source\" title=\"\">{\"author\":\"user\"}</persona-context>\n" +
+            "<persona-context kind=\"skill-instructions\" title=\"skill\">steps</persona-context>\n" +
+            "<persona-context kind=\"context\" title=\"插话\" url=\"\">mid-turn</persona-context>\n\n先停一下"
+        for (raw in canonicalAndLegacy(meta)) {
+            assertEquals("先停一下", composerMessagePreview(raw, "[图片]", "[视频]", res))
+            assertNull(composerContextNote(raw, "先停一下") { contextSummary(it).resolve(res) })
+            assertEquals("先停一下", composerMessageCopyText(raw, "[图片]", "[视频]", res))
+        }
+
+        // Nested <attached_images> inside a quoted context block is not counted as this message's own photo.
+        val nestedPhotoQuote = ChatLinkContext.quote("Look:\n<attached_images>\n/tmp/quoted.jpg\n</attached_images>", "Antigravity", "m9")
+        for (raw in canonicalAndLegacy("${nestedPhotoQuote.xml()}\n\n问个问题")) {
+            assertEquals(0, composerPhotoCount(raw))
+            assertEquals("问个问题", composerMessagePreview(raw, "[图片]", "[视频]", res))
+        }
+    }
+
+    @Test fun queuedRestoreKeepsDraftCleanAndReturnsCanonicalAndLegacyContexts() {
+        val quote1 = ChatLinkContext.quote("First quoted snippet", "Antigravity", "3599@0", ChatLinkContext.PART_SELECTION)
+        val quote2 = ChatLinkContext("context", "Photo sync", "persona://session/m/s1", "Another session: Photo sync")
+        val file = "<persona-file kind=\"file\" path=\"/tmp/spec.pdf\" name=\"spec.pdf\" size=\"86\"/>"
+
+        // Single and multiple quotes + body (canonical & legacy) restore into contexts without XML in the text input.
+        for (raw in canonicalAndLegacy("[Image #1]\n\n${quote1.xml()}\n${quote2.xml()}\n\n帮我看下\n\n$file\n\n<attached_images>\npath: /tmp/a.jpg\n</attached_images>")) {
+            val state = ChatComposerState(ChatComposerDraft("已有草稿"))
+            val restored = state.restoreQueued(raw)
+            assertEquals("已有草稿\n帮我看下", state.value.text)
+            assertFalse(state.value.text.contains("-context"))
+            assertEquals(2, restored.size)
+            assertEquals(listOf("quote", "Antigravity", "3599@0", ChatLinkContext.PART_SELECTION, "First quoted snippet"),
+                listOf(restored[0].kind, restored[0].title, restored[0].msg, restored[0].part, restored[0].text))
+            assertEquals("Photo sync", restored[1].title)
+            assertTrue(isSessionContextUrl(restored[1].url))
+            assertEquals(listOf("/tmp/a.jpg", "/tmp/spec.pdf"), state.attachments.map { it.path })
+        }
+
+        // Quote-only message with stand-in leaves empty draft empty and preserves existing draft unchanged.
+        for (raw in canonicalAndLegacy("${quote1.xml()}\n\n参考上面的内容。")) {
+            val empty = ChatComposerState()
+            val contexts = empty.restoreQueued(raw)
+            assertEquals("", empty.value.text)
+            assertEquals(1, contexts.size)
+            assertEquals("3599@0", contexts.single().msg)
+
+            val existing = ChatComposerState(ChatComposerDraft("继续补充"))
+            val existingContexts = existing.restoreQueued(raw)
+            assertEquals("继续补充", existing.value.text)
+            assertEquals(1, existingContexts.size)
+        }
+
+        // Plain stand-in text without any context or attachment is preserved verbatim.
+        val plain = ChatComposerState()
+        assertTrue(plain.restoreQueued("参考上面的内容。").isEmpty())
+        assertEquals("参考上面的内容。", plain.value.text)
+
+        // Persona photo-only + quote message where the photo arrives beside the queue drops the photo stand-in.
+        for (raw in canonicalAndLegacy("${quote1.xml()}\n\n请看图片")) {
+            val state = ChatComposerState()
+            val contexts = state.restoreQueued(raw, photosBeside = 1)
+            assertEquals("", state.value.text)
+            assertEquals(1, contexts.size)
+        }
+
+        // Internal hub metadata blocks do not restore as user context chips.
+        val interject = "<persona-context kind=\"context\" title=\"插话\" url=\"\">note</persona-context>\n\n先停一下"
+        for (raw in canonicalAndLegacy(interject)) {
+            val state = ChatComposerState()
+            assertTrue(state.restoreQueued(raw).isEmpty())
+            assertEquals("先停一下", state.value.text)
+        }
+    }
+
+    @Test fun queueStripRendersCopiesAndRestoresLegacyAndCanonicalQuotedMessages() {
+        val legacyQuoted = ProtocolCompatibility.messageForHub(
+            "${ChatLinkContext.quote("Legacy quoted body", "Antigravity", "3599@0").xml()}\n\n帮我看下这个问题")
+        val canonicalQuoteOnly = "${ChatLinkContext.quote("Canonical quoted body", "设计文档", "3600@0").xml()}\n\n参考上面的内容。"
+        val relayedLegacy = ProtocolCompatibility.messageForHub(
+            "${ChatLinkContext("context", "早报", "", "Summary body").xml()}\n\n来自「早报」：会议纪要已整理")
+        val session = persona.copy(queued = listOf(legacyQuoted, canonicalQuoteOnly, relayedLegacy), queuedRelayed = 1)
+        val queue = Queue()
+        val composer = ChatComposerState()
+        val restoredContexts = mutableListOf<ChatLinkContext>()
+        val clipboard = ApplicationProvider.getApplicationContext<Context>().getSystemService(ClipboardManager::class.java)
+        var style by mutableStateOf(AppStyle.Glass)
+
+        rule.setContent {
+            PersonaTheme(style = style, reduceMotion = true) {
+                ChatQueueStrip(session, queue, composer, {}, {}, initiallyExpanded = true,
+                    onRestoreContexts = { restored ->
+                        val next = restored.fold(restoredContexts.toList(), ::withQuote)
+                        restoredContexts.clear()
+                        restoredContexts.addAll(next)
+                    })
+            }
+        }
+
+        // Neither canonical nor legacy raw XML appears anywhere in Glass, Brief, or Board.
+        for (s in listOf(AppStyle.Brief, AppStyle.Board, AppStyle.Glass)) {
+            style = s
+            rule.waitForIdle()
+            rule.onAllNodesWithText("-context", substring = true).assertCountEquals(0)
+            rule.onNodeWithText("帮我看下这个问题").assertExists()
+            rule.onNodeWithText("上下文 · Antigravity").assertExists()
+            rule.onNodeWithText("上下文 · 设计文档").assertExists()
+            rule.onAllNodesWithText("上下文 · 设计文档").assertCountEquals(1)
+        }
+
+        // Tapping row 1 opens the sheet with clean title, and Copy puts clean user body on the clipboard.
+        rule.onNodeWithContentDescription("第 1 条：帮我看下这个问题。上下文 · Antigravity").performClick()
+        rule.waitForIdle()
+        rule.onAllNodesWithText("-context", substring = true).assertCountEquals(0)
+        rule.onNodeWithText("拷贝").performClick()
+        rule.waitForIdle()
+        assertEquals("帮我看下这个问题", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+
+        // Taking row 1 back to edit restores clean body into composer text and restores the quote into linkContexts.
+        rule.onNodeWithContentDescription("第 1 条：帮我看下这个问题。上下文 · Antigravity").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("撤回编辑").performClick()
+        rule.waitUntil(10_000) { restoredContexts.size == 1 }
+        assertEquals("帮我看下这个问题", composer.value.text)
+        assertEquals("Antigravity", restoredContexts.single().title)
+        assertEquals("3599@0", restoredContexts.single().msg)
+        assertEquals("Legacy quoted body", restoredContexts.single().text)
+
+        // Row 2 (quote-only): Copy puts clean quoted content on the clipboard, Edit restores context without stand-in text.
+        rule.onNodeWithContentDescription("第 2 条：上下文 · 设计文档").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("拷贝").performClick()
+        rule.waitForIdle()
+        assertEquals("Canonical quoted body", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+
+        rule.onNodeWithContentDescription("第 2 条：上下文 · 设计文档").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("撤回编辑").performClick()
+        rule.waitUntil(10_000) { restoredContexts.size == 2 }
+        assertEquals("帮我看下这个问题", composer.value.text)
+        assertEquals("设计文档", restoredContexts[1].title)
+        assertEquals("3600@0", restoredContexts[1].msg)
+
+        // Relayed row with legacy context renders and copies clean text with no raw XML.
+        rule.onNodeWithContentDescription("还有 1 条别的对话在排队").performClick()
+        rule.waitForIdle()
+        rule.onAllNodesWithText("-context", substring = true).assertCountEquals(0)
+        rule.onNodeWithContentDescription("第 3 条：来自「早报」：会议纪要已整理").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("拷贝").performClick()
+        rule.waitForIdle()
+        assertEquals("来自「早报」：会议纪要已整理", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
     }
 }

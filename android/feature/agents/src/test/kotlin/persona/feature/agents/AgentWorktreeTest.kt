@@ -93,11 +93,12 @@ class AgentWorktreeTest {
             advanceUntilIdle()
             model.selection(model.state.value.selection.copy(launcher = "claude"))
             val rows = model.state.value.workspaces.flatMap { s -> s.rows.map { it.workspace } }
-            // an Orca workspace's worktrees go through Orca's own New Worktree: no switch
+            // an Orca workspace's worktree is Orca's to make too (#17050): Orca is asked, and the switch shows, off
             model.pickWorkspace(rows.first { it.source == "orca" })
             advanceUntilIdle()
-            assertEquals("first:/code/weather-fix", service.asked.last())
-            assertFalse(model.state.value.worktreeOffered)
+            assertEquals("first:/code/weather-fix:orca", service.asked.last())
+            assertTrue(model.state.value.worktreeOffered)
+            assertFalse(model.state.value.inWorktree)
 
             model.pickWorkspace(rows.first { it.source == "paseo" })
             advanceUntilIdle()
@@ -122,6 +123,35 @@ class AgentWorktreeTest {
             assertEquals("made-for-it", request.workspaceId)
             assertEquals("paseo", request.host)
             assertEquals("/code/weather", store.operation?.folder)
+        } finally {
+            model.viewModelScope.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
+    /** An Orca workspace picked (#17050): Orca makes the worktree as a child of it, and the start goes into the one made. */
+    @Test fun anOrcaWorkspacePickedStartsInANewWorktreeOrcaMakes() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = Store()
+        val service = Service().apply {
+            catalog = listOf(AgentWorkspace("first/orca/tree", "first", "orca", "tree", "fix", "/code/weather-fix", "fix"))
+            madeWorkspace = "made-for-it"
+        }
+        val model = NewAgentViewModel(service, store, MutableStateFlow(listOf(Machine("first", online = true))))
+        try {
+            advanceUntilIdle()
+            model.selection(model.state.value.selection.copy(launcher = "claude"))
+            model.pickWorkspace(model.state.value.workspaces.flatMap { s -> s.rows.map { it.workspace } }.single())
+            advanceUntilIdle()
+            model.inWorktree(true)
+            model.prompt("Fix the login bug")
+            model.submit()
+            advanceUntilIdle()
+            assertEquals(listOf("first:/code/weather-fix:Fix the login bug::orca"), service.added)
+            val request = requireNotNull(service.request)
+            assertEquals("/wt/persona-fix-the-login-bug", request.cwd)
+            assertEquals("made-for-it", request.workspaceId)
+            assertEquals("orca", request.host)
         } finally {
             model.viewModelScope.cancel()
             Dispatchers.resetMain()

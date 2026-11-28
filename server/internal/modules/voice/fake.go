@@ -35,9 +35,15 @@ func (fakeWire) acks() bool                         { return false } // it takes
 func (fakeWire) close() any                         { return map[string]any{"type": "fake.close"} }
 func (fakeWire) outputRate(in int) int              { return in }
 
-// start says whether the session only reads texts aloud (speak.go): the stand-in then says them as audio too.
+// start says whether the session only reads texts aloud (speak.go: the stand-in then says them as audio too) or asks
+// for text-only output (external TTS calls: the stand-in echoes text-only output and emits only fake.line text, never
+// fake.voice audio).
 func (fakeWire) start(s session) any {
-	return map[string]any{"type": "fake.start", "read_aloud": s.ReadAloud}
+	m := map[string]any{"type": "fake.start", "read_aloud": s.ReadAloud}
+	if s.TextOnly {
+		m["text_only"] = true
+	}
+	return m
 }
 
 func (fakeWire) reply(delegation, s string, final bool, _ string) []any {
@@ -46,17 +52,18 @@ func (fakeWire) reply(delegation, s string, final bool, _ string) []any {
 
 func (fakeWire) decode(raw []byte) []event {
 	var f struct {
-		Type  string `json:"type"`
-		ID    string `json:"id"`
-		Text  string `json:"text"`
-		Audio []byte `json:"audio"`
+		Type             string   `json:"type"`
+		ID               string   `json:"id"`
+		Text             string   `json:"text"`
+		Audio            []byte   `json:"audio"`
+		OutputModalities []string `json:"output_modalities"`
 	}
 	if json.Unmarshal(raw, &f) != nil {
 		return nil
 	}
 	switch f.Type {
 	case "fake.started":
-		return []event{{kind: evStarted}}
+		return []event{{kind: evStarted, modalities: f.OutputModalities}}
 	case "fake.voice":
 		if len(f.Audio) == 0 {
 			return nil
@@ -79,6 +86,7 @@ type fakeLink struct {
 	mu        sync.Mutex
 	n         int  // delegations made
 	readAloud bool // the session only reads texts aloud (speak.go): what it is told to say comes as audio too
+	textOnly  bool // text-only session: emits no fake.voice audio
 }
 
 // fakeSpoken is the audio the fake dialect says a text with in a session that reads texts aloud: a tenth of a second
@@ -106,6 +114,7 @@ func (f *fakeLink) Write(ctx context.Context, _ websocket.MessageType, p []byte)
 		Text      string `json:"text"`
 		Final     bool   `json:"final"`
 		ReadAloud bool   `json:"read_aloud"`
+		TextOnly  bool   `json:"text_only"`
 	}
 	if err := json.Unmarshal(p, &m); err != nil {
 		return err
@@ -114,8 +123,13 @@ func (f *fakeLink) Write(ctx context.Context, _ websocket.MessageType, p []byte)
 	case "fake.start":
 		f.mu.Lock()
 		f.readAloud = m.ReadAloud
+		f.textOnly = m.TextOnly
 		f.mu.Unlock()
-		return f.emit(ctx, map[string]any{"type": "fake.started"})
+		started := map[string]any{"type": "fake.started"}
+		if m.TextOnly {
+			started["output_modalities"] = []string{"text"}
+		}
+		return f.emit(ctx, started)
 	case "fake.text":
 		f.mu.Lock()
 		f.n++
@@ -124,9 +138,9 @@ func (f *fakeLink) Write(ctx context.Context, _ websocket.MessageType, p []byte)
 		return f.emit(ctx, map[string]any{"type": "fake.delegation", "id": id, "text": m.Text})
 	case "fake.say":
 		f.mu.Lock()
-		readAloud := f.readAloud
+		readAloud, textOnly := f.readAloud, f.textOnly
 		f.mu.Unlock()
-		if readAloud {
+		if readAloud && !textOnly {
 			for range 2 {
 				if err := f.emit(ctx, map[string]any{"type": "fake.voice", "audio": make([]byte, fakeSpoken)}); err != nil {
 					return err

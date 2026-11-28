@@ -83,6 +83,9 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 			}
 			break
 		}
+		if w.Closeout != nil {
+			return // A closeout records the dependency without assigning an automatic next step.
+		}
 		if w.Wait == "" && w.Agent == nil {
 			return // a background task or a /loop: it wakes itself
 		}
@@ -466,13 +469,20 @@ func autoContinueSource() *proto.MessageSource {
 	return &proto.MessageSource{Kind: proto.SourceAutoContinue}
 }
 
+func (s *Service) workSendWait(machine, sid string) time.Duration {
+	if row, ok := s.nodeSession(machine, sid); ok && row.CanRefreshTerminalLauncher() {
+		return proto.LauncherRefreshSendWait
+	}
+	return 30 * time.Second
+}
+
 // sendWorkText resolves a model only for a quota continuation; ordinary manager messages retain their send path.
 func (s *Service) sendWorkText(ctx context.Context, machine, sid, text string, quotaContinuation bool) error {
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.sent[[2]string{machine, sid}] = time.Now()
 	s.work.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, s.workSendWait(machine, sid))
 	defer cancel()
 	params := map[string]any{"session_id": sid, "text": text}
 	if quotaContinuation {
@@ -491,7 +501,7 @@ func (s *Service) sendModelRetry(ctx context.Context, e db.SessionWork, text str
 	s.work.init()
 	s.work.sent[[2]string{e.MachineID, e.SessionID}] = time.Now()
 	s.work.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, s.workSendWait(e.MachineID, e.SessionID))
 	defer cancel()
 	// PostgreSQL timestamps retain microseconds. Use that same precision before
 	// and after loading a due row so a crash cannot change its once-only send ID.

@@ -454,7 +454,8 @@ func TestMinutesHeadingsAreTheWebsSections(t *testing.T) {
 		}
 		for hub, page := range map[string]string{"kb-minutes.points": "minutes_points", "kb-minutes.decisions": "minutes_decisions",
 			"kb-minutes.actions": "minutes_actions", "kb-minutes.open": "minutes_open", "kb-day-recap.actions": "recap_actions",
-			"kb-minutes.conclusions": "minutes_conclusions", "kb-minutes.ai_note": "minutes_ai_note"} {
+			"kb-minutes.conclusions": "minutes_conclusions", "kb-minutes.ai_note": "minutes_ai_note",
+			"kb-minutes.debates": "minutes_debates", "kb-minutes.debate_open": "minutes_debate_open", "kb-minutes.debate_settled": "minutes_debate_settled"} {
 			if got := i18n.T(l, hub); got != web[page] {
 				t.Errorf("%s: %s is %q, the web's %s %q", l, hub, got, page, web[page])
 			}

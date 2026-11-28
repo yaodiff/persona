@@ -134,6 +134,56 @@ class TaskRecordsTest {
         assertEquals("unknown", JsonCodec.decodeFromString(FeedItem.serializer(), """{"id":"x","kind":"later_kind"}""").kind)
     }
 
+    @Test fun mergeHandlesReplannedTodosProjectedOverridesAndReceiptReportIds() {
+        val oldPlan = TaskPlan("plan-old", "main", listOf(PlanTask("Old task", todoId = "t1")), "started", at(1))
+        val newPlan = TaskPlan("plan-new", "main", listOf(PlanTask("New task", todoId = "t1")), "started", at(5))
+        val todo = Todo("t1", "Replanned task", origin = "main", planId = "plan-new", createdAt = at(2))
+        val projected = listOf(
+            AssistantTaskCard(
+                id = "plan:plan-old:0",
+                todoId = "t1",
+                planId = "plan-old",
+                index = 0,
+                at = at(1),
+                state = "started",
+                receiptId = "rc-extra",
+                reportId = "rp-extra",
+            ),
+            AssistantTaskCard(
+                id = "plan:plan-new:0",
+                todoId = "t1",
+                planId = "plan-new",
+                index = 0,
+                at = at(5),
+                state = "started",
+                receiptId = "rc-extra",
+                reportId = "rp-extra",
+            ),
+        )
+        val mergedFeed = listOf(
+            item("plan-old-feed", 1, "plan", "plan-old"),
+            item("plan-new-feed", 5, "plan", "plan-new"),
+            item("task-t1", 6, "task", "t1"),
+            item("rc-extra", 7, "receipt", null, "title" to "Replanned task", "summary" to "Done"),
+            item("rp-extra", 8, "report", null, "text" to "Progress"),
+            item("task-t1", 9, "task", "t1"),
+        )
+        val merged = AssistantTaskCards.merge(
+            feed = mergedFeed,
+            plans = mapOf(oldPlan.id to oldPlan, newPlan.id to newPlan),
+            todos = listOf(todo),
+            projected = projected,
+        )
+        assertEquals(1, merged.size)
+        val card = merged.single()
+        assertEquals("plan-new", card.identity.planId)
+        assertEquals(newPlan, card.plan)
+        assertEquals(todo, card.todo)
+        assertEquals(listOf("task-t1", "rc-extra", "rp-extra"), card.records.map { it.id })
+        assertEquals("rc-extra", card.receipt?.id)
+        assertEquals("rp-extra", card.report?.id)
+    }
+
     @Test fun earliestClipsOlderTaskCardsBriefsAndDayLinesWhileKeepingBackgroundAndTraysIntact() {
         val day1Plan = TaskPlan("p1", "main", listOf(PlanTask("Old cleanup", todoId = "t1")), "started", "2026-11-10T09:05:00Z")
         val day1Open = TaskPlan("p1-open", "main", listOf(PlanTask("Old unstarted plan")), "open", "2026-11-10T09:10:00Z")
@@ -258,5 +308,38 @@ class TaskRecordsTest {
             listOf("Untimed active task", "Sparse old task"),
             hints(full).flatMap { hint -> hint.tasks.map { it.title } },
         )
+    }
+
+    @Test fun duplicateRecordIdPreservesEarliestFeedMatchAcrossReceiptAndTodoRef() {
+        val receiptFirst = persona.core.contracts.FeedItem(
+            id = "dup_rec",
+            at = "2026-11-25T09:00:00Z",
+            kind = "task",
+            ref = "other_todo",
+            body = kotlinx.serialization.json.JsonPrimitive("earliest-receipt-body"),
+        )
+        val todoRefLater = persona.core.contracts.FeedItem(
+            id = "dup_rec",
+            at = "2026-11-25T09:05:00Z",
+            kind = "task",
+            ref = "todo_target",
+            body = kotlinx.serialization.json.JsonPrimitive("later-todo-ref-body"),
+        )
+        val card = persona.core.contracts.AssistantTaskCard(
+            id = "todo:todo_target",
+            todoId = "todo_target",
+            at = "2026-11-25T08:55:00Z",
+            receiptId = "dup_rec",
+        )
+        val merged = AssistantTaskCards.merge(
+            feed = listOf(receiptFirst, todoRefLater),
+            plans = emptyMap(),
+            todos = emptyList(),
+            projected = listOf(card),
+        )
+        val target = merged.single { it.identity.todoId == "todo_target" }
+        org.junit.Assert.assertEquals(1, target.records.size)
+        org.junit.Assert.assertEquals(kotlinx.serialization.json.JsonPrimitive("earliest-receipt-body"), target.records.single().body)
+        org.junit.Assert.assertEquals("2026-11-25T09:00:00Z", target.records.single().at)
     }
 }

@@ -22,6 +22,12 @@ type trustMemStore struct {
 	trusts map[string]db.ExtensionTrust
 }
 
+func (st *trustMemStore) ExtensionTrustOf(_ context.Context, extension string) (string, error) {
+	st.tmu.Lock()
+	defer st.tmu.Unlock()
+	return st.trusts[extension].Trust, nil
+}
+
 func (st *trustMemStore) ExtensionTrusts(context.Context) (map[string]db.ExtensionTrust, error) {
 	st.tmu.Lock()
 	defer st.tmu.Unlock()
@@ -132,9 +138,9 @@ func TestExtensionTrustDecidesReads(t *testing.T) {
 	}
 
 	// A removed extension's trust goes with it: installed again, it starts as a third party's.
-	var none map[string]any
-	if err := askConversations(t, s, assistantwire.MethodExtensionTrustForget, `{"extension":"qa-memory"}`, &none); err != nil {
-		t.Fatal(err)
+	var none json.RawMessage
+	if err := askConversations(t, s, assistantwire.MethodExtensionTrustForget, `{"extension":"qa-memory"}`, &none); err != nil || string(none) != `{}` {
+		t.Fatalf("forget trust reply: %s, %v", none, err)
 	}
 	if _, kept := st.trusts["qa-memory"]; kept || !s.extensionHides(s.withExtensionReader(ctx, "qa-memory"), SpaceHealth) {
 		t.Fatal("a removed extension is still the user's own")

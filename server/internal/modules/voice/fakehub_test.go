@@ -70,6 +70,11 @@ type fakeHub struct {
 	rooms      map[string]*liveRoom
 	liveStatus int
 	liveReads  []string
+	// files are the text files POST /api/v1/machines/{mid}/files/write made ("<mid>:<path>" -> text), dirs the
+	// folders …/files/mkdir made; onWrite answers a write instead (status 0: take it).
+	files   map[string]string
+	dirs    []string
+	onWrite func(mid, path string) (int, string)
 }
 
 type resolvedCard struct {
@@ -106,6 +111,57 @@ func newFakeHub(t *testing.T) *fakeHub {
 
 func (h *fakeHub) server(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/machines/{mid}/files/mkdir", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Dir, Name string }
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		dir := r.PathValue("mid") + ":" + in.Dir + "/" + in.Name
+		if in.Dir == "/" || in.Dir == "/Users" { // above the home (/Users/me), as the node's write guard has it
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "read only", "code": "read_only"})
+			return
+		}
+		if slices.Contains(h.dirs, dir) {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "exists", "code": "exists"})
+			return
+		}
+		h.dirs = append(h.dirs, dir)
+		_ = json.NewEncoder(w).Encode(map[string]string{"path": in.Dir + "/" + in.Name})
+	})
+	mux.HandleFunc("POST /api/v1/machines/{mid}/files/write", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Path   string `json:"path"`
+			Text   string `json:"text"`
+			Create bool   `json:"create"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		mid := r.PathValue("mid")
+		h.mu.Lock()
+		f := h.onWrite
+		h.mu.Unlock()
+		if f != nil {
+			if status, code := f(mid, in.Path); status != 0 {
+				w.WriteHeader(status)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "code": code})
+				return
+			}
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		key := mid + ":" + in.Path
+		if _, ok := h.files[key]; ok || !in.Create {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "exists", "code": "exists"})
+			return
+		}
+		if h.files == nil {
+			h.files = map[string]string{}
+		}
+		h.files[key] = in.Text
+		_ = json.NewEncoder(w).Encode(map[string]any{"path": in.Path, "size": len(in.Text)})
+	})
 	mux.HandleFunc("GET /api/v1/kb-search", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"hits": []map[string]string{{"path": "people/x.md", "line": "x likes " + r.URL.Query().Get("q")}}})
 	})

@@ -54,7 +54,7 @@ func TestEvolveProjectShownFormFindsTheProject(t *testing.T) {
 	c := &Chat{ID: "lark-f1", Kind: "group", Name: "示例群"}
 	now := time.Now().UTC()
 	for _, name := range []string{"Alpha 发布（阿尔法、甲）", "Alpha 发布（阿尔法、甲）（Beta 迁移、贝塔）", "Alpha 发布（阿尔法、甲）：灰度推进中"} {
-		if slug := e.evolveProject(name, "short", nil, "", c, "进展", now); slug != "alpha" {
+		if slug := e.evolveProject(name, "short", nil, "", c, true, "进展", now); slug != "alpha" {
 			t.Fatalf("%q -> %q", name, slug)
 		}
 	}
@@ -68,7 +68,7 @@ func TestEvolveProjectShownFormFindsTheProject(t *testing.T) {
 		}
 	}
 	// A new project named in the shown form gets the bare name.
-	if slug := e.evolveProject("Gamma 上线（伽马、丙）", "short", nil, "", c, "", now); slug != Slug("Gamma 上线") {
+	if slug := e.evolveProject("Gamma 上线（伽马、丙）", "short", nil, "", c, true, "", now); slug != Slug("Gamma 上线") {
 		t.Fatalf("new project slug %q", slug)
 	}
 	// A generic base does not stand for the project named by it.

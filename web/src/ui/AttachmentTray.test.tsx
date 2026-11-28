@@ -85,4 +85,35 @@ describe("AttachmentTray", () => {
     expect(18 + 2 + f.left).toBe(28);
     expect(20 + f.down).toBe(44);
   });
+
+  it("highlights the active image tile and optionally preserves input focus on pointer down", () => {
+    const onOpen = vi.fn();
+    const onRemove = vi.fn();
+    act(() =>
+      root.render(
+        <AttachmentTray
+          attachments={[
+            { id: "a", name: "a.png", url: "blob:a" },
+            { id: "b", name: "b.png", url: "blob:b" },
+          ]}
+          activeId="b"
+          keepFocus
+          onOpen={onOpen}
+          onRemove={onRemove}
+        />,
+      ),
+    );
+    const tileA = button("编辑 a.png");
+    const tileB = button("编辑 b.png");
+    expect(tileA.getAttribute("aria-pressed")).toBe("false");
+    expect(tileB.getAttribute("aria-pressed")).toBe("true");
+    expect(tileB.closest("[data-attachment-id]")?.classList.contains("ring-2")).toBe(true);
+    expect(tileA.closest("[data-attachment-id]")?.classList.contains("ring-2")).toBe(false);
+
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    act(() => { tileB.dispatchEvent(down); });
+    expect(down.defaultPrevented).toBe(true);
+    act(() => tileB.click());
+    expect(onOpen).toHaveBeenCalledWith("b");
+  });
 });

@@ -54,6 +54,13 @@ export function AgentsView({ id, onToggleSidebar }: { id?: string; onToggleSideb
   return id ? <AgentSessionView key={id} id={id} onToggleSidebar={onToggleSidebar} /> : <AgentList onToggleSidebar={onToggleSidebar} />;
 }
 
+/** One personal Agent conversation without the page's own title row, for a page that draws its own over it (the
+ *  Messages page's right-hand side, modules/lark/Messages.tsx): the same reading, sending, outbox reconciling, drafts,
+ *  marking read and live refresh as `/agents/<id>`. */
+export function AgentConversation({ id }: { id: string }) {
+  return <AgentSessionView key={id} id={id} embedded onToggleSidebar={() => {}} />;
+}
+
 function Header({ title, sub, avatar, onToggleSidebar }: { title: string; sub?: string; avatar?: AvatarSession; onToggleSidebar: () => void }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
@@ -81,7 +88,7 @@ function BoundedAgentList({ onToggleSidebar }: { onToggleSidebar: () => void }) 
     <Header title={t("agents-agentsview.title")} sub={t("agents-agentsview.subtitle")} onToggleSidebar={onToggleSidebar} />
     <div className="min-h-0 flex-1 overflow-y-auto"><div className={SESSION_LIST_STYLE.personalPage}>
       {loaded && !error && sessions.length > 0 && <SourceNotice hints={hints} />}
-      <PagedSessionList root={personalSessions} path="/agents/sessions" identity={personalIdentity} compare={personalOrder} event="agents" personal label={accounts.label} accountMark={accounts.accountMark} renderRow={(s) => <div className={SESSION_LIST_STYLE.personalRow}>
+      <PagedSessionList root={personalSessions} path="/agents/sessions" identity={personalIdentity} compare={personalOrder} event="agents" personal label={accounts.label} accountMark={accounts.accountMark} providerOptions={accounts.providerOptions} renderRow={(s) => <div className={SESSION_LIST_STYLE.personalRow}>
         <a href={href({ name: "agents", id: s.id })} onClick={(e) => onLinkClick(e, { name: "agents", id: s.id })} className="flex min-w-0 flex-1 items-center gap-2">
           <AgentAvatar s={s} size={SESSION_LIST_METRICS.avatar} /><span className={SESSION_LIST_STYLE.personalTitle}>{s.title || t("lib-format.untitled_session")}</span>
           {s.unreadCount > 0 && <span className={SESSION_LIST_STYLE.personalBadge}>{s.unreadCount}</span>}
@@ -202,7 +209,7 @@ function LegacyAgentList({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   );
 }
 
-function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar: () => void }) {
+function AgentSessionView({ id, onToggleSidebar, embedded = false }: { id: string; onToggleSidebar: () => void; embedded?: boolean }) {
   const { sessions } = useAgentList();
   const fromList = sessions.find((s) => s.id === id);
   const [pageSession, setPageSession] = useState(fromList);
@@ -323,10 +330,10 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
   };
 
   const canSend = session?.canSend ?? false;
-  if (missing && !session) return <MissingAgent onToggleSidebar={onToggleSidebar} />;
+  if (missing && !session) return <MissingAgent onToggleSidebar={onToggleSidebar} embedded={embedded} />;
   return (
-    <div className="flex h-full flex-col">
-      <Header title={session?.title || t("lib-format.untitled_session")} sub={session ? providerLabel(session.provider) : undefined} avatar={session ?? undefined} onToggleSidebar={onToggleSidebar} />
+    <div className="flex h-full min-h-0 flex-col">
+      {!embedded && <Header title={session?.title || t("lib-format.untitled_session")} sub={session ? providerLabel(session.provider) : undefined} avatar={session ?? undefined} onToggleSidebar={onToggleSidebar} />}
       <div
         ref={scroller}
         onScroll={(e) => {
@@ -372,18 +379,19 @@ function AgentSessionView({ id, onToggleSidebar }: { id: string; onToggleSidebar
 
 /** A personal agent's link to a conversation the hub doesn't have: what happened in plain words and the way back to the
  *  list, as a computer's page that isn't there does (machines/MachineDetail.tsx), with no box that waits forever. */
-function MissingAgent({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+function MissingAgent({ onToggleSidebar, embedded }: { onToggleSidebar: () => void; embedded: boolean }) {
   return (
     <div className="flex h-full flex-col">
       {/* as a space that is gone (SpacePage): the header names where this is (the list's name), the shared empty state
-          says what is missing once, with the way back, and there is no composer */}
-      <Header title={t("agents-agentsview.title")} onToggleSidebar={onToggleSidebar} />
+          says what is missing once, with the way back, and there is no composer; embedded, the page's own header is
+          the way back */}
+      {!embedded && <Header title={t("agents-agentsview.title")} onToggleSidebar={onToggleSidebar} />}
       <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" role="status">
         <Empty
           icon="chat"
           title={t("not-found.agent_title")}
           detail={t("not-found.agent_detail")}
-          action={<Button tone="secondary" icon="arrowLeft" onClick={() => navigate({ name: "agents" })}>{t("not-found.agent_back")}</Button>}
+          action={embedded ? undefined : <Button tone="secondary" icon="arrowLeft" onClick={() => navigate({ name: "agents" })}>{t("not-found.agent_back")}</Button>}
         />
       </div>
     </div>

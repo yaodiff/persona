@@ -12,7 +12,7 @@ import { formatDate, t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import { isPolled } from "../../lib/channels";
 import type { ConnectorPrompt } from "../../lib/connectors";
-import { ago, clock } from "../../lib/format";
+import { ago, clock, safeWebURL } from "../../lib/format";
 import {
   addSyncScopes, approvalOf, authorizeSyncBot, bindingsOf, bindingTitle, botTitle, createSyncBot, healthOf, leaveFor,
   needsAuthorize, oauthRedirectURI, orderedBots, pollSyncAuthorize, reauthSoon, registerSyncBot, rememberReturn,
@@ -580,8 +580,10 @@ function AuthorizeStep({ flow, setFlow, onDone, onCancel }: {
   }, 3);
 
   const go = () => {
-    const url = flow.answer?.url;
-    if (!url) return void ask();
+    const raw = flow.answer?.url;
+    if (!raw) return void ask();
+    const url = safeWebURL(raw, true);
+    if (!url) return;
     rememberReturn();
     leaveFor(url);
   };
@@ -626,6 +628,7 @@ function AuthorizeStep({ flow, setFlow, onDone, onCancel }: {
 /** The app could not be set up for the return address: the owner adds it in the app's settings, then goes on. */
 function ManualStep({ answer, busy, onContinue, onCancel }: { answer: LarkSyncAuthorize; busy: boolean; onContinue: () => void; onCancel: () => void }) {
   const uri = answer.redirect_uri || oauthRedirectURI();
+  const consoleURL = safeWebURL(answer.console_url, true);
   return (
     <>
       <SettingsHint>{t("settings-larksync.manual_intro")}</SettingsHint>
@@ -638,8 +641,8 @@ function ManualStep({ answer, busy, onContinue, onCancel }: { answer: LarkSyncAu
         />
       </div>
       <div className="flex flex-wrap items-center gap-2 px-4 pb-2.5">
-        {answer.console_url && (
-          <Button tone="secondary" icon="link" href={answer.console_url}>{t("settings-larksync.open_app_settings")}</Button>
+        {consoleURL && (
+          <Button tone="secondary" icon="link" href={consoleURL}>{t("settings-larksync.open_app_settings")}</Button>
         )}
         <Button tone="accent" busy={busy} onClick={onContinue}>{t("settings-larksync.manual_continue")}</Button>
         <Button tone="quiet" onClick={onCancel}>{t("common.cancel")}</Button>
@@ -652,6 +655,8 @@ function ManualStep({ answer, busy, onContinue, onCancel }: { answer: LarkSyncAu
 function PromptBody({ prompt, onCancel, onRestart }: { prompt: ConnectorPrompt; onCancel: () => void; onRestart: () => void }) {
   const app = t("settings-larksync.lark_app");
   const code = prompt.user_code;
+  const promptLink = safeWebURL(prompt.link, true);
+  const promptURL = safeWebURL(prompt.url, true);
   // A terminal failure (expired, declined): said, with a way to start again; the old QR code is no use any more.
   if (prompt.error) {
     return (
@@ -673,7 +678,7 @@ function PromptBody({ prompt, onCancel, onRestart }: { prompt: ConnectorPrompt; 
       )}
       {prompt.kind === "qr" && prompt.qr?.rows.length ? (
         <>
-          {(code || prompt.link) && (
+          {(code || promptLink) && (
             // on the device that shows the code, scanning it is not possible: the link (and the code it asks for) instead
             <div className="flex flex-wrap items-center gap-2 px-4 pt-1">
               {code && (
@@ -682,8 +687,8 @@ function PromptBody({ prompt, onCancel, onRestart }: { prompt: ConnectorPrompt; 
                   <IconButton icon="copy" label={t("settings-larksync.copy_code")} onClick={() => void copyText(code, { done: t("settings-larksync.copied"), failed: t("settings-larksync.copy_failed") })} />
                 </>
               )}
-              {prompt.link && (
-                <Button tone="secondary" icon="link" href={prompt.link}>{prompt.link_text || t("settings-larksync.open_link")}</Button>
+              {promptLink && (
+                <Button tone="secondary" icon="link" href={promptLink}>{prompt.link_text || t("settings-larksync.open_link")}</Button>
               )}
             </div>
           )}
@@ -697,8 +702,8 @@ function PromptBody({ prompt, onCancel, onRestart }: { prompt: ConnectorPrompt; 
             <span className="min-w-0 flex-1 truncate font-mono text-card-title font-semibold tracking-widest text-ink select-all">{code}</span>
             <IconButton icon="copy" label={t("settings-larksync.copy_code")} onClick={() => void copyText(code, { done: t("settings-larksync.copied"), failed: t("settings-larksync.copy_failed") })} />
           </div>
-          {prompt.url && (
-            <Button tone="secondary" icon="link" href={prompt.url} className="self-start">{t("settings-larksync.open_link")}</Button>
+          {promptURL && (
+            <Button tone="secondary" icon="link" href={promptURL} className="self-start">{t("settings-larksync.open_link")}</Button>
           )}
           <p className="flex items-center gap-2 text-meta text-ink-3">
             <Spinner size={11} />

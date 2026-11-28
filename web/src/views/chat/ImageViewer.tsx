@@ -8,6 +8,8 @@ import { createPortal } from "react-dom";
 import { imageURL } from "../../lib/api";
 import { useCloseOnBack } from "../../lib/back-close";
 import { sendDraft, type DraftImage } from "../../lib/drafts";
+import { safeWebURL } from "../../lib/format";
+import { isSameOriginBlobURL, MEDIA_CTRL_CHARS, safeApiPath } from "../../lib/safe-media-url";
 import type { EditedImage } from "../../lib/image-edit";
 import { clampView, doubleTapView, fingers, fitRect, IDENTITY, isZoomed, panView, wheelFactor, zoomAt, type Point, type Rect, type Size, type View } from "../../lib/image-zoom";
 import type { Item } from "../../lib/types";
@@ -40,8 +42,25 @@ export interface ViewerAction {
   run: () => void;
 }
 
+// Only non-scriptable raster image MIME types may become top-level same-origin blob: documents.
+const SAFE_RASTER_IMAGE_MIME = /^image\/(?:png|jpeg|jpg|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)$/i;
+const SAFE_DATA_IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
+
+function normalizeRasterMime(raw: string): string | undefined {
+  const mime = raw.split(";", 1)[0].trim().toLowerCase();
+  if (!SAFE_RASTER_IMAGE_MIME.test(mime)) return undefined;
+  return mime === "image/jpg" ? "image/jpeg" : mime;
+}
+
+function safeDataImageMime(raw: string): string | undefined {
+  if (!raw || MEDIA_CTRL_CHARS.test(raw)) return undefined;
+  const m = /^data:([^,]+),/i.exec(raw);
+  return m ? normalizeRasterMime(m[1]) : undefined;
+}
+
 function viewerImage(item: Item, mid: string, sid: string): ViewerImage {
-  const src = item.image?.data ? `data:${item.image.mime};base64,${item.image.data}` : imageURL(mid, sid, item.id);
+  const mime = item.image?.mime?.split(";", 1)[0].trim() ?? "";
+  const src = item.image?.data && SAFE_DATA_IMAGE_MIME.test(mime) ? `data:${mime};base64,${item.image.data}` : imageURL(mid, sid, item.id);
   return { id: item.id, src, mime: item.image?.mime };
 }
 
@@ -235,15 +254,47 @@ export function ImageViewer({
     }
   };
 
-  // the original in a new tab; browsers refuse to open a data: address at the top level, so that goes as a blob
+  // the original in a new tab; browsers refuse to open a data: address at the top level, so safe raster data:
+  // images go as a blob with a validated non-scriptable MIME (never SVG/HTML as a same-origin blob: document).
   const openOriginal = async () => {
-    if (!cur.src.startsWith("data:")) {
-      window.open(cur.src, "_blank", "noopener");
+    const raw = cur.src.trim();
+    if (!raw || MEDIA_CTRL_CHARS.test(raw)) return;
+    if (/^data:/i.test(raw)) {
+      const mime = safeDataImageMime(raw);
+      if (!mime) return;
+      try {
+        const res = await fetch(raw);
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const safeType = blob.type.trim() ? normalizeRasterMime(blob.type) : mime;
+        if (!safeType) return;
+        const url = URL.createObjectURL(new Blob([blob], { type: safeType }));
+        window.open(url, "_blank", "noopener,noreferrer");
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch {
+        // Ignore unreadable embedded image sources.
+      }
       return;
     }
-    const url = URL.createObjectURL(await (await fetch(cur.src)).blob());
-    window.open(url, "_blank", "noopener");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    if (/^blob:/i.test(raw)) {
+      if (!isSameOriginBlobURL(raw)) return;
+      try {
+        const res = await fetch(raw);
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const safeType = normalizeRasterMime(blob.type);
+        if (!safeType) return;
+        const url = URL.createObjectURL(new Blob([blob], { type: safeType }));
+        window.open(url, "_blank", "noopener,noreferrer");
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch {
+        // Ignore unreadable blob image sources.
+      }
+      return;
+    }
+    const target = safeWebURL(raw) ?? safeApiPath(raw);
+    if (!target) return;
+    window.open(target, "_blank", "noopener,noreferrer");
   };
 
   // the bottom bar; more than three don't fit a phone with their words, so there they are icons

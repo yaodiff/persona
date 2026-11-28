@@ -87,6 +87,9 @@
     <string name="inbox_empty_search_text">「%1$s」に一致するメッセージやメールはありません。</string>
     <string name="inbox_empty_title">受信トレイは空です</string>
     <string name="inbox_empty_text">ハブでLark（Lark ゲートウェイ）を設定するか、設定でメールアカウントを追加すると、対応が必要なメッセージやメールがここに表示されます。</string>
+    <string name="inbox_empty_text_lark">ハブでLark（Lark ゲートウェイ）を設定すると、対応が必要な Lark のメッセージがここに表示されます。</string>
+    <string name="inbox_empty_text_mail">設定でメールアカウントを追加すると、対応が必要なメールがここに表示されます。</string>
+    <string name="inbox_empty_text_generic">対応が必要な新しい項目がここに表示されます。</string>
     <string name="inbox_empty_filtered_title">この絞り込みに一致する未対応の項目はありません</string>
     <string name="inbox_empty_filtered_text">絞り込みを解除すると、受信トレイ全体が表示されます。</string>
     <string name="inbox_empty_caught_up_title">すべて確認済み</string>

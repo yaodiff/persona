@@ -805,7 +805,7 @@ def mark(h, tid, what):
 
 
 def accept(h, tid):
-    """POST …/accept {asked_at[, option | response]} (briefing_feed.go): today's answer to T01's decision. The round
+    """POST …/accept {asked_at[, option | response]} (todo_accept_route.go): today's answer to T01's decision. The round
     listed now or 409; an option (one of its labels) or the plain press takes it: Persona books the choice and Pick a
     ryokan is done; explain_first keeps the round waiting with no default; the other fixed answers end it."""
     if refused(h, tid):

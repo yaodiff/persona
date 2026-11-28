@@ -47,8 +47,9 @@ internal fun OutboxStatus(
                 JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_discard), onClick = { onAction(DeliveryAction.Discard) }, enabled = !busy)
         }
     }
-    LaunchedEffect(canSend) { if (!canSend) retryConfirmation = false }
-    if (retryConfirmation && canSend) JDialog(onDismiss = { retryConfirmation = false }, title = stringResource(R.string.chat_delivery_resend_title),
+    val canConfirmResend = canSend && message.state.resultUnknown && message.state.allows(DeliveryAction.Retry, canSend)
+    LaunchedEffect(canConfirmResend) { if (!canConfirmResend) retryConfirmation = false }
+    if (retryConfirmation && canConfirmResend) JDialog(onDismiss = { retryConfirmation = false }, title = stringResource(R.string.chat_delivery_resend_title),
         text = stringResource(R.string.chat_delivery_resend_text),
         confirm = stringResource(R.string.chat_delivery_resend_confirm) to { retryConfirmation = false; onAction?.invoke(DeliveryAction.Retry) },
         confirmEnabled = !busy, dismiss = stringResource(R.string.chat_delivery_resend_dismiss) to { retryConfirmation = false })

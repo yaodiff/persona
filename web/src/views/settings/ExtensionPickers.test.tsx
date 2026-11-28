@@ -98,7 +98,7 @@ describe("machine and launcher pickers", () => {
     act(() => choose(launcher, "work_gw"));
     await act(async () => button("保存")!.click());
     await flush();
-    expect(setExtensionConfig).toHaveBeenCalledWith("example-chat", { agent_machine: "server", agent_launcher: "work_gw" });
+    expect(setExtensionConfig).toHaveBeenCalledWith("example-chat", { agent_machine: "server", agent_launcher: "work_gw" }, expect.objectContaining({ managerId: "assistant" }));
   });
 
   it("uses the entry-preserving write for an immediate machine switch", async () => {
@@ -113,7 +113,8 @@ describe("machine and launcher pickers", () => {
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Home server"]')!.click());
     await flush();
-    expect(setExtensionConfigPreservingEntries).toHaveBeenCalledWith("example-chat", { agent_machines: ["server"], accounts: [{ _id: "entry_one", name: "One" }] });
+    expect(setExtensionConfigPreservingEntries).toHaveBeenCalledWith("example-chat", { agent_machines: ["server"], accounts: [{ _id: "entry_one", name: "One" }] },
+      expect.objectContaining({ managerId: "assistant" }));
     expect(setExtensionConfig).not.toHaveBeenCalled();
   });
 
@@ -123,9 +124,9 @@ describe("machine and launcher pickers", () => {
     act(() => root.render(<Extensions open="example-chat" onOpen={() => {}} />));
     await flush();
     expect(select("agent_machine")!.value).toBe("old-mac");
-    expect(options(select("agent_machine")!)[1]).toBe("old-mac=old-mac（找不到这台机器）");
+    expect(options(select("agent_machine")!)[1]).toBe("old-mac=old-mac（未找到该机器）");
     expect(select("agent_launcher")!.value).toBe("gone_gw");
-    expect(options(select("agent_launcher")!)[1]).toBe("gone_gw=gone_gw（找不到这个启动器）");
+    expect(options(select("agent_launcher")!)[1]).toBe("gone_gw=gone_gw（未找到该启动器）");
   });
 
   it("loads launchers used only inside entry lists", async () => {

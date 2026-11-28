@@ -1,6 +1,6 @@
 {
   "name": "model_profiles_list",
-  "description": "List profiles, active profile, drift, rollback previews and audit events. Model settings only, never credentials.",
+  "description": "List saved profiles, active profile, drift, rollback previews and audit events.",
   "input_schema": {
     "type": "object",
     "properties": {},

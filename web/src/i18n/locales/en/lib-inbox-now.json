@@ -1,6 +1,7 @@
 {
   "confirm_reply": "Waiting for you to confirm a reply",
   "confirm_agent": "Waiting for you to start an Agent",
+  "confirm_handoff": "Waiting for you to confirm a handoff",
   "decide": "Waiting for your decision",
   "queued": "Queued for the AI",
   "looking": "AI is looking",

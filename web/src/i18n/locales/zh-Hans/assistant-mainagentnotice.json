@@ -1,3 +1,3 @@
 {
-  "main_other_kind": "当前主对话使用 {actual}。新主对话默认使用 {configured}，新建一个即可切换。"
+  "main_other_kind": "当前主对话使用 {actual}。新建主对话已设为使用 {configured}，新建即可切换。"
 }

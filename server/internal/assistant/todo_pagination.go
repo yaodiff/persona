@@ -17,10 +17,10 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
-// Paginated reads of the to-dos (#14506): a list can grow past what one HTTP response can carry (some clients refuse
-// a body over 4 MiB whole), so GET /api/v1/todos takes ?limit and ?cursor. Without either it answers exactly what it
-// always did: every row, the counts and the revision header. With them it answers one page and says how to read the
-// next one.
+// Reads of the to-dos (#14506, #15683): a list can grow past what one HTTP response can carry (some clients refuse a
+// body over 4 MiB whole), and closed history grows without bound. GET /api/v1/todos without parameters keeps the
+// complete answer; ?closed_limit=N opts into every open to-do plus N closed ones, with the counts and revision header
+// of the whole list. With ?limit or ?cursor it answers one page of the whole list and says how to read the next one.
 //
 // The order is the list's own (created_at descending, ties by id ascending, todo_view_routes.go). The cursor is the
 // last row's key, not an offset: a row inserted or removed between two reads cannot make a page skip or repeat one.
@@ -36,8 +36,9 @@ const (
 )
 
 var (
-	errTodoPageLimit  = errors.New("limit must be an integer from 1 to 200")
-	errTodoPageCursor = errors.New("cursor is invalid")
+	errTodoPageLimit   = errors.New("limit must be an integer from 1 to 200")
+	errTodoPageCursor  = errors.New("cursor is invalid")
+	errTodoClosedLimit = errors.New("closed_limit must be an integer from 1 to 200")
 )
 
 // todoPageCursor is where the next page starts: the last row's created_at and id, in the list's order.
@@ -76,6 +77,19 @@ func todoListPageQuery(v url.Values) (limit int, after *todoPageCursor, paged bo
 		after, paged = &c, true
 	}
 	return limit, after, paged, nil
+}
+
+// todoClosedLimitQuery reads the opt-in bound for the unpaged to-do list. Without it, the complete list is unchanged;
+// Web asks for the bound explicitly, while other clients keep every closed row.
+func todoClosedLimitQuery(v url.Values) (limit int, bounded bool, err error) {
+	if !v.Has("closed_limit") {
+		return 0, false, nil
+	}
+	n, convErr := strconv.Atoi(v.Get("closed_limit"))
+	if convErr != nil || n < 1 || n > todoPageLimitMax {
+		return 0, true, errTodoClosedLimit
+	}
+	return n, true, nil
 }
 
 // decodeTodoPageCursor reads a cursor this manager wrote. A cursor names the sort key and id explicitly, so a deleted
@@ -163,6 +177,42 @@ func todoPageOf(list []listedTodo, limit int, after *todoPageCursor) (page []lis
 		next = encodeTodoPageCursor(page[len(page)-1])
 	}
 	return page, next, hasMore, oversized
+}
+
+// boundedTodoList answers an opt-in bounded list: every open to-do plus the first closedLimit closed ones
+// in the list's created_at order. Rows keep that order; a failed start is open. The returned cursor starts immediately
+// after the oldest row kept, so the existing pagination reaches every closed row left out. Pagination does not call
+// this: its cursors walk the whole list.
+func boundedTodoList(list []listedTodo, closedLimit int) (rows []listedTodo, next string, hasMore bool) {
+	if len(list) == 0 {
+		return list, "", false
+	}
+	keep := make(map[string]bool, len(list))
+	var boundary listedTodo
+	closed := 0
+	for _, row := range list {
+		if !row.closedForGood() {
+			keep[row.ID] = true
+			continue
+		}
+		if closed < closedLimit {
+			keep[row.ID] = true
+			boundary = row
+			closed++
+		} else {
+			hasMore = true
+		}
+	}
+	if !hasMore {
+		return list, "", false
+	}
+	out := make([]listedTodo, 0, len(keep))
+	for _, row := range list {
+		if keep[row.ID] {
+			out = append(out, row)
+		}
+	}
+	return out, encodeTodoPageCursor(boundary), true
 }
 
 // writeTodoPage answers GET /api/v1/todos's paginated read; p is the projection of the whole visible list, which the

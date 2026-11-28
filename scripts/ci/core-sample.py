@@ -8,6 +8,8 @@ hub built with persona_core_only, in a temporary home on a disposable Postgres c
 scripts/ci/core-only-smoke.py: nothing of this machine's own hub is read or reached):
 
   absent     the core-only hub is healthy and loads no module; the sample's flag, entry and route are not there
+  refused    an install with a deliberately wrong --expect-home is refused before any request or write: non-zero exit,
+             the mismatch names both homes, no flag, no entry, the package still there; `extension list` unchanged
   installed  `personad extension test`, `pack` and `install` with the core-only personad; the hub announces the
              feature flag `quicknotes`, lists the page in the main navigation (titles in en, zh-Hans and ja), draws
              it, and the route stores and lists a note
@@ -20,8 +22,9 @@ scripts/ci/core-only-smoke.py: nothing of this machine's own hub is read or reac
 Every personad command runs with `env -i` and an explicit HOME and PERSONA_HOME of the temporary home: an inherited
 PERSONA_HOME would send the command to this machine's own hub (docs/lessons/workflow.md). Before every hub write the
 gate runs the read-only `extension list` in that same environment, prints the resolved home and listen address, and
-checks they are the sandbox's. Prints one PASS / FAIL / TIMEOUT line. Needs Go and Docker (DOCKER names another
-client).
+checks they are the sandbox's; the write itself also carries `--expect-home <sandbox PERSONA_HOME>` and
+`--expect-hub <sandbox listen>`, so the CLI refuses anything but this sandbox even if the check above were skipped
+(#16302). Prints one PASS / FAIL / TIMEOUT line. Needs Go and Docker (DOCKER names another client).
 """
 import argparse
 import hashlib
@@ -97,12 +100,27 @@ def cli_env(home):
     return env
 
 
-def personad(bindir, env, cwd, *args, timeout=600):
+def run_personad(bindir, env, cwd, *args, timeout=600):
+    """(exit code, output) of one personad call in the sandbox environment; the caller decides what a failure means."""
     r = smoke.run(["env", "-i"] + [f"{k}={v}" for k, v in env.items()] + [str(bindir / "personad")] + list(args), timeout,
                   cwd=cwd, stdin=subprocess.DEVNULL)
-    out = (r.stdout + r.stderr).strip()
-    check(r.returncode == 0, f"personad {' '.join(args[:3])}: exit {r.returncode}: {out[-1500:]}")
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def personad(bindir, env, cwd, *args, timeout=600):
+    code, out = run_personad(bindir, env, cwd, *args, timeout=timeout)
+    check(code == 0, f"personad {' '.join(args[:3])}: exit {code}: {out[-1500:]}")
     return out
+
+
+def target_flags(env, listen):
+    """The CLI's own target guard (#16302): the write itself refuses any home or hub but this sandbox's."""
+    return ["--expect-home", env["PERSONA_HOME"], "--expect-hub", listen]
+
+
+def write(bindir, env, cwd, listen, *args, timeout=600):
+    """One `personad extension` write (`install`, `disable`, `enable`, `uninstall`), bound by the CLI to this sandbox."""
+    return personad(bindir, env, cwd, *args, *target_flags(env, listen), timeout=timeout)
 
 
 def start_hub(bindir, home, work, log):
@@ -116,12 +134,13 @@ def start_hub(bindir, home, work, log):
 
 
 def confirm_target(bindir, env, cwd, listen):
-    """A read-only CLI call and an explicit target check before a write; never print the sandbox token."""
+    """A read-only CLI call before a write; never print the sandbox token. The write's own flags bind it (target_flags)."""
     resolved = json.loads((Path(env["PERSONA_HOME"]) / "hub.json").read_text())["listen"]
     check(resolved == listen, f"personad would reach {resolved}, not the test hub {listen}")
     out = personad(bindir, env, cwd, "extension", "list")
     print(f"target confirmed by read-only extension list: PERSONA_HOME={env['PERSONA_HOME']}, hub={resolved}; "
           f"{out or 'no extensions listed'}", flush=True)
+    return out
 
 
 def sha(path):
@@ -173,8 +192,23 @@ def main():
         personad(bindir, env, sample, "extension", "pack", "--platforms", platform)
         package = sample / "dist" / f"{ID}-0.1.0.tar.gz"
         check(package.exists(), f"pack wrote no {package.name}")
-        confirm_target(bindir, env, sample, resolved)
-        personad(bindir, env, sample, "extension", "install", str(package), "--yes")
+        before_list = confirm_target(bindir, env, sample, resolved)
+        # The guard is the write's own: a deliberately wrong home must be refused before any request or write.
+        wrong_home = str(work / "not-the-sandbox" / ".persona")
+        code, refused = run_personad(bindir, env, sample, "extension", "install", str(package), "--yes",
+                                     "--expect-home", wrong_home, "--expect-hub", resolved)
+        check(code != 0, f"install with --expect-home {wrong_home} exited 0; the write was not refused")
+        check(wrong_home in refused and env["PERSONA_HOME"] in refused,
+              f"install with a wrong --expect-home: no target mismatch naming both homes in {refused[-800:]}")
+        check(FLAG not in features(base) and not entries(base, token),
+              "the refused install changed the hub: the flag or the entry exists")
+        check(package.exists(), "the refused install consumed the package")
+        same = confirm_target(bindir, env, sample, resolved)
+        check(same == before_list, f"the refused install changed extension list: {before_list!r} -> {same!r}")
+        seen["refused"] = {"expect_home": wrong_home, "exit": code, "list": same}
+        print(f"refused: install with --expect-home {wrong_home} exited {code} with the mismatch printed; "
+              f"extension list unchanged ({same or 'no extensions listed'}), no flag, no entry", flush=True)
+        write(bindir, env, sample, resolved, "extension", "install", str(package), "--yes")
         smoke.wait_for("the sample's route", 60, lambda: call(base, token, "GET", ROUTE)[0] == 200)
         check(FLAG in features(base), "installed: the hub does not announce the flag")
         titles = {}
@@ -197,22 +231,22 @@ def main():
 
         # off: entry points and new activity go; what is stored stays.
         confirm_target(bindir, env, work, resolved)
-        personad(bindir, env, work, "extension", "disable", ID)
+        write(bindir, env, work, resolved, "extension", "disable", ID)
         smoke.wait_for("the flag to go", 30, lambda: FLAG not in features(base))
         check(not entries(base, token), "off: the navigation entry is still listed")
         read, _ = call(base, token, "GET", ROUTE)
-        write, _ = call(base, token, "POST", ROUTE, {"text": "written while off"})
-        check(read == 404 and write == 404, f"off: the route answers {read} (read) and {write} (write), want 404")
+        denied, _ = call(base, token, "POST", ROUTE, {"text": "written while off"})
+        check(read == 404 and denied == 404, f"off: the route answers {read} (read) and {denied} (write), want 404")
         core_answers(base, token)
         check(sha(stored) == before, "off: the stored file changed")
         kept = json.loads(stored.read_text())["notes"]
         check(len(kept) == 1 and kept[0]["text"] == "kept when off", f"off: the stored notes read {kept}")
-        seen["off"] = {"flag": False, "entries": 0, "read": read, "write": write, "stored_sha256": sha(stored)}
+        seen["off"] = {"flag": False, "entries": 0, "read": read, "write": denied, "stored_sha256": sha(stored)}
         print("off: flag and entry gone, route 404 for read and write, Core answers, stored file unchanged", flush=True)
 
         # on again: the same data, nothing rewritten.
         confirm_target(bindir, env, work, resolved)
-        personad(bindir, env, work, "extension", "enable", ID)
+        write(bindir, env, work, resolved, "extension", "enable", ID)
         smoke.wait_for("the sample's route again", 60, lambda: call(base, token, "GET", ROUTE)[0] == 200)
         status, body = call(base, token, "GET", ROUTE)
         check(body == {"notes": [note]}, f"on again: the route lists {body}, want the note stored before")
@@ -223,7 +257,7 @@ def main():
 
         # uninstalled: a separate, explicit deletion. Off above kept the file; the default uninstall removes it.
         confirm_target(bindir, env, work, resolved)
-        personad(bindir, env, work, "extension", "uninstall", ID)
+        write(bindir, env, work, resolved, "extension", "uninstall", ID)
         smoke.wait_for("the flag to go after uninstall", 30, lambda: FLAG not in features(base))
         check(not entries(base, token), "uninstalled: the navigation entry is still listed")
         status, _ = call(base, token, "GET", ROUTE)
@@ -237,7 +271,8 @@ def main():
         hub = None
         if a.evidence:
             Path(a.evidence).write_text(json.dumps(seen, ensure_ascii=False, indent=2) + "\n")
-        print(f"PASS core-only sample: core-only hub, {ID} absent -> installed -> off -> on again -> uninstalled; flag, "
+        print(f"PASS core-only sample: core-only hub, {ID} absent -> wrong --expect-home refused -> installed -> off -> "
+              f"on again -> uninstalled; every write bound to the sandbox by --expect-home / --expect-hub, flag, "
               f"navigation entry and route follow the switch, off leaves the stored value unchanged (sha256 {before[:12]}), "
               f"uninstall deletes it, clean shutdown ({time.monotonic() - started:.0f}s)")
         return 0

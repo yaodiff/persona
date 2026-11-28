@@ -5,10 +5,21 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.hoisted(() => {
-  window.matchMedia = ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
+const { mediaListeners } = vi.hoisted(() => {
+  const mediaListeners = new Set<() => void>();
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener(_type: string, cb: () => void) { mediaListeners.add(cb); },
+    removeEventListener(_type: string, cb: () => void) { mediaListeners.delete(cb); },
+    addListener() {},
+    removeListener() {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+  return { mediaListeners };
 });
-import { useTheme } from "./theme";
+import { setTheme, useTheme } from "./theme";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -65,5 +76,30 @@ describe("a theme picked in another tab", () => {
     elsewhere(null);
     expect(document.documentElement.classList.contains("dark")).toBe(false);
     expect(host.querySelector("span")!.dataset.theme).toBe("system");
+  });
+
+  it("syncs theme changes and cross-tab storage updates to desktop setThemeSource without echoing media events", () => {
+    const setThemeSource = vi.fn();
+    Object.assign(window, { personaDesktop: { setThemeSource } });
+    act(() => root.render(<Picked />));
+
+    act(() => setTheme("dark"));
+    expect(setThemeSource).toHaveBeenLastCalledWith("dark");
+
+    act(() => setTheme("light"));
+    expect(setThemeSource).toHaveBeenLastCalledWith("light");
+
+    act(() => setTheme("system"));
+    expect(setThemeSource).toHaveBeenLastCalledWith("system");
+
+    elsewhere("persona.theme", "dark");
+    expect(setThemeSource).toHaveBeenLastCalledWith("dark");
+
+    const callsBeforeMedia = setThemeSource.mock.calls.length;
+    mediaListeners.forEach((cb) => cb());
+    expect(setThemeSource).toHaveBeenCalledTimes(callsBeforeMedia);
+
+    delete (window as { personaDesktop?: unknown }).personaDesktop;
+    expect(() => act(() => setTheme("dark"))).not.toThrow();
   });
 });

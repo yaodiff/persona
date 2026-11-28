@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -672,18 +674,18 @@ func (h *Hub) machineConnected(ctx context.Context, m *Machine, at time.Time) de
 	return out
 }
 
-// updateNodes has each manager that carries machines redeploy its own whose node is not this build (selfupdate.go):
-// the carrier always, the others connected now.
+// updateNodes tells connected managers to check their own computers after
+// the Hub publishes packages or the operator enables automatic updates.
 func (h *Hub) updateNodes(ctx context.Context) {
-	owners := []string{devicesOwner}
-	for _, mc := range h.knownEntries() {
-		if o := h.machineOwner(mc.ID); !slices.Contains(owners, o) && h.busConnOf(o) != nil {
-			owners = append(owners, o)
+	for _, p := range h.busRoster() {
+		if p.Role != bus.RoleManager {
+			continue
 		}
-	}
-	for _, o := range owners {
-		if err := h.callBus(ctx, o, devicewire.MethodUpdateNodes, map[string]any{}, nil); err != nil {
-			h.logf("update: [%s] redeploys its machines: %v", o, err)
+		call, cancel := context.WithTimeout(ctx, updateRequestLimit)
+		_, err := buswire.Call(call, h.managerCaller(p.ID), devicewire.UpdateNodesMethod, buswire.None{})
+		cancel()
+		if err != nil {
+			h.logf("update: [%s] checks its node packages: %v", p.ID, err)
 		}
 	}
 }

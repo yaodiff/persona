@@ -43,13 +43,15 @@ type MinutesOverview struct {
 	Groups []MinutesGroup `json:"groups"`
 }
 
-// UnmarshalJSON reads Minutes with its overview decoded on its own: one this hub cannot read (another hub's shape, a
-// hand edit) or that has no bullet counts as absent, as on the clients, and never makes the rest unreadable.
+// UnmarshalJSON reads Minutes with its overview and debates decoded on their own: one this hub cannot read (another
+// hub's shape, a hand edit) or that cleans down to nothing counts as absent, as on the clients, and never makes the
+// rest unreadable.
 func (m *Minutes) UnmarshalJSON(data []byte) error {
 	type plain Minutes
 	var aux struct {
 		*plain
 		Overview json.RawMessage `json:"overview"` // shallower than plain's: it takes the field
+		Debates  json.RawMessage `json:"debates"`
 	}
 	aux.plain = (*plain)(m)
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -62,6 +64,7 @@ func (m *Minutes) UnmarshalJSON(data []byte) error {
 			m.Overview = &o
 		}
 	}
+	m.Debates = decodeMinutesDebates(aux.Debates, len(m.Decisions))
 	return nil
 }
 

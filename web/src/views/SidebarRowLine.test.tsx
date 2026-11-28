@@ -31,8 +31,8 @@ describe("an agent's sidebar row (#3195)", () => {
   it("says what its card asks, under the title", () => {
     const card = { id: "q1", machine_id: "mac", session_id: "s1", kind: "question", questions: [{ question: "网络层的测试用哪个框架？" }] } as Interaction;
     const html = render({ ...base, state: "needs_you", pending_interactions: 1 }, [card]);
-    expect(line(html)).toBe("在问你：网络层的测试用哪个框架？");
-    expect(html).toMatch(/<span class="font-medium text-attention">在问你：<\/span>/);
+    expect(line(html)).toBe("向你提问：网络层的测试用哪个框架？");
+    expect(html).toMatch(/<span class="font-medium text-attention">向你提问：<\/span>/);
   });
 
   it("does not take another agent's card", () => {

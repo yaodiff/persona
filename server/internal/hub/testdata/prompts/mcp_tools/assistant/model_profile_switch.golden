@@ -1,12 +1,12 @@
 {
   "name": "model_profile_switch",
-  "description": "Switch atomically to a profile by id; inspect first. Saves a rollback point and affects new model calls/Agent starts, not running work.",
+  "description": "Inspect first. Apply a profile to future model calls and Agent starts. Saves a rollback point.",
   "input_schema": {
     "type": "object",
     "properties": {
       "id": {
         "type": "string",
-        "description": "Profile id from model_profiles_list"
+        "description": "Saved profile ID"
       }
     },
     "additionalProperties": false,

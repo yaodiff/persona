@@ -62,10 +62,33 @@ class HttpMessageTransport(
             } catch (failure: HubFailure) {
                 if (failure.status == 404) null else throw failure
             }
-            if (receipt?.get("state")?.jsonPrimitive?.content in setOf("done", "failed", "unknown")) {
+            val opState = receipt?.get("state")?.jsonPrimitive?.contentOrNull
+            if (opState in setOf("done", "failed", "unknown")) {
                 val saved = receipt?.get("result") as? JsonObject
                 val status = saved?.get("status")?.jsonPrimitive?.intOrNull
                 val body = saved?.get("body")?.jsonPrimitive?.contentOrNull
+                if (opState == "unknown") {
+                    val result = if (status != null && body != null) {
+                        decodeResult(request.session, status, String(Base64.getDecoder().decode(body), Charsets.UTF_8))
+                    } else {
+                        MessageTransportResult.NoReceipt
+                    }
+                    // When the saved error proves nothing reached the node, return it directly without fuzzy transcript matching.
+                    if (result is MessageTransportResult.HubError &&
+                        (result.delivered == "none" || (result.code == "assistant_offline" && result.delivered == null))) {
+                        return MessageEvidence.Receipt(result)
+                    }
+                    // Otherwise check the transcript first so messages that already landed converge to Shown;
+                    // a recovered row with result=null still reports Receipt(NoReceipt) rather than null.
+                    val shown = try {
+                        transcriptEvidence(request, createdAt, allowTextMatch)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                    return shown ?: MessageEvidence.Receipt(result)
+                }
                 if (status != null && body != null) {
                     val result = decodeResult(request.session, status, String(Base64.getDecoder().decode(body), Charsets.UTF_8))
                     if (result == MessageTransportResult.Held) {

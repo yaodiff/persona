@@ -1,4 +1,6 @@
-import type { AgentState, Interaction, Session, SessionCapabilities } from "./types";
+import { parseAgentPhase, type AgentPhase, type AgentView } from "./agent-view-wire";
+import { inferAgentView } from "./legacy-agent-view";
+import type { AgentState, StatusMarkState, Interaction, Session, SessionCapabilities } from "./types";
 import { formatDate, formatRelative, t } from "../i18n";
 import { normalizeTraeCliName, sessionAgentName } from "./agent-kind";
 import { usageLimitLabel } from "./usage-limit";
@@ -94,11 +96,12 @@ export function shellPath(path: string): string {
 }
 
 export function sessionMenuActions(s: Session): string[] {
+  const foreground = viewOf(s).reason?.kind !== "background" && !s.background_working && !s.background_waiting;
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
-    ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
+    ...(stateOf(s) === "working" && foreground && sessionCan(s, "interrupt") ? ["stop"] : []),
     ...(sessionCan(s, "terminal") ? ["resume"] : []),
-    ...(!s.assistant && stateOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
+    ...(!s.assistant && activityOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
 }
 
@@ -111,40 +114,45 @@ export function sessionDeletable(s: Session): boolean {
   return !s.assistant && DELETABLE_STATUSES.has(s.status) && !s.starting;
 }
 
-// docs/protocol/agent-states.md: needs you → unread → awaiting reply (seen, awaiting the user's reply, #5096) → working →
-// just finished (done before anybody looked, #9751) → idle → unknown → offline
-const RANK: Record<AgentState, number> = { needs_you: 0, unread: 1, working: 3, idle: 5, unknown: 6, offline: 7 };
-
-// A seen agent awaiting the user's reply ranks between unread and working, a just finished one between working and the
-// seen ones. The comparator has no mutes: a muted one ranks so here too (the sidebar's By Status sections and folds go
-// by lib/agent-groups.ts awaitsReply and justFinished).
-function rankOf(s: Session): number {
-  const st = stateOf(s);
-  if (st === "idle" && s.awaits_reply) return 2;
-  if (st === "idle" && s.work?.just_finished) return 4;
-  return RANK[st];
+/** A rolling upgrade can mix rows from old and new managers in one response. */
+export function viewOf(s: Session): AgentView {
+  if (!s.view) return inferAgentView(s);
+  if (typeof parseAgentPhase(s.view.phase) === "string") return s.view;
+  return { ...s.view, phase: "idle", reason: { kind: "host_unknown" } };
 }
 
-export function stateOf(s: Session): AgentState {
-  if (s.state) return s.state;
-  if (s.status === "offline") return "offline";
-  if (s.status === "working") return "working";
-  if (s.status === "blocked" || (s.pending_interactions ?? 0) > 0) return "needs_you";
+export function stateOf(s: Session): AgentPhase {
+  return viewOf(s).phase;
+}
+
+/** The older host vocabulary used by read receipts, notification transitions and terminal controls.
+ * Done alone cannot tell these callers whether a reply is unread or a process is running. */
+export function activityOf(s: Session): AgentState {
+  if (!s.view && s.state) return s.state;
+  const { phase, reason } = viewOf(s);
+  if (phase === "working" || phase === "needs_you") return phase;
+  if (phase === "done" && s.locallySeen) return "idle";
+  if (reason?.kind === "unseen" || (reason?.kind === "asks" && reason.unseen)) return "unread";
+  if (reason?.kind === "not_running") return "offline";
+  if (reason?.kind === "host_unknown") return "unknown";
   return "idle";
 }
 
-/** Working only because its background commands wait (#6045, Session.background_waiting): its own state is still
- *  "working" (older apps show that); the web shows it as "Waiting in the background", apart from Working. */
 export function backgroundWaiting(s: Session): boolean {
-  return stateOf(s) === "working" && Boolean(s.background_waiting);
+  if (!s.view && s.background_waiting && s.background_working === undefined) return stateOf(s) === "working";
+  const reason = viewOf(s).reason;
+  return reason?.kind === "background" && reason.waiting === true;
 }
 
-export function stateColor(st: AgentState): string {
+export function stateColor(st: StatusMarkState): string {
   switch (st) {
     case "needs_you":
       return "var(--status-needs)";
     case "working":
       return "var(--status-working)";
+    case "error":
+      return "var(--red)";
+    case "done":
     case "unread":
       return "var(--status-unread)";
     case "offline":
@@ -155,7 +163,7 @@ export function stateColor(st: AgentState): string {
 }
 
 export function byAttention(a: Session, b: Session): number {
-  const d = rankOf(a) - rankOf(b);
+  const d = viewOf(a).rank - viewOf(b).rank;
   if (d) return d;
   const ta = stateOf(a) === "working" ? a.state_since || a.updated_at : a.updated_at;
   const tb = stateOf(b) === "working" ? b.state_since || b.updated_at : b.updated_at;
@@ -199,15 +207,30 @@ export function failureReason(s: Session | undefined): string | undefined {
   return failureText(s.failure_reason) || undefined;
 }
 
-/** "Open in Lark": the session's place outside Persona, a web (https) link only (iOS externalLink). */
-export function externalLink(s?: Pick<Session, "external_url">): string | undefined {
-  const raw = s?.external_url?.trim();
-  if (!raw) return undefined;
+const CTRL_CHARS = /[\u0000-\u001f\u007f]/;
+
+/** Validates a credential-free http(s) URL (https-only when `httpsOnly` is true), rejecting single-slash
+ *  same-origin relative URLs (`https:/admin`), backslash/userinfo authority confusion, and C0/DEL control
+ *  characters. Returns the canonical `URL.href` or undefined. */
+export function safeWebURL(raw?: string, httpsOnly = false): string | undefined {
+  const s = raw?.trim();
+  if (!s || CTRL_CHARS.test(s)) return undefined;
+  const m = httpsOnly ? /^https:\/\//i.exec(s) : /^https?:\/\//i.exec(s);
+  if (!m) return undefined;
+  const auth = s.slice(m[0].length).split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return undefined;
   try {
-    return new URL(raw).protocol === "https:" ? raw : undefined;
+    const u = new URL(s);
+    if ((httpsOnly ? u.protocol !== "https:" : u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname || u.username || u.password) return undefined;
+    return u.href;
   } catch {
     return undefined;
   }
+}
+
+/** "Open in Lark": the session's place outside Persona, a web (https) link only (iOS externalLink). */
+export function externalLink(s?: Pick<Session, "external_url">): string | undefined {
+  return safeWebURL(s?.external_url, true);
 }
 
 type SessionNameFields = Pick<Session, "title" | "cwd" | "assistant" | "slot_name" | "slot_id" | "tab_id" | "space_kind" | "host">;
@@ -238,7 +261,7 @@ export function sessionTitleDetail(s: SessionNameFields, preferTab: boolean): st
 
 // A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other
 // path it is a character of a name.
-const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\|^\/\/[^\\/]+[\\/]/;
+export const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\|^\/\/[^\\/]+[\\/]/;
 
 export function baseName(p?: string): string {
   if (!p) return "";

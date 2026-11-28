@@ -8,7 +8,7 @@ import type { MenuItem } from "../ui/menu-model";
 
 /** What the menu's choices do; the page owns the requests, the dialogs and their toasts. */
 export interface TodoRowActions {
-  /** Completes an open to-do, reopens a done one (the row's checkbox). */
+  /** Completes a to-do, opens the report form for a concern, or reopens a done item. */
   toggleDone: () => void;
   /** Saves a priority, due date or reminder, as the to-do's page does. */
   save: (patch: TodoPatch) => void;
@@ -79,7 +79,7 @@ export function todoRowMenu(todo: Todo, open: boolean, now: number, act: TodoRow
   });
   return [
     open
-      ? { key: "complete", label: t("todos.complete_todo"), icon: "check", onSelect: act.toggleDone }
+      ? { key: "complete", label: todo.kind === "concern" ? t("todos.report_concern_action") : t("todos.complete_todo"), icon: "check", onSelect: act.toggleDone }
       : { key: "reopen", label: t("todos.reopen_todo"), icon: "undo", onSelect: act.toggleDone },
     {
       key: "priority",

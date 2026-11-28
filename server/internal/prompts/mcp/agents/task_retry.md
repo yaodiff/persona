@@ -1,4 +1,4 @@
-Start a failed task's agent again: in its kept tab (once task_start_keys answered what stopped it), else in a new tab, reopening it; with launcher, on that launcher of the same computer and workspace. At most 3 retries; the hub never retries itself. Returns at once; the outcome comes as a 督办 message. Only this conversation's tasks; reason goes in their history.{{template "shared/mcp_language" .}}
+Retry a failed task in its kept tab after clearing the blocker, or reopen it in a new tab. An optional launcher uses the same computer and workspace. The main conversation may retry any task. Other conversations may retry only tasks they supervise. Up to 3 manual retries. Returns at once. Look for the result in supervision. The task history records the reason.{{template "shared/mcp_language" .}}
 
 ```json
 {

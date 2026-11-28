@@ -5,7 +5,7 @@
 // here: the caps, line ranges, the block as written into the message and read back (an edit, a sent bubble).
 import type { DraftQuote } from "./drafts";
 import type { DiffLine } from "./files";
-import { openPanel } from "./panel";
+import { openPanel, type Panel } from "./panel";
 
 /** A comment's note is cut at this many characters. */
 export const MAX_COMMENT_CHARS = 4000;
@@ -14,13 +14,27 @@ export const MAX_CODE_LINES = 60;
 
 /** What a diff shows: the staged changes, the unstaged ones, or one commit; or what a review of the session's changes
  *  compares the files on disk with (lib/session-review.ts, #151): HEAD, where the branch left the default branch, a
- *  commit (`base`: its first 8 hex digits). */
+ *  commit (`base`: its first 8 hex digits); a turn's last completed checkpoint. */
 export type DiffScope =
   | { kind: "staged" }
   | { kind: "unstaged" }
   | { kind: "commit"; sha: string }
   | { kind: "review"; scope: "uncommitted" }
-  | { kind: "review"; scope: "branch" | "commit"; base: string };
+  | {
+      kind: "review";
+      scope: "branch" | "commit" | "turn";
+      base: string;
+      /** The full base hash, when the card still has it (the display `base` is short). */
+      baseHash?: string;
+      /** The branch ref a branch review was against. */
+      ref?: string;
+      /** A turn's end checkpoint. */
+      target?: string;
+      /** The turn was live when the comment was made; reopen the working-tree side. */
+      live?: boolean;
+      /** The first turn in an unborn repository: its base is the empty tree. */
+      emptyBase?: boolean;
+    };
 
 /** Where picked words sit in the transcript: the message (its `data-items` id) and the offsets in its text. */
 export interface TextAnchor {
@@ -75,6 +89,8 @@ export interface QuoteComment {
   body: string;
   anchor?: TextAnchor;
   spot?: CodeSpot;
+  /** The displayed file location and, for a draft, the file panel it came from. */
+  file?: { location: string; panel?: Extract<Panel, { kind: "file" }> };
   /** An element picked in a dev server preview (lib/preview.ts, #150); its HTML is the quote's text. */
   element?: ElementSpot;
 }
@@ -118,19 +134,50 @@ export function truncateLines(lines: readonly string[], max = MAX_CODE_LINES): {
   return { lines: lines.slice(0, max), omitted: lines.length - max };
 }
 
-/** `staged`, `unstaged` or `commit <first 8 of the hash>`; a review's `uncommitted`, `branch since <hash>`, `since <hash>`. */
+/** `staged`, `unstaged` or `commit <first 8 of the hash>`; a review's `uncommitted`, `branch since <hash>`,
+ *  `since <hash>`, `turn <hash>`. */
 export function diffLabel(d: DiffScope): string {
-  if (d.kind === "review") return d.scope === "uncommitted" ? "uncommitted" : `${d.scope === "branch" ? "branch since" : "since"} ${d.base}`;
+  if (d.kind === "review") {
+    if (d.scope === "uncommitted") return "uncommitted";
+    if (d.scope === "branch") return `branch since ${d.base}`;
+    if (d.scope === "turn") {
+      const base = d.baseHash ?? d.base;
+      if (d.emptyBase) {
+        if (d.target) return `turn ..${d.target}`;
+        return d.live ? "turn ..live" : "turn";
+      }
+      if (d.live && !d.target) return `turn ${base}..live`;
+      return d.target ? `turn ${base}..${d.target}` : `turn ${base}`;
+    }
+    return `since ${d.baseHash ?? d.base}`;
+  }
   return d.kind === "commit" ? `commit ${d.sha.slice(0, 8)}` : d.kind;
 }
 
 /** A `Diff:` line's value read back (diffLabel's). */
 export function parseDiffLabel(v: string): DiffScope | null {
-  const d = /^(staged|unstaged|uncommitted|commit ([0-9a-f]+)|(branch since|since) ([0-9a-f]+))$/.exec(v.trim());
-  if (!d) return null;
-  if (d[2]) return { kind: "commit", sha: d[2] };
-  if (d[4]) return { kind: "review", scope: d[3] === "since" ? "commit" : "branch", base: d[4] };
-  return d[1] === "uncommitted" ? { kind: "review", scope: "uncommitted" } : { kind: d[1] as "staged" | "unstaged" };
+  const value = v.trim();
+  if (value === "staged" || value === "unstaged") return { kind: value };
+  if (value === "uncommitted") return { kind: "review", scope: "uncommitted" };
+  const commit = /^commit ([0-9a-f]+)$/.exec(value);
+  if (commit) return { kind: "commit", sha: commit[1] };
+  const since = /^(branch since|since) ([0-9a-f]+)$/.exec(value);
+  if (since) {
+    const scope = since[1] === "since" ? "commit" : "branch";
+    return { kind: "review", scope, base: since[2], ...(scope === "commit" ? { baseHash: since[2] } : {}) };
+  }
+  const liveTurn = /^turn ([0-9a-f]+)\.\.live$/.exec(value);
+  if (liveTurn) return { kind: "review", scope: "turn", base: liveTurn[1], baseHash: liveTurn[1], live: true };
+  if (value === "turn ..live") return { kind: "review", scope: "turn", base: "", emptyBase: true, live: true };
+  const turn = /^turn (?:([0-9a-f]*)\.\.)?([0-9a-f]+)$/.exec(value);
+  if (turn) {
+    if (turn[1] !== undefined) {
+      const base = turn[1];
+      return { kind: "review", scope: "turn", base: base || turn[2], ...(base ? { baseHash: base } : { emptyBase: true }), target: turn[2] };
+    }
+    return { kind: "review", scope: "turn", base: turn[2], baseHash: turn[2] };
+  }
+  return null;
 }
 
 /** The first `max` lines of some code for a card, with the indentation they all share taken off. */
@@ -167,9 +214,9 @@ export function codeQuote(a: { file: string; path: string; from: number; to: num
   return { text: cut.lines.join("\n"), comment: { body: "", spot } };
 }
 
-/** The words picked in the transcript as a quote. */
+/** The words picked in the transcript as a quote (untrimmed to match anchorOf's exact slice). */
 export function textQuote(words: string, anchor: TextAnchor | undefined, from?: string, ts?: string): DraftQuote {
-  return { text: words.trim(), from, ts, comment: { body: "", ...(anchor ? { anchor } : {}) } };
+  return { text: words, from, ts, comment: { body: "", ...(anchor ? { anchor } : {}) } };
 }
 
 // i18n-ignore: the block below is written into the message for the agent and read back by parseCommentBlock
@@ -181,7 +228,7 @@ export function isCommentHead(line: string): boolean {
 }
 
 /** The comment as the block the agent reads (before the `> ` marks): its number, where, the words or code, the note. */
-export function commentBlock(q: DraftQuote, n: number): string {
+export function commentBlock(q: DraftQuote, n: number, images?: readonly number[]): string {
   const c = q.comment;
   if (!c) return q.text;
   const note = clampComment(c.body).trim();
@@ -206,7 +253,11 @@ export function commentBlock(q: DraftQuote, n: number): string {
     const fence = fenceFor(q.text);
     out.push(fence + (s.lang ?? ""), q.text, fence);
   } else {
-    out.push(`Comment ${n}`, "Selected text:", ...q.text.split("\n").map((l) => `> ${l}`));
+    out.push(`Comment ${n}`);
+    if (images?.length) out.push(`Attached images for this comment (positions in this message): ${images.join(", ")}`);
+    out.push("Selected text:", ...q.text.split("\n").map((l) => `> ${l}`));
+    // Old clients still read the selection. They show these lines at the start of the note.
+    if (c.file) out.push(`File: ${c.file.location}`);
   }
   if (note) out.push("", note);
   return out.join("\n");
@@ -219,11 +270,15 @@ export function parseCommentBlock(block: string): DraftQuote | null {
   if (!head) return null;
   let i = 1;
   if (head[1] === "Comment") {
+    if (/^Attached images for this comment \(positions in this message\): \d+(, \d+)*$/.test(lines[i] ?? "")) i++;
     if (lines[i]?.trim() === "Selected text:") i++;
     const words: string[] = [];
     while (i < lines.length && /^ {0,3}>/.test(lines[i])) words.push(lines[i++].replace(/^ {0,3}> ?/, ""));
+    const location = /^File: (.+)$/.exec(lines[i] ?? "")?.[1];
+    if (location) i++;
     const body = lines.slice(i).join("\n").trim();
-    return { text: words.join("\n").trim(), comment: { body } };
+    const text = words.join("\n");
+    return { text: location ? text : text.trim(), comment: location ? { body, file: { location } } : { body } };
   }
   if (head[1] === "Element comment") return parseElementBlock(lines.slice(1));
   const spot: Partial<CodeSpot> = { omitted: 0 };
@@ -286,8 +341,25 @@ function parseElementBlock(lines: string[]): DraftQuote | null {
 /** Opens the file or the diff a code comment is about at its lines; false when it does not know where (a bubble read back). */
 export function openSpot(s: CodeSpot): boolean {
   if (!s.mid) return false;
-  if (s.diff?.kind === "review") openPanel({ kind: "review", mid: s.mid, sid: s.sid ?? "", cwd: s.cwd ?? "", at: { path: s.path, line: s.from, old: s.old } });
-  else if (s.diff) openPanel({ kind: "git", mid: s.mid, sid: s.sid ?? "", cwd: s.cwd ?? "", at: { path: s.path, diff: s.diff, line: s.from, to: s.to, old: s.old } });
+  if (s.diff?.kind === "review") {
+    const d = s.diff;
+    if (d.scope === "uncommitted") {
+      openPanel({ kind: "review", mid: s.mid, sid: s.sid ?? "", cwd: s.cwd ?? "", scope: d.scope, at: { path: s.path, line: s.from, old: s.old } });
+      return true;
+    }
+    const base = d.emptyBase ? undefined : d.scope === "branch" ? d.ref ?? d.baseHash ?? d.base : d.baseHash ?? d.base;
+    openPanel({
+      kind: "review",
+      mid: s.mid,
+      sid: s.sid ?? "",
+      cwd: s.cwd ?? "",
+      scope: d.scope,
+      base,
+      target: d.target,
+      live: d.live,
+      at: { path: s.path, line: s.from, old: s.old },
+    });
+  } else if (s.diff) openPanel({ kind: "git", mid: s.mid, sid: s.sid ?? "", cwd: s.cwd ?? "", at: { path: s.path, diff: s.diff, line: s.from, to: s.to, old: s.old } });
   else openPanel({ kind: "file", mid: s.mid, path: s.path, cwd: s.cwd, line: s.from, to: s.to, sid: s.sid });
   return true;
 }

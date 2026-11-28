@@ -13,7 +13,11 @@ import { PagedSessionList } from "./PagedSessionList";
 import { useAccountGroups } from "./account-groups";
 
 vi.mock("../../lib/api", async (original) => ({ ...await original<typeof import("../../lib/api")>(), api: vi.fn() }));
-vi.mock("../../lib/store", () => ({ onHubEvent: () => () => {} }));
+vi.mock("../../lib/store", () => ({
+  onHubEvent: () => () => {},
+  // the grouped list reads the computers' online state (GroupedSessions, #13522): none here
+  useStore: (select: (state: { machines: [] }) => unknown) => select({ machines: [] }),
+}));
 const agents = vi.hoisted(() => ({ sources: null as AgentSourceStatus[] | null, sessions: [] as { id: string; accountId: string; provider: string }[] }));
 vi.mock("../../lib/agents", async (original) => ({
   ...await original<typeof import("../../lib/agents")>(),
@@ -72,7 +76,7 @@ afterEach(() => {
 function Personal() {
   const accounts = useAccountGroups();
   return <PagedSessionList root={list} path="/agents/sessions" identity={identity} compare={compare} event="agents" personal
-    label={accounts.label} accountMark={accounts.accountMark} renderRow={(r) => <span data-row={r.id}>{r.id}</span>} />;
+    label={accounts.label} accountMark={accounts.accountMark} providerOptions={accounts.providerOptions} renderRow={(r) => <span data-row={r.id}>{r.id}</span>} />;
 }
 async function byAccount() {
   await list.load();
@@ -95,9 +99,9 @@ describe("the personal list by account", () => {
     const groups = sections().map(named).sort((a, b) => a.key!.localeCompare(b.key!));
     expect(groups).toEqual([
       { key: "acct-blank", name: "Claude Duet", tip: "acct-blank", mark: "claude" }, // a blank displayName: the provider's label
-      { key: "acct-dots", name: "Dots · Example User", tip: "acct-dots", mark: "codex" }, // ChatGPT's Blossom
+      { key: "acct-dots", name: "Dots · Example User", tip: "acct-dots", mark: "letter" }, // Dots is not ChatGPT's Blossom
       { key: "acct-gone", name: "Groq", tip: "acct-gone", mark: "letter" }, // not in /agents: its sessions' provider
-      { key: "acct-grok", name: "Grok Bot", tip: "acct-grok", mark: "grok" },
+      { key: "acct-grok", name: "Grok Bot", tip: "acct-grok", mark: "letter" }, // Grok Bot is not xAI's Grok
       { key: "acct-muse", name: "Muse", tip: "acct-muse", mark: "letter" },
     ]);
     for (const s of sections()) expect(heading(s).textContent).not.toContain(s.dataset.sessionGroup!);
@@ -120,5 +124,23 @@ describe("the personal list by account", () => {
     const groups = sections().map((s) => heading(s).textContent);
     expect(groups.some((x) => x?.includes("acct-grok"))).toBe(true);
     expect(sections().every((s) => !heading(s).querySelector("[data-agent-mark]"))).toBe(true);
+  });
+
+  it("offers the providers with sessions by display name and filters by their id", async () => {
+    await byAccount();
+    const pill = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("paged-agents.provider")}"]`)!;
+    expect(pill.textContent).toContain(t("paged-agents.all_providers"));
+
+    await act(async () => pill.click());
+    const choices = [...document.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
+    expect(choices.map((x) => x.textContent)).toEqual(expect.arrayContaining([
+      t("paged-agents.all_providers"), "Claude Duet", "Grok Bot", "Muse", "Groq",
+    ]));
+    expect(choices.every((x) => !/grok_bot|muse2api|claude_duet/.test(x.textContent ?? ""))).toBe(true);
+
+    const grok = choices.find((x) => x.textContent?.includes("Grok Bot"))!;
+    await act(async () => grok.click());
+    expect(pill.textContent).toContain("Grok Bot");
+    expect(vi.mocked(api).mock.calls.some(([path]) => params(path as string).get("provider") === "grok_bot")).toBe(true);
   });
 });

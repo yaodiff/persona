@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_ext_scene">3D シーン</string>
+    <string name="settings_ext_scene_turn_left">シーンを左に回す</string>
+    <string name="settings_ext_scene_turn_right">シーンを右に回す</string>
+    <string name="settings_ext_scene_tilt_up">視点を上げる</string>
+    <string name="settings_ext_scene_tilt_down">視点を下げる</string>
+    <string name="settings_ext_scene_reset">表示をリセット</string>
+</resources>

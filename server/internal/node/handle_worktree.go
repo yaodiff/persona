@@ -39,7 +39,7 @@ type worktreeCreateParams struct {
 	// ForAgent: the assistant makes this worktree for an Agent it starts there, so its first shell is Persona's
 	// (finished_close.go, #10624). The user's "New worktree…" never sends it.
 	ForAgent bool `json:"for_agent"`
-	// OpenWorkspace defaults to true. A herdr leader task sets false for a checkout whose Agent tab opens in the
+	// OpenWorkspace defaults to true. A grouped herdr or Orca task sets false for a checkout whose Agent tab opens in the
 	// task's shared workspace instead (#4786).
 	OpenWorkspace *bool `json:"open_workspace,omitempty"`
 }

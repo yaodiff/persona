@@ -265,13 +265,14 @@ func (d *DB) DeleteExtensionRecordRetainingData(ctx context.Context, row extensi
 		return err
 	}
 	defer storageRollback(tx)
-	var publicID, version string
-	var installed time.Time
-	if err = tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(public_id,''),id),version,installed_at FROM plugins WHERE id=$1 FOR UPDATE`, row.StorageKey()).Scan(&publicID, &version, &installed); err != nil {
-		return err
-	}
-	if publicID != row.ID || version != row.Version || installed.UnixMicro() != row.InstalledAt.UnixMicro() {
+	var matched int
+	err = tx.QueryRow(ctx, `SELECT 1 FROM plugins WHERE `+extensionRecordMatch+` FOR UPDATE`,
+		row.StorageKey(), row.ID, row.Version, row.InstalledAt, row.Source, row.BuiltinPredecessor).Scan(&matched)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return extension.ErrIdentity
+	}
+	if err != nil {
+		return err
 	}
 	if err = storageBudget(ctx, tx); err != nil {
 		return err

@@ -33,6 +33,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/mail/messages/{aid}/{uid}", s.handleGetMessage)
 	mux.HandleFunc("GET /api/v1/mail/messages/{aid}/{uid}/attachments/{attachment}", s.handleAttachment)
 	mux.HandleFunc("POST /api/v1/mail/messages/{aid}/{uid}/flags", s.handleSetFlags)
+	mux.HandleFunc("POST /api/v1/mail/messages/{aid}/{uid}/move", s.handleMove)
 	mux.HandleFunc("POST /api/v1/mail/send", s.handleSend)
 	// ServeMux answers 404/405 in plain text; the API contract is JSON errors.
 	// Binary downloads stream directly, retaining ServeContent's Range response headers.
@@ -359,6 +360,25 @@ func (s *Service) handleSetFlags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) handleMove(w http.ResponseWriter, r *http.Request) {
+	uid, err := strconv.ParseUint(r.PathValue("uid"), 10, 32)
+	if err != nil || uid == 0 {
+		apierr.WriteCode(w, http.StatusBadRequest, "invalid_params", invalidMove)
+		return
+	}
+	var req MoveRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	result, err := s.moveMessage(r.Context(), r.PathValue("aid"), uint32(uid), req)
+	if err != nil {
+		failure := moveResponseError(err)
+		apierr.WriteCode(w, failure.HTTPStatus(), failure.Code(), failure)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {

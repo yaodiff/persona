@@ -1,6 +1,6 @@
 # Plan: tmux as a terminal engine (#1180)
 
-Status: proposal, waiting for the maintainer to decide ("Points for the maintainer to decide" below). Once decided, implement it in the order of "Phases"; when done, merge the design parts into `docs/integrations/engines.md` / `docs/plans/plan-orca-support.md` and delete this plan.
+Status: proposal, waiting for the maintainer to decide ("Points for the maintainer to decide" below). Once decided, implement it in the order of "Phases"; when done, merge the design parts into `docs/integrations/engines.md` and delete this plan.
 
 ## Background
 
@@ -8,7 +8,7 @@ Many people open Claude Code / Codex directly in tmux panes. Today these session
 and sending a message starts another `claude --resume` in herdr. tmux appears in Persona only indirectly: botmux sessions run in its own tmux
 and are listed by the botmux host (`server/internal/node/hostbotmux.go`) through `botmux observe`, without reading tmux directly.
 
-The host interface has already been extracted (`server/internal/host/host.go`, design in `docs/plans/plan-orca-support.md` ("Host interface")), so tmux is just one more host implementation:
+The host interface has already been extracted (`server/internal/host/host.go`, design in `docs/integrations/engines.md` ("Host interface")), so tmux is just one more host implementation:
 type `tmux`, the host lives in the node package (new file hosttmux.go), plus a thin tmux client package (new package internal/tmux: run commands, parse `-F` output, read/write control mode).
 The shared layer above hosts (recognizing sessions, deciding state, pre-send checks, capability reporting) stays as is, with no `if` added for tmux.
 
@@ -74,7 +74,7 @@ When the client and server versions differ too much, tmux reports `protocol vers
   `tmux:default@4242/%3`. The hook builds the same string from `TMUX` (its second field is the pid) and `TMUX_PANE`. When the server's pid changes, old bindings expire naturally and never land on the new server's `%3` (see open point 3).
   Add `tmux` to `host.Kinds`: herdr ids look like `w1:p2` and never start with `tmux:`, so existing data needs no migration.
 - **Session groups** (`new-session -t` sharing windows): the same pane is listed once under each session in the group; deduplicate by pane id and assign it to the group's earliest-created session.
-- Spaces of **multiple servers** are independent (the id includes the server); the App's grouping key being "machine + space_kind + space_id" is already a step to be done (`docs/plans/plan-orca-support.md` ("Shared layer above hosts")).
+- Spaces of **multiple servers** are independent (the id includes the server); the App's grouping key being "machine + space_kind + space_id" is already a step to be done (`docs/integrations/engines.md` ("Shared layer above hosts")).
 - Hostname titles: when `pane_title` equals the hostname (tmux's default), treat it as no title.
 
 ### 3. Reading the screen and live streaming
@@ -99,7 +99,7 @@ Note: when the program is on the alternate screen, `capture-pane` reads the alte
 | `pipe-pane -O` | the program's raw bytes; each pane can have only one pipe, so the user's own `pipe-pane` (recording, logging) would be displaced | not used |
 | Control mode `tmux -C attach` | `%output` pushes the program's raw bytes; without a size it **does not resize panes** (measured); one connection covers all panes of the whole server | use it, but do not forward the bytes directly |
 
-`%output` is the program's raw output, not grid-redrawn frames like herdr observe; the App's own VT subset cannot handle arbitrary raw output (the same issue as in `docs/plans/plan-orca-support.md` ("herdr-core host")).
+`%output` is the program's raw output, not grid-redrawn frames like herdr observe; the App's own VT subset cannot handle arbitrary raw output (the same issue as in `docs/integrations/herdr-core.md` ("herdr-core host")).
 So: **`%output` is only a signal that "this pane changed"; frames are fetched fresh with `capture-pane -e -p`**, combined with `#{cursor_x},#{cursor_y}`, `#{cursor_flag}` into one frame
 (full-screen `ESC[2J` + per-line `CUP` + line content + cursor position), with changes within 30 ms merged into one (the node's current `termMinGap`). The node remembers each line of the previous frame and redraws only changed lines, which gives incremental frames.
 The frame format is the same as herdr observe, so the hub and App need no changes. Size comes from `pane_width`×`pane_height`; after `%layout-change`, send a full frame at the new size.

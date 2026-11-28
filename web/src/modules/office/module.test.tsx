@@ -34,3 +34,24 @@ it("falls back to the embedded preview when the workbook reader cannot open a Nu
   }
   expect(revoke).toHaveBeenCalledWith("blob:numbers-preview");
 });
+
+it("tameLinks keeps canonical credential-free http(s) URLs and strips unsafe or userinfo links", async () => {
+  const { tameLinks } = await import("./OfficeView");
+  const root = document.createElement("div");
+  root.innerHTML =
+    '<a id="ok" href="https://example.com/doc?x=1">ok</a>' +
+    '<a id="cred" href="https://user:pass@evil.example/doc">cred</a>' +
+    '<a id="bs" href="https://evil.example\\@trusted.example/doc">bs</a>' +
+    '<a id="js" href="javascript:alert(1)" target="_top" rel="opener">js</a>';
+  tameLinks(root);
+  const ok = root.querySelector("#ok")!;
+  expect(ok.getAttribute("href")).toBe("https://example.com/doc?x=1");
+  expect(ok.getAttribute("target")).toBe("_blank");
+  expect(ok.getAttribute("rel")).toBe("noopener noreferrer");
+  for (const id of ["#cred", "#bs", "#js"]) {
+    const el = root.querySelector(id)!;
+    expect(el.hasAttribute("href"), id).toBe(false);
+    expect(el.hasAttribute("target"), id).toBe(false);
+    expect(el.hasAttribute("rel"), id).toBe(false);
+  }
+});

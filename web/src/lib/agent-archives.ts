@@ -6,7 +6,7 @@
 // it as "Close…" (#7125, closeOffer), which closes a busy agent too after saying what that interrupts.
 import { useSyncExternalStore } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
-import { sessionDeletable, sessionMenuActions, sessionTitle, stateOf } from "./format";
+import { sessionDeletable, sessionMenuActions, sessionTitle, activityOf, stateOf } from "./format";
 import { dropSession, getState, refresh, upsertSession, useStore } from "./store";
 import { toast } from "../ui/atoms";
 import { t } from "../i18n";
@@ -19,7 +19,7 @@ export const AGENT_ARCHIVE_CLOSE_FEATURE = "agent_session_archive_close";
 /** Busy as the manager counts it for an archive (agent_archives.go agentArchiveBusy): working, starting, waiting for an
  *  answer, background work, running subagents or workflows. Awaiting the user's reply is not busy. */
 export function archiveBusy(s: Session): boolean {
-  const st = stateOf(s);
+  const st = activityOf(s);
   return Boolean(
     s.starting || s.status === "working" || s.status === "blocked" || st === "working" || st === "needs_you" ||
       s.background_working || s.background_waiting || (s.pending_interactions ?? 0) > 0 ||
@@ -61,7 +61,7 @@ export function archiveOffers(s: Session, features: readonly string[]): { archiv
   const agent = s.agent ?? "";
   const resumable = agent === "" || agent === "claude" || ((agent === "codex" || agent === "traex") && Boolean(s.started_by_persona));
   const agy = agent === "agy" && (!s.source_kind || (s.source_kind === "runtime" && s.capabilities?.close === true));
-  const open = stateOf(s) !== "offline" && s.status !== "offline" && !s.start_error;
+  const open = activityOf(s) !== "offline" && s.status !== "offline" && !s.start_error;
   const closable = features.includes(AGENT_ARCHIVE_CLOSE_FEATURE) && (agy || (!s.source_kind && resumable)) && open;
   return { archive, close: !closable ? "no" : closeBusy(s) ? "busy" : "ok" };
 }

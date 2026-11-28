@@ -19,13 +19,13 @@ describe("iPhone control", () => {
   });
 
   it("offers the helper's install, its progress at once, and why one failed", () => {
-    expect(iphoneView(on({ installed: false, code: "bridge_missing" }), true, true)).toEqual({ kind: "install", text: "这台电脑上还没装 iPhone 助手程序", retry: false });
+    expect(iphoneView(on({ installed: false, code: "bridge_missing" }), true, true)).toEqual({ kind: "install", text: "该电脑尚未安装 iPhone 助手程序", retry: false });
     expect(iphoneView(on({ installed: false }), true, true, { action: "install" })).toEqual({ kind: "installing", text: "正在安装 iPhone 助手程序…" });
     expect(iphoneView(on({ installed: false, job: { kind: "install", state: "running", step: "正在校验" } }), true, true)).toEqual({ kind: "installing", text: "正在校验" });
     const failed = (code: string) => iphoneView(on({ installed: false, job: { kind: "install", state: "failed", code, error: "x" } }), true, true);
-    expect(failed("download_failed")).toEqual({ kind: "install", text: "没能下载 iPhone 助手程序。看看这台电脑的网络，再试一次。", retry: true });
-    expect(failed("checksum_mismatch")).toMatchObject({ text: "下载的 iPhone 助手程序没通过校验，所以什么都没装。再试一次。" });
-    expect(failed("install_failed")).toMatchObject({ text: "没能安装 iPhone 助手程序：x" });
+    expect(failed("download_failed")).toEqual({ kind: "install", text: "无法下载 iPhone 助手程序。请检查该电脑的网络连接后重试。", retry: true });
+    expect(failed("checksum_mismatch")).toMatchObject({ text: "已下载的 iPhone 助手程序未通过校验，未执行安装。请重试。" });
+    expect(failed("install_failed")).toMatchObject({ text: "iPhone 助手程序安装失败：x" });
   });
 
   it("says a Mac without Xcode needs it, and still pairs", () => {
@@ -36,22 +36,22 @@ describe("iPhone control", () => {
   });
 
   it("walks an iPhone from the cable to ready", () => {
-    expect(iphoneRow(cable, undefined, false)).toMatchObject({ text: "已用数据线连上，还没配对", tone: "need", action: "pair", forget: false });
+    expect(iphoneRow(cable, undefined, false)).toMatchObject({ text: "已通过数据线连接，尚未配对", tone: "need", action: "pair", forget: false });
     const pairing = { kind: "pair", state: "running", code: "trust_pending", device: "dev-1" };
-    expect(iphoneRow(cable, pairing, false)).toMatchObject({ text: "在这台 iPhone 上点「信任」，再输入锁屏密码", tone: "work", action: "cancel" });
-    expect(iphoneRow(cable, { ...pairing, code: "locked" }, false).text).toBe("解锁这台 iPhone，配对才能继续");
-    expect(iphoneRow(cable, { kind: "pair", state: "running" }, false).text, "the moment Pair is clicked").toBe("正在和这台 iPhone 配对…");
+    expect(iphoneRow(cable, pairing, false)).toMatchObject({ text: "请在这台 iPhone 上轻点「信任」，然后输入锁屏密码", tone: "work", action: "cancel" });
+    expect(iphoneRow(cable, { ...pairing, code: "locked" }, false).text).toBe("请解锁这台 iPhone 以继续配对");
+    expect(iphoneRow(cable, { kind: "pair", state: "running" }, false).text, "the moment Pair is clicked").toBe("正在与此 iPhone 配对…");
     expect(iphoneRow({ ...paired, ready: false, developer_mode: false, code: "developer_mode_off" }, undefined, false)).toMatchObject({ tone: "need", forget: true });
     const unprepared = { ...paired, ready: false, code: "ddi_not_mounted" };
-    expect(iphoneRow(unprepared, undefined, false)).toMatchObject({ text: "还没准备好", action: "prepare", prepare: true });
+    expect(iphoneRow(unprepared, undefined, false)).toMatchObject({ text: "尚未就绪", action: "prepare", prepare: true });
     const noXcode = iphoneRow(unprepared, undefined, true);
-    expect([noXcode.text, noXcode.action]).toEqual(["还没准备好：这台 Mac 要先装 Xcode", undefined]);
+    expect([noXcode.text, noXcode.action]).toEqual(["尚未就绪：该 Mac 需先安装 Xcode", undefined]);
     const again = iphoneRow({ ...unprepared, auto_prepare: true }, undefined, false);
     expect([again.tone, again.action]).toEqual(["work", undefined]);
-    expect(iphoneRow(unprepared, { kind: "prepare", state: "running", device: "dev-1" }, false)).toMatchObject({ text: "正在准备这台 iPhone，大约一分钟", action: "cancel" });
-    expect(iphoneRow({ ...paired, locked: true, ready: false }, undefined, false).text).toBe("锁屏了：解锁后助手才能操控");
-    expect(iphoneRow({ ...paired, allowed: false }, undefined, false)).toMatchObject({ text: "等这台 iPhone 同意", tone: "need" });
-    expect(iphoneRow({ ...paired, allowed: true }, undefined, false)).toMatchObject({ text: "助手可以操控 · 经 Wi‑Fi 连着", tone: "ok", forget: true });
+    expect(iphoneRow(unprepared, { kind: "prepare", state: "running", device: "dev-1" }, false)).toMatchObject({ text: "正在配置此 iPhone，预计耗时约 1 分钟", action: "cancel" });
+    expect(iphoneRow({ ...paired, locked: true, ready: false }, undefined, false).text).toBe("设备已锁屏，解锁后助手方可操控");
+    expect(iphoneRow({ ...paired, allowed: false }, undefined, false)).toMatchObject({ text: "等待此 iPhone 授权", tone: "need" });
+    expect(iphoneRow({ ...paired, allowed: true }, undefined, false)).toMatchObject({ text: "助手可以操控 · 已通过 Wi‑Fi 连接", tone: "ok", forget: true });
   });
 
   it("only one thing runs: no Pair or Prepare beside another iPhone's job", () => {
@@ -62,9 +62,9 @@ describe("iPhone control", () => {
 
   it("points to the iPhone for its consent, and says why a job failed", () => {
     const v = iphoneView(on({ devices: [{ ...paired, allowed: false }], job: { kind: "prepare", state: "failed", code: "ddi_missing", device: "dev-1" } }), true, true);
-    expect(v).toMatchObject({ kind: "devices", consentHint: true, failed: "这台 Mac 要先装 Xcode：从 App Store 装好后再试一次。" });
+    expect(v).toMatchObject({ kind: "devices", consentHint: true, failed: "该 Mac 需先安装 Xcode。请前往 App Store 安装完成后重试。" });
     const timeout = iphoneView(on({ devices: [cable], job: { kind: "pair", state: "failed", code: "timeout", device: "dev-1" } }), true, true);
-    expect(timeout).toMatchObject({ failed: "iPhone 上没有及时点「信任」。点「配对」再试一次。" });
+    expect(timeout).toMatchObject({ failed: "未在规定时间内在 iPhone 上轻点「信任」。请点击「配对」重试。" });
     expect(iphoneView(on({ note: "这台电脑的节点太旧" }), true, true)).toMatchObject({ note: "这台电脑的节点太旧" });
     expect(iphoneView(on({ note: "没配对", code: "none_paired" }), true, true)).toMatchObject({ note: undefined, rows: [] });
   });

@@ -388,4 +388,29 @@ describe("ChangesPanel", () => {
     await click("[data-review-with-git]");
     expect(getPanel()).toEqual({ kind: "review", mid: "m", sid: "s", cwd: CWD, scope: "branch", at: { path: `${CWD}/a.ts`, file: true } });
   });
+
+  it("renders unified inset rounded tree rows, neutral folder icons, and thin scrollbar", async () => {
+    transcript([user("u1"), ...edit("e1", `${CWD}/src/a.ts`, "old a", "new a"), ...edit("e2", `${CWD}/src/b.ts`, "old b", "new b")]);
+    render(opened(`${CWD}/src/a.ts`, "call-e1"));
+    await until(() => host.querySelectorAll("[data-change-file]").length === 2);
+
+    const nav = host.querySelector<HTMLElement>("nav")!;
+    expect(nav.className.split(" ")).toEqual(expect.arrayContaining(["px-1.5", "py-1", "scrollbar-thin"]));
+
+    const folder = host.querySelector<HTMLButtonElement>("nav button[aria-expanded]")!;
+    expect(folder.className.split(" ")).toEqual(expect.arrayContaining(["h-7", "rounded-md", "text-tree-row", "hover:bg-hover"]));
+    expect(folder.style.paddingLeft).toBe("8px");
+    expect(folder.querySelectorAll("svg").length).toBe(2);
+    for (const svg of folder.querySelectorAll("svg")) {
+      expect(svg.getAttribute("class")).toContain("text-ink-3");
+      expect(svg.getAttribute("class")).not.toContain("text-accent");
+    }
+
+    const selected = host.querySelector<HTMLButtonElement>(`[data-change-file="${CWD}/src/a.ts"]`)!;
+    expect(selected.className.split(" ")).toEqual(expect.arrayContaining(["h-7", "rounded-md", "text-tree-row", "bg-hover-2", "font-medium", "text-ink"]));
+
+    const unselected = host.querySelector<HTMLButtonElement>(`[data-change-file="${CWD}/src/b.ts"]`)!;
+    expect(unselected.className.split(" ")).toEqual(expect.arrayContaining(["h-7", "rounded-md", "text-tree-row", "hover:bg-hover"]));
+    expect(unselected.className.split(" ")).not.toContain("bg-hover-2");
+  });
 });

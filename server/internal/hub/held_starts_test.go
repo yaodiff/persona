@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -305,6 +307,24 @@ func TestStartSessionValidationErrorsNeverHeldAndGating(t *testing.T) {
 		`{"machine_id":"box","cwd":"/work","launcher":"claude"}`)
 	if errorCodeOf(full.Body.Bytes()) != devicewire.CodeHeldStartFull {
 		t.Fatalf("held_start_full: %d %s", full.Code, full.Body)
+	}
+}
+
+func TestBusReplayHeldStartChecksRoleBeforeDecode(t *testing.T) {
+	h := newTestHub(t)
+	handle := busMethods[devicewire.MethodReplayHeldStart]
+	for _, tc := range []struct {
+		conn         *busConn
+		code, reason string
+	}{
+		{&busConn{}, "forbidden", "only managers can replay held starts"},
+		{&busConn{ident: db.BusIdentity{Role: bus.RoleManager}}, bus.CodeInvalidParams, "call.machine_id and call.op_id are required"},
+	} {
+		out, err := handle(h, t.Context(), tc.conn, json.RawMessage(`{"call":false}`))
+		var re *rpc.Error
+		if out != nil || !errors.As(err, &re) || re.Code != tc.code || re.Message != tc.reason {
+			t.Errorf("role %q: out %v, err %v", tc.conn.ident.Role, out, err)
+		}
 	}
 }
 

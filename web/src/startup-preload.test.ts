@@ -8,7 +8,7 @@ import { brotliCompressSync, brotliDecompressSync, constants, gzipSync } from "n
 import { LANG_MATCHES, LANGS, preferredLanguage } from "./i18n";
 import { rememberHubModules } from "./core/module-hub-storage";
 import {
-  brotliCopies, BROTLI_MIN_SIZE, EXPORT_NAME_PLACEHOLDER, FIRST_SCREEN_LOW_ROOM, firstScreenBytes, firstScreenOverBudget, firstScreenRoom, gzipBytes,
+  brotliCopies, BROTLI_MIN_SIZE, EXPORT_NAME_PLACEHOLDER, FIRST_SCREEN_LOW_ROOM, firstScreenBytes, firstScreenOverBudget, firstScreenRoom, fontStartupScript, gzipBytes,
   HASH_PLACEHOLDER, idleImports, localeDirs, nameHashes, placeholderExportNames, placeholderHashes, preloadScript, standalonePages, startupGaps,
 } from "./startup-preload";
 
@@ -145,6 +145,24 @@ describe("modules' pages of their own", () => {
     expect(standalonePages(dir)).toEqual([{ base: "live", module: "garden" }, { base: "yard", module: "garden" }]);
     rmSync(dir, { recursive: true });
   });
+});
+
+it("defers the font startup module until the app has committed and had a frame to paint", async () => {
+  const frame = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+  const root = document.createElement("div");
+  root.id = "root";
+  document.body.appendChild(root);
+  try {
+    new Function(fontStartupScript("assets/fonts.js"))();
+    expect(frame).not.toHaveBeenCalled();
+    root.appendChild(document.createElement("main"));
+    await Promise.resolve();
+    expect(frame).toHaveBeenCalledTimes(1);
+    frame.mock.calls[0]![0](0);
+    expect(frame).toHaveBeenCalledTimes(2);
+  } finally {
+    root.remove();
+  }
 });
 
 describe("brotli copies", () => {

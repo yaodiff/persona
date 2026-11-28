@@ -18,10 +18,12 @@ import persona.core.contracts.api.PhoneToolResult
 internal class PhoneToolResultOutbox(
     private val capacity: Int = DEFAULT_CAPACITY,
 ) {
-    private data class Held(val callId: String, val result: PhoneToolResult)
+    private data class Held(val callId: String, val result: PhoneToolResult, val seq: Long)
 
     private val lock = Any()
     private val queue = ArrayDeque<Held>()
+    private val deliveredSeq = LinkedHashMap<String, Long>()
+    private var nextSeq = 0L
     private var closed = false
 
     /**
@@ -31,11 +33,20 @@ internal class PhoneToolResultOutbox(
      * The [send] block is the live socket send and returns its success. It is invoked outside the lock.
      */
     fun send(callId: String, result: PhoneToolResult, send: () -> Boolean): Boolean {
-        if (send()) return true
+        val seq = synchronized(lock) { ++nextSeq }
+        if (send()) {
+            synchronized(lock) {
+                queue.removeAll { it.callId == callId && it.seq < seq }
+                recordDeliveredLocked(callId, seq)
+            }
+            return true
+        }
         synchronized(lock) {
             if (closed) return false
+            if ((deliveredSeq[callId] ?: 0L) > seq) return false
+            if (queue.any { it.callId == callId && it.seq > seq }) return false
             queue.removeAll { it.callId == callId }
-            queue.addLast(Held(callId, result))
+            queue.addLast(Held(callId, result, seq))
             while (queue.size > capacity) queue.removeFirst()
         }
         return false
@@ -55,7 +66,8 @@ internal class PhoneToolResultOutbox(
             if (!send(next.callId, next.result)) return
             synchronized(lock) {
                 if (queue.firstOrNull() == next) queue.removeFirst()
-                else queue.removeAll { it.callId == next.callId && it.result == next.result }
+                else queue.removeAll { it.callId == next.callId && it.seq <= next.seq }
+                recordDeliveredLocked(next.callId, next.seq)
             }
         }
     }
@@ -68,8 +80,20 @@ internal class PhoneToolResultOutbox(
         synchronized(lock) {
             closed = true
             queue.clear()
+            deliveredSeq.clear()
         }
     }
 
-    private companion object { const val DEFAULT_CAPACITY = 16 }
+    private fun recordDeliveredLocked(callId: String, seq: Long) {
+        if (closed) return
+        val prev = deliveredSeq.remove(callId) ?: 0L
+        deliveredSeq[callId] = maxOf(prev, seq)
+        val cap = maxOf(capacity * 4, DEFAULT_DELIVERED_CAPACITY)
+        while (deliveredSeq.size > cap) deliveredSeq.remove(deliveredSeq.keys.first())
+    }
+
+    private companion object {
+        const val DEFAULT_CAPACITY = 16
+        const val DEFAULT_DELIVERED_CAPACITY = 64
+    }
 }

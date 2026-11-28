@@ -37,7 +37,7 @@ describe("MachineDetail boot time", () => {
     fake.machines = [{ id: "box", name: "Box", online: false, system: { boot_time: Date.parse(boot) / 1000 } } as Machine];
     act(() => root.render(<MachineDetail subview="diagnostics" mid="box" onToggleSidebar={() => {}} />));
     await flush();
-    const row = [...host.querySelectorAll("dt")].find((dt) => dt.textContent === "开机于")?.parentElement;
+    const row = [...host.querySelectorAll("dt")].find((dt) => dt.textContent === "开机时间")?.parentElement;
     expect(row?.textContent).toContain(date);
     expect(row?.textContent).toContain(time);
   });

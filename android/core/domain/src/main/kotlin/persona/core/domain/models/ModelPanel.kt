@@ -25,6 +25,8 @@ data class PanelModel(
     val custom: Boolean = false,
     /** It stands for whatever its provider runs when no model is given (a launcher's default entry). */
     val providerDefault: Boolean = false,
+    /** The current Desktop model reports its session value independently of saved choices. */
+    val sessionEffortOnly: Boolean = false,
 )
 
 /** Why a provider's rows can't be picked here, in the words the UI gives each. */
@@ -174,6 +176,17 @@ data class PanelRow(
 ) {
     /** A model of a provider's list (also in Recommended), a favorite's copy, a recent setup, or "Use “…”" for a typed id. */
     enum class Kind { Model, Favorite, Recent, Typed }
+
+    enum class EffortEdit { ReadOnly, Live, Preference }
+
+    fun effortEdit(live: Boolean): EffortEdit = when {
+        model.sessionEffortOnly -> EffortEdit.ReadOnly
+        live -> EffortEdit.Live
+        else -> EffortEdit.Preference
+    }
+
+    val reportsSessionEffort: Boolean get() = current && kind == Kind.Model && model.sessionEffortOnly
+    val shownEffort: String get() = if (reportsSessionEffort) setup.effort.orEmpty() else ModelPanel.shownEffort(setup, model)
 }
 
 data class PanelSection(
@@ -212,7 +225,8 @@ object ModelPanel {
     fun rowSetup(provider: PanelProvider, model: PanelModel, state: PanelState, override: PanelOverride?): PanelConfig {
         val current = state.current
         val now = runsNow(provider, model, current)
-        val effort = if (now) takes(model, current?.effort) ?: (if (state.starting) null else takes(model, override?.effort))
+        val effort = if (now && model.sessionEffortOnly) current?.effort
+            else if (now) takes(model, current?.effort) ?: (if (state.starting) null else takes(model, override?.effort))
             else takes(model, override?.effort) ?: takes(model, current?.effort)
         val fast = if (now) current?.fast else override?.fast
         return PanelConfig(provider.id, model.id, effort, fast).clean()

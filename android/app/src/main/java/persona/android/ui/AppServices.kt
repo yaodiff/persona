@@ -164,18 +164,24 @@ class AppServices @Inject constructor(
                         try { interactions.resolveOutcome(id, resolution, handoffCard) }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (error: Exception) { feedback.failure(error, true); throw error }
+                    override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean) =
+                        try { interactions.resolveOccurrence(interaction, resolution, handoffCard) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (error: Exception) { feedback.failure(error, true); throw error }
                 }
-                // Its to-dos show from the last read until the hub answers (#4533), as the group's chat bindings' do.
-                // A new hub gets a new store, so todosReady starts false and a card does not call a task gone mid-switch.
-                val tasksStore = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(socket), runtime, data.coroutineScope,
-                    ListSnapshotStore(File(data.noBackupDirectory, "lists")).todoCache())
+                // Share the group stack's single TasksStore so shell badges, To-dos and chat cards never run
+                // duplicate concurrent /api/v1/todos reads for the same hub. A new hub builds a new GroupStack
+                // and TasksStore, so todosReady still starts false mid-switch (#5110).
+                val stack = resolveHubStack(stacks.stacks, data)
+                if (app.hub.value !== hub) return@collectLatest
+                val tasksStore = stack.tasks
                 // Files, chat actions and machine metrics go to the group of the machine they name (one group: this hub).
                 mutableSession.value = ShellSession(data.scope.path, runtime, sessions, chats, boundInteractions, sender,
                     assistant, inbox, preferences, HubTerminalTransport(socket), shell.files, mergedMetrics,
                     knowledgeConnection, shell.actions, phone, agentsWiring = agentsWiring, machines = machineManagement,
                     modules = moduleServices, features = socket.serverFeatures, groups = hubGroups, tasks = tasksStore, hubUpdates = hubUpdates,
                     hubAddresses = { listOf(data.credentials.hubAddress) + data.credentials.candidateAddresses + socket.knownAddresses() },
-                    computers = computers, listAdapter = app.agentListAdapter, knowledgeNamespace = stacks.selected.value?.namespace,
+                    computers = computers, listAdapter = app.agentListAdapter, knowledgeNamespace = stack.namespace,
                     savedPromptsConnection = socket)
                 try {
                     coroutineScope {
@@ -296,6 +302,12 @@ class AppServices @Inject constructor(
             routed(key).let { (terminal, plain) -> terminal.keys(plain, keys, text) }
     }
 }
+
+/** Wait for the [persona.android.di.GroupStack] built for [data] so [AppServices] reuses its single TasksStore. */
+internal suspend fun resolveHubStack(
+    stacks: Flow<List<persona.android.di.GroupStack>>,
+    data: ScopedHubData,
+): persona.android.di.GroupStack = stacks.mapNotNull { list -> list.firstOrNull { it.data === data } }.first()
 
 /** What was built for the last route, while the connection has none (reconnecting); a new route builds anew. */
 internal fun <R : Any> Flow<HubRoute?>.followingLastRoute(build: (HubRoute) -> R): Flow<R> = filterNotNull().map(build)

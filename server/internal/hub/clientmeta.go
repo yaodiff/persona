@@ -13,6 +13,7 @@ import (
 // All access is protected by client.mu; identity here never replaces the authenticated device or role.
 type clientMeta struct {
 	DeviceID string          `json:"device_id"`
+	Instance string          `json:"instance"`
 	Platform string          `json:"platform"`
 	Version  string          `json:"version"`
 	Build    json.RawMessage `json:"build"`
@@ -67,6 +68,7 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 		return
 	}
 	wasElicitation := c.has("elicitation")
+	wasApprovalMirrors := c.wants(featureApprovalMirrors)
 	wasDesktopsLink := c.wants(featureDesktopsLink)
 	wasLiveTools := c.wants(proto.FeatureSessionLiveTools)
 	wasCounts := c.wants(proto.FeatureCountsView)
@@ -123,6 +125,9 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 			// The hello may follow a subscribe. Send the ack before replaying any current snapshots.
 			defer h.replaySubscribedLiveTools(c)
 		}
+	}
+	if !wasApprovalMirrors && c.wants(featureApprovalMirrors) {
+		defer h.sendPendingMirrorInteractions(c)
 	}
 	if !wasCounts && c.wants(proto.FeatureCountsView) {
 		defer h.sendCountsViews(c) // the views kept so far; the new ones follow (counts_view.go)

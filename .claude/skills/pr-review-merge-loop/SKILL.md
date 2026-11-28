@@ -88,7 +88,11 @@ files into a private runtime directory and replace every placeholder; restrict t
   message containing exactly the two invocation markers and the JSON object is accepted; intermediate tool calls,
   prompt echoes, other sessions, additional prose and duplicate marked results are rejected. The response must still
   match the watcher's JSON schema and changed-line validation; transcript text is transport, never approval by itself.
-  Each review gets a fresh session ID and is never resumed into another PR. If Herdr's five-second startup observation
+  Once a final `end_turn` result has malformed markers, surrounding prose, invalid JSON, a schema mismatch or duplicate
+  marked answers, the helper fails immediately instead of holding its slot until the overall review timeout. It keeps
+  waiting for an unfinished `tool_use` message whose transcript may still be incomplete; no malformed answer becomes
+  approval or a passing review. Each review gets a fresh session ID and is never resumed into another PR. If Herdr's
+  five-second startup observation
   stalls, the helper polls the same pane and current-session transcript for a bounded startup grace period (30 seconds
   by default, configurable from 1 to 120 seconds). Working or blocked states retain the accepted prompt and wait for
   that session's marked result instead of resubmitting it. An idle or done state is accepted only after the current

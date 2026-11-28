@@ -267,6 +267,142 @@
     {
       "name": "settings_search_shadow",
       "value": "#00000000"
+    },
+    {
+      "name": "persona_glass_rim",
+      "value": "#24FFFFFF"
+    },
+    {
+      "name": "persona_glass_surface",
+      "value": "#D91C1C1E"
+    },
+    {
+      "name": "persona_hero_glow",
+      "value": "#290A84FF"
+    },
+    {
+      "name": "persona_hero_glow_alt",
+      "value": "#217D72FF"
+    },
+    {
+      "name": "persona_needs_wash",
+      "value": "#29409CFF"
+    },
+    {
+      "name": "persona_working_wash",
+      "value": "#28FFB224"
+    },
+    {
+      "name": "persona_unread_wash",
+      "value": "#244CC38A"
+    },
+    {
+      "name": "persona_danger_wash",
+      "value": "#28FF453A"
+    },
+    {
+      "name": "persona_ai_wash",
+      "value": "#26B0A8FF"
+    },
+    {
+      "name": "persona_teal_wash",
+      "value": "#2663D3DF"
+    },
+    {
+      "name": "persona_press_overlay",
+      "value": "#1FFFFFFF"
+    },
+    {
+      "name": "persona_elevated_glass",
+      "value": "#CC1C1C1E"
+    },
+    {
+      "name": "persona_hairline_glass",
+      "value": "#28FFFFFF"
+    },
+    {
+      "name": "persona_toast_surface",
+      "value": "#EB1C1C1E"
+    },
+    {
+      "name": "persona_code_surface",
+      "value": "#1C1C1E"
+    },
+    {
+      "name": "persona_subtle_scrim",
+      "value": "#73000000"
+    },
+    {
+      "name": "persona_floating_shadow",
+      "value": "#40000000"
+    },
+    {
+      "name": "persona_hero_shadow",
+      "value": "#4D000000"
+    },
+    {
+      "name": "persona_health_rose",
+      "value": "#FF6B8B"
+    },
+    {
+      "name": "persona_health_rose_wash",
+      "value": "#26FF6B8B"
+    },
+    {
+      "name": "persona_health_water",
+      "value": "#719BFF"
+    },
+    {
+      "name": "persona_health_water_wash",
+      "value": "#24719BFF"
+    },
+    {
+      "name": "persona_health_protein",
+      "value": "#F6B650"
+    },
+    {
+      "name": "persona_health_protein_wash",
+      "value": "#24F6B650"
+    },
+    {
+      "name": "persona_health_action_surface",
+      "value": "#38383A"
+    },
+    {
+      "name": "persona_chart_blue",
+      "value": "#5B9BFF"
+    },
+    {
+      "name": "persona_indigo",
+      "value": "#5E5CE6"
+    },
+    {
+      "name": "persona_on_action_wash",
+      "value": "#28FFFFFF"
+    },
+    {
+      "name": "persona_muted_ink",
+      "value": "#6696969C"
+    },
+    {
+      "name": "persona_secondary_glass_ink",
+      "value": "#80FFFFFF"
+    },
+    {
+      "name": "persona_surface_transparent",
+      "value": "#001C1C1E"
+    },
+    {
+      "name": "persona_grouped_transparent",
+      "value": "#00000000"
+    },
+    {
+      "name": "persona_canvas_fog_start",
+      "value": "#00000000"
+    },
+    {
+      "name": "persona_canvas_fog_end",
+      "value": "#E6000000"
     }
   ]
 }

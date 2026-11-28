@@ -717,6 +717,10 @@ func (n *Node) dropSwitchNow(id string, why error) {
 // for the user or still starts, or has background work that quitting it would end (backgroundWork).
 func (n *Node) switchBusy(ctx context.Context, id string) string {
 	_ = n.refreshHosts(ctx)
+	return n.switchActivity(id)
+}
+
+func (n *Node) switchActivity(id string) string {
 	a, ok := n.agent(id)
 	if !ok {
 		return ""
@@ -1039,13 +1043,9 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	back modelExecution, backErr error, prev sessionState, had bool) (string, error) {
 	a, h, ref := plan.a, plan.h, plan.ref
 	n.logf("session %s: switching from launcher %s to %s (model %q) in %s", id, own, ps.Launcher, plan.forward.Model, a.PaneID)
-	if quit, err := n.quitAgent(ctx, id, a.PaneID); err != nil || !quit {
-		return "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, own), nil)
-	}
-	shells, dir, err := n.shellAfterQuit(ctx, id, "claude", a, h, ref)
+	shells, dir, err := n.quitForLauncherRestart(ctx, id, own, a, h, ref)
 	if err != nil {
-		n.logf("session %s: switch: %v", id, err)
-		return "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
+		return "", err
 	}
 	start := func(launcher, effort string, execution modelExecution, shells []string, dir string) (*proto.Session, error) {
 		sctx, cancel := switchStartCtx(ctx, a, h, ref, shells, dir, plan.cwd)
@@ -1075,6 +1075,18 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	}
 	n.logf("session %s: back on launcher %s", id, own)
 	return "", refusal(proto.CodeSwitchFailed, fmt.Sprintf("the agent did not come up on launcher %s (%v); it is back on %s", ps.Launcher, startErr, own), nil)
+}
+
+func (n *Node) quitForLauncherRestart(ctx context.Context, id, launcher string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
+	if quit, err := n.quitAgent(ctx, id, a.PaneID); err != nil || !quit {
+		return nil, "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, launcher), nil)
+	}
+	shells, dir, err := n.shellAfterQuit(ctx, id, "claude", a, h, ref)
+	if err != nil {
+		n.logf("session %s: restart: %v", id, err)
+		return nil, "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
+	}
+	return shells, dir, nil
 }
 
 // switchStartCtx is the context of a start in a switch's pane (ref on h, agent a's): the pane adopted with the shells

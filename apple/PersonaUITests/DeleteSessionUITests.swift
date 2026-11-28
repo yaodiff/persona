@@ -1,7 +1,7 @@
 import XCTest
 
 /// Delete Chat (issue #1749) against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB): 「菜谱网站加搜索」 on macbook is not running.
-/// The chat's confirmation (`-showDeleteSession YES` opens it, as 「…」›「删除对话…」 does) says what deleting does;
+/// The chat's confirmation (`-showDeleteSession YES` opens it, as 「…」›「删除对话」 does) says what deleting does;
 /// Cancel leaves it, Delete sends DELETE /api/v1/sessions/{mid}/{sid}, the chat goes and the list no longer has it.
 /// `TEST_RUNNER_PERSONA_SHOTS=<dir>` also writes the screenshots there.
 final class DeleteSessionUITests: XCTestCase {
@@ -89,10 +89,10 @@ final class DeleteSessionUITests: XCTestCase {
         let row = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "整理发布说明")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no row:\n\(app.debugDescription)")
         row.press(forDuration: 1.0)
-        let delete = app.buttons["删除对话…"]
-        // The menu's last item, or More's while Close Agent… is the last (#13396).
+        let delete = app.buttons["删除对话"]
+        // The menu's last item, or More's while Close Agent is the last (#13396).
         if !delete.waitForExistence(timeout: 3) { app.openAgentMenuMore() }
-        XCTAssertTrue(delete.waitForExistence(timeout: 5), "no 删除对话…:\n\(app.debugDescription)")
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), "no 删除对话:\n\(app.debugDescription)")
         shot("row-menu")
         delete.tap()
         XCTAssertTrue(confirmation().exists)
@@ -104,9 +104,9 @@ final class DeleteSessionUITests: XCTestCase {
         XCTAssertTrue(working.waitForExistence(timeout: 10), "no row:\n\(app.debugDescription)")
         working.press(forDuration: 1.0)
         XCTAssertTrue(app.buttons["置顶"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["删除对话…"].exists)
+        XCTAssertFalse(app.buttons["删除对话"].exists)
         app.openAgentMenuMore()
         XCTAssertTrue(app.buttons["拷贝目录"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["删除对话…"].exists)
+        XCTAssertFalse(app.buttons["删除对话"].exists)
     }
 }

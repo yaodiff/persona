@@ -34,7 +34,7 @@ func TestAssistantIgnoresARuntimeFromAnOlderHub(t *testing.T) {
 			}
 			onCLI := func(what string, p *assistantProc) {
 				t.Helper()
-				if p == nil || !slices.Contains(p.cmd.Args, "-ic") || !slices.Contains(p.cmd.Args, "--input-format") {
+				if p == nil || !slices.Contains(p.cmd.Args, shellFlag(p.cmd.Args[0])) || !slices.Contains(p.cmd.Args, "--input-format") {
 					t.Fatalf("%s does not run claude -p through the launcher: %+v", what, p)
 				}
 			}
@@ -139,7 +139,7 @@ func TestAssistantResumesAConversationAnOlderNodeRanOnAnotherRuntime(t *testing.
 				t.Fatal("no process")
 			}
 			if i := slices.Index(p.cmd.Args, "--resume"); i < 0 || i+1 >= len(p.cmd.Args) || p.cmd.Args[i+1] != id ||
-				!slices.Contains(p.cmd.Args, "-ic") || slices.Contains(p.cmd.Args, "--session-id") ||
+				!slices.Contains(p.cmd.Args, shellFlag(p.cmd.Args[0])) || slices.Contains(p.cmd.Args, "--session-id") ||
 				!strings.Contains(strings.Join(p.cmd.Args, " "), "command claude") {
 				t.Fatalf("not claude -p itself resuming %s: %q", id, p.cmd.Args)
 			}

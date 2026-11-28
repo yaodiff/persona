@@ -984,6 +984,66 @@ func TestAnswerThatDidNotGoPutsTheCardBack(t *testing.T) {
 	}
 }
 
+type launcherRefreshWorkHub struct {
+	*fakeHub
+	t        *testing.T
+	attempts int
+}
+
+func (h *launcherRefreshWorkHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method != DeviceSessionSend {
+		return h.fakeHub.DeviceCall(ctx, p)
+	}
+	h.attempts++
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) < 3*time.Minute {
+		h.t.Errorf("Continue's send deadline %v does not cover a launcher refresh", deadline)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(p.Params, &params); err != nil {
+		h.t.Fatal(err)
+	}
+	if p.Device != "mac" || params["session_id"] != "s1" || params["text"] != continueText || params["apply_switch"] != nil {
+		h.t.Errorf("Continue did not use an ordinary send to the same session: %+v", params)
+	}
+	if h.attempts == 1 {
+		return nil, &rpc.Error{Code: "not_delivered", Message: "provider update could not be applied", Data: json.RawMessage(`{"delivered":"none"}`)}
+	}
+	return json.RawMessage(`{"ok":true}`), nil
+}
+
+func TestWorkCardContinueWaitsForManagedLauncherRefresh(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	s := ft.s
+	h := &launcherRefreshWorkHub{fakeHub: ft.f, t: t}
+	s.hub = h
+	now := time.Now().UTC()
+	row := proto.Session{SessionID: "s1", Agent: "claude", PaneID: "w1:p1", Launcher: "work", Status: proto.StatusDone, UpdatedAt: now}
+	ft.d.setSessions("mac", []proto.Session{row})
+	question, answer := "The provider refused the request. What next?", answerLabel("en", answerHandled)
+	w := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: now, Questions: []proto.Question{{
+		Question: question, Options: []proto.QuestionOption{{Label: answer}},
+	}}}
+	id := s.openCard("mac", row, w)
+	w.InteractionID = id
+	s.work.mu.Lock()
+	s.work.loaded = true
+	s.work.entries[[2]string{"mac", row.SessionID}] = &db.SessionWork{MachineID: "mac", SessionID: row.SessionID,
+		TurnAt: now, InteractionID: id, Work: w}
+	s.work.mu.Unlock()
+	defer s.waitWorkEvents()
+	resolution := proto.Resolution{Answers: map[string]string{question: answer}}
+	answerCard(t, s, id, resolution)
+	cards := s.workCards()
+	if h.attempts != 1 || len(cards) != 1 || cards[0].ID == id {
+		t.Fatalf("pre-delivery failure did not restore the card, attempts=%d, cards=%+v", h.attempts, cards)
+	}
+	answerCard(t, s, cards[0].ID, resolution)
+	if h.attempts != 2 || len(s.workCards()) != 0 {
+		t.Fatalf("successful Continue did not retire the card, attempts=%d, cards=%+v", h.attempts, s.workCards())
+	}
+}
+
 // A repeated callback while the answer is still being sent (a redelivered webhook, a second tap, phone and watch
 // together) is answered OK and the first instruction reaches the agent once, not twice; a different answer racing it
 // is ignored.

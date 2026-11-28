@@ -36,7 +36,7 @@ import Testing
     @Test func aLauncherSaysItsNameAndTheModesItTakes() throws {
         let json = #"[{"name":"grok","agent":"paseo","source":"paseo","display_name":"Grok","permission_modes":["default","bypassPermissions"]},{"name":"claude"},{"name":"odd","display_name":7,"permission_modes":"all"}]"#
         let list = try JSON.decoder.decode([Launcher].self, from: Data(json.utf8))
-        #expect(list.map(\.title) == ["Grok", "claude", "odd"])
+        #expect(list.map(\.title) == ["Grok", "Claude Code", "odd"])
         #expect(list[0].permissionModes == ["default", "bypassPermissions"])
         #expect(list[1].displayName == nil && list[1].permissionModes == nil)
         // A name or a list this app cannot read is left out, never the launcher.

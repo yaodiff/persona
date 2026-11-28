@@ -10,5 +10,7 @@
   "runtime_required": "Configure a pinned source runtime on the assistant before enabling this extension.",
   "isolation_required": "Isolation cannot be turned off for source extensions.",
   "package_check_only": "Source package checks passed. Runtime verification requires the assistant's enforced sandbox; a bare engine launch does not qualify.",
-  "created": "Source extension created. Package it with personad extension pack; enabling it requires a pinned runtime and enforced Linux isolation."
+  "created": "Source extension created. Package it with personad extension pack; enabling it requires a pinned runtime and enforced Linux isolation.",
+  "package_size_invalid": "A file in the package has an invalid size: {size}",
+  "package_too_big": "The package is too large"
 }

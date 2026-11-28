@@ -38,6 +38,7 @@
         "X-Jarvis-Op-Id",
         "ask_jarvis",
         "jarvis",
+        "jarvis-",
         "jarvis-blob",
         "jarvis-circuit",
         "jarvis-context",
@@ -165,7 +166,16 @@
     "android/feature/settings/src/test/kotlin/persona/feature/settings/ProtocolCompatibilityTest.kt": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
+        "JARVIS",
         "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "android/platform/shortcuts/src/test/kotlin/persona/platform/shortcuts/MainChatWidgetTest.kt": {
+      "reason": "Exact legacy context-block fixture proves widget summaries strip both protocol generations.",
+      "tokens": [
+        "jarvis-context"
       ],
       "path_tokens": [],
       "external_refs": []
@@ -608,6 +618,14 @@
       "reason": "Exact regression fixture for stripping the legacy context marker while preserving visible text.",
       "tokens": [
         "jarvis-context"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "integrations/antigravity/test/node-program.test.js": {
+      "reason": "The companion clears the previous home variable while creating an isolated test environment.",
+      "tokens": [
+        "env.JARVIS_HOME"
       ],
       "path_tokens": [],
       "external_refs": []
@@ -1196,6 +1214,22 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "server/internal/extmgr/compose_link_test.go": {
+      "reason": "Exact legacy quick-prompt URL fixture preserves the previous protocol generation.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "server/internal/extmgr/extension_cli_target_test.go": {
+      "reason": "Exact legacy home-variable fixtures prove target selection cannot inherit an unintended hub.",
+      "tokens": [
+        "JARVIS_HOME"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "server/internal/hub/compatibility_test.go": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
@@ -1397,6 +1431,14 @@
     },
     "web/src/lib/assistant-chat.test.ts": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "web/src/lib/extension-ui.test.ts": {
+      "reason": "Exact legacy URL fixtures verify previous-generation extension links remain in the app.",
       "tokens": [
         "jarvis"
       ],

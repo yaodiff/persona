@@ -29,6 +29,9 @@ interface ChatTransport {
     /** The transport adds the hand-off or env feature header only for this explicit full-card approval. */
     suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
         resolveOutcome(id, resolution)
+    /** Answers the exact displayed occurrence; older delegated transports retain their ID-only fallback. */
+    suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean = false): ResolveOutcome =
+        resolveOutcome(interaction.id, resolution, handoffCard)
     /** [secretRunEnv] selects the env feature instead of the hand-off feature, only when [handoffCard] is true. */
     suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean): ResolveOutcome =
         resolveOutcome(id, resolution, handoffCard)

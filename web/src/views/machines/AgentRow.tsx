@@ -1,6 +1,6 @@
 // An agent's row in a list of a machine's or a space's agents: its state, title, tab and latest line; opens its chat.
 import { t } from "../../i18n";
-import { sessionPreview, sessionTitle, stateOf } from "../../lib/format";
+import { sessionPreview, sessionTitle, activityOf, stateOf } from "../../lib/format";
 import { agentMeta, loudState } from "../../lib/machine-detail";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { href, onLinkClick } from "../../lib/router";
@@ -11,7 +11,8 @@ import { Icon } from "../../ui/icons";
 
 export function AgentRow({ s }: { s: Session }) {
   const todo = s.todo;
-  const st = stateOf(s);
+  const st = activityOf(s);
+  const phase = stateOf(s);
   const to = { name: "session" as const, mid: s.machine_id, sid: s.session_id };
   const meta = agentMeta(s);
   // Markdown on one line, without its marks (#10939)
@@ -20,7 +21,7 @@ export function AgentRow({ s }: { s: Session }) {
     <div className="flex flex-col sm:flex-row sm:items-center">
       <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group flex min-h-11 min-w-0 flex-1 items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
         <span className="flex size-4 shrink-0 items-center justify-center">
-          <StatusMark state={st} />
+          <StatusMark state={phase} />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-baseline gap-2">
@@ -34,7 +35,7 @@ export function AgentRow({ s }: { s: Session }) {
             </span>
           )}
         </span>
-        {loudState(st) && <StatePill state={st} />}
+        {(phase === "error" || loudState(st)) && <StatePill state={phase} />}
         <Icon name="chevronRight" size={13} stroke={2.2} className="shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5" />
       </a>
       {todo?.id && (

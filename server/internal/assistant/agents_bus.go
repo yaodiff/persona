@@ -34,12 +34,8 @@ func (b *BusHub) agentRequest(ctx context.Context, s *Service, method string, de
 		}
 		return map[string]any{"params": params}, nil
 	default: // MethodAgentTabName
-		var p struct {
-			Prompt string `json:"prompt"`
-		}
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return map[string]any{"name": s.tabName(ctx, p.Prompt)}, nil
+		return handleBusRequest(ctx, assistantwire.AgentTabNameMethod, decode, func(ctx context.Context, p assistantwire.AgentTabNameParams) (assistantwire.AgentTabNameResult, error) {
+			return assistantwire.AgentTabNameResult{Name: s.tabName(ctx, p.Prompt)}, nil
+		})
 	}
 }

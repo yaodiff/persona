@@ -825,3 +825,110 @@ func TestZeroTurnSlowListLagDoesNotRollbackOrTriggerRecovery(t *testing.T) {
 		}
 	})
 }
+
+// agy materializes an empty history generation during items reads. Its revision
+// is not execution evidence, but the persisted first-message state is required.
+func TestZeroTurnPreparedEmptyGenerationNeedsExplicitStateAndNoDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		awaiting   bool
+		tail       int
+		receipt    bool
+		dispatch   bool
+		unresolved bool
+		want       bool
+	}{
+		{name: "empty_agy_generation", awaiting: true, want: true},
+		{name: "revision_one_is_not_proof"},
+		{name: "real_history", awaiting: true, tail: 1},
+		{name: "node_receipt", awaiting: true, receipt: true},
+		{name: "direct_dispatch", awaiting: true, dispatch: true},
+		{name: "unresolved_input", awaiting: true, unresolved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", false)
+			ctx := t.Context()
+			state := map[string]any{"awaiting_first_message": tc.awaiting}
+			if tc.receipt {
+				state["segment_inputs"] = []string{"received"}
+			}
+			if err := rig.d.PutSetting(ctx, "node_model.server.prepared-zero-turn", state); err != nil {
+				t.Fatal(err)
+			}
+			page := db.ConversationPage{MachineID: "server", SessionID: "prepared-zero-turn", History: "empty-agy-generation", Revision: 1, ThroughSeq: tc.tail, Tail: true}
+			if tc.tail > 0 {
+				page.Items = []proto.Item{{ID: "actual-turn", Seq: 1, Role: "user", Kind: proto.KindText, Text: "real"}}
+			}
+			if err := rig.d.PutConversationPage(ctx, page); err != nil {
+				t.Fatal(err)
+			}
+			if err := rig.d.ObserveConversationSource(ctx, "server", "prepared-zero-turn", page.History); err != nil {
+				t.Fatal(err)
+			}
+			if err := rig.d.ObserveConversationRevision(ctx, "server", "prepared-zero-turn", 1); err != nil {
+				t.Fatal(err)
+			}
+			if tc.dispatch {
+				if err := rig.d.MarkConversationSegmentDispatched(ctx, "server", "side-chat", "seg-two"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.unresolved {
+				if err := rig.d.EnqueueConversationInput(ctx, "server", "side-chat", "pending", 2, json.RawMessage(`{"text":"uncertain"}`)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := rig.d.ClaimConversationInput(ctx, "server", "side-chat", 2); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c, _ := rig.d.LogicalConversation(ctx, "server", "side-chat")
+			active, _ := c.Active()
+			if got := rig.s.isZeroTurnPreparedSegment(ctx, c, active); got != tc.want {
+				t.Fatalf("zero-turn=%v want %v: %+v", got, tc.want, active)
+			}
+			if tc.want {
+				zero := 0
+				if !rig.s.isZeroTurnEmptyTail(ctx, c, active, historyPage{History: page.History, ToSeq: &zero}, nil, false) {
+					t.Fatal("empty generation page refused despite prepared proof")
+				}
+			}
+		})
+	}
+}
+
+func TestZeroTurnPreparedEmptyHistoryRecoveryCarriesHandoffOnce(t *testing.T) {
+	rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", false)
+	ctx := t.Context()
+	setSettings(t, rig.s, func(cfg *Settings) { cfg.Leaders = append(cfg.Leaders, "side-chat") })
+	if err := rig.d.PutSetting(ctx, "node_model.server.prepared-zero-turn", map[string]bool{"awaiting_first_message": true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.d.PutConversationPage(ctx, db.ConversationPage{MachineID: "server", SessionID: "prepared-zero-turn", History: "empty-generation", Revision: 1, Tail: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.d.ObserveConversationSource(ctx, "server", "prepared-zero-turn", "empty-generation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.d.ObserveConversationRevision(ctx, "server", "prepared-zero-turn", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, handled, err := rig.s.logicalCall(ctx, "server", DeviceSessionSend, json.RawMessage(`{"session_id":"side-chat","client_msg_id":"first-after-restart","text":"first input after companion restart"}`)); !handled || err != nil {
+		t.Fatalf("send refused: %v %v", handled, err)
+	}
+	waitFor(t, "empty generation recovery first delivery", func() bool {
+		rig.s.logicalSweep(ctx)
+		return len(rig.sentTo("recovered-seg-1")) == 1
+	})
+	conversationSwitchTestSettle(t, rig.s)
+	if _, handled, err := rig.s.logicalCall(ctx, "server", DeviceSessionSend, json.RawMessage(`{"session_id":"side-chat","client_msg_id":"first-after-restart","text":"first input after companion restart"}`)); !handled || err != nil {
+		t.Fatalf("idempotent retry: %v %v", handled, err)
+	}
+	conversationSwitchTestSettle(t, rig.s)
+	sends := rig.sentTo("recovered-seg-1")
+	if len(sends) != 1 || !strings.Contains(fmt.Sprint(sends[0]["text"]), "earlier handoff summary") {
+		t.Fatalf("handoff missing or repeated execution: %+v", sends)
+	}
+	if !slices.Contains(rig.s.settings(ctx).Leaders, "side-chat") {
+		t.Fatal("supervisor mapping lost")
+	}
+}

@@ -223,9 +223,11 @@ func card(summary string) string {
 }
 
 // gate lets the action name of c through or answers instead of it: Deny refuses, Confirm asks the user with the
-// card's words (Describe, and who will see it) and refuses unless they allow it, Allow says nothing. A nil result
-// means run it, with the very args the card was made from; how it was let through comes with it.
-func gate(ctx context.Context, rules []Rule, c Connector, a Actions, name string, args json.RawMessage, ask Ask) (*proto.ToolResult, LetThrough) {
+// card's words (Describe, and who will see it) and refuses unless they allow it — or, when eligible under a hub-side
+// guarded auto-confirm policy and the extension returns a valid short-lived credential, lets it through with an
+// AutoConfirmApproval — Allow says nothing. A nil result means run it, with the very args the card was made from;
+// how it was let through comes with it.
+func gate(ctx context.Context, rules []Rule, autoConfirm []AutoConfirmPolicy, c Connector, a Actions, name string, args json.RawMessage, ask Ask) (*proto.ToolResult, LetThrough, *AutoConfirmApproval) {
 	d, rule := decide(rules, c.Manifest(), c.ID(), name, args)
 	if d == Allow && confirmsEach(ctx) {
 		d = Confirm
@@ -239,16 +241,69 @@ func gate(ctx context.Context, rules []Rule, c Connector, a Actions, name string
 			text = repeatedText(name, field)
 		}
 		res := proto.ErrorResult(proto.ToolErrorDeclined, text, 0)
-		return &res, through
+		return &res, through, nil
 	case Allow:
 		through = LetThrough{Kind: ThroughRule, Rule: rule, UserRule: rule != nil && rule.fromUser}
 	case Confirm:
-		act, summary, err := a.Describe(ctx, name, args)
+		var (
+			act     Action
+			summary string
+			err     error
+		)
+		// Guarded conditional auto-confirm requires ALL of:
+		//  1. no explicit Confirm rule in connector_gate (rule == nil)
+		//  2. not a ConfirmEach conversation (health / space / restricted)
+		//  3. verified owner assistant caller (OwnerCallerOf)
+		//  4. connector supporting ApprovalActions and carrying a hub-verified ExtensionIdentity
+		//  5. an enabled hub-side AutoConfirmPolicy matching that extension, connector and exact action
+		//  6. a valid, unexpired, TTL-bounded AutoConfirmGrant returned from negotiated actions.describe
+		// If any condition is unmet, fall back to the ordinary phone confirmation card.
+		if rule == nil && !confirmsEach(ctx) && OwnerCallerOf(ctx) {
+			if aa, ok := a.(ApprovalActions); ok {
+				if ic, ok := c.(IdentifiedConnector); ok {
+					if ident, ok := ic.ExtensionIdentity(); ok {
+						if match, ok := matchAutoConfirmPolicy(autoConfirm, ident, c.ID(), name); ok {
+							var grant *AutoConfirmGrant
+							act, summary, grant, err = aa.DescribeWithApproval(ctx, name, args, match.protocol)
+							if err != nil {
+								res := proto.TextResult(err.Error(), true)
+								return &res, through, nil
+							}
+							summary = card(summary)
+							if validateAutoConfirmGrant(grant, autoConfirmNow(), match.maxTTL) {
+								through = LetThrough{
+									Kind:    ThroughAutoConfirm,
+									Summary: summary,
+									AutoConfirm: &AutoConfirmAudit{
+										Policy:          match.name,
+										Extension:       ident.Extension,
+										Version:         ident.Version,
+										Source:          ident.Source,
+										Protocol:        match.protocol,
+										OwnerAuthorized: true,
+									},
+								}
+								return nil, through, &AutoConfirmApproval{
+									Mode:      ApprovalModeAutoConfirm,
+									Token:     grant.Token,
+									ExpiresAt: grant.ExpiresAt,
+								}
+							}
+							// Missing, malformed, expired or over-TTL grant: fall back to the phone card using the
+							// same Describe result without calling Describe a second time.
+							goto confirmCard
+						}
+					}
+				}
+			}
+		}
+		act, summary, err = a.Describe(ctx, name, args)
 		if err != nil {
 			res := proto.TextResult(err.Error(), true)
-			return &res, through
+			return &res, through, nil
 		}
 		summary = card(summary)
+	confirmCard:
 		through = LetThrough{Kind: ThroughCard, Summary: summary}
 		if act.Visible != "" {
 			summary += "\n\n谁会看到：" + act.Visible
@@ -259,13 +314,13 @@ func gate(ctx context.Context, rules []Rule, c Connector, a Actions, name string
 				// Nobody answered the card (TellAskOutcome): not the user's decline, and never told as one.
 				res := proto.ErrorResult(proto.ToolErrorUnanswered, prompts.RenderOutboundUnanswered(prompts.OutboundUnanswered{
 					Outcome: outcome, Nothing: name + " did not run"}), 0)
-				return &res, through
+				return &res, through, nil
 			}
 			res := proto.ErrorResult(proto.ToolErrorDeclined, "The user declined "+name+".", 0)
-			return &res, through
+			return &res, through, nil
 		}
 	}
-	return nil, through
+	return nil, through, nil
 }
 
 func matches(pattern, s string) bool {

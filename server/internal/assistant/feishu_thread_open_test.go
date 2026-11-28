@@ -9,14 +9,94 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Opening a to-do from a topic (the lark module's thread_open.go, #5279): a topic the owner starts, or "/ai …" in one bound to
-// nothing, opens a to-do bound to it and hands the first words to the main conversation. All ids are placeholders.
+// Topic routing and opening a bound to-do through the Lark bot. All IDs are placeholders.
+
+func TestDefaultTopicAnswersWithoutATodo(t *testing.T) {
+	needsLarkLayer(t)
+	e := newThreadEnv(t, nil)
+	e.topicModes = nil
+	e.deliver(rootEvent("om_question", "What is the error?"))
+	e.deliver(topicEvent("om_followup", "Is it safe to retry?"))
+	if todoCount(e.s) != 0 || len(topicNotes(e.f)) != 0 {
+		t.Fatalf("todos %d, notes %v", todoCount(e.s), topicNotes(e.f))
+	}
+	sends := handoffs(e.f)
+	if len(sends) != 2 || sends[0].session != "m1" || sends[1].session != "m1" ||
+		!strings.Contains(sends[0].text, "What is the error?") || !strings.Contains(sends[1].text, "Is it safe to retry?") ||
+		strings.Contains(sends[0].text+sends[1].text, "topic_message_id") {
+		t.Fatalf("handoffs %+v", sends)
+	}
+	run, _ := e.s.channelRunByID("fb_om_followup")
+	if run == nil {
+		t.Fatal("topic reply has no channel run")
+	}
+	if ext := e.s.runExts(run, "chat", "thread"); ext["chat"] != testChat || ext["thread"] != testThread {
+		t.Fatalf("reply destination %+v", run)
+	}
+	if _, err := e.s.toolTodoCreate(t.Context(), "server", "m1", json.RawMessage(`{"title":"Retry","topic_message_id":"om_followup"}`)); err == nil {
+		t.Fatal("answer-only mode accepted a request to bind")
+	}
+	e.deliver(rootEvent("om_explicit", "/todo Fix the error"))
+	if todo := onlyTodo(e.s); todo.Thread == nil || todo.Thread.ThreadID != testThread || todo.Notes != "Fix the error" {
+		t.Fatalf("explicit request: %+v", todo)
+	}
+}
+
+func TestMainDecidesOpensAndBindsTopicTodo(t *testing.T) {
+	needsLarkLayer(t)
+	e := newThreadEnv(t, nil)
+	e.topicModes = map[string]assistantwire.TopicTodoMode{testChat: assistantwire.TopicMainDecides}
+	e.deliver(rootEvent("om_work", "Investigate the recurring error"))
+	e.deliver(topicEvent("om_details", "It happens every Friday"))
+	if handoffs := handoffs(e.f); todoCount(e.s) != 0 || len(handoffs) != 2 ||
+		!strings.Contains(handoffs[0].text, "topic_message_id") || !strings.Contains(handoffs[0].text, "om_work") {
+		t.Fatalf("todos %d, handoffs %+v", todoCount(e.s), handoffs)
+	}
+	args := json.RawMessage(`{"title":"Investigate the error","notes":"It recurs every Friday","topic_message_id":"om_work"}`)
+	if _, err := e.s.toolTodoCreate(t.Context(), "server", "c1x1x1", args); err == nil {
+		t.Fatal("another conversation accepted a request to bind")
+	}
+	id, err := e.s.toolTodoCreate(t.Context(), "server", "m1", args)
+	todo := onlyTodo(e.s)
+	if err != nil || id == "" || todo.ID != id || todo.Origin != "m1" || todo.Thread == nil || todo.Thread.ThreadID != testThread ||
+		todo.Supervision == nil || todo.Supervision.Supervisor != "m1" {
+		t.Fatalf("tool returned %q, %v, todo %+v", id, err, todo)
+	}
+	if again, err := e.s.toolTodoCreate(t.Context(), "server", "m1", args); err != nil || again != id {
+		t.Fatalf("repeated call returned %q, %v", again, err)
+	}
+	notes := topicNotes(e.f)
+	if len(notes) != 1 || notes[0]["reply_to"] != "om_work" || notes[0]["in_thread"] != true || len(handoffs(e.f)) != 2 {
+		t.Fatalf("notes %+v, handoffs %+v", notes, handoffs(e.f))
+	}
+	e.f.mu.Lock()
+	e.f.startReply = func(_ map[string]any, sess *proto.Session) *proto.StartInstead {
+		sess.SessionID = "agent_started"
+		return nil
+	}
+	e.f.mu.Unlock()
+	if _, err := e.s.toolTaskPlan(t.Context(), "m1", reuseArgs(true, id)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the plan's Agent to link to the topic to-do", func() bool {
+		return len(todoNow(e.s, id).Agents) == 1
+	})
+	agent := todoNow(e.s, id).Agents[0]
+	e.sessions(agent.MachineID, proto.Session{SessionID: agent.SessionID, Status: proto.StatusIdle})
+	e.deliver(topicEvent("om_agent", "Please check the logs"))
+	sent := handoffs(e.f)
+	if len(sent) != 3 || sent[2].session != agent.SessionID || todoCount(e.s) != 1 {
+		t.Fatalf("handoffs %+v, todos %d", sent, todoCount(e.s))
+	}
+}
 
 // said is the bot's own text for key, in the language its notes are in.
 func (e *threadEnv) said(key string, args ...i18n.Args) string {

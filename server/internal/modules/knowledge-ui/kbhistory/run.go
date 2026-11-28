@@ -70,6 +70,10 @@ func (d *historyDriver) loadState(e *kb.Engine, w historyWork) (kb.HistoryState,
 	if err != nil {
 		return kb.HistoryState{}, err
 	}
+	if ok && (st.Source != w.chat.Filing(d.source) || st.Connector != "" && st.Connector != d.source ||
+		st.SourceID != "" && st.SourceID != w.chat.ID) {
+		return kb.HistoryState{}, errors.New("history: checkpoint belongs to another conversation")
+	}
 	mode := historyMode(w.need)
 	if !ok || !Covers(st.Plan, w.need) {
 		st = kb.HistoryState{Source: w.chat.Filing(d.source), Mode: mode, State: kb.HistoryRunning, Read: st.Read, Written: st.Written}
@@ -85,6 +89,7 @@ func (d *historyDriver) loadState(e *kb.Engine, w historyWork) (kb.HistoryState,
 }
 
 func (d *historyDriver) saveState(ctx context.Context, e *kb.Engine, w historyWork, st *kb.HistoryState) error {
+	st.Connector, st.SourceID = d.source, w.chat.ID
 	st.UpdatedAt = d.now().UTC()
 	if err := e.Store.PutHistoryState(w.id, *st); err != nil {
 		return failed(ctx, "state_save_failed", err)
@@ -98,7 +103,7 @@ func (d *historyDriver) kbChat(w historyWork) *kb.Chat {
 	if kind == Unlisted {
 		kind = connectorwire.HistoryKindGroup
 	}
-	return &kb.Chat{Source: w.chat.Filing(d.source), SourceID: w.chat.ID, Kind: kind, Name: w.chat.Name}
+	return &kb.Chat{Connector: d.source, Source: w.chat.Filing(d.source), SourceID: w.chat.ID, Kind: kind, Name: w.chat.Name}
 }
 
 // historyMine picks the owner's own messages: the anchors the mine rule's context is read around.

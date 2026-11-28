@@ -135,14 +135,16 @@ public struct TierPolicy: Sendable {
         self.bias = bias
         self.capKbps = capKbps
         self.maxFps = maxFps
-        self.maxScale = maxScale
-        let tiers = Self.tiers(display: display, bias: bias, capKbps: capKbps, maxFps: maxFps, maxScale: maxScale)
+        let normalizedScale = Self.normalizedScale(maxScale)
+        self.maxScale = normalizedScale
+        let tiers = Self.tiers(display: display, bias: bias, capKbps: capKbps, maxFps: maxFps, maxScale: normalizedScale)
         ladder = tiers
         let start = remembered.map { min(max($0, 0), tiers.count - 1) }
-            ?? Self.index(rung: Self.rung(link), in: tiers, display: display, bias: bias, maxFps: maxFps, maxScale: maxScale)
+            ?? Self.index(rung: Self.rung(link), in: tiers, display: display, bias: bias, maxFps: maxFps, maxScale: normalizedScale)
+        let startNow = now.isFinite ? now : 0
         index = start
-        shortUntil = now + Self.early
-        tierSince = now
+        shortUntil = startNow + Self.early
+        tierSince = startNow
         last = Change(tier: tiers[start], index: start, reason: .start, targetKbps: tiers[start].minKbps)
     }
 
@@ -160,14 +162,15 @@ public struct TierPolicy: Sendable {
 
     /// One decision, every 250 ms. A change is returned for the app to send as an `update`.
     public mutating func tick(_ s: TierSignals, now: Double) -> Change? {
+        guard now.isFinite else { return nil }
         let fresh = helperFresh
         helperFresh = false
         if fresh { helperAt = now }
         let skipping = helperSkipped > 0 && helperAt.map { now - $0 < Self.helperStale } ?? false
-        let queue = s.queueP50Ms ?? 0
+        let queue = s.queueP50Ms.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
         // A backlog now: the newest frame still waited. Every step down needs one: one that came in all at once after a
         // stall leaves the p50 high for a moment though it is gone, and the helper has cut to its floor by then.
-        let backlog = (s.queueLastMs ?? queue) > Self.upQueueMs
+        let backlog = (s.queueLastMs.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? queue) > Self.upQueueMs
 
         // Down, fast: a long queue, or skipped frames while a queue is still there, for a quarter second. The helper
         // skips until a report shows 150 ms or less, and its `timing` says so up to a second later: once the phone sees
@@ -191,7 +194,8 @@ public struct TierPolicy: Sendable {
 
         // The phone can't keep up: a lower frame rate.
         let interval = 1000 / Double(max(tier.fps, 1))
-        let behind = (s.decodeP95Ms.map { $0 > 1.5 * interval } ?? false) || (s.replacedShare.map { $0 > 1.0 / 3 } ?? false)
+        let behind = (s.decodeP95Ms.map { $0.isFinite && $0 > 1.5 * interval } ?? false)
+            || (s.replacedShare.map { $0.isFinite && $0 > 1.0 / 3 } ?? false)
         if behind {
             let since = decodeBadSince ?? now
             decodeBadSince = since
@@ -205,7 +209,7 @@ public struct TierPolicy: Sendable {
 
         // Up, slow: a calm window with proof of headroom. A still screen (no frames) neither proves nor breaks it.
         if s.frames > 0 {
-            let calm = (s.queueP95Ms ?? 0) < Self.upQueueMs && !skipping && !behind
+            let calm = (s.queueP95Ms.map { $0.isFinite && $0 >= 0 && $0 < Self.upQueueMs } ?? true) && !skipping && !behind
             if !calm {
                 forgetProof()
                 return nil
@@ -219,9 +223,9 @@ public struct TierPolicy: Sendable {
                Double(sent) >= 1.25 * Double(next.minKbps) {
                 motionKbps = max(motionKbps ?? 0, sent)
             }
-            for b in s.burstKbps where b >= 1.5 * Double(next.minKbps) {
-                bursts += 1
-                burstKbps = min(burstKbps ?? .max, Int(b / 1.5))
+            for b in s.burstKbps where b.isFinite && b >= 1.5 * Double(next.minKbps) {
+                if bursts < Self.burstProofs { bursts += 1 }
+                burstKbps = min(burstKbps ?? .max, TierLadder.clampedInt(b / 1.5))
             }
         }
         if let up = lastUp, up.into == index, now - tierSince >= Self.windowReset { windows[index] = nil }
@@ -242,29 +246,35 @@ public struct TierPolicy: Sendable {
     /// The stream moved to another route, or the phone's interface changed (#6398). A start tier below the current one
     /// is taken at once; otherwise the tier stays and the next step up waits only the short window.
     public mutating func path(_ change: PathChange, now: Double) -> Change? {
+        let at = now.isFinite ? now : tierSince
         forgetProof()
-        shortUntil = now + Self.early
+        shortUntil = at + Self.early
         let start = Self.index(rung: Self.rung(change.to), in: ladder, display: display, bias: bias, maxFps: maxFps, maxScale: maxScale)
         guard start > index else { return nil }
-        return move(to: start, target: ladder[start].minKbps, reason: .networkChanged, now: now)
+        return move(to: start, target: ladder[start].minKbps, reason: .networkChanged, now: at)
     }
 
     /// ⋯ › Quality chose another bias: the new ladder's tier that the current rate fits.
     public mutating func setBias(_ b: TierLadder.Bias, now: Double) -> Change? {
         guard b != bias else { return nil }
         bias = b
-        return rebuild(reason: .choice, now: now)
+        return rebuild(reason: .choice, now: now.isFinite ? now : tierSince)
     }
 
     /// The phone's caps changed (cellular, Low Data Mode, Low Power Mode, heat, Data Saver): a new ladder, the tier the
     /// rate fits.
     public mutating func setBudget(capKbps cap: Int, maxFps fps: Int, maxScale scale: Double? = nil, now: Double) -> Change? {
-        guard cap != capKbps || fps != maxFps || scale != maxScale else { return nil }
+        let normalized = Self.normalizedScale(scale)
+        guard cap != capKbps || fps != maxFps || normalized != maxScale else { return nil }
         let reason: TierReason = fps < maxFps ? .phoneWarm : .networkChanged
         capKbps = cap
         maxFps = fps
-        maxScale = scale
-        return rebuild(reason: reason, now: now)
+        maxScale = normalized
+        return rebuild(reason: reason, now: now.isFinite ? now : tierSince)
+    }
+
+    private static func normalizedScale(_ scale: Double?) -> Double? {
+        scale.flatMap { $0.isFinite ? $0 : nil }
     }
 
     // MARK: Moves
@@ -280,18 +290,20 @@ public struct TierPolicy: Sendable {
     private func canDown(_ now: Double, _ s: TierSignals) -> Bool {
         guard let lastDownAt else { return true }
         if now - lastDownAt >= Self.downSpacing, !s.queueFalling { return true }
-        return s.queueRising && (s.queueP50Ms ?? 0) > 2 * queueAtDown + 100
+        let queue = s.queueP50Ms.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
+        return s.queueRising && queue > 2 * queueAtDown + 100
     }
 
     /// The tier's floor doesn't fit 80% of the rate that arrived (or that rate is unknown): its band can't get under the
     /// link.
     private func outgrown(_ delivered: Double?) -> Bool {
-        delivered.map { Double(tier.minKbps) > 0.8 * $0 } ?? true
+        guard let d = delivered, d.isFinite, d >= 0 else { return true }
+        return Double(tier.minKbps) > 0.8 * d
     }
 
     /// The best tier below this one whose floor fits 80% of the rate that arrived; the next one down when it's unknown.
     private func fitting(_ delivered: Double?) -> Int {
-        guard let d = delivered else { return index + 1 }
+        guard let d = delivered, d.isFinite, d >= 0 else { return index + 1 }
         return ladder.indices.first { $0 > index && Double(ladder[$0].minKbps) <= 0.8 * d } ?? ladder.count - 1
     }
 
@@ -309,7 +321,7 @@ public struct TierPolicy: Sendable {
         queueAtDown = queue
         emergencySince = nil
         let t = ladder[i]
-        let target = delivered.map { min(t.maxKbps, max(t.minKbps, Int(0.85 * $0))) } ?? t.minKbps
+        let target = delivered.flatMap { $0.isFinite && $0 >= 0 ? min(t.maxKbps, max(t.minKbps, TierLadder.clampedInt(0.85 * $0))) : nil } ?? t.minKbps
         return move(to: i, target: target, reason: reason, now: now)
     }
 
@@ -352,7 +364,9 @@ public struct TierPolicy: Sendable {
         guard let link else { return 1 }
         switch link.kind {
         case .lan: return 0
-        case .tailscale, .ipv6: return (link.minRttMs ?? link.srttMs ?? .infinity) < 30 ? 0 : 1
+        case .tailscale, .ipv6:
+            let rtt = [link.minRttMs, link.srttMs].compactMap { $0 }.first { $0.isFinite && $0 >= 0 } ?? .infinity
+            return rtt < 30 ? 0 : 1
         case .relay: return link.via == .cellular ? 2 : 1
         }
     }
@@ -363,7 +377,7 @@ public struct TierPolicy: Sendable {
     static func tiers(display: Display, bias: TierLadder.Bias, capKbps: Int, maxFps: Int, maxScale: Double?) -> [TierLadder.Tier] {
         let all = TierLadder.make(points: display.pointSize, pixels: display.pixelSize, maxSize: display.maxSize, bias: bias,
                                   capKbps: capKbps, maxFps: maxFps)
-        guard let maxScale else { return all }
+        guard let maxScale, maxScale.isFinite else { return all }
         let kept = all.filter { $0.pixelsPerPoint <= maxScale + 1e-9 }
         return kept.isEmpty ? Array(all.suffix(1)) : kept
     }
@@ -374,11 +388,12 @@ public struct TierPolicy: Sendable {
     /// a tier lower on such a display than on a Retina one (30 fps instead of 60).
     static func index(rung: Int, in ladder: [TierLadder.Tier], display: Display, bias: TierLadder.Bias, maxFps: Int,
                       maxScale: Double? = nil) -> Int {
+        guard !ladder.isEmpty else { return 0 }
         let steps = TierLadder.steps(bias)
         let step = steps[min(max(rung, 0), steps.count - 1)]
-        let scale = maxScale.map { min(step.scale, $0) } ?? step.scale
+        let scale = maxScale.flatMap { $0.isFinite ? min(step.scale, $0) : nil } ?? step.scale
         let size = CapturePlan.size(points: display.pointSize, pixels: display.pixelSize, scale: scale, maxSize: display.maxSize)
-        let ref = size.width * size.height * CapturePlan.fps(min(step.fps, maxFps))
+        let ref = TierLadder.pixelRate(width: size.width, height: size.height, fps: CapturePlan.fps(min(step.fps, maxFps)))
         return ladder.indices.first { ladder[$0].pixelRate <= ref } ?? ladder.count - 1
     }
 }

@@ -1,3 +1,5 @@
 {
-  "control_unavailable": "閲覧のみ：Codex Appは現在、Personaからのメッセージや停止リクエストを受け付けていません。コンピューターのCodex Appでこの会話を続けてください。"
+  "control_unavailable": "閲覧のみ：Codex Appは現在、Personaからのメッセージや停止リクエストを受け付けていません。コンピューターのCodex Appでこの会話を続けてください。",
+  "recoverable_resume_or_continue": "Codex App の会話は待機中です。ここから Persona ターミナルで引き継ぎ・再開するか、新しいセッションで続けられます。",
+  "recoverable_continue_only": "閲覧のみ：この Codex App 会話はここから直接再開できません。新しいセッションで続けるか、コンピューターの Codex App で開いてください。"
 }

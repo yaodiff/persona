@@ -155,7 +155,7 @@ var codexDebugModels = func(ctx context.Context, n *Node, launcher string) ([]by
 	defer os.RemoveAll(dir)
 	ctx, cancel := context.WithTimeout(ctx, launcherModelsTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, shell, "-ic", n.codexDebugModelsScript(launcher), "persona")
+	cmd := exec.CommandContext(ctx, shell, shellFlag(shell), n.codexDebugModelsScript(launcher), "persona")
 	cmd.Dir = dir
 	killGroupOnCancel(cmd)
 	return cmd.Output()

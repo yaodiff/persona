@@ -69,6 +69,13 @@ export function machineBytes(value: number): string {
 export function machinePercent(v: number): string {
   return v < 0 || !Number.isFinite(v) ? '—' : v.toFixed(v > 0 && v < 10 ? 1 : 0) + '%';
 }
+export function formatMachineLoad(load: number, cores: number, perCoreTemplate: string): string {
+  if (!Number.isFinite(load) || load < 0) return '—';
+  const raw = (load >= 10 ? load.toFixed(1) : load.toFixed(2)).replace(/\.?0+$/, '');
+  if (!Number.isFinite(cores) || cores <= 0) return raw;
+  const perCore = (load / cores).toFixed(1);
+  return raw + ' · ' + perCoreTemplate.replace('{per}', perCore);
+}
 export function machineTokens(value: number): string {
   if (value < 0 || !Number.isFinite(value)) return '—';
   const count = Math.round(value);

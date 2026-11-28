@@ -1,4 +1,5 @@
 {
+  "leader_placement_pending": "尚未确认负责人在这台电脑上的工作区。请等负责人就绪后再重试启动成员。",
   "infer": "无法推断 {machine} 上的任务工作区；请显式选择工作区",
   "resolve": "无法解析任务工作区 {path}",
   "unavailable": "工作区 {path} 不是可用的绝对目录",
@@ -20,5 +21,8 @@
   "own_checkout_dirty_files": "上次使用的工作区有未提交的改动。提交改动或用 Git stash 保存后重试（task_retry），也可以另选分支新建工作区。改动的文件包括 {files}。",
   "own_checkout_in_use": "这个待办之前的检出 {path}（分支 {branch}）正被 Agent {owner} 使用；请等它结束或停止它，然后再启动",
   "own_checkout_unverified": "无法确认 {path} 仍是这个待办在分支 {branch} 上的干净检出；请检查后用 workspace {\"existing\": \"{path}\"} 重新安排任务以在那里继续，或删除它",
-  "own_path_taken": "这个任务的检出文件夹 {path} 里已有文件，没有在那里新建检出；如果那是这个待办之前的工作，请用 workspace {\"existing\": \"{path}\"} 重新安排任务以在那里继续，或删除它"
+  "own_path_taken": "这个任务的检出文件夹 {path} 里已有文件，没有在那里新建检出；如果那是这个待办之前的工作，请用 workspace {\"existing\": \"{path}\"} 重新安排任务以在那里继续，或删除它",
+  "scratch_unsupported": "电脑 {machine} 运行的 Persona Node 版本较旧，不支持受管隔离 scratch 工作区；请升级节点或显式指定 cwd。未启动 Agent",
+  "scratch_create": "受管隔离 scratch 工作区准备失败；未启动 Agent",
+  "scratch_path": "节点未返回有效的绝对 scratch 目录路径；未启动 Agent"
 }

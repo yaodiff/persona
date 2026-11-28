@@ -125,6 +125,7 @@ selector is accepted from the model.
 
 The roster is the bus's identity table `bus_identities` (`docs/protocol/protocol.md`, "Bus"): every row with role `manager` is a manager. Migration 0419 adds where its last handshake said it runs (`host`, `os`, `arch`, `deploy`, `version`) and `last_seen` (recorded on handshake and on disconnect), and a later migration adds `machine_uid` (the host's `~/.persona/machine-uid` when present, additive/omitempty), so clients can correlate hosted managers with their host computer even when display names differ and still show an offline manager's place and "Last synced…". While connected, the hub also keeps ephemeral `pending_restart` in memory (`manager.hello` and live `manager.status` events), cleared on disconnect.
 
+- `extension_info_access_scoped` is true in `GET /api/v1/managers` for a connected Assistant when the hub enforces the scoped authorization contract and that Assistant advertises `extension_info_access_scoped` in `manager.hello`. Clients can offer information-access settings for a non-default Assistant once its roster entry reports this capability and its explicitly targeted trust list loads. An absent field keeps the legacy entry rules. The capability is independent of the `integrations_v2` Labs setting.
 - The hub gives the assistant it starts a new token on every start, but **the name stays**: a name the user gave it is kept.
 - Manager ids: `m-` plus 6 hex digits for one made in the app; `assistant` for the hub's own.
 - **The hub's own can be kept out of the switcher while it is not used (#9055)**: `PATCH /api/v1/managers/assistant {"hide": true}` stores the choice in the hub's settings (`managers.builtin_hide`). The roster then says `hide` and, while it is not the default, owns no machine and has nothing in its inbox that needs the user (`inbox_needs_you`), `hidden`. A machine that falls back to it (its manager revoked) or making it the default shows it again, the choice kept. It is refused (`409 builtin_in_use`) while it is in use; showing it again always works. It stays the carrier, and nothing else changes.
@@ -297,6 +298,20 @@ The built-in manager runs on the hub's machine: its extensions call the hub ther
 
 Not yet covered: the built-in voice extension (off until it is turned on) also calls routes open to full credentials only (`/api/v1/ws`, `/api/v1/channels`, `/api/v1/agents/triage`). Turned on in another manager, those calls are refused.
 
+### Extension information access
+
+`GET /api/v1/assistant/extension-trust` and `PUT /api/v1/assistant/extension-trust/{id}` require a full-access client.
+The request's Assistant owns the trust and category grants. Use `X-Persona-Manager` to name the Assistant, including
+the default Assistant when addressing a known owner.
+
+For reads served by the hub, `extensions.authorize` adds an optional `owner` boolean. The Assistant that recognizes
+the token reads the current trust row from its own database. A current Assistant grants the extra reads through
+`owner: true` and the existing route scope on a live connection. A missing trust row or a failed lookup produces
+`owner: false`. An older Assistant that omits the verdict can establish owner trust through `Profile.ExtensionOwners`
+in its latest snapshot on the same connection. A missing profile, a disconnected or replaced connection, or an
+advertised capability with a missing verdict leaves the extension with ordinary third-party access. Current
+Assistants still send `Profile.ExtensionOwners` for older hubs.
+
 ### After it is revoked
 
 When the hub deletes it (or it was installed again somewhere else), the connection is closed with 4002 and the next dial gets 401 with code `token_revoked`. Only that explicit word counts: a hub that can't look tokens up (its database restarting) answers 503 `store_unavailable`, and a plain 401 is a refusal to retry later; the manager keeps dialing as usual on both. On the explicit word it says once that the hub no longer accepts its token and **stops dialing**; the process stays up, checks `manager.json` every 10 seconds, and every 10 minutes tries the token alone with a bare dial, nothing else of the manager running meanwhile (no bots, connectors, extensions or inbox: those sources may be another manager's now). It starts again only when that dial goes through (a hub restored from a backup may know the token again); a dial that gets no verdict (the hub unreachable, a proxy's answer) is tried again after a minute, never taken for yes. While the hub can't look tokens up it answers 503 for a couple of seconds without asking its database again, and counts none of it against the source. Once you get a new code in the app and `personad manager join … --dir <the same directory>` writes a new token, it restarts itself in place (exec), with nothing to change in the service. The assistant the hub starts is not affected (it doesn't take this path and keeps retrying every minute).
@@ -351,6 +366,16 @@ On an upgraded install the manager's `secret.key` began as the same bytes as the
 
 An independent assistant runs its own manager executable and deploys the node programs
 on the computers it owns. Each installation confirms its own update.
+
+Independent managers on Linux and macOS can follow a confirmed release or direct Hub deploy
+when automatic node updates are enabled. A co-located manager with its own executable can also
+follow the confirmed build when Redeploy installs that build on its host's node. The manager
+verifies its package and waits for idle before the supervised trial. Existing managers from
+before package negotiation use their installed service's replacement watcher or release bootstrap.
+
+On a shared Hub state root the service watcher uses the inode of the running executable and
+checks which build the Hub serves. It waits through a Hub self-update trial. Built-in child
+managers start with the Hub, while independent services wait for their own active work to finish.
 
 ### Following a Web development commit
 
@@ -533,7 +558,7 @@ By default the hub starts the built-in manager as its child (`personad assistant
 - **Its service.** `persona-manager install --builtin [--join <hub address>]` (`personad manager install --builtin`) installs it on Linux as the systemd user unit `persona-manager-assistant.service`, and on a Mac as the launchd agent `com.persona.manager.assistant` (log: `managers/assistant/manager.log` in the data directory). The unit runs `<data dir>/bin/persona-manager assistant` when that is beside `<data dir>/bin/personad` and its build (`version -v`), else `<data dir>/bin/personad assistant` (the binary updates replace; without one there, the running program); a new agent on a Mac by the same rules, but on a Mac installed with `personad` it stays on `personad`: its own agent ran it, or, before it has one, the hub's agent runs it (Full Disk Access lists `personad` for the node of the hub's computer, and moving would need another program added there); `install --builtin` says so when `persona-manager` is beside it, and says which program Full Disk Access needs when it moves an agent ([server.md](../server/server.md) ("Programs")). Each runs it with `PERSONA_ASSISTANT_DEPLOY=service` and `PERSONA_HOME` set to the data directory. The unit restarts it on any exit but 2 (`RestartPreventExitStatus=2`: not bound, another one running). With `--join` and a code in `PERSONA_MANAGER_CODE` (which it takes out of its environment once read, so `systemctl` and `launchctl` don't get it), it keeps a binding whose token the hub still takes: it checks with a bare dial, which takes nothing over, and leaves the code to run out. Otherwise it trades the code first. Without a working binding and a code it installs nothing (exit 2). No systemd user instance, or another system, stops it before the code is spent; `install --builtin --check` checks just that, changing nothing. The unit is started when it does not run, restarted when it changed or the binding is new, and left alone otherwise. A unit or agent that ran another program is moved to this one, and it says so (`it runs … now, not …`); one under the former name keeps `personad`, and `PERSONA_SPLIT_PROGRAMS=0` in its environment keeps `personad` too, written into the unit or agent until `install --builtin` runs again without it ([server.md](../server/server.md) ("Programs")). On a Mac, `bootstrap` right after `bootout` is tried up to 5 times, a second apart. `persona-manager join --builtin <hub address> [<code>] --install` (the code given, or in `PERSONA_MANAGER_CODE`) always trades the code, then installs it the same way. `persona-manager uninstall --builtin` stops and removes the service; the binding and the data stay. `persona-manager status` lists it too (`status --builtin`: only it).
 - **A new binary.** Updates (the hub's self-update swaps `personad` and its programs together) and `install.sh` replace the file the service runs from, and nothing else restarts the service. So the service looks at that file every minute. When another file is there, or this one was written over:
   - **Check:** the new file must be an executable regular file whose `version -v` answers within 30 seconds (one that hangs is killed with what it started). One that doesn't is not used: the service goes on with the code it runs, says so in its log, and doesn't check that file again until another one is there.
-  - **Idle:** with a file that runs, it waits until nothing is going on. That means no request being answered (an app's call or an extension's through the hub; an agent's tool call or a write the gate forwarded from a computer), no hub event left to handle, and no request or stream of the extensions' open (a voice call, or a live view such as an extension's log page left open, which holds it up to the 30 minutes below). None of its own conversations may be on a turn (or their machine not answering), no agent's finished turn being looked at, and no scheduled task's message or channel's answer going out. A task agent's start also keeps it busy, counted before its goroutine is launched until linking, failure bookkeeping or entering a retained-tab remedy finishes; normal starts and both retry paths are covered (#3251). A computer's card or question waits on a person and is taken up again after a restart, so it doesn't count. Its outbox doesn't hold it back: what it keeps waits in its database. It logs what it waits for. A check of all this that doesn't answer within 10 seconds counts as busy, and its late answer is dropped. After 30 minutes it goes ahead anyway, saying so.
+  - **Idle:** with a file that runs, it waits until nothing is going on. That means no request being answered (an app's call or an extension's through the hub; an agent's tool call or a write the gate forwarded from a computer), no hub event left to handle, and no request or stream of the extensions' open (a voice call, or a live view such as an extension's log page left open). None of its own conversations may be on a turn (or their machine not answering), no agent's finished turn being looked at, and no scheduled task's message or channel's answer going out. A task agent's start also keeps it busy, counted before its goroutine is launched until linking, failure bookkeeping or entering a retained-tab remedy finishes; normal starts and both retry paths are covered (#3251). A computer's card or question waits on a person and is taken up again after a restart, so it doesn't count. Its outbox doesn't hold it back: what it keeps waits in its database. It logs what it waits for. A check of all this that doesn't answer within 10 seconds counts as busy, and its late answer is dropped.
   - **Restart:** then it stops and starts again in place on the new file, after one more check (as after a refused token, with the same exec).
   - **Failure:** when the check or the exec fails then, it runs again on its old code, and that file isn't tried again. The file that was there when it started isn't started on, not even when that very file is renamed back while it waits. A rollback that copies the old binary back in is a new file, so the service starts again once more, onto the old version. After a refused token it starts again only on a file that passes the same check.
 - **Binding by hand.**
@@ -693,11 +718,30 @@ list or old mtime never proves completion. An unloaded persisted main is covered
 only after the complete live sources have answered. Snapshot data includes no
 prompts, task commands, transcript content or credentials.
 
+Each configured host needs an audited fresh read for this (`SnapshotForUpdate`,
+`server/internal/node/update_inventory_hosts.go`); a host without one fails the
+inventory. herdr, the Herdr App and Orca have one. Orca's
+(`server/internal/node/hostorca_update.go`) reads `terminal.list` with its
+layouts, a full `worktree.ps` outside the listing's snapshot series and a new
+process scan, none from the listing's caches; either list cut short at Orca's limit,
+a failed `worktree.ps` or an unreadable process table fails it, and Orca not running
+is an empty source. It also stands for the built-in Orca bridge, whose sessions are
+Orca's chats: any chat open on this machine that has had a turn refuses the read
+(a chat's row is Orca's display state, with no background or child inventory; a
+chat with no turn yet runs nothing, and one listed closed is not open in Orca),
+and only while Orca's read
+stands for it is the bridge's connection, told by its hello instance, not counted
+as a runtime of its own.
+
 An explicitly remote Codex terminal can use the configured app-server's authority.
-The supported command form is `codex resume --remote <configured-local-endpoint> <thread-id>`:
+The supported command forms are `codex resume --remote <configured-local-endpoint> <thread-id>`
+and the one Persona's own Codex start writes, `codex --remote <configured-local-endpoint> [--no-alt-screen] resume <thread-id>`,
+word for word:
 the host must report that exact session, its foreground PID must match the owner's
 process inventory, and kernel argv must bind that PID to the same endpoint and
-thread. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
+thread. Orca reports no agent session, so for an Orca pane the session is the
+thread its foreground Codex's kernel argv resumes; two different threads in one
+pane, or an argv that cannot be read, leave it without one. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
 `KERN_PROCARGS2` on macOS, never the formatted `ps` command or a title. The endpoint
 must already be a configured, connected local app-server; collection neither starts
 one nor resumes the terminal. A matching historical thread ID alone is insufficient.

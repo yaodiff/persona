@@ -206,9 +206,9 @@ describe("the registry", () => {
 
 describe("reserved chords", () => {
   it("keeps the browser's, the text fields' and (on Windows / Linux) the terminal's", () => {
-    expect(reservedWhy("Mod+T", "other")).toBe("浏览器要用");
-    expect(reservedWhy("Mod+Shift+N", "mac")).toBe("浏览器要用");
-    expect(reservedWhy("Mod+C", "other")).toBe("文字编辑要用");
+    expect(reservedWhy("Mod+T", "other")).toBe("已被浏览器占用");
+    expect(reservedWhy("Mod+Shift+N", "mac")).toBe("已被浏览器占用");
+    expect(reservedWhy("Mod+C", "other")).toBe("已被文本编辑功能占用");
     expect(reservedWhy("Mod+Enter", "mac")).not.toBeNull();
     expect(reservedWhy("Mod+W", "other")).not.toBeNull();
     expect(reservedWhy("Mod+Q", "mac")).not.toBeNull();
@@ -216,11 +216,11 @@ describe("reserved chords", () => {
   it("is platform-aware: ⌘Q is the Mac's, Ctrl+Q is free; ⌃D is the terminal's only off the Mac", () => {
     expect(reservedWhy("Mod+Q", "other")).toBeNull();
     expect(reservedWhy("Mod+M", "other")).toBeNull();
-    expect(reservedWhy("Mod+Z", "mac")).toBe("文字编辑要用");
+    expect(reservedWhy("Mod+Z", "mac")).toBe("已被文本编辑功能占用");
   });
   it("covers a whole digits chord when one of its nine is reserved", () => {
     expect(reservedWhy("Mod+1-9", "other")).toBeNull();
-    expect(reservedWhy("Mod+0", "other")).toBe("浏览器要用");
+    expect(reservedWhy("Mod+0", "other")).toBe("已被浏览器占用");
   });
 });
 
@@ -232,8 +232,8 @@ describe("rebinding", () => {
     expect(checkBinding("jump", pressed("o", { shiftKey: true }), defaults, "other")).toEqual({ ok: true, chord: "Mod+Shift+O" });
   });
   it("asks for Ctrl / ⌘ when the chord has none", () => {
-    expect(checkBinding("jump", pressed("o", {}, false), defaults, "other")).toMatchObject({ ok: false, reason: "mod", message: "需要带 Ctrl" });
-    expect(checkBinding("jump", eventChord(key("o"), "mac"), defaults, "mac")).toMatchObject({ ok: false, reason: "mod", message: "需要带 ⌘" });
+    expect(checkBinding("jump", pressed("o", {}, false), defaults, "other")).toMatchObject({ ok: false, reason: "mod", message: "需要包含 Ctrl" });
+    expect(checkBinding("jump", eventChord(key("o"), "mac"), defaults, "mac")).toMatchObject({ ok: false, reason: "mod", message: "需要包含 ⌘" });
     expect(checkBinding("jump", eventChord(key("o", { shiftKey: true, altKey: true }), "mac"), defaults, "mac")).toMatchObject({ reason: "mod" });
   });
   it("names the command that already has the chord", () => {
@@ -248,7 +248,7 @@ describe("rebinding", () => {
   });
   it("refuses reserved chords with the reason", () => {
     expect(checkBinding("jump", pressed("t"), defaults, "other")).toMatchObject({ ok: false, reason: "reserved" });
-    expect(checkBinding("jump", pressed("t"), defaults, "other")).toMatchObject({ message: expect.stringContaining("浏览器要用") });
+    expect(checkBinding("jump", pressed("t"), defaults, "other")).toMatchObject({ message: expect.stringContaining("已被浏览器占用") });
   });
   it("refuses keys chords do not use", () => {
     expect(checkBinding("jump", eventChord(ctrl("Tab"), "other"), defaults, "other")).toMatchObject({ ok: false, reason: "key" });

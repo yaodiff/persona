@@ -469,20 +469,28 @@ func TestOutsideDecisionPostgresLifecycle(t *testing.T) {
 
 func TestOutsideDecisionNodeRequestLifecycle(t *testing.T) {
 	e := newTodoEnv(t, nil)
-	params := struct {
-		Decision assistantwire.OutsideDecisionRequest `json:"decision"`
-		Source   string                               `json:"source"`
-	}{Decision: outsideFixture(), Source: "Terminal job"}
-	raw, _ := json.Marshal(params)
+	decision, err := json.Marshal(outsideFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := `{"decision":` + string(decision) + `,"source":"Terminal job","extra":true`
+	raw := json.RawMessage(wire + `,"cwd":"/work/nightly"}`)
 	out, ok, err := e.s.NodeAnswer(context.Background(), "server", assistantwire.MethodDecisionRaise, raw)
 	if !ok || err != nil {
 		t.Fatalf("node raise: ok %v, err %v", ok, err)
 	}
 	raised := out.(assistantwire.OutsideDecisionReply)
-	if raised.Decision == nil || raised.Decision.Source.Kind != "script" || raised.Decision.Source.Name != "Terminal job" {
+	if !raised.Inserted || raised.Decision == nil || raised.Decision.Source.Kind != "script" || raised.Decision.Source.Name != "Terminal job" {
 		t.Fatalf("node raise: %+v", raised)
 	}
-	raw, _ = json.Marshal(map[string]string{"id": raised.Decision.ID})
+	// Older assistants ignored cwd regardless of its JSON type.
+	raw = json.RawMessage(wire + `,"cwd":{"ignored":true}}`)
+	out, ok, err = e.s.NodeAnswer(context.Background(), "server", assistantwire.MethodDecisionRaise, raw)
+	replay, _ := out.(assistantwire.OutsideDecisionReply)
+	if !ok || err != nil || replay.Inserted || replay.Decision == nil || replay.Decision.ID != raised.Decision.ID {
+		t.Fatalf("node replay with ignored cwd: %+v, ok %v, err %v", out, ok, err)
+	}
+	raw = json.RawMessage(`{"extra":true,"id":` + string(mustJSON(raised.Decision.ID)) + `}`)
 	out, ok, err = e.s.NodeAnswer(context.Background(), "server", assistantwire.MethodDecisionGet, raw)
 	if !ok || err != nil || out.(assistantwire.OutsideDecisionReply).Decision == nil {
 		t.Fatalf("node poll: %+v, ok %v, err %v", out, ok, err)
@@ -494,6 +502,27 @@ func TestOutsideDecisionNodeRequestLifecycle(t *testing.T) {
 	out, ok, err = e.s.NodeAnswer(context.Background(), "server", assistantwire.MethodDecisionWithdraw, raw)
 	if !ok || err != nil || out.(assistantwire.OutsideDecisionReply).Decision.State != assistantwire.OutsideDecisionWithdrawn {
 		t.Fatalf("node withdraw: %+v, ok %v, err %v", out, ok, err)
+	}
+}
+
+func TestOutsideDecisionNodeRequestInvalidReplies(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	for _, tc := range []struct {
+		name, method, input, message string
+	}{
+		{"malformed raise", "decision.raise", `{"decision":`, "unexpected end of JSON input"},
+		{"invalid source", "decision.raise", `{"source":42}`, "json: cannot unmarshal number into Go struct field .source of type string"},
+		{"invalid source after ignored cwd", "decision.raise", `{"cwd":42,"source":42}`, "json: cannot unmarshal number into Go struct field .source of type string"},
+		{"empty id", "decision.get", `{"id":""}`, "a decision id is required"},
+		{"invalid id", "decision.withdraw", `{"id":42}`, "a decision id is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: tc.message}
+			out, ok, err := e.s.NodeAnswer(t.Context(), "server", tc.method, json.RawMessage(tc.input))
+			if !ok || err != nil || out != want {
+				t.Errorf("reply = %+v, handled = %v, err = %v, want %+v, true, nil", out, ok, err, want)
+			}
+		})
 	}
 }
 

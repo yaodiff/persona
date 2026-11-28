@@ -394,6 +394,51 @@ func TestDesktopSessionsHaveACountOfTheirOwn(t *testing.T) {
 	}
 }
 
+// A session the index gives a parent (a side session, a fork, an earlier run of a scheduled task) is drawn under another
+// row, so it is counted apart from the top-level ones (#15279): the newest maxDesktopFolded of them are listed beside
+// the newest maxDesktopOffline top-level sessions, however much newer the folded ones are. Before, they were one count,
+// and a daily scheduled task's runs pushed the top-level sessions out.
+func TestDesktopFoldedSessionsDoNotTakeTheTopLevelPlaces(t *testing.T) {
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, third := useDesktopDirs(t)
+	top := func(i int) string { return fmt.Sprintf("dddddddd-0000-4000-8000-%012d", i) }
+	side := func(i int) string { return fmt.Sprintf("ffffffff-0000-4000-8000-%012d", i) }
+	for i := 0; i < maxDesktopOffline+5; i++ { // older than every folded one
+		writeEntrypointTranscript(t, dir, top(i), "claude-desktop-3p", time.Duration(1000+i)*time.Minute)
+		writeDesktopEntry(t, third, top(i), top(i), false, nil, "")
+	}
+	from := `,"spawnedFrom":{"sessionId":"local_` + top(0) + `","taskId":"task_1","sideSession":true}`
+	for i := 0; i < maxDesktopFolded+5; i++ {
+		writeEntrypointTranscript(t, dir, side(i), "claude-desktop-3p", time.Duration(i+1)*time.Minute)
+		writeDesktopEntry(t, third, side(i), side(i), false, nil, from)
+	}
+	tops, sides := 0, 0
+	listed := map[string]bool{}
+	for _, s := range n.scanOffline() {
+		listed[s.SessionID] = true
+		switch {
+		case strings.HasPrefix(s.SessionID, "dddddddd"):
+			tops++
+		case strings.HasPrefix(s.SessionID, "ffffffff"):
+			sides++
+		}
+	}
+	if tops != maxDesktopOffline || sides != maxDesktopFolded {
+		t.Fatalf("top-level sessions %d, folded %d; want %d and %d", tops, sides, maxDesktopOffline, maxDesktopFolded)
+	}
+	if !listed[top(0)] || listed[top(maxDesktopOffline)] {
+		t.Fatal("not the newest of the top-level sessions")
+	}
+	if !listed[side(0)] || listed[side(maxDesktopFolded)] {
+		t.Fatal("not the newest of the folded sessions")
+	}
+}
+
 // A sidebar of a couple of hundred sessions, quiet for more than the usual 7 days, is listed whole (#15522): with the old
 // bound of 100 the older ones were cut while the app still showed them.
 func TestDesktopSidebarOfHundredsIsListedWhole(t *testing.T) {

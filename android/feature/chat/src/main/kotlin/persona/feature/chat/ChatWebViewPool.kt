@@ -75,7 +75,10 @@ internal class ChatWebViewPool(
         val view = pages[url] ?: create().also { pages[url] = it; if (url in noCache) it.settings.cacheMode = WebSettings.LOAD_NO_CACHE; it.loadUrl(url) }
         // Only the newest uncommitted view needs protection. A composition abandoned before activate leaves no permanent held entry.
         pending = view
-        if (speculative.remove(url)) {
+        val wasSpeculative = speculative.remove(url)
+        val hadSuppressedDownload = view.suppressedBackgroundDownload
+        view.suppressedBackgroundDownload = false
+        if (wasSpeculative || hadSuppressedDownload) {
             if (view.paused) {
                 view.paused = false
                 view.onResume()
@@ -127,8 +130,8 @@ internal class ChatWebViewPool(
 
     @androidx.annotation.OptIn(markerClass = [Profile.ExperimentalUrlPrefetch::class])
     fun preload(url: String) {
-        // Loopback addresses (the phone's own) and direct media files are never preloaded in a paused background WebView.
-        if (closed || isLoopback(url) || isDirectMedia(url) || pages.containsKey(url)) return
+        // Loopback addresses (the phone's own), direct media, and direct file downloads are never preloaded in a paused background WebView.
+        if (closed || classifyWebDownloadHost(url) != WebDownloadHostSafety.Allowed || isDirectMedia(url) || isDirectDownload(url) || pages.containsKey(url)) return
         val view = create()
         pages[url] = view
         view.needsMediaRecovery = true
@@ -156,7 +159,7 @@ internal class ChatWebViewPool(
         val entry = pages.entries.firstOrNull { it.value === view } ?: return
         val url = entry.key
         view.exitCustomView()
-        view.onPick = null; view.onExternal = null
+        view.onPick = null; view.onExternal = null; view.onDownload = null; view.downloadGuard.clear()
         (view.parent as? ViewGroup)?.removeView(view)
         pauseView(view)
         if (active === view) active = null
@@ -203,6 +206,8 @@ internal class ChatWebViewPool(
         view.exitCustomView()
         view.onPick = null
         view.onExternal = null
+        view.onDownload = null
+        view.downloadGuard.clear()
         view.onWindowAttached = null
         (view.parent as? ViewGroup)?.removeView(view)
         view.destroy()
@@ -331,18 +336,42 @@ internal class ChatWebViewPool(
                 return true
             }
         }
+        setDownloadListener { downloadUrl, userAgent, contentDisposition, mimetype, contentLength ->
+            if (!canAcceptDownload(page)) {
+                if (!closed && !page.gone && active !== page && page !in held && page !== pending) {
+                    page.suppressedBackgroundDownload = true
+                }
+                return@setDownloadListener
+            }
+            val safeUrl = ChatLinks.webUrl(downloadUrl.orEmpty()) ?: return@setDownloadListener
+            val referer = page.currentUrl.ifBlank { page.url.orEmpty() }.takeIf { it.isNotBlank() }
+            page.onDownload?.invoke(
+                ChatWebDownloadRequest(
+                    url = safeUrl,
+                    userAgent = userAgent.orEmpty(),
+                    contentDisposition = contentDisposition.orEmpty(),
+                    mimeType = mimetype.orEmpty(),
+                    contentLength = contentLength,
+                    referer = referer,
+                ),
+            )
+        }
     }
 
-    private fun isLoopback(url: String): Boolean {
-        val host = runCatching { URI(url.trim()).host }.getOrNull()?.lowercase() ?: return false
-        return host in loopbackHosts || host.endsWith(".localhost")
+    private fun canAcceptDownload(view: ChatSelectionWebView): Boolean {
+        if (closed || view.gone || active !== view || view.paused || view.parent == null) return false
+        return speculative.none { pages[it] === view }
     }
 
-    private fun isDirectMedia(url: String): Boolean {
-        val path = runCatching { URI(url.trim()).path }.getOrNull()?.lowercase() ?: return false
+    private fun isDirectMedia(url: String): Boolean = urlExtension(url) in directMediaExtensions
+
+    private fun isDirectDownload(url: String): Boolean = urlExtension(url) in directDownloadExtensions
+
+    private fun urlExtension(url: String): String {
+        val path = runCatching { URI(url.trim()).path }.getOrNull()?.lowercase() ?: return ""
         val segment = path.substringAfterLast('/', "")
         val ext = segment.substringAfterLast('.', "")
-        return ext.isNotEmpty() && ext != segment && ext in directMediaExtensions
+        return if (ext.isNotEmpty() && ext != segment) ext else ""
     }
 
     private fun mute(view: WebView, muted: Boolean) {
@@ -380,9 +409,6 @@ internal class ChatWebViewPool(
     }
 }
 
-/** The hosts that mean this phone itself (the same set as `PortLinks`, which also needs a port). */
-private val loopbackHosts = setOf("localhost", "127.0.0.1", "0.0.0.0", "::1", "::", "[::1]", "[::]")
-
 private fun applyPlatformAlgorithmicDarkening(settings: WebSettings, allowed: Boolean) {
     if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
         // Optional appearance only: a framework / WebView version mismatch must not make the link card unusable.
@@ -392,6 +418,9 @@ private fun applyPlatformAlgorithmicDarkening(settings: WebSettings, allowed: Bo
 
 /** Direct audio/video file extensions skipped by background preloading so they load only in an active, visible WebView. */
 private val directMediaExtensions = setOf("mp4", "m4v", "mov", "webm", "mkv", "ogv", "m3u8", "mpd", "mp3", "m4a", "ogg", "wav", "flac")
+
+/** Direct file download extensions skipped by background preloading so downloads only begin on an explicit foreground open. */
+private val directDownloadExtensions = setOf("apk", "aab", "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "pdf", "dmg", "exe", "msi", "deb", "rpm", "pkg", "ipa", "iso", "bin")
 
 /**
  * Re-triggers `load()` on `<video>` elements that stalled at `readyState < 2` while a preloaded WebView was paused and
@@ -411,6 +440,12 @@ internal open class ChatSelectionWebView(context: Context) : WebView(context) {
     var onPick: ((ChatLinkPick, ChatLinkContext) -> Unit)? = null
     /** A tapped link for another app (mailto:, tel:, intent:): the host asks before it leaves. */
     var onExternal: ((String) -> Unit)? = null
+    /** A file download triggered by a foreground, mounted page; the host routes it through [ChatWebDownloader]. */
+    var onDownload: ((ChatWebDownloadRequest) -> Unit)? = null
+    /** Per-view in-flight and short-cooldown deduplication guard; cleared on release and destroy. */
+    internal val downloadGuard: ChatWebDownloadGuard = ChatWebDownloadGuard()
+    /** True when a background preloaded view suppressed a download so the next foreground acquire reloads cleanly. */
+    internal var suppressedBackgroundDownload: Boolean = false
     /** Active fullscreen custom view requested via [WebChromeClient.onShowCustomView], if any. */
     var customView by mutableStateOf<View?>(null)
         internal set

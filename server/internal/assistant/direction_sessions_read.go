@@ -120,7 +120,12 @@ func (s *Service) serveDirectionRead(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = directionEndedTasksPage
 	}
-	tb := s.directionOwners()
+	all := s.treeTodos()
+	tb := s.directionOwners(all)
+	tb.todosV2 = cfg.todosV2On()
+	if tb.todosV2 {
+		tb.effectiveDirs = tb.resolveEffectiveDirections(all, s.directionNames(ctx, cfg, titles, true))
+	}
 	tasks, more, cursorOK := tb.directionEndedTasks(id, query.Get("title"), query.Get("before"), min(limit, directionEndedTasksMaxPage))
 	if !cursorOK {
 		directionFilingRefusal(w, r, http.StatusConflict, "ended_task_not_found", errDirectionEndedTaskCursor)
@@ -451,14 +456,14 @@ func (l *directionLook) sessionRows(ctx context.Context, placed []directionCandi
 	return groups
 }
 
-// directionEndedTasks uses the same raw ownership resolution as the open tree. Only done/cancelled tasks are included;
-// a failed start still waiting for its owner is open, not ended.
+// directionEndedTasks uses v2 board attribution, including historical directions. A failed start still waiting for
+// its owner is open.
 func (tb *treeBuild) directionEndedTasks(direction, title, before string, limit int) (page []directionEndedTask, more, ok bool) {
 	filter := strings.ToLower(strings.TrimSpace(title))
 	var all []directionEndedTask
 	for _, id := range slices.Sorted(maps.Keys(tb.todos)) {
 		t := tb.todos[id].Todo
-		if tb.taskOwner(t) != direction || t.DoneAt == nil && t.CancelledAt == nil || !t.closedForGood() && t.CancelledAt == nil {
+		if tb.attributedDirection(t) != direction || t.DoneAt == nil && t.CancelledAt == nil || !t.closedForGood() && t.CancelledAt == nil {
 			continue
 		}
 		if filter != "" && !strings.Contains(strings.ToLower(t.Title), filter) {

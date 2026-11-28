@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -36,7 +35,7 @@ type boardRow struct {
 	link     string
 	nudged   bool // the bot nudged under its card in the chat (the lark module's nudge.go, #6084)
 	// machine and session are the chat a card or a question that can wait came from, empty when it came from none; the
-	// apps open it from the brief item (briefing_feed.go).
+	// apps open it from the brief item (modules/briefing/feed.go).
 	machine, session string
 	// asked is when the "Please verify" ask of a to-do waiting to be verified was made (its card, if it has one, went out then) (zero: the row is not one); id is the to-do.
 	asked time.Time
@@ -208,12 +207,7 @@ func boardRowMarkdown(l i18n.Lang, n int, r boardRow) string {
 	return b.String()
 }
 
-// boardLinkOK: u is an http(s) address with a host that a Markdown link can hold (card links are documented for
-// http(s) only, as safeLinkButton checks).
-func boardLinkOK(u string) bool {
-	p, err := url.Parse(u)
-	return err == nil && u != "" && (p.Scheme == "http" || p.Scheme == "https") && p.Host != "" && !strings.ContainsAny(u, "() \t\r\n")
-}
+var boardLinkOK = botcard.MarkdownLinkOK
 
 // boardCard is the board and the same as plain text (the fallback when Feishu refuses the card): one line a thing,
 // with what is waiting and a note of when it was written; when nothing is, it says so. said is the card without that

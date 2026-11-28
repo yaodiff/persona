@@ -29,6 +29,6 @@
   "close": "閉じる…",
   "archive_busy": "処理中：終わってからアーカイブしてください",
   "close_busy": "処理中：作業中、待機中、ループやサーバーの実行中は閉じられません",
-  "archived_agents": "アーカイブしたエージェント",
+  "archived_agents": "アーカイブ済みセッション",
   "worktree_source_unavailable": "このリポジトリをワークツリー対応のターミナルワークスペースで開いてください。"
 }

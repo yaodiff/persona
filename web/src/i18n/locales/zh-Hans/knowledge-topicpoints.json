@@ -1,14 +1,14 @@
 {
   "title": "知识点",
-  "empty": "这个主题下还没有知识点。",
+  "empty": "该主题下暂无知识点。",
   "reason": "理由：{text}",
   "cause": "原因：{text}",
   "source_title": "打开「{name}」",
   "when": "{day} 确认",
   "point_concept": "概念",
-  "point_decision": "决定",
+  "point_decision": "决策",
   "point_practice": "做法",
-  "point_pitfall": "坑",
+  "point_pitfall": "避坑",
   "point_fact": "事实",
   "point_question": "待定",
   "point_plain": "知识点"

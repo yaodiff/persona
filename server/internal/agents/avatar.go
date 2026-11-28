@@ -21,7 +21,7 @@ import (
 
 // Avatars come from the Lark gateway's feed as data: URLs (Grok Bot's generated one-path SVGs, Muse's JPEGs) or https URLs.
 // The list carries only hasAvatar + avatarVersion; GET /api/v1/agents/sessions/{id}/avatar serves the image. SVGs are
-// rasterized here to PNG because iOS cannot draw SVG data with public APIs.
+// rasterized here to PNG because iOS cannot draw SVG data with public APIs; .ico favicons become PNG too (avatar_ico.go).
 
 const (
 	avatarMaxBytes = 2 << 20
@@ -51,7 +51,7 @@ func withAvatar(s Session, avatarURL string) Session {
 var avatarHTTP = &http.Client{Timeout: 10 * time.Second}
 
 // decodeAvatar turns an avatar URL into image bytes: data: URLs are decoded, https URLs fetched (size-limited), and
-// SVG is rasterized to PNG.
+// SVG and .ico favicons become PNG.
 func decodeAvatar(ctx context.Context, raw string) (*Avatar, error) {
 	var data []byte
 	var ctype string
@@ -107,6 +107,13 @@ func decodeAvatar(ctx context.Context, raw string) (*Avatar, error) {
 	}
 	if ctype == "image/svg+xml" || bytes.HasPrefix(bytes.TrimSpace(data), []byte("<svg")) {
 		png, err := rasterizeSVG(data)
+		if err != nil {
+			return nil, err
+		}
+		data, ctype = png, "image/png"
+	}
+	if isICOType(ctype) || looksLikeICO(data) {
+		png, err := icoToPNG(data)
 		if err != nil {
 			return nil, err
 		}

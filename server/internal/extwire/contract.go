@@ -6,8 +6,9 @@ import "strings"
 // hub an extension's token may call names one (extmgr/extension_scopes.go); a route naming none is for full tokens
 // only.
 const (
-	ScopeKBRead  = "kb.read"
-	ScopeKBWrite = "kb.write"
+	ScopeKBImportStatus = "kb.import_status"
+	ScopeKBRead         = "kb.read"
+	ScopeKBWrite        = "kb.write"
 	// ScopeSentRead reveals which archived messages Persona sent as the user (kb.day).
 	ScopeSentRead      = "sent.read"
 	ScopeInboxRead     = "inbox.read"

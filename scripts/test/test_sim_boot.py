@@ -34,8 +34,11 @@ FAKE_XCRUN = textwrap.dedent('''\
     if a[:2] == ["list", "devices"]: print(json.dumps({"devices": st["devices"]}))
     elif a[:1] == ["list"]: print(json.dumps({"devicetypes": st["devicetypes"], "runtimes": st["runtimes"]}))
     elif a[0] == "create":
-        st["devices"].setdefault(a[3], []).append({"udid": st["next"], "name": a[1], "state": "Shutdown", "isAvailable": True}); save()
+        st["devices"].setdefault(a[3], []).append({"udid": st["next"], "name": a[1], "state": "Shutdown", "isAvailable": True,
+                                                   "deviceTypeIdentifier": a[2]}); save()
         print(st["next"])
+    elif a[0] == "rename":
+        dev(a[1])["name"] = a[2]; save()
     elif a[0] == "boot":
         if st.get("boot_rc"): sys.exit(st["boot_rc"])
         dev(a[1])["state"] = "Booted"; save()
@@ -149,7 +152,8 @@ class SimBootTests(unittest.TestCase):
             (nobin / "xcrun").write_text(FAKE_XCRUN)
             (nobin / "xcrun").chmod(0o755)
             path = [str(nobin)]
-        e = {"PATH": ":".join(path + ["/usr/bin", "/bin"]), "HOME": str(self.dir), "FAKE": str(self.dir), "SIM_BOOT_TIMEOUT": "20"}
+        e = {"PATH": ":".join(path + ["/usr/bin", "/bin"]), "HOME": str(self.dir), "FAKE": str(self.dir), "SIM_BOOT_TIMEOUT": "20",
+             "SIM_BOOT_LOCK_DIR": str(self.dir / "boot.lock")}
         e.update(env or {})
         r = subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env=e, timeout=timeout, cwd=self.dir)
         calls = (self.dir / "calls").read_text().splitlines() if (self.dir / "calls").exists() else []
@@ -231,6 +235,128 @@ class SimBootTests(unittest.TestCase):
         self.assertIn("xcrun simctl create Persona Shots 1 com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro "
                       "com.apple.CoreSimulator.SimRuntime.iOS-27-0", calls)
         self.assertEqual(self.device(NEW)["state"], "Booted")
+
+    IOS = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+    PHONE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
+
+    def add_device(self, name, state, udid, device_type=PHONE_TYPE, runtime=IOS):
+        self.state = self.load()
+        self.state["devices"].setdefault(runtime, []).append(
+            {"udid": udid, "name": name, "state": state, "isAvailable": True, "deviceTypeIdentifier": device_type})
+        self.save()
+
+    def three_booted(self):
+        for i, name in enumerate(("Persona A", "Persona B", "Persona C")):
+            self.add_device(name, "Booted", "55555555-0000-0000-0000-00000000000%d" % i)
+
+    def boot_calls(self, calls):
+        return [c for c in calls if c.startswith("xcrun simctl boot ")]
+
+    def test_a_boot_beyond_the_booted_limit_waits_then_exits_75_without_booting(self):
+        self.three_booted()
+        r, calls = self.run_boot("--profile", "stock", "mine", env={"SIM_SLOT_WAIT": "0"})
+        self.assertEqual(r.returncode, 75, r.stderr)
+        self.assertIn("3 simulators are already booted (limit 3", r.stderr)
+        self.assertIn("Persona A (55555555-0000-0000-0000-000000000000) Booted", r.stderr)
+        self.assertEqual(self.boot_calls(calls), [])
+        self.assertEqual(self.device(PHONE)["state"], "Shutdown")
+        self.assertFalse((self.dir / "boot.lock").exists(), "the lock is released on exit")
+
+    def test_a_new_name_beyond_the_limit_creates_nothing(self):
+        self.three_booted()
+        r, calls = self.run_boot("brand new", env={"SIM_SLOT_WAIT": "0"})
+        self.assertEqual(r.returncode, 75, r.stderr)
+        self.assertFalse([c for c in calls if " create " in c or " rename " in c], calls)
+
+    def test_an_already_booted_simulator_is_never_blocked_by_the_limit(self):
+        self.three_booted()
+        r, calls = self.run_boot("--profile", "stock", "Persona A", env={"SIM_SLOT_WAIT": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "55555555-0000-0000-0000-000000000000")
+        self.assertEqual(self.boot_calls(calls), [])
+
+    def test_the_limit_is_configurable(self):
+        self.three_booted()
+        r, _ = self.run_boot("--profile", "stock", "mine", env={"SIM_SLOT_WAIT": "0", "SIM_MAX_BOOTED": "4"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r, _ = self.run_boot("mine", env={"SIM_MAX_BOOTED": "0"})
+        self.assertEqual(r.returncode, 2)
+
+    def test_a_slot_freed_while_waiting_lets_the_boot_continue(self):
+        import threading
+        self.three_booted()
+        def free_one():
+            st = self.load()
+            next(d for r in st["devices"].values() for d in r if d["name"] == "Persona B")["state"] = "Shutdown"
+            (self.dir / "state.json").write_text(json.dumps(st))
+        timer = threading.Timer(1.5, free_one)
+        timer.start()
+        try:
+            r, calls = self.run_boot("--profile", "stock", "mine", env={"SIM_SLOT_WAIT": "20"})
+        finally:
+            timer.cancel()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("waiting for a slot", r.stderr)
+        self.assertEqual(len(self.boot_calls(calls)), 1)
+
+    def test_create_only_and_start_only_skip_the_limit_and_the_lock(self):
+        self.three_booted()
+        (self.dir / "boot.lock").mkdir()
+        (self.dir / "boot.lock" / "pid").write_text(str(os.getpid()))  # a live holder would block a normal boot
+        r, _ = self.run_boot("--create-only", "--profile", "stock", "ci device", env={"SIM_SLOT_WAIT": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r, calls = self.run_boot("--start-only", "--profile", "stock", PHONE, env={"SIM_SLOT_WAIT": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.boot_calls(calls)), 1)
+        self.assertTrue((self.dir / "boot.lock").exists(), "a lock this run never took is left alone")
+
+    def test_a_live_lock_holder_blocks_a_boot_and_a_dead_one_is_taken_over(self):
+        lock = self.dir / "boot.lock"
+        lock.mkdir()
+        (lock / "pid").write_text(str(os.getpid()))
+        r, calls = self.run_boot("--profile", "stock", "mine", env={"SIM_SLOT_WAIT": "1"})
+        self.assertEqual(r.returncode, 75, r.stderr)
+        self.assertIn("waited 1s for another sim-boot.sh", r.stderr)
+        self.assertEqual(self.boot_calls(calls), [])
+        self.assertTrue(lock.exists(), "a live holder keeps its lock")
+        (lock / "pid").write_text("999999999")
+        r, calls = self.run_boot("--profile", "stock", "mine", env={"SIM_SLOT_WAIT": "5"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("taking over the boot lock", r.stderr)
+        self.assertEqual(len(self.boot_calls(calls)), 1)
+        self.assertFalse(lock.exists())
+
+    def test_a_new_name_adopts_a_shut_down_persona_simulator_instead_of_creating_one(self):
+        old = "66666666-0000-0000-0000-000000000001"
+        self.add_device("Persona Shots 1", "Shutdown", old)
+        r, calls = self.run_boot("--profile", "stock", "Persona Shots 2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), old)
+        self.assertIn("xcrun simctl rename %s Persona Shots 2" % old, calls)
+        self.assertFalse([c for c in calls if " create " in c], calls)
+        self.assertEqual(self.device(old)["name"], "Persona Shots 2")
+        self.assertEqual(self.device(old)["state"], "Booted")
+
+    def test_adoption_skips_booted_foreign_and_other_type_simulators(self):
+        self.add_device("Persona Running", "Booted", "66666666-0000-0000-0000-000000000002")
+        self.add_device("someone else's", "Shutdown", "66666666-0000-0000-0000-000000000003")
+        self.add_device("Persona Watch 1", "Shutdown", "66666666-0000-0000-0000-000000000004",
+                        device_type="com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm")
+        self.add_device("Persona Old Runtime", "Shutdown", "66666666-0000-0000-0000-000000000005",
+                        runtime="com.apple.CoreSimulator.SimRuntime.iOS-26-5")
+        r, calls = self.run_boot("--profile", "stock", "Persona Fresh")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), NEW)
+        self.assertFalse([c for c in calls if " rename " in c], calls)
+
+    def test_sim_reuse_zero_creates_instead_of_adopting(self):
+        old = "66666666-0000-0000-0000-000000000006"
+        self.add_device("Persona Shots 1", "Shutdown", old)
+        r, calls = self.run_boot("--profile", "stock", "Persona Shots 2", env={"SIM_REUSE": "0"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), NEW)
+        self.assertFalse([c for c in calls if " rename " in c], calls)
+        self.assertEqual(self.device(old)["name"], "Persona Shots 1")
 
     def test_without_simslim_it_boots_stock_and_says_how_to_install(self):
         r, calls = self.run_boot("mine", simslim=False)

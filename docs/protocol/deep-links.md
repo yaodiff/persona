@@ -93,9 +93,13 @@ These name the same pages and are read wherever links are read. Nothing new writ
 | `persona://task/<id>` | `/todos/<id>` |
 | `persona://kb/<kind>/<id…>` | `/kb/<kind>/<id>` (the rest of the path is the id) |
 | `persona://settings/extensions/<id>` | `/settings?tab=extensions&extension=<id>` |
+| `persona://settings/extensions/<id>?set=<url-encoded JSON object>` | that settings page with the proposed ordinary configuration values filled in (Web; nothing is saved until Save) |
 | `persona://extension/<extension>/<ui>[?state=]` | `/extension/<extension>/<ui>[?state=]` |
 
 The older product name's scheme and paths are accepted as these are (`docs/protocol/rolling-upgrade-compatibility.md`).
+The `set` form is deliberately narrow: one object of known ordinary configuration fields, at most 2 KiB decoded, with no
+secrets, entry lists, unknown fields, extra path, extra query or fragment. Web applies it to the existing extension form;
+the saved configuration stays the base, and Save is the only write. Apple and Android do not apply this prefill yet.
 
 ## Which hub
 
@@ -120,6 +124,7 @@ checks; none of them is ever written by the hub's link builder.
 | `persona://browser-login?hub=&request=` | a browser asks to sign in (the web sign-in page's code) | read only by the app's own scanner in Settings › Devices; opened as a link it signs nothing in ([protocol.md](protocol.md) "Browser QR sign-in") |
 | `persona://shortcut-callback/…` | a Shortcut Persona ran came back | its token |
 | `persona://ask?text=`, `persona://sources-graph` | the subscriptions pages' actions | only from those pages |
+| `persona://compose?prompt=&text=` | an extension page's own quick prompt, into the assistant's composer without sending | only that extension's declared quick prompt; id and text must match it exactly (Web and Android today; iOS not yet) |
 | `persona://widget/<kind>`, `persona://record…`, `persona://allday?action=` | Home Screen widgets, Live Activities, watch complications | Persona's own surfaces |
 | `persona://inbox/<id>/source` | an extension's link back to the Inbox item it is drawn for | only that item (`checkOpenURL`) |
 | `persona://tracks/<machine>/<space>/<session>` | the `space-conversations` extension opens an existing assistant conversation | only that extension; bounded ASCII path segments, no query, fragment or credentials; Health and arbitrary internal routes refused |

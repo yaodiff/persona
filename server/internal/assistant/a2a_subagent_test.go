@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -726,4 +727,243 @@ func TestLegacySpawnedSubagentLoadsWithoutInitializingTodos(t *testing.T) {
 	if st2Calls != 0 {
 		t.Fatalf("already-loaded todos still queried ListAllTodoAgents %d times", st2Calls)
 	}
+}
+
+func archivedSubagentCacheFixture(tb testing.TB, liveCount, listedArchCount, tailArchCount int) (*Service, *fleetDevs, *memA2AStore, []proto.Session) {
+	tb.Helper()
+	ctx := context.Background()
+	st := newMemA2AStore()
+	f := newFakeHub()
+	f.hello.Assistant.MachineID = "mac"
+	f.hello.Assistant.Machines = []string{"mac", "box"}
+	f.hello.ArchivedApart = true
+	f.devices = []Device{{ID: "mac", Home: "/home/u"}, {ID: "box", Home: "/home/u"}}
+	d := newFleetDevs()
+	d.add("mac", "Mac")
+	d.add("box", "Box")
+	s := New(Options{Hub: f, Devices: d, Store: func() Store { return st }, Logf: func(string, ...any) {}})
+
+	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	rows := make([]proto.Session, 0, liveCount+listedArchCount+1)
+	for i := range liveCount {
+		rows = append(rows, proto.Session{
+			MachineID: "mac", SessionID: fmt.Sprintf("live-%03d", i),
+			Agent: "claude", Cwd: "/code/app", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: at,
+		})
+	}
+	rows = append(rows, proto.Session{
+		MachineID: "mac", SessionID: "sub-1",
+		Agent: "claude", Cwd: "/code/app", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: at,
+	})
+	records := map[string]agentArchive{}
+	for i := range listedArchCount {
+		sess := proto.Session{
+			MachineID: "mac", SessionID: fmt.Sprintf("listed-arch-%03d", i),
+			Agent: "claude", Cwd: "/code/app", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: at,
+		}
+		rows = append(rows, sess)
+		records[runtimeListID("mac", sess.SessionID)] = agentArchive{
+			Session: archiveSnapshot(sess), Archived: true, ChangedAt: at.Add(time.Hour),
+		}
+	}
+	for i := range tailArchCount {
+		sess := proto.Session{
+			MachineID: "mac", SessionID: fmt.Sprintf("tail-arch-%03d", i),
+			Agent: "codex", Cwd: "/code/app", Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: at.Add(-48 * time.Hour),
+		}
+		records[runtimeListID("mac", sess.SessionID)] = agentArchive{
+			Session: archiveSnapshot(sess), Archived: true, ChangedAt: at.Add(-24 * time.Hour),
+		}
+	}
+	restoredSess := proto.Session{
+		MachineID: "mac", SessionID: "tail-restored-1",
+		Agent: "codex", Cwd: "/code/app", Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: at.Add(-24 * time.Hour),
+	}
+	records[runtimeListID("mac", restoredSess.SessionID)] = agentArchive{
+		Session: archiveSnapshot(restoredSess), Archived: false, ChangedAt: at.Add(-12 * time.Hour),
+	}
+	if err := st.PutSetting(ctx, agentArchivesKey, records); err != nil {
+		tb.Fatal(err)
+	}
+	body, _ := json.Marshal(a2aBody{Launch: &a2aLaunch{CWD: "/code/app", Subagent: true}})
+	if _, err := st.A2ACreate(ctx, db.A2ARow{
+		ID: "task-arch-cache-1", Owner: "mac/live-000", Request: "req-arch-cache-1", Context: "ctx-arch-cache-1",
+		SourceMachine: "mac", SourceSession: "live-000", TargetMachine: "mac", TargetSession: "sub-1",
+		State: a2aWorking, Body: body,
+	}); err != nil {
+		tb.Fatal(err)
+	}
+	d.setSessions("mac", rows)
+	d.setSessions("box", []proto.Session{{
+		MachineID: "box", SessionID: "box-live-1",
+		Agent: "claude", Cwd: "/code/app", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: at,
+	}})
+	return s, d, st, rows
+}
+
+// Alternating publishList (Hello.ArchivedApart -> decoratedApart) and live refresh (decoratedInto)
+// must retain archived sessions in subagentsChecked without including them in visible folding or foldMeta.
+func TestSubagentCheckedRetainsArchivedAcrossPublishAndRefresh(t *testing.T) {
+	ctx := context.Background()
+	s, d, st, rows := archivedSubagentCacheFixture(t, 3, 2, 3)
+
+	// Add a cross-machine archived row on mac referencing box so we verify decoratedApart
+	// retains it in cache without pulling it into crossParents or foldMeta.
+	var records map[string]agentArchive
+	if _, err := st.Setting(ctx, agentArchivesKey, &records); err != nil {
+		t.Fatal(err)
+	}
+	crossArch := proto.Session{
+		MachineID: "mac", SessionID: "listed-cross-arch",
+		Agent: "claude", Cwd: "/code/app", Status: proto.StatusIdle, State: proto.StateIdle,
+		ParentSessionID: "box-live-1", IsSubagent: true,
+		UpdatedAt: time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC),
+	}
+	crossArch.SetSubagentProvenance("box", "task-cross-arch", proto.SubagentOriginA2A)
+	rows = append(rows, crossArch)
+	records[runtimeListID("mac", crossArch.SessionID)] = agentArchive{
+		Session: archiveSnapshot(crossArch), Archived: true, ChangedAt: crossArch.UpdatedAt.Add(time.Hour),
+	}
+	if err := st.PutSetting(ctx, agentArchivesKey, records); err != nil {
+		t.Fatal(err)
+	}
+	d.setSessions("mac", rows)
+
+	// Prime another machine's bucket to verify per-machine pruning never touches it.
+	s.decorateSubagents(ctx, "box", []proto.Session{{MachineID: "box", SessionID: "box-live-1", Status: proto.StatusIdle}})
+
+	// Cold pass: publish (decoratedApart) then live refresh (decoratedInto).
+	shown, archived := s.decoratedApart("mac", s.archiveMark())
+	for _, row := range shown {
+		if row.Archived && !row.Assistant {
+			t.Fatalf("decoratedApart leaked archived row %s into shown", row.SessionID)
+		}
+	}
+	if len(archived.rows) != 3 || len(archived.keys) != 3 {
+		t.Fatalf("archived partition = %d rows / %d keys, want 3 / 3", len(archived.rows), len(archived.keys))
+	}
+	// Archived cross-machine row must NOT enter foldMeta or crossParents during decoratedApart.
+	s.fleet.foldMu.Lock()
+	hasCrossParent := len(s.fleet.crossParents["mac"]) > 0
+	_, hasFoldMeta := s.fleet.foldMeta["mac"]
+	s.fleet.foldMu.Unlock()
+	if hasCrossParent || hasFoldMeta {
+		t.Fatalf("decoratedApart polluted visible fold metadata with archived rows: crossParents=%v foldMeta=%v", hasCrossParent, hasFoldMeta)
+	}
+
+	var buf []proto.Session
+	buf = s.decoratedInto("mac", buf)
+	foundSub := false
+	for _, row := range buf {
+		if row.SessionID == "sub-1" && row.IsSubagent && row.A2ATaskID() == "task-arch-cache-1" {
+			foundSub = true
+		}
+	}
+	if !foundSub {
+		t.Fatal("sub-1 missing expected A2A subagent provenance after live refresh")
+	}
+
+	st.mu.Lock()
+	afterCold := st.launchQueries
+	st.mu.Unlock()
+	if afterCold == 0 {
+		t.Fatal("expected cold pass to query A2ALaunchesForTargets")
+	}
+
+	// Warm alternating publish + live refresh rounds MUST make ZERO A2ALaunchesForTargets queries.
+	for round := range 4 {
+		s.publishList("mac")
+		buf = s.decoratedInto("mac", buf)
+		st.mu.Lock()
+		got := st.launchQueries
+		st.mu.Unlock()
+		if got != afterCold {
+			t.Fatalf("warm alternating round %d queried A2ALaunchesForTargets %d extra times (cold=%d now=%d)",
+				round, got-afterCold, afterCold, got)
+		}
+	}
+
+	// Consecutive publishList calls with node-listed archived rows MUST also make ZERO queries.
+	for round := range 3 {
+		s.publishList("mac")
+		st.mu.Lock()
+		got := st.launchQueries
+		st.mu.Unlock()
+		if got != afterCold {
+			t.Fatalf("warm consecutive publish %d queried A2ALaunchesForTargets %d extra times", round, got-afterCold)
+		}
+	}
+
+	// Removing a live unarchived session (live-001) prunes only that session on mac,
+	// retaining remaining live rows, archived rows, archived tail rows, restored tail rows, and other machines.
+	prunedRows := make([]proto.Session, 0, len(rows)-1)
+	for _, r := range rows {
+		if r.SessionID != "live-001" {
+			prunedRows = append(prunedRows, r)
+		}
+	}
+	d.setSessions("mac", prunedRows)
+	s.publishList("mac")
+
+	s.fleet.subagentsMu.RLock()
+	_, hasLive0 := s.fleet.subagentsChecked["mac"]["live-000"]
+	_, hasLive1 := s.fleet.subagentsChecked["mac"]["live-001"]
+	_, hasSub1 := s.fleet.subagentsChecked["mac"]["sub-1"]
+	_, hasListedArch := s.fleet.subagentsChecked["mac"]["listed-arch-000"]
+	_, hasTailArch := s.fleet.subagentsChecked["mac"]["tail-arch-000"]
+	_, hasTailRestored := s.fleet.subagentsChecked["mac"]["tail-restored-1"]
+	_, hasBoxLive := s.fleet.subagentsChecked["box"]["box-live-1"]
+	s.fleet.subagentsMu.RUnlock()
+	if !hasLive0 || hasLive1 || !hasSub1 || !hasListedArch || !hasTailArch || !hasTailRestored || !hasBoxLive {
+		t.Fatalf("prune state mismatch after live removal: live0=%v live1=%v sub1=%v listedArch=%v tailArch=%v tailRestored=%v boxLive=%v",
+			hasLive0, hasLive1, hasSub1, hasListedArch, hasTailArch, hasTailRestored, hasBoxLive)
+	}
+
+	// Removing an archived record from storage prunes it on the next decoratedApart pass.
+	delete(records, runtimeListID("mac", "tail-arch-002"))
+	if err := st.PutSetting(ctx, agentArchivesKey, records); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.agentArchives.lock(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.agentArchives.loaded = false
+	s.agentArchives.tails = nil
+	s.agentArchives.unlock()
+	s.publishList("mac")
+
+	s.fleet.subagentsMu.RLock()
+	_, hasRemovedTailArch := s.fleet.subagentsChecked["mac"]["tail-arch-002"]
+	_, stillHasTailArch := s.fleet.subagentsChecked["mac"]["tail-arch-000"]
+	s.fleet.subagentsMu.RUnlock()
+	if hasRemovedTailArch || !stillHasTailArch {
+		t.Fatalf("removed archive tail entry prune mismatch: removed=%v kept=%v", hasRemovedTailArch, stillHasTailArch)
+	}
+}
+
+func BenchmarkSubagentCheckedAlternatingPublishAndRefresh(b *testing.B) {
+	s, d, st, rows := archivedSubagentCacheFixture(b, 50, 10, 100)
+	var buf []proto.Session
+	// Warm both paths once before measuring steady-state rounds.
+	s.publishList("mac")
+	buf = s.decoratedInto("mac", buf)
+
+	st.mu.Lock()
+	startQueries := st.launchQueries
+	st.mu.Unlock()
+
+	b.ReportAllocs()
+	n := 0
+	for b.Loop() {
+		n++
+		rows[n%50].LastText = fmt.Sprintf("turn-%d", n)
+		d.setSessions("mac", rows)
+		s.publishList("mac")
+		buf = s.decoratedInto("mac", buf)
+	}
+
+	st.mu.Lock()
+	queries := st.launchQueries - startQueries
+	st.mu.Unlock()
+	b.ReportMetric(float64(queries)/float64(n), "queries/op")
 }

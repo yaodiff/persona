@@ -377,11 +377,11 @@ final class MachinePagesTests: XCTestCase {
         shot("new-chat-model-locked")
 
         see(app.buttons["newChat.launcher"], "launcher row").tap()
-        see(button("codex"), "codex launcher").tap()
+        see(button("Codex"), "codex launcher").tap()
         see(app.buttons["newChat.model"], "模型 row", timeout: 15).tap()
         see(app.buttons["newChat.model.gpt-5.5-codex"], "a Codex model").tap()
         let picked = see(app.buttons["newChat.model"], "模型 row")
-        XCTAssertTrue(picked.label.contains("5.5 Codex"), picked.label) // GPT names drop the prefix (SessionModes.gptModelName)
+        XCTAssertTrue(picked.label.contains("GPT-5.5 Codex"), picked.label) // GPT names keep their GPT- prefix (SessionModes.gptModelName)
         let prompt = app.textViews["newChat.prompt"].exists ? app.textViews["newChat.prompt"] : app.textFields["newChat.prompt"]
         for _ in 0..<4 where !prompt.isHittable { app.swipeUp() }
         see(prompt, "the first message field").tap()
@@ -406,8 +406,8 @@ final class MachinePagesTests: XCTestCase {
         see(app.navigationBars["启动器"], "launcher picker")
         see(text("Codex"), "the Codex mark on its launcher")
         shot("launcher-picker-codex")
-        see(button("codex"), "codex launcher").tap()
-        see(text("codex"), "launcher picked")
+        see(button("Codex"), "codex launcher").tap()
+        see(text("Codex"), "launcher picked")
         XCTAssertFalse(app.staticTexts["权限与思考"].exists, "Claude Code's modes are not offered for Codex")
 
         let start = see(button("开始对话"), "开始对话")
@@ -446,11 +446,11 @@ final class MachinePagesTests: XCTestCase {
             see(app.buttons["新建会话"], "新建会话", timeout: 15).tap()
             see(app.buttons["newChat.launcher"], "launcher row").tap()
             see(app.navigationBars["启动器"], "launcher picker")
-            let traexRow = see(button("traex"), "the discovered Traex launcher")
+            let traexRow = see(button("TRAE CLI"), "the discovered Traex launcher")
             for _ in 0..<4 where !traexRow.isHittable { app.swipeUp() }
             XCTAssertTrue(traexRow.isHittable, "the discovered Traex row is on screen")
             traexRow.tap()
-            wait("Traex launcher picked") { app.buttons["newChat.launcher"].label.contains("traex") }
+            wait("Traex launcher picked") { app.buttons["newChat.launcher"].label.contains("TRAE CLI") }
             let loading = app.descendants(matching: .any)["newChat.model.loading"].firstMatch
             XCTAssertTrue(loading.waitForNonExistence(timeout: 10), "Traex's model list finishes loading")
             XCTAssertFalse(app.staticTexts["权限与思考"].exists, "Claude Code's modes are not offered for Traex")

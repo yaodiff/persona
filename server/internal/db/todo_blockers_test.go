@@ -122,6 +122,15 @@ func TestTodoBlockersCRUDLifecycleAndCascade(t *testing.T) {
 	if err != nil || canc == nil || canc.State != TodoBlockerStateCancelled || canc.ResolvedAt == nil {
 		t.Fatalf("CancelTodoBlocker: row=%+v err=%v", canc, err)
 	}
+	if row, err := d.CancelTodoBlocker(ctx, res.ID, cancelledAt); err != nil || row != nil {
+		t.Fatalf("cancel overwrote a resolved row: %+v, %v", row, err)
+	}
+	if row, err := d.ResolveTodoBlocker(ctx, canc.ID, resolvedAt); err != nil || row != nil {
+		t.Fatalf("resolve overwrote a cancelled row: %+v, %v", row, err)
+	}
+	if row, err := d.IncrementTodoBlockerAttempts(ctx, canc.ID, cancelledAt); err != nil || row != nil {
+		t.Fatalf("increment overwrote a cancelled row: %+v, %v", row, err)
+	}
 
 	// Missing id returns nil, nil.
 	if missing, err := d.ResolveTodoBlocker(ctx, "blk_missing", resolvedAt); err != nil || missing != nil {

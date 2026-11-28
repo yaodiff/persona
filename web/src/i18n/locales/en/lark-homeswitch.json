@@ -1,4 +1,6 @@
 {
   "label": "Show messages on home",
-  "hint": "Adds Messages to the sidebar to browse all direct and group chats. Shares the account and chat history with Inbox. Applies to this browser only."
+  "hint": "Adds Messages to the sidebar to browse all direct and group chats. Shares the account and chat history with Inbox. Applies to this browser only.",
+  "mix_label": "Show AI assistants in Messages",
+  "mix_hint": "List your personal AI assistants with your Lark chats, newest message first. Only affects this browser."
 }

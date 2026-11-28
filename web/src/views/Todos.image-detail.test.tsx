@@ -56,7 +56,7 @@ beforeEach(async () => {
   Object.assign(getState(), { todos: [serverTodo], todosLoaded: true, todosError: null, todosSupported: true, machines: [{ id: "m1", name: "Remote box", online: true }], sessions: { m1: [agent] }, interactions: [], answered: {} });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const path = String(input).replace("/api/v1", "");
+    const path = new URL(String(input), "http://hub").pathname.replace("/api/v1", "");
     if (path === imageURL.replace("/api/v1", "")) {
       imageReads.push(init);
       return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { status: 200, headers: { "Content-Type": "image/png", "Cache-Control": "private, no-store" } });

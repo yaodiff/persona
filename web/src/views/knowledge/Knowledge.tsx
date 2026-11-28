@@ -5,8 +5,9 @@
 // Wide enough (the page, not the window: a side panel takes room) it is a list beside the open entry; narrower, the
 // entry replaces the list, which stays mounted underneath so its scroll, search and folds survive the round trip.
 import { useEffect, useRef, useState } from "react";
-import { kindOf, type KBEntry } from "../../lib/kb";
+import { kindOf, type KBEntry, type KBKind } from "../../lib/kb";
 import { navigate } from "../../lib/router";
+import { ONE_PANE, useMedia } from "../../lib/viewport";
 import { cx } from "../../ui/atoms";
 import { remember, searches } from "./cache";
 import { EmptyDetail, EntryDetail } from "./KBDetail";
@@ -21,8 +22,13 @@ export function Knowledge({ kind, id, onToggleSidebar }: { kind?: string; id?: s
     if (!id) setListKind(kindOf(kind));
   }, [kind, id]);
   const [reloadKey, setReloadKey] = useState(0);
+  // The first entry of the list, drawn beside it while the address names none. Not a selection: the address stays put
+  // and on a narrow screen the list keeps the whole page, as To-dos does.
+  const [first, setFirst] = useState<{ listKind: KBKind; entry: KBEntry }>();
   // The search an entry was opened from: its page starts with the places found.
   const [from, setFrom] = useState<{ key: string; q: string } | null>(null);
+  // The list and detail take turns on a phone; the list's first entry stands in only when both fit.
+  const split = !useMedia(ONE_PANE);
   // Something was opened from this page, so "Back" is the browser's back (to the list or the entry before).
   const opened = useRef(false);
 
@@ -44,6 +50,10 @@ export function Knowledge({ kind, id, onToggleSidebar }: { kind?: string; id?: s
   // /kb/map: the knowledge map (topics and projects as a mind map), a page of its own.
   if (kind === "map") return <KnowledgeMap onToggleSidebar={onToggleSidebar} />;
 
+  const fallback = first?.listKind === listKind && kindOf(first.entry.kind) === listKind ? first.entry : undefined;
+  const shown = detailOpen ? { kind: kind!, id: id! } : split ? fallback : undefined;
+  const shownKey = shown ? `${shown.kind}/${shown.id}` : "";
+
   return (
     <div className="@container flex h-full min-w-0">
       <ListPane
@@ -53,14 +63,15 @@ export function Knowledge({ kind, id, onToggleSidebar }: { kind?: string; id?: s
         reloadKey={reloadKey}
         onToggleSidebar={onToggleSidebar}
         onOpen={open}
+        onFirst={setFirst}
       />
       <section className={cx("min-h-0 min-w-0 flex-1 flex-col", detailOpen ? "flex" : "hidden @3xl:flex")}>
-        {detailOpen ? (
+        {shown ? (
           <EntryDetail
-            key={`${kind}/${id}`}
-            kind={kind!}
-            id={id!}
-            query={from?.key === `${kind}/${id}` ? from.q : undefined}
+            key={shownKey}
+            kind={shown.kind}
+            id={shown.id}
+            query={detailOpen && from?.key === shownKey ? from.q : undefined}
             reloadKey={reloadKey}
             onToggleSidebar={onToggleSidebar}
             onBack={back}

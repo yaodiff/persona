@@ -25,17 +25,18 @@ import (
 
 // runtimeHub is the hub end of a node under test: the events it got and how it answers interactions.
 type runtimeHub struct {
-	modeSets []proto.ModeSetEvent
-	mu       sync.Mutex
-	events   []string
-	lists    [][]proto.Session
-	items    []json.RawMessage
-	deltas   []json.RawMessage
-	cancels  []string
-	asked    []proto.Interaction
-	resolve  func(proto.Interaction) proto.Resolution
-	nodePeer *rpc.Peer
-	cancel   context.CancelFunc
+	modeSets     []proto.ModeSetEvent
+	mu           sync.Mutex
+	events       []string
+	lists        [][]proto.Session
+	items        []json.RawMessage
+	deltas       []json.RawMessage
+	cancels      []string
+	asked        []proto.Interaction
+	askedOrigins []string
+	resolve      func(proto.Interaction) proto.Resolution
+	nodePeer     *rpc.Peer
+	cancel       context.CancelFunc
 	// drop ends the link from the hub's side: the node's connection closes, as when the hub goes away.
 	drop func()
 	// answer takes the other hub calls (mcp.tools, assistant.context…); handled false: an unexpected call.
@@ -128,10 +129,12 @@ func runtimeNodeTapped(t *testing.T, shared *RuntimeHost, tap io.Writer) (*Node,
 		case "interaction.create":
 			var p struct {
 				Interaction proto.Interaction `json:"interaction"`
+				Origin      string            `json:"origin"`
 			}
 			_ = json.Unmarshal(params, &p)
 			end.mu.Lock()
 			end.asked = append(end.asked, p.Interaction)
+			end.askedOrigins = append(end.askedOrigins, p.Origin)
 			resolve := end.resolve
 			end.mu.Unlock()
 			return resolve(p.Interaction), nil
@@ -712,6 +715,23 @@ func TestRuntimeRowListsItsPermissionModes(t *testing.T) {
 	_ = json.Unmarshal(h.got("session.modes")[0], &m)
 	if m["session_id"] != "grok" || m["permission_mode"] != "bypassPermissions" {
 		t.Fatalf("modes %v", m)
+	}
+}
+
+func TestAgyRowPreservesPermissionModesAlongsideClaudeModes(t *testing.T) {
+	n, _ := runtimeNode(t)
+	h := dialRuntime(t, n, map[string]any{
+		"runtime": "agy", "name": "Antigravity", "agent": "agy", "launcher": "agy",
+		"caps": map[string]any{"send": true, "modes": true, "assistant": true},
+	})
+	noAuto := []string{"default", "acceptEdits", "plan", "bypassPermissions"}
+	_ = h.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": "agy-1", "status": "idle", "agent": "agy", "capabilities": map[string]any{"rewind": false, "permission_modes": noAuto}},
+	}})
+	waitFor(t, "agy row listed", func() bool { _, ok := listed(t, n)["agy-1"]; return ok })
+	got := listed(t, n)["agy-1"].Capabilities
+	if got == nil || got.Modes == nil || !*got.Modes || got.PermissionModes != proto.PermissionModeSetOf(noAuto...) {
+		t.Fatalf("agy caps = %+v, want modes=true and permission_modes=%v", got, noAuto)
 	}
 }
 

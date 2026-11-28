@@ -193,6 +193,7 @@ var claudeLiveTexts = map[string]string{
 	proto.AttentionClaudeComputer:           "attention_claude_computer",
 	proto.AttentionClaudeComputerBefore5965: "attention_claude_computer",
 	proto.AttentionClaudeDesktopComputer:    "attention_claude_desktop_computer",
+	proto.AttentionClaudePluginPassedOver:   "attention_claude_plugin_passed_over",
 	proto.AttentionClaudeAnswer:             "attention_claude_answer",
 }
 

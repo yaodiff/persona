@@ -57,8 +57,11 @@ DOMAINS = [
     "desktops_mock",  # desktop client registration (hub/desktops.go), GET /mock/desktops, MOCK_DESKTOPS
     "bg_stalled_mock",  # an Agent whose background work stalled, still Working (#13744), MOCK_BG_STALLED
     "side_unread_mock",  # side sessions with unseen replies for the sidebar's Unread row (#13496), MOCK_SIDE_UNREAD
+    "herdr_repositories_mock",  # herdr repository grouping fixtures (#13505), MOCK_HERDR_REPOSITORIES
+    "project_headings_mock",  # same-named projects for the native By Project headings (#13558), MOCK_PROJECT_HEADINGS
     "github_mock",  # GitHub's sign-ins and MOCK_GITHUB_INBOX's thread page (/api/v1/connectors/github/…)
     "kb_selection_mock",  # Settings › Knowledge selection (/api/v1/kb/selection), MOCK_KB_SELECTION
+    "project_tree_mock",  # the knowledge base's projects as a tree with milestones (#12927), MOCK_KB_TREE
     "project_lessons_mock",  # a project's lessons from finished tasks (/api/v1/kb/projects/{id}/lessons…), MOCK_PROJECT_LESSONS
     "mail_mock",  # mail accounts and write paths (/api/v1/mail/…, GET /mock/mail), MOCK_MAIL, MOCK_GOOGLE, MOCK_OUTLOOK
     "hub_update_mock",  # the hub's own update (/api/v1/hub/update…, GET /mock/hub_update), MOCK_HUB_UPDATE
@@ -73,14 +76,22 @@ DOMAINS = [
     "dock_mock",  # more of the main conversation's tasks waiting in the To Decide pager (#12831), MOCK_DOCK
     "meeting_finishing_mock",  # a meeting's final pass in progress for shots of the minutes line (#13461), MOCK_MEETING_FINISHING
     "extension_scene_mock",  # UI version 11's scene on a made-up Home page (#12544), MOCK_EXTENSION_SCENE
+    "space_folders_mock",  # two of the MacBook's spaces with one name, in two folders (#13522), MOCK_SPACE_FOLDERS
     "extension_map_mock",  # UI version 12's map page, overview card, and tool_views (#14730), MOCK_EXTENSION_MAP
     "spaces_mock",  # domain spaces: tracks, kinds, SPACE.md, categories, extension trust (#13500), MOCK_SPACES
     "question_rail_mock",  # the main chat's question rail states and read marks (#13021), MOCK_QUESTION_RAIL
     "hub_modules_mock",  # a hub that publishes module flags: `modules` and `module.<id>` (#13849), MOCK_HUB_MODULES
     "usage_map_mock",  # the disk usage map: scan, trash, cleanup and an offload provider (#14576), MOCK_USAGE_MAP
     "machine_load_mock",  # moderate CPU with work queued on some cores: MOCK_LOAD_QUEUE (#12519)
+    "orca_stopped_mock",  # Orca installed and not running, or incompatible, in the engine rows (#17037), MOCK_ORCA_STOPPED
     "todo_wait_reasons_mock",  # to-dos waiting for different reasons with the hub's typed `wait` (#16168), MOCK_TODO_WAIT_REASONS
     "dashboards_mock",  # Dashboards: the -pages places and pages, the `dashboards` switch (#15017), MOCK_DASHBOARDS
+    "kb_chat_inbox_mock",  # a chat's Inbox items on its knowledge page and its items' kb_chat (#15356), MOCK_KB_CHAT_INBOX
+    "command_input_mock",  # an Antigravity command waiting at a prompt (#14527), MOCK_COMMAND_INPUT
+    "recording_minutes_debates_mock",  # disagreements in meeting minutes (#16728), POST /mock/recording_minutes_debates
+    "recording_speakers_mock",  # meeting speakers samples and edit route (#17674), POST /api/v1/recordings/{id}/speakers
+    "orca_chat_launchers_mock",  # the server's Orca chat launchers in New Agent (#17047), MOCK_ORCA_CHAT_LAUNCHERS
+    "orca_chat_starts_mock",  # the server's "Start new Agents as Orca chats" switch (#17650), MOCK_ORCA_CHAT_STARTS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

@@ -430,6 +430,35 @@ class AssistantManagementTest {
         }
     }
 
+    @Test fun modelPickRoutesExtendReadTimeoutBeyondBaseClient() = runBlocking {
+        assertTrue(HttpAssistantManagement.MODEL_PICK_TIMEOUT_SECONDS >= 40L)
+        MockWebServer().use { server ->
+            val shortClient = OkHttpClient.Builder().readTimeout(150, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", shortClient)
+            server.enqueue(
+                MockResponse()
+                    .setHeadersDelay(350, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .setBody("""{"ok":true,"model_pick":{"launcher":"gemini","model":"gemini-2.5-flash"}}"""),
+            )
+            val kept = api.setModelPick(SessionKey("mac", "main-1"), persona.core.contracts.ModelPick("gemini", "gemini-2.5-flash"))
+            assertEquals("gemini", kept.launcher)
+            assertEquals("gemini-2.5-flash", kept.model)
+            val put = server.takeRequest()
+            assertEquals("PUT", put.method)
+            assertEquals("/api/v1/assistant/conversations/main-1/model", put.path)
+
+            server.enqueue(
+                MockResponse()
+                    .setHeadersDelay(350, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .setBody("""{"ok":true}"""),
+            )
+            api.clearModelPick(SessionKey("mac", "main-1"))
+            val delete = server.takeRequest()
+            assertEquals("DELETE", delete.method)
+            assertEquals("/api/v1/assistant/conversations/main-1/model", delete.path)
+        }
+    }
+
     @Test fun conversationSwitchReadsSegmentsAndSubmitsSwitchWithExactWireFields() = runBlocking {
         MockWebServer().use { server ->
             var current = true

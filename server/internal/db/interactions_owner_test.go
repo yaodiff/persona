@@ -37,10 +37,14 @@ func TestPersistentOwnerProposalSurvivesFormerDeadlineAndRestart(t *testing.T) {
 			t.Errorf("restored proposal lost its metadata: %+v", ix)
 		}
 	}
+	cancelledIDs := make([]string, 0, len(cancelled))
+	for _, ix := range cancelled {
+		cancelledIDs = append(cancelledIDs, ix.ID)
+	}
 	slices.Sort(keptIDs)
-	slices.Sort(cancelled)
+	slices.Sort(cancelledIDs)
 	if !slices.Equal(keptIDs, []string{"owner_former_deadline", "owner_persistent"}) ||
-		!slices.Equal(cancelled, []string{"ordinary_no_expiry_forgery", "owner_not_persistent"}) {
-		t.Fatalf("kept=%v cancelled=%v", keptIDs, cancelled)
+		!slices.Equal(cancelledIDs, []string{"ordinary_no_expiry_forgery", "owner_not_persistent"}) {
+		t.Fatalf("kept=%v cancelled=%v", keptIDs, cancelledIDs)
 	}
 }

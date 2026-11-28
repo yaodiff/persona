@@ -29,6 +29,8 @@ export interface MachineAlert {
   count?: number;
   /** mismatch: a redeploy is under way. */
   busy?: boolean;
+  /** mismatch: the new build is installed and waiting for active work to drain before restarting. */
+  draining?: boolean;
 }
 
 /** A launcher health record (GET /api/v1/launchers/health, docs/server/launcher-health.md "API for the board"). */
@@ -124,7 +126,7 @@ export function machineAlerts({ machine: m, metrics, launchers = 0, managerOffli
     push("load", r.load, 1, 2);
   }
   if (launchers > 0) out.push({ kind: "launcher", severity: "warning", count: launchers });
-  if ((m.node_mismatch || busy) && !m.deploy_error) out.push({ kind: "mismatch", severity: "info", ...(busy ? { busy: true } : {}) });
+  if ((m.node_mismatch || busy) && !m.deploy_error) out.push({ kind: "mismatch", severity: "info", ...(busy ? { busy: true } : {}), ...(m.deploy_phase === "draining" ? { draining: true } : {}) });
   return out.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || KIND_RANK[a.kind] - KIND_RANK[b.kind]);
 }
 
@@ -141,7 +143,7 @@ export function alertLabel(a: MachineAlert, card = false): string {
 }
 
 /** The alert's name alone ("Memory used"). */
-export function alertTitle(a: Pick<MachineAlert, "kind" | "busy">): string {
+export function alertTitle(a: Pick<MachineAlert, "kind" | "busy" | "draining">): string {
   switch (a.kind) {
     case "offline":
       return t("lib-machine-alerts.offline");
@@ -158,7 +160,7 @@ export function alertTitle(a: Pick<MachineAlert, "kind" | "busy">): string {
     case "launcher":
       return t("lib-machine-alerts.launcher");
     case "mismatch":
-      return a.busy ? t("lib-machine-alerts.updating") : t("lib-machine-alerts.mismatch");
+      return a.draining ? t("lib-machine-alerts.waiting_restart") : a.busy ? t("lib-machine-alerts.updating") : t("lib-machine-alerts.mismatch");
   }
 }
 

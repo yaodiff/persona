@@ -20,14 +20,17 @@ import (
 //
 //   - the same chat (the crosswalk's pair, or the one gateway chat of that name), the same known sender (on a paired
 //     chat an unknown sender may stand for any non-owner, as in the format tier), both times exact from the receipts
-//     and in the same or a neighbouring 2-second bucket;
+//     and in the same or a neighbouring 2-second bucket — or, on an already-paired gateway chat whose legacy archive
+//     has no .receipts.json, the sync message's exact time within the gateway line's minute widened by one 2-second
+//     bucket on each side;
 //   - exactly one gateway line in that frame passes; two or more is ambiguous and nothing is dropped;
-//   - the texts, with media placeholders removed (both sides' "[image]", "[附件](…)" and the like), are equal ignoring
-//     white space, or after one leading @mention (at most looseMentionMost characters, written otherwise or left out
-//     on one side) followed by the same text of at least looseTitleMin characters; or the shorter one is the longer
-//     one's first lines (a card's or post's title, line by line, at least looseTitleMin characters); or both are at
-//     least looseSimilarMin characters, differ in at most one character per looseSimilarPer (98 % alike), and carry
-//     the same numbers and the same links.
+//   - the texts, with media/sticker/card placeholders removed (both sides' "[image]", "[Image]", "[photo]", "[sticker]",
+//     "[表情]", "【图片】", "[附件](…)" and the like), are equal ignoring white space, or after one-sided standard Lark
+//     inline emoticons ("[捂脸]", ":THUMBSUP:"), or after one leading @mention (at most looseMentionMost characters,
+//     written otherwise or left out on one side) followed by the same text of at least looseTitleMin characters; or the
+//     shorter one is the longer one's first lines (a card's or post's title, line by line, at least looseTitleMin
+//     characters); or both are at least looseSimilarMin characters, differ in at most one character per looseSimilarPer
+//     (98 % alike), and carry the same numbers and the same links.
 //
 // Why 98 % and not lower: two different messages from one sender in one 2-second bucket that share 98 % of at least
 // 40 characters, every number and every link are not two messages a reader tells apart (a resend, an edit, one
@@ -48,11 +51,13 @@ const (
 )
 
 var (
-	looseMedia   = lazyre.New(`\[(?:image|video|audio|图片|视频|语音|附件)\](?:\([^()\s]*\))?`) // i18n-ignore: archive data
-	looseAtTag   = lazyre.New(`<at\b[^>]*>([^<]*)</at>`)
-	looseMention = lazyre.New(`^(?:@\S+(?:\s+|$))+`)
-	looseDigits  = lazyre.New(`[0-9]+`)
-	looseURL     = lazyre.New(`https?://[^\s()<>]+`)
+	looseMedia        = lazyre.New(`(?i)\[(?:image|img|photo|picture|pic|video|audio|voice|media|file|attachment|sticker|emoji|emotion|emoticon|card|merge_forward|forward|location|share_chat|share_user|hongbao|图片|图像|照片|视频|语音|语音消息|音频|文件|附件|表情|表情包|贴纸|动画表情|卡片|合并转发|聊天记录|位置|红包|分享了一个群|分享了一张名片)\](?:\([^()\s]*\))?|【(?:图片|图像|照片|视频|语音|语音消息|音频|文件|附件|表情|表情包|贴纸|动画表情|卡片|合并转发|聊天记录|位置|红包|分享了一个群|分享了一张名片)】`)                                                                                       // i18n-ignore: archive data
+	looseBracketEmoji = lazyre.New(`(?:\[|【)(?:微笑|捂脸|偷笑|呲牙|抱拳|比心|狗头|笑哭|鼓掌|点赞|赞同|玫瑰|握手|加油|害羞|机智|裂开|吃瓜|合十|祈祷|感谢|谢谢|破涕为笑|得意|发呆|尴尬|流泪|委屈|坏笑|哈欠|鄙视|阴险|亲亲|可怜|笑脸|开心|打脸|白眼|思考|吐血|石化|发怒|抓狂|奋斗|疑问|敲打|傲慢|大哭|傻笑|震惊|惊喜|无语|爱心|心碎|礼花|烟花|礼物|咖啡|啤酒|干杯|蛋糕|擦汗|抠鼻|飞吻|撇嘴|惊恐|流汗|再见|拜拜|泪奔|撒花|摸头|摸鱼|赞叹|叹气|皱眉|调皮|吐舌|鬼脸|脸红|捂嘴|闭嘴|难过|伤心|泪目|悲伤|生气|害怕|冷汗|斜眼|骄傲|花痴|拜托|拍手|抱抱|拥抱|击掌|挥手|拳头|胜利|作揖|激动|欢呼|猪头|太阳|月亮|星星|彩虹|闪电|炸弹|西瓜|鸡腿|火锅|便便|发财|暴富|锦鲤|暗中观察|捂嘴笑|黑人问号|翻白眼|加油鸭|灵光一闪|好的|收到|赞|强|弱|汗|酷|晕|色|哭|笑|嘘|衰|困|睡|吐|吓|呆|耶|踩)(?:\]|】)`) // i18n-ignore: archive data
+	looseColonEmoji   = lazyre.New(`:[A-Z][A-Z0-9_+-]{1,31}:`)
+	looseAtTag        = lazyre.New(`<at\b[^>]*>([^<]*)</at>`)
+	looseMention      = lazyre.New(`^(?:@\S+(?:\s+|$))+`)
+	looseDigits       = lazyre.New(`[0-9]+`)
+	looseURL          = lazyre.New(`https?://[^\s()<>]+`)
 )
 
 // gatewayDrop is a gateway chat's line to drop: its chat id, its day and its receipt key (gatewayLine.key).
@@ -120,7 +125,7 @@ func looseMatch(a, b looseText) (match, shorter bool) {
 	if a.full == "" || b.full == "" {
 		return false, false
 	}
-	if a.full == b.full || sameAfterMention(a.full, b.full) {
+	if a.full == b.full || sameAfterMention(a.full, b.full) || sameIgnoringOneSidedEmoji(a.full, b.full) {
 		return true, false
 	}
 	short, long := a, b
@@ -170,6 +175,30 @@ func sameAfterMention(a, b string) bool {
 		return len(h) == 0 || (h[0] == '@' && len(h) <= looseMentionMost)
 	}
 	return head(ar) && head(br)
+}
+
+// sameIgnoringOneSidedEmoji reports whether a and b (white space removed) are identical (or sameAfterMention) of at
+// least looseTitleMin runes once standard Lark/Feishu inline emoticons are stripped, provided the difference is
+// one-sided (one renderer omitted the emoticon) or cross-format (Chinese bracket emoticon vs ":CODE:") rather than two
+// different emoticons of the same format on otherwise identical text.
+func sameIgnoringOneSidedEmoji(a, b string) bool {
+	aBracket, bBracket := looseBracketEmoji.MatchString(a), looseBracketEmoji.MatchString(b)
+	aColon, bColon := looseColonEmoji.MatchString(a), looseColonEmoji.MatchString(b)
+	if !(aBracket || bBracket || aColon || bColon) {
+		return false
+	}
+	if (aBracket && bBracket) || (aColon && bColon) {
+		return false
+	}
+	strip := func(s string) string {
+		s = looseBracketEmoji.ReplaceAllString(s, "")
+		return looseColonEmoji.ReplaceAllString(s, "")
+	}
+	sa, sb := strip(a), strip(b)
+	if utf8.RuneCountInString(sa) < looseTitleMin || utf8.RuneCountInString(sb) < looseTitleMin {
+		return false
+	}
+	return sa == sb || sameAfterMention(sa, sb)
 }
 
 // editsWithin reports whether a and b are at most k insertions, deletions or substitutions apart (Levenshtein,
@@ -238,7 +267,7 @@ func (a *gatewayAligner) withinLoose(gw string, src gatewayLine, paired bool) al
 	matches := 0
 	for _, day := range alignDays(src.exact, a.s.Zone()) {
 		for _, dst := range a.day(gw, day) {
-			if dst.exact.IsZero() {
+			if !withinTimeWindow(src.exact, dst, paired) {
 				continue
 			}
 			dstUnknown := dst.sender == "" || dst.sender == unknownSender
@@ -247,9 +276,6 @@ func (a *gatewayAligner) withinLoose(gw string, src gatewayLine, paired bool) al
 				senderMatch = (srcUnknown && dst.sender != ownerSender) || (dstUnknown && src.sender != ownerSender)
 			}
 			if !senderMatch {
-				continue
-			}
-			if bucket := dst.exact.Unix()/2 - src.exact.Unix()/2; bucket < -1 || bucket > 1 {
 				continue
 			}
 			dstRaw := dst.formatBody

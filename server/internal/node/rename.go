@@ -147,7 +147,7 @@ func (n *Node) renameSession(ctx context.Context, id string, tab, title *string)
 	if tab != nil {
 		name := strings.TrimSpace(*tab)
 		if name == "" || !live || a.TabID == "" {
-			return fmt.Errorf("the tab can only be renamed while the session runs in herdr")
+			return fmt.Errorf("the tab can only be renamed while the session runs in a terminal")
 		}
 		org, _, err := paneCap[host.Organizer](n, a.PaneID)
 		if err != nil {
@@ -180,6 +180,12 @@ func (n *Node) renameSession(ctx context.Context, id string, tab, title *string)
 	return nil
 }
 
+// guardedSlotRenamer is a host that renames a tab only while it still shows the expected name, read fresh from the
+// host itself (orcaHost.RenameSlotIf): its cached layout may be older than a rename the owner just made.
+type guardedSlotRenamer interface {
+	RenameSlotIf(ctx context.Context, slot, expected, name string) error
+}
+
 // renameObservedTab rechecks the host label before applying an automatic name based on a potentially stale inventory.
 func (n *Node) renameObservedTab(ctx context.Context, id, tab, expected, name string) error {
 	a, live := n.agent(id)
@@ -189,6 +195,9 @@ func (n *Node) renameObservedTab(ctx context.Context, id, tab, expected, name st
 	h, _, err := n.paneHost(a.PaneID)
 	if err != nil {
 		return err
+	}
+	if g, ok := h.(guardedSlotRenamer); ok { // Orca: its own fresh read of the layout
+		return g.RenameSlotIf(ctx, tab, expected, name)
 	}
 	org, ok := h.(host.Organizer)
 	if !ok || h.Kind() != host.Herdr && h.Kind() != host.HerdrCore {

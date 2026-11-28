@@ -10,5 +10,5 @@
     <string name="agents_projects_summary">%1$s · %2$s</string>
     <string name="agents_projects_empty_title">没有在跑的 Agent</string>
     <string name="agents_projects_empty_offline">这台机器现在离线。</string>
-    <string name="agents_projects_empty_hint">在这台机器的 herdr 里启动 Claude、Codex 或 TRAE CLI，就会出现在这里。</string>
+    <string name="agents_projects_empty_hint">在这台机器的 %1$s 里启动 Claude、Codex 或 TRAE CLI，就会出现在这里。</string>
 </resources>

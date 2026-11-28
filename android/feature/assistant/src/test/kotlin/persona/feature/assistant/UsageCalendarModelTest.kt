@@ -10,6 +10,8 @@ import persona.core.contracts.api.UsageDay
 import persona.core.contracts.api.UsageDays
 import persona.core.contracts.api.UsageHistoryApi
 import persona.core.contracts.api.UsageHours
+import persona.core.contracts.api.UsageProjectDetail
+import persona.core.contracts.api.UsageProjects
 import java.io.IOException
 
 class UsageCalendarModelTest {
@@ -36,6 +38,10 @@ class UsageCalendarModelTest {
             hoursFailure?.let { throw it }
             return this.hours
         }
+
+        override suspend fun usageProjects(): UsageProjects? = null
+
+        override suspend fun usageProjectDetail(key: String): UsageProjectDetail = error("not used")
     }
 
     @Test fun aSuccessfulHomeReadPublishesTheDays() = runTest {

@@ -1,11 +1,12 @@
 package extmgr
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 
-	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -17,68 +18,71 @@ import (
 
 const sourceKindMail = "mail"
 
-// sourceCall answers extensions.source_export / source_import / source_release.
-func (h *Manager) sourceCall(method string, params json.RawMessage) (any, error) {
-	switch method {
-	case extwire.MethodSourceImport:
-		var b extwire.SourceBundle
-		if err := json.Unmarshal(params, &b); err != nil {
-			// Not err itself: it could quote the bundle.
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions.source_import needs a source bundle"}
-		}
-		return h.importSource(b)
-	case extwire.MethodSourceExport, extwire.MethodSourceRelease:
-		var r extwire.SourceRef
-		if err := json.Unmarshal(params, &r); err != nil || r.Source == "" {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + " needs a source"}
-		}
-		id, err := h.mailSource(r.Source)
-		if err != nil {
-			return nil, err
-		}
-		if method == extwire.MethodSourceExport {
-			data, err := h.mail.ExportAccount(id)
-			if errors.Is(err, mailwire.ErrNoAccount) {
-				return nil, noSource(r.Source)
-			}
-			if err != nil {
-				return nil, err
-			}
-			return extwire.SourceBundle{Source: r.Source, Kind: sourceKindMail, Data: data}, nil
-		}
-		if err := h.mail.DeleteAccount(id); err != nil {
-			return nil, err
-		}
-		h.logf("source %s released", r.Source)
-		return map[string]any{}, nil
+// The source methods wait for the manager before decoding bundles or references.
+func handleSourceRequest[P, R any](ctx context.Context, h *Manager, method buswire.Method[P, R], params json.RawMessage, invalid error, run func(P) (R, error)) (any, bool, error) {
+	if !h.ready(ctx) {
+		return nil, true, errAssistantOffline
 	}
-	return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "unknown source method " + method}
+	return handleExtensionRequest(method, params, invalid, run)
+}
+
+func invalidSourceRef(method string) error {
+	return invalidExtensionParams(method + " needs a source")
+}
+
+func (h *Manager) exportSource(r extwire.SourceRef) (extwire.SourceBundle, error) {
+	id, err := h.mailSource(extwire.SourceExportMethod.Name, r.Source)
+	if err != nil {
+		return extwire.SourceBundle{}, err
+	}
+	data, err := h.mail.ExportAccount(id)
+	if errors.Is(err, mailwire.ErrNoAccount) {
+		return extwire.SourceBundle{}, noSource(r.Source)
+	}
+	if err != nil {
+		return extwire.SourceBundle{}, err
+	}
+	return extwire.SourceBundle{Source: r.Source, Kind: sourceKindMail, Data: data}, nil
+}
+
+func (h *Manager) releaseSource(r extwire.SourceRef) (buswire.None, error) {
+	id, err := h.mailSource(extwire.SourceReleaseMethod.Name, r.Source)
+	if err != nil {
+		return buswire.None{}, err
+	}
+	if err := h.mail.DeleteAccount(id); err != nil {
+		return buswire.None{}, err
+	}
+	h.logf("source %s released", r.Source)
+	return buswire.None{}, nil
 }
 
 // importSource takes a source another manager exported.
-func (h *Manager) importSource(b extwire.SourceBundle) (any, error) {
+func (h *Manager) importSource(b extwire.SourceBundle) (extwire.SourceRef, error) {
 	kind, _, _ := strings.Cut(b.Source, ":")
 	if b.Kind != sourceKindMail || kind != sourceKindMail {
-		return nil, &rpc.Error{Code: extwire.CodeSourceKind, Message: "this kind of source cannot move: " + b.Kind}
+		return extwire.SourceRef{}, &rpc.Error{Code: extwire.CodeSourceKind, Message: "this kind of source cannot move: " + b.Kind}
 	}
 	if h.mail == nil {
-		return nil, &rpc.Error{Code: extwire.CodeNoSource, Message: "mail is not set up on this manager"}
+		return extwire.SourceRef{}, &rpc.Error{Code: extwire.CodeNoSource, Message: "mail is not set up on this manager"}
 	}
 	a, err := h.mail.ImportAccount(b.Data)
 	if errors.Is(err, mailwire.ErrAccountExists) {
-		return nil, &rpc.Error{Code: extwire.CodeSourceExists, Message: "this manager has " + b.Source + " already"}
+		return extwire.SourceRef{}, &rpc.Error{Code: extwire.CodeSourceExists, Message: "this manager has " + b.Source + " already"}
 	}
 	if err != nil {
-		return nil, err
+		return extwire.SourceRef{}, err
 	}
 	ref := extwire.SourceRef{Source: sourceKindMail + ":" + a.ID}
 	h.logf("source %s imported", ref.Source)
 	return ref, nil
 }
 
-// mailSource is the account ID of a "mail:<id>" source this manager has (a *rpc.Error with CodeNoSource or
-// CodeSourceKind otherwise).
-func (h *Manager) mailSource(source string) (string, error) {
+// mailSource resolves a reference to an account on this manager.
+func (h *Manager) mailSource(method, source string) (string, error) {
+	if source == "" {
+		return "", invalidSourceRef(method)
+	}
 	kind, id, _ := strings.Cut(source, ":")
 	if kind != sourceKindMail {
 		return "", &rpc.Error{Code: extwire.CodeSourceKind, Message: "this kind of source cannot move: " + kind}

@@ -1,7 +1,7 @@
 {
   "delete_confirm": "删除对话",
   "delete_title": "删除「{title}」？",
-  "delete_body": "此操作会永久移除 Persona 中的此对话及其消息，且无法撤销。关联任务、Agent、已保存的知识和电脑上的对话记录文件会保留。",
+  "delete_body": "此操作将从 Persona 中永久移除该对话及其消息，且无法撤销。关联任务、Agent、已保存的知识以及电脑上的本地记录文件仍会保留。",
   "delete_unavailable": "此对话正在运行或等待回复，暂时无法删除。",
   "delete_unconfirmed": "尚未确认删除成功，请重试。",
   "deleted_title": "对话已删除",

@@ -131,7 +131,7 @@ final class ComposerKeyboardTests: XCTestCase {
                 XCTAssertLessThanOrEqual(control.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
                 frames[id] = control.frame
             }
-            let expected = name.hasPrefix("assistant") ? "6.1 Sol" : "6.1 Sol Codex Mini Preview 2026 11 05"
+            let expected = name.hasPrefix("assistant") ? "GPT-6.1 Sol" : "GPT-6.1 Sol Codex Mini Preview 2026 11 05"
             XCTAssertTrue((app.buttons["shell-composer-modes"].value as? String ?? "").hasPrefix(expected),
                           "the model label lost the version or variant")
             let mic = frames["shell-composer-mic"]!, send = frames["shell-composer-send"]!
@@ -204,9 +204,9 @@ final class ComposerKeyboardTests: XCTestCase {
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let button = app.buttons["shell-composer-modes"]
-        XCTAssertTrue((button.value as? String ?? "").hasPrefix("6.1 Sol"))
+        XCTAssertTrue((button.value as? String ?? "").hasPrefix("GPT-6.1 Sol"))
         button.tapCenter()
-        XCTAssertTrue(app.staticTexts["6.1 Sol"].waitForExistence(timeout: 5), "menu and current label disagree")
+        XCTAssertTrue(app.staticTexts["GPT-6.1 Sol"].waitForExistence(timeout: 5), "menu and current label disagree")
         shot("assistant-model-menu")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
     }

@@ -3,11 +3,13 @@ package node
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/runtimepkg"
 )
@@ -365,8 +367,12 @@ func TestFormatProxyURLValidation(t *testing.T) {
 }
 
 func TestWithSystemProxyEnvRespectsExplicitEnv(t *testing.T) {
-	oldDetect := detectSystemProxy
-	t.Cleanup(func() { detectSystemProxy = oldDetect })
+	oldDetect, oldShell := detectSystemProxy, detectShellProxy
+	t.Cleanup(func() { detectSystemProxy, detectShellProxy = oldDetect, oldShell })
+	detectShellProxy = func(context.Context) shellProxy {
+		t.Error("detectShellProxy should not be called when explicit or system proxy applies")
+		return shellProxy{}
+	}
 
 	for _, key := range proxyVars {
 		t.Run(key+" non-empty", func(t *testing.T) {
@@ -544,8 +550,12 @@ func TestApplySystemProxyEnvMergesNoProxyAndSyncsCase(t *testing.T) {
 }
 
 func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
-	oldDetect := detectSystemProxy
-	t.Cleanup(func() { detectSystemProxy = oldDetect })
+	oldDetect, oldShell := detectSystemProxy, detectShellProxy
+	t.Cleanup(func() { detectSystemProxy, detectShellProxy = oldDetect, oldShell })
+	detectShellProxy = func(context.Context) shellProxy {
+		t.Error("detectShellProxy should not be called when explicit or system proxy applies")
+		return shellProxy{}
+	}
 
 	detected := systemProxy{
 		HTTP:                   "http://127.0.0.1:7890",
@@ -558,14 +568,10 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 	t.Run("injects system proxy when launchd env has no proxy", func(t *testing.T) {
 		detectSystemProxy = func(context.Context) systemProxy { return detected }
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"GEMINI_API_KEY=test-key", "PERSONA_AGY_MODEL_PROVIDER=gemini"})
 		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
 		m := envMap(got)
 		if m["PERSONA_RUNTIME_SOCKET"] != "/tmp/persona-runtime.sock" {
 			t.Fatalf("PERSONA_RUNTIME_SOCKET = %q", m["PERSONA_RUNTIME_SOCKET"])
-		}
-		if m["GEMINI_API_KEY"] != "test-key" || m["PERSONA_AGY_MODEL_PROVIDER"] != "gemini" {
-			t.Fatalf("provider env missing: %v", m)
 		}
 		if m["HTTPS_PROXY"] != "http://127.0.0.1:7890" || m["https_proxy"] != "http://127.0.0.1:7890" {
 			t.Fatalf("HTTPS proxy not injected: %v", m)
@@ -579,11 +585,10 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("adds single-label provider gateway host to NO_PROXY when ExcludeSimpleHostnames is on", func(t *testing.T) {
+	t.Run("adds single-label gateway host to NO_PROXY when ExcludeSimpleHostnames is on", func(t *testing.T) {
 		detectSystemProxy = func(context.Context) systemProxy { return detected }
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"GOOGLE_GEMINI_BASE_URL=http://gateway", "GEMINI_API_KEY=test-key", "PERSONA_AGY_MODEL_PROVIDER=gemini"})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "GOOGLE_GEMINI_BASE_URL=http://gateway"})
 		m := envMap(got)
 		wantNoProxy := "localhost,127.0.0.1,::1,192.0.2.0/24,.local,gateway"
 		if m["NO_PROXY"] != wantNoProxy || m["no_proxy"] != wantNoProxy {
@@ -591,11 +596,10 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("merges provider NO_PROXY with loopback and system exceptions", func(t *testing.T) {
+	t.Run("merges existing NO_PROXY with loopback and system exceptions", func(t *testing.T) {
 		detectSystemProxy = func(context.Context) systemProxy { return detected }
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"GEMINI_API_KEY=test-key", "NO_PROXY=gateway.example.com"})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "NO_PROXY=gateway.example.com"})
 		m := envMap(got)
 		wantNoProxy := "gateway.example.com,localhost,127.0.0.1,::1,192.0.2.0/24,.local"
 		if m["NO_PROXY"] != wantNoProxy || m["no_proxy"] != wantNoProxy {
@@ -603,38 +607,36 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("provider explicit proxy suppresses system proxy fallback", func(t *testing.T) {
+	t.Run("explicit proxy suppresses system proxy fallback", func(t *testing.T) {
 		called := false
 		detectSystemProxy = func(context.Context) systemProxy {
 			called = true
 			return detected
 		}
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"HTTPS_PROXY=http://proxy.example.com:3128"})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "HTTPS_PROXY=http://proxy.example.com:3128"})
 		if called {
-			t.Fatal("detectSystemProxy should not be called when provider explicitly sets HTTPS_PROXY")
+			t.Fatal("detectSystemProxy should not be called when base explicitly sets HTTPS_PROXY")
 		}
 		m := envMap(got)
 		if m["HTTPS_PROXY"] != "http://proxy.example.com:3128" {
 			t.Fatalf("HTTPS_PROXY = %q", m["HTTPS_PROXY"])
 		}
 		if _, ok := m["ALL_PROXY"]; ok {
-			t.Fatalf("unexpected ALL_PROXY injected alongside explicit provider proxy: %v", m)
+			t.Fatalf("unexpected ALL_PROXY injected alongside explicit proxy: %v", m)
 		}
 	})
 
-	t.Run("provider explicit empty proxy disables system proxy fallback", func(t *testing.T) {
+	t.Run("explicit empty proxy disables system proxy fallback", func(t *testing.T) {
 		called := false
 		detectSystemProxy = func(context.Context) systemProxy {
 			called = true
 			return detected
 		}
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"HTTP_PROXY="})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "HTTP_PROXY="})
 		if called {
-			t.Fatal("detectSystemProxy should not be called when provider explicitly clears HTTP_PROXY")
+			t.Fatal("detectSystemProxy should not be called when base explicitly clears HTTP_PROXY")
 		}
 		m := envMap(got)
 		if v, ok := m["HTTP_PROXY"]; !ok || v != "" {
@@ -687,8 +689,12 @@ func TestAgyBridgeCommandInjectsSystemProxyEnv(t *testing.T) {
 	}
 	t.Setenv("PERSONA_NODEJS", fakeNode)
 
-	oldDetect := detectSystemProxy
-	t.Cleanup(func() { detectSystemProxy = oldDetect })
+	oldDetect, oldShell := detectSystemProxy, detectShellProxy
+	t.Cleanup(func() { detectSystemProxy, detectShellProxy = oldDetect, oldShell })
+	detectShellProxy = func(context.Context) shellProxy {
+		t.Error("detectShellProxy should not be called when explicit or system proxy applies")
+		return shellProxy{}
+	}
 
 	allProxyAndBypass := append(slices.Clone(proxyVars), "NO_PROXY", "no_proxy")
 
@@ -785,5 +791,697 @@ func TestReadSystemProxyCanceledContext(t *testing.T) {
 	cancel()
 	if got := readSystemProxy(ctx); got.hasProxy() || len(got.Exceptions) != 0 {
 		t.Fatalf("readSystemProxy(canceled) = %+v, want empty", got)
+	}
+}
+
+func TestParseShellProxyOutput(t *testing.T) {
+	frame := func(pairs ...string) string {
+		return shellProxyBegin + strings.Join(pairs, "\x00") + shellProxyEnd
+	}
+	tests := []struct {
+		name string
+		out  string
+		want shellProxy
+	}{
+		{
+			name: "framed output ignores startup banner trailing trap and non-proxy secrets",
+			out: "Welcome banner\n\x1b[32mhello\x1b[0m\n" +
+				frame(
+					"HTTP_PROXY=http://127.0.0.1:7890",
+					"http_proxy=http://127.0.0.1:7890",
+					"HTTPS_PROXY=http://127.0.0.1:7890",
+					"https_proxy=http://127.0.0.1:7890",
+					"ALL_PROXY=socks5://127.0.0.1:7891",
+					"all_proxy=socks5://127.0.0.1:7891",
+					"NO_PROXY=.corp.example.com,192.0.2.0/24",
+					"no_proxy=localhost,127.0.0.1",
+					"GEMINI_API_KEY=must-never-leak",
+					"ANTHROPIC_API_KEY=must-never-leak",
+				) + "\nexit trap noise\n",
+			want: shellProxy{
+				HTTPProxy:  "http://127.0.0.1:7890",
+				httpProxy:  "http://127.0.0.1:7890",
+				HTTPSProxy: "http://127.0.0.1:7890",
+				httpsProxy: "http://127.0.0.1:7890",
+				ALLProxy:   "socks5://127.0.0.1:7891",
+				allProxy:   "socks5://127.0.0.1:7891",
+				NoProxy:    ".corp.example.com,192.0.2.0/24",
+				noProxy:    "localhost,127.0.0.1",
+			},
+		},
+		{
+			name: "lowercase only clash shell export",
+			out: frame(
+				"HTTP_PROXY=",
+				"http_proxy=http://127.0.0.1:7890",
+				"HTTPS_PROXY=",
+				"https_proxy=http://127.0.0.1:7890",
+				"ALL_PROXY=",
+				"all_proxy=socks5://127.0.0.1:7890",
+				"NO_PROXY=",
+				"no_proxy=",
+			),
+			want: shellProxy{
+				httpProxy:  "http://127.0.0.1:7890",
+				httpsProxy: "http://127.0.0.1:7890",
+				allProxy:   "socks5://127.0.0.1:7890",
+			},
+		},
+		{
+			name: "drops invalid proxy urls and poisoned no_proxy entries without dropping valid peers",
+			out: frame(
+				"HTTP_PROXY=http://127.0.0.1:0",
+				"http_proxy=http://127.0.0.1:7890",
+				"HTTPS_PROXY=file:///etc/passwd",
+				"https_proxy=http://127.0.0.1:7890\r\nEVIL=1",
+				"ALL_PROXY=socks5h://[::1]:1080",
+				"all_proxy=$all_proxy",
+				"NO_PROXY=.corp.example.com,*.local,bad\nEVIL=1,example.com/path,192.0.2/24,a;b,$(id),`id`,foo|bar,foo&bar,foo(1),localhost:8080",
+				"no_proxy=*",
+			),
+			want: shellProxy{
+				httpProxy: "http://127.0.0.1:7890",
+				ALLProxy:  "socks5h://[::1]:1080",
+				NoProxy:   ".corp.example.com,.local,192.0.2.0/24,localhost:8080",
+				noProxy:   "*",
+			},
+		},
+		{
+			name: "missing end marker fails open to empty",
+			out:  shellProxyBegin + "HTTPS_PROXY=http://127.0.0.1:7890",
+			want: shellProxy{},
+		},
+		{
+			name: "missing begin marker fails open to empty",
+			out:  "HTTPS_PROXY=http://127.0.0.1:7890" + shellProxyEnd,
+			want: shellProxy{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseShellProxyOutput(tc.out)
+			if got != tc.want {
+				t.Fatalf("parseShellProxyOutput() =\n  %+v\nwant\n  %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateShellProxyURL(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"http ipv4", "http://127.0.0.1:7890", "http://127.0.0.1:7890"},
+		{"https trailing slash", "https://proxy.example.com:8443/", "https://proxy.example.com:8443/"},
+		{"uppercase scheme", "HTTP://127.0.0.1:7890", "HTTP://127.0.0.1:7890"},
+		{"trimmed spaces and tabs", " \thttp://127.0.0.1:7890\t ", "http://127.0.0.1:7890"},
+		{"socks5", "socks5://127.0.0.1:7890", "socks5://127.0.0.1:7890"},
+		{"socks5h ipv6", "socks5h://[::1]:7891", "socks5h://[::1]:7891"},
+		{"ipv6 default port", "http://[2001:db8::1]", "http://[2001:db8::1]"},
+		{"ipv6 zone", "http://[fe80::1%25en0]:7890", "http://[fe80::1%25en0]:7890"},
+		{"userinfo auth", "http://alice:secret@proxy.example.com:8080", "http://alice:secret@proxy.example.com:8080"},
+		{"default port hostname", "http://proxy.example.com", "http://proxy.example.com"},
+		{"bare ipv4 host port", "127.0.0.1:7890", "127.0.0.1:7890"},
+		{"bare ipv6 host port", "[::1]:7890", "[::1]:7890"},
+		{"empty", "", ""},
+		{"bare word", "direct", ""},
+		{"unexpanded shell var", "$http_proxy", ""},
+		{"port zero", "http://127.0.0.1:0", ""},
+		{"port overflow", "http://127.0.0.1:65536", ""},
+		{"port leading zero", "http://127.0.0.1:07890", ""},
+		{"empty trailing colon", "http://127.0.0.1:", ""},
+		{"empty ipv6 trailing colon", "http://[::1]:", ""},
+		{"missing host", "http://:7890", ""},
+		{"unsupported file scheme", "file:///etc/passwd", ""},
+		{"unsupported ftp scheme", "ftp://proxy.example.com:21", ""},
+		{"path rejected", "http://127.0.0.1:7890/evil", ""},
+		{"query rejected", "http://127.0.0.1:7890?a=1", ""},
+		{"empty query rejected", "http://127.0.0.1:7890?", ""},
+		{"fragment rejected", "http://127.0.0.1:7890#x", ""},
+		{"empty fragment rejected", "http://127.0.0.1:7890#", ""},
+		{"crlf rejected", "http://127.0.0.1:7890\r\nX=1", ""},
+		{"trailing newline rejected", "http://127.0.0.1:7890\n", ""},
+		{"nul rejected", "http://127.0.0.1:7890\x00", ""},
+		{"bracketed ipv4 rejected", "http://[127.0.0.1]:7890", ""},
+		{"bracketed hostname rejected", "http://[proxy.example.com]:7890", ""},
+		{"bare userinfo rejected", "user@127.0.0.1:7890", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validateShellProxyURL(tc.raw); got != tc.want {
+				t.Fatalf("validateShellProxyURL(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyShellProxyEnvSyncsCaseAndPreservesLoopbackNoProxy(t *testing.T) {
+	t.Run("lowercase only syncs uppercase and injects loopback no_proxy", func(t *testing.T) {
+		base := []string{"PATH=/usr/bin"}
+		orig := slices.Clone(base)
+		got := applyShellProxyEnv(base, shellProxy{
+			httpProxy:  "http://127.0.0.1:7890",
+			httpsProxy: "http://127.0.0.1:7890",
+			allProxy:   "socks5://127.0.0.1:7891",
+		})
+		if !slices.Equal(base, orig) {
+			t.Fatalf("input slice mutated: %v", base)
+		}
+		m := envMap(got)
+		for _, k := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
+			if m[k] != "http://127.0.0.1:7890" {
+				t.Fatalf("%s = %q, want http://127.0.0.1:7890", k, m[k])
+			}
+			if envKeyCount(got, k) != 1 {
+				t.Fatalf("%s appeared %d times in %v", k, envKeyCount(got, k), got)
+			}
+		}
+		for _, k := range []string{"ALL_PROXY", "all_proxy"} {
+			if m[k] != "socks5://127.0.0.1:7891" {
+				t.Fatalf("%s = %q, want socks5://127.0.0.1:7891", k, m[k])
+			}
+		}
+		if m["NO_PROXY"] != loopbackNoProxy || m["no_proxy"] != loopbackNoProxy {
+			t.Fatalf("NO_PROXY=%q no_proxy=%q, want %q", m["NO_PROXY"], m["no_proxy"], loopbackNoProxy)
+		}
+	})
+
+	t.Run("distinct upper and lower values stay distinct while merging base and shell NO_PROXY", func(t *testing.T) {
+		base := []string{"PATH=/usr/bin", "NO_PROXY=gateway.example.com,127.0.0.1"}
+		got := applyShellProxyEnv(base, shellProxy{
+			HTTPSProxy: "http://upper.example.com:8080",
+			httpsProxy: "http://lower.example.com:8080",
+			NoProxy:    ".corp.example.com,LOCALHOST",
+			noProxy:    "internal.example.org",
+		})
+		m := envMap(got)
+		if m["HTTPS_PROXY"] != "http://upper.example.com:8080" || m["https_proxy"] != "http://lower.example.com:8080" {
+			t.Fatalf("HTTPS_PROXY=%q https_proxy=%q", m["HTTPS_PROXY"], m["https_proxy"])
+		}
+		for _, k := range []string{"HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+			if _, ok := m[k]; ok {
+				t.Fatalf("unexpected %s=%q when shell set only HTTPS proxy", k, m[k])
+			}
+		}
+		wantNoProxy := "gateway.example.com,127.0.0.1,localhost,::1,.corp.example.com,internal.example.org"
+		if m["NO_PROXY"] != wantNoProxy || m["no_proxy"] != wantNoProxy {
+			t.Fatalf("NO_PROXY=%q no_proxy=%q, want %q", m["NO_PROXY"], m["no_proxy"], wantNoProxy)
+		}
+	})
+
+	t.Run("no_proxy only or invalid urls leave env untouched", func(t *testing.T) {
+		base := []string{"PATH=/usr/bin"}
+		for _, p := range []shellProxy{
+			{NoProxy: ".corp.example.com"},
+			{HTTPSProxy: "file:///etc/passwd", NoProxy: ".corp.example.com"},
+		} {
+			if got := applyShellProxyEnv(base, p); !slices.Equal(got, base) {
+				t.Fatalf("applyShellProxyEnv(%+v) modified env: got %v, want %v", p, got, base)
+			}
+		}
+	})
+
+	t.Run("preserves wildcard NO_PROXY from shell", func(t *testing.T) {
+		got := applyShellProxyEnv([]string{"PATH=/usr/bin"}, shellProxy{
+			HTTPSProxy: "http://127.0.0.1:7890",
+			NoProxy:    "*",
+		})
+		m := envMap(got)
+		if m["NO_PROXY"] != "*" || m["no_proxy"] != "*" {
+			t.Fatalf("NO_PROXY=%q no_proxy=%q, want *", m["NO_PROXY"], m["no_proxy"])
+		}
+	})
+}
+
+func TestWithShellProxyEnvRespectsExplicitEnv(t *testing.T) {
+	oldShell := detectShellProxy
+	t.Cleanup(func() { detectShellProxy = oldShell })
+
+	for _, key := range proxyVars {
+		t.Run(key+" non-empty", func(t *testing.T) {
+			called := false
+			detectShellProxy = func(context.Context) shellProxy {
+				called = true
+				return shellProxy{HTTPSProxy: "http://127.0.0.1:7890"}
+			}
+			base := []string{"PATH=/usr/bin", key + "=http://proxy.example.com:8888"}
+			got := withShellProxyEnv(context.Background(), base)
+			if called {
+				t.Fatalf("detectShellProxy was called despite explicit %s", key)
+			}
+			if !slices.Equal(got, base) {
+				t.Fatalf("env changed despite explicit %s: got %v, want %v", key, got, base)
+			}
+		})
+
+		t.Run(key+" explicit empty disables fallback", func(t *testing.T) {
+			called := false
+			detectShellProxy = func(context.Context) shellProxy {
+				called = true
+				return shellProxy{HTTPSProxy: "http://127.0.0.1:7890"}
+			}
+			base := []string{"PATH=/usr/bin", key + "="}
+			got := withShellProxyEnv(context.Background(), base)
+			if called {
+				t.Fatalf("detectShellProxy was called despite explicit empty %s=", key)
+			}
+			if !slices.Equal(got, base) {
+				t.Fatalf("env changed despite explicit empty %s=: got %v, want %v", key, got, base)
+			}
+		})
+	}
+}
+
+func TestAgyBridgeEnvProxyPrecedence(t *testing.T) {
+	oldSys, oldShell := detectSystemProxy, detectShellProxy
+	t.Cleanup(func() {
+		detectSystemProxy, detectShellProxy = oldSys, oldShell
+	})
+
+	sysProxy := systemProxy{HTTPS: "http://127.0.0.1:7890"}
+	shProxy := shellProxy{
+		httpProxy:  "http://127.0.0.1:9990",
+		httpsProxy: "http://127.0.0.1:9990",
+		allProxy:   "socks5://127.0.0.1:9991",
+		NoProxy:    ".corp.example.com",
+	}
+
+	t.Run("explicit process env beats system and shell without probing either", func(t *testing.T) {
+		sysCalled, shellCalled := false, false
+		detectSystemProxy = func(context.Context) systemProxy { sysCalled = true; return sysProxy }
+		detectShellProxy = func(context.Context) shellProxy { shellCalled = true; return shProxy }
+
+		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "HTTPS_PROXY=http://explicit.example.com:3128"})
+		if sysCalled || shellCalled {
+			t.Fatalf("unexpected fallback probe: sys=%v shell=%v", sysCalled, shellCalled)
+		}
+		m := envMap(got)
+		if m["HTTPS_PROXY"] != "http://explicit.example.com:3128" {
+			t.Fatalf("HTTPS_PROXY = %q", m["HTTPS_PROXY"])
+		}
+		if _, ok := m["ALL_PROXY"]; ok {
+			t.Fatalf("unexpected ALL_PROXY injected: %v", m)
+		}
+	})
+
+	t.Run("explicit empty process proxy disables both system and shell fallback", func(t *testing.T) {
+		sysCalled, shellCalled := false, false
+		detectSystemProxy = func(context.Context) systemProxy { sysCalled = true; return sysProxy }
+		detectShellProxy = func(context.Context) shellProxy { shellCalled = true; return shProxy }
+
+		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "HTTPS_PROXY="})
+		if sysCalled || shellCalled {
+			t.Fatalf("unexpected fallback probe: sys=%v shell=%v", sysCalled, shellCalled)
+		}
+		m := envMap(got)
+		if v, ok := m["HTTPS_PROXY"]; !ok || v != "" {
+			t.Fatalf("HTTPS_PROXY = %q (ok=%v), want explicit empty", v, ok)
+		}
+	})
+
+	t.Run("explicit proxy and explicit empty proxy disable both system and shell fallback", func(t *testing.T) {
+		for _, kv := range []string{"HTTPS_PROXY=http://provider.example.com:3128", "HTTP_PROXY="} {
+			sysCalled, shellCalled := false, false
+			detectSystemProxy = func(context.Context) systemProxy { sysCalled = true; return sysProxy }
+			detectShellProxy = func(context.Context) shellProxy { shellCalled = true; return shProxy }
+
+			rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
+			got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", kv})
+			if sysCalled || shellCalled {
+				t.Fatalf("base %q triggered fallback probe: sys=%v shell=%v", kv, sysCalled, shellCalled)
+			}
+			k, want, _ := strings.Cut(kv, "=")
+			m := envMap(got)
+			if v, ok := m[k]; !ok || v != want {
+				t.Fatalf("base %q: %s = %q (ok=%v), want %q", kv, k, v, ok, want)
+			}
+			if _, ok := m["ALL_PROXY"]; ok {
+				t.Fatalf("base %q leaked shell ALL_PROXY: %v", kv, m)
+			}
+		}
+	})
+
+	t.Run("system proxy beats login shell without probing login shell", func(t *testing.T) {
+		sysCalled, shellCalled := false, false
+		detectSystemProxy = func(context.Context) systemProxy { sysCalled = true; return sysProxy }
+		detectShellProxy = func(context.Context) shellProxy { shellCalled = true; return shProxy }
+
+		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		if !sysCalled {
+			t.Fatal("detectSystemProxy was not called")
+		}
+		if shellCalled {
+			t.Fatal("detectShellProxy should not be called when system proxy is active")
+		}
+		m := envMap(got)
+		if m["HTTPS_PROXY"] != "http://127.0.0.1:7890" || m["https_proxy"] != "http://127.0.0.1:7890" {
+			t.Fatalf("system proxy did not win: %v", m)
+		}
+		if _, ok := m["ALL_PROXY"]; ok {
+			t.Fatalf("shell ALL_PROXY leaked despite system proxy: %v", m)
+		}
+	})
+
+	t.Run("falls back to login shell when process and system proxy are absent", func(t *testing.T) {
+		sysCalled, shellCalled := false, false
+		detectSystemProxy = func(context.Context) systemProxy { sysCalled = true; return systemProxy{} }
+		detectShellProxy = func(context.Context) shellProxy { shellCalled = true; return shProxy }
+
+		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "NO_PROXY=gateway.example.com"})
+		if !sysCalled || !shellCalled {
+			t.Fatalf("expected both probes in order: sys=%v shell=%v", sysCalled, shellCalled)
+		}
+		m := envMap(got)
+		if m["PERSONA_RUNTIME_SOCKET"] != "/tmp/persona-runtime.sock" {
+			t.Fatalf("bridge socket env missing: %v", m)
+		}
+		if m["HTTP_PROXY"] != "http://127.0.0.1:9990" || m["http_proxy"] != "http://127.0.0.1:9990" {
+			t.Fatalf("HTTP proxy missing: %v", m)
+		}
+		if m["HTTPS_PROXY"] != "http://127.0.0.1:9990" || m["https_proxy"] != "http://127.0.0.1:9990" {
+			t.Fatalf("HTTPS proxy missing: %v", m)
+		}
+		if m["ALL_PROXY"] != "socks5://127.0.0.1:9991" || m["all_proxy"] != "socks5://127.0.0.1:9991" {
+			t.Fatalf("ALL proxy missing: %v", m)
+		}
+		wantNoProxy := "gateway.example.com,localhost,127.0.0.1,::1,.corp.example.com"
+		if m["NO_PROXY"] != wantNoProxy || m["no_proxy"] != wantNoProxy {
+			t.Fatalf("NO_PROXY=%q no_proxy=%q, want %q", m["NO_PROXY"], m["no_proxy"], wantNoProxy)
+		}
+	})
+
+	t.Run("no proxy in process system or shell leaves env untouched", func(t *testing.T) {
+		detectSystemProxy = func(context.Context) systemProxy { return systemProxy{} }
+		detectShellProxy = func(context.Context) shellProxy { return shellProxy{} }
+
+		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		m := envMap(got)
+		for _, k := range append(slices.Clone(proxyVars), "NO_PROXY", "no_proxy") {
+			if _, ok := m[k]; ok {
+				t.Fatalf("unexpected %s=%q when no proxy is configured anywhere", k, m[k])
+			}
+		}
+	})
+}
+
+func TestAgyBridgeCommandFallsBackToShellProxyEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script fixture")
+	}
+	dir := t.TempDir()
+	pkgRoot := filepath.Join(dir, "pkgs")
+	companion := filepath.Join(pkgRoot, agyPackage, "antigravity", "companion.mjs")
+	if err := os.MkdirAll(filepath.Dir(companion), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(companion, []byte("// test companion\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimepkg.OverrideEnv, pkgRoot)
+
+	fakeNode := filepath.Join(dir, "node")
+	if err := os.WriteFile(fakeNode, []byte("#!/bin/sh\nprintf 22.14.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PERSONA_NODEJS", fakeNode)
+
+	oldSys, oldShell := detectSystemProxy, detectShellProxy
+	t.Cleanup(func() { detectSystemProxy, detectShellProxy = oldSys, oldShell })
+	detectSystemProxy = func(context.Context) systemProxy { return systemProxy{} }
+	detectShellProxy = func(context.Context) shellProxy {
+		return shellProxy{
+			httpsProxy: "http://127.0.0.1:7890",
+			NoProxy:    ".corp.local",
+		}
+	}
+
+	unsetEnv(t, append(slices.Clone(proxyVars), "NO_PROXY", "no_proxy")...)
+	rh := NewRuntimeHost("test", filepath.Join(dir, "runtime.sock"))
+	cmd, err := agyBridgeCommand(context.Background(), rh, "/opt/bin/agy", "builtin-test")
+	if err != nil {
+		t.Fatalf("agyBridgeCommand: %v", err)
+	}
+	m := envMap(cmd.Env)
+	if m["HTTPS_PROXY"] != "http://127.0.0.1:7890" || m["https_proxy"] != "http://127.0.0.1:7890" {
+		t.Fatalf("shell HTTPS proxy missing from cmd.Env: HTTPS_PROXY=%q https_proxy=%q", m["HTTPS_PROXY"], m["https_proxy"])
+	}
+	wantNoProxy := "localhost,127.0.0.1,::1,.corp.local"
+	if m["NO_PROXY"] != wantNoProxy || m["no_proxy"] != wantNoProxy {
+		t.Fatalf("NO_PROXY=%q no_proxy=%q, want %q", m["NO_PROXY"], m["no_proxy"], wantNoProxy)
+	}
+}
+
+func TestReadShellProxyRealShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("login-shell proxy probe is disabled on Windows")
+	}
+
+	t.Run("canceled context returns empty without spawning shell", func(t *testing.T) {
+		oldCmd := shellProxyCommand
+		t.Cleanup(func() { shellProxyCommand = oldCmd })
+		spawned := false
+		shellProxyCommand = func(ctx context.Context, script string) *exec.Cmd {
+			spawned = true
+			return loginShell(ctx, script)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if got := readShellProxy(ctx); got.hasProxy() || spawned {
+			t.Fatalf("readShellProxy(canceled) = %+v spawned=%v, want empty and no spawn", got, spawned)
+		}
+	})
+
+	t.Run("noisy stdout past max buffer still preserves trailing framed proxy", func(t *testing.T) {
+		oldCmd := shellProxyCommand
+		t.Cleanup(func() { shellProxyCommand = oldCmd })
+		shellProxyCommand = func(ctx context.Context, script string) *exec.Cmd {
+			// Emit >1 MiB of noise before running the probe script so tailBuffer wraps without dropping the frame.
+			noisy := "dd if=/dev/zero bs=4096 count=320 2>/dev/null | tr '\\0' 'A'; " + script
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "export HTTPS_PROXY=http://127.0.0.1:7898; "+noisy)
+			cmd.Stdin = nil
+			return cmd
+		}
+		got := readShellProxy(context.Background())
+		if got.HTTPSProxy != "http://127.0.0.1:7898" {
+			t.Fatalf("readShellProxy(noisy) = %+v, want HTTPSProxy http://127.0.0.1:7898", got)
+		}
+	})
+
+	t.Run("probe runs with cmd.Dir set to userHome", func(t *testing.T) {
+		home := t.TempDir()
+		realHome, err := filepath.EvalSymlinks(home)
+		if err != nil {
+			realHome = home
+		}
+		t.Setenv("HOME", home)
+		oldCmd := shellProxyCommand
+		t.Cleanup(func() { shellProxyCommand = oldCmd })
+		pwdFile := filepath.Join(home, "seen-pwd")
+		shellProxyCommand = func(ctx context.Context, _ string) *exec.Cmd {
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `pwd > "$HOME/seen-pwd"`)
+			cmd.Stdin = nil
+			return cmd
+		}
+		_ = readShellProxy(context.Background())
+		raw, err := os.ReadFile(pwdFile)
+		if err != nil {
+			t.Fatalf("read pwdFile: %v", err)
+		}
+		gotDir := strings.TrimSpace(string(raw))
+		if gotReal, err := filepath.EvalSymlinks(gotDir); err == nil {
+			gotDir = gotReal
+		}
+		if gotDir != realHome {
+			t.Fatalf("shell probe cwd = %q, want %q", gotDir, realHome)
+		}
+	})
+
+	t.Run("hanging shell times out and fails open without blocking", func(t *testing.T) {
+		oldCmd, oldTimeout := shellProxyCommand, shellProxyTimeout
+		t.Cleanup(func() { shellProxyCommand, shellProxyTimeout = oldCmd, oldTimeout })
+		shellProxyTimeout = 150 * time.Millisecond
+		shellProxyCommand = func(ctx context.Context, _ string) *exec.Cmd {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 30")
+		}
+		start := time.Now()
+		got := readShellProxy(context.Background())
+		elapsed := time.Since(start)
+		if got.hasProxy() {
+			t.Fatalf("hanging shell returned proxy %+v, want empty", got)
+		}
+		if elapsed > 3*time.Second {
+			t.Fatalf("hanging shell took %v to time out, want bounded by shellProxyTimeout", elapsed)
+		}
+	})
+
+	zshPath, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+
+	t.Run("reads exported proxy vars from zshrc ignores banners functions unexported vars and parent env", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("ZDOTDIR", home)
+		t.Setenv("SHELL", zshPath)
+		// Parent env proxy must be stripped before probing so only shell rc exports are observed.
+		t.Setenv("HTTP_PROXY", "http://parent.example.com:9999")
+		t.Setenv("NO_PROXY", "parent.example.com")
+
+		sourced := filepath.Join(home, ".proxy_extra")
+		if err := os.WriteFile(sourced, []byte("export all_proxy=socks5h://127.0.0.1:7891\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		zshrc := strings.Join([]string{
+			`echo "startup banner noise"`,
+			`local_http_proxy=http://127.0.0.1:1111`,
+			`HTTP_PROXY=http://127.0.0.1:2222`, // unexported shell-local variable
+			`proxy_on() { export HTTP_PROXY=http://127.0.0.1:3333; }`,
+			`PROXY_BASE="http://127.0.0.1:7890"`,
+			`export https_proxy="$PROXY_BASE"`,
+			`export NO_PROXY=".corp.example.com"`,
+			`export GEMINI_API_KEY="super-secret-value"`,
+			`source "$HOME/.proxy_extra"`,
+		}, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(zshrc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		got := readShellProxy(context.Background())
+		want := shellProxy{
+			httpsProxy: "http://127.0.0.1:7890",
+			allProxy:   "socks5h://127.0.0.1:7891",
+			NoProxy:    ".corp.example.com",
+		}
+		if got != want {
+			t.Fatalf("readShellProxy() =\n  %+v\nwant\n  %+v", got, want)
+		}
+	})
+
+	t.Run("empty zshrc does not inherit parent process proxy", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("ZDOTDIR", home)
+		t.Setenv("SHELL", zshPath)
+		t.Setenv("HTTPS_PROXY", "http://parent.example.com:9999")
+		if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("# no proxy here\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readShellProxy(context.Background()); got != (shellProxy{}) {
+			t.Fatalf("readShellProxy() = %+v, want empty", got)
+		}
+	})
+
+	if runtime.GOOS == "darwin" {
+		t.Run("darwin zsh reads zprofile in addition to zshrc", func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("ZDOTDIR", home)
+			t.Setenv("SHELL", zshPath)
+			if err := os.WriteFile(filepath.Join(home, ".zprofile"), []byte("export HTTPS_PROXY=http://127.0.0.1:7895\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("# no proxy here\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got := readShellProxy(context.Background())
+			if got.HTTPSProxy != "http://127.0.0.1:7895" {
+				t.Fatalf("readShellProxy() = %+v, want HTTPSProxy from .zprofile", got)
+			}
+		})
+
+		t.Run("launchd minimal env without SHELL still reads zshrc proxy", func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("ZDOTDIR", home)
+			unsetEnv(t, "SHELL")
+			t.Setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+			if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export https_proxy=http://127.0.0.1:7896 http_proxy=http://127.0.0.1:7896\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got := readShellProxy(context.Background())
+			if got.httpsProxy != "http://127.0.0.1:7896" || got.httpProxy != "http://127.0.0.1:7896" {
+				t.Fatalf("readShellProxy(launchd env) = %+v, want http/https proxy 7896", got)
+			}
+		})
+	}
+
+	if bashPath, err := exec.LookPath("bash"); err == nil {
+		t.Run("bash login shell without zshrc reads exported proxy from bashrc", func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			unsetEnv(t, "ZDOTDIR", "ENV", "BASH_ENV")
+			t.Setenv("SHELL", bashPath)
+			if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export HTTP_PROXY=http://127.0.0.1:7897\nexport NO_PROXY=.corp.example.com\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got := readShellProxy(context.Background())
+			want := shellProxy{
+				HTTPProxy: "http://127.0.0.1:7897",
+				NoProxy:   ".corp.example.com",
+			}
+			if got != want {
+				t.Fatalf("readShellProxy(bash) =\n  %+v\nwant\n  %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestShellProxyTailBuffer(t *testing.T) {
+	b := &shellProxyTailBuffer{max: 10}
+	_, _ = b.Write([]byte("abc"))
+	if got := b.String(); got != "abc" {
+		t.Fatalf("after 3B: got %q, want abc", got)
+	}
+	_, _ = b.Write([]byte("012345678"))
+	if got := b.String(); got != "c012345678" {
+		t.Fatalf("after wrap transition: got %q, want c012345678", got)
+	}
+	_, _ = b.Write([]byte("XYZ"))
+	if got := b.String(); got != "2345678XYZ" {
+		t.Fatalf("after ring wrap: got %q, want 2345678XYZ", got)
+	}
+	_, _ = b.Write([]byte("0123456789ABCDEF"))
+	if got := b.String(); got != "6789ABCDEF" {
+		t.Fatalf("after >=max write: got %q, want 6789ABCDEF", got)
+	}
+}
+
+func TestSanitizeShellNoProxyAllowlist(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "keeps valid hosts suffixes ips cidrs ports and normalizes wildcard prefix",
+			raw:  "localhost, 127.0.0.1, [::1], [::1]:8080, gateway, corp.example.com:8443, *.local, .corp.example.com, 192.0.2/24, 2001:db8::/32",
+			want: "localhost,127.0.0.1,::1,[::1]:8080,gateway,corp.example.com:8443,.local,.corp.example.com,192.0.2.0/24,2001:db8::/32",
+		},
+		{
+			name: "wildcard returns star",
+			raw:  "localhost,*",
+			want: "*",
+		},
+		{
+			name: "rejects shell metacharacters controls zones and malformed tokens",
+			raw:  "$(whoami),`id`,foo|bar,foo&bar,foo(bar),foo$bar,foo!bar,foo{bar},foo~bar,foo;bar,foo*bar,<local>,fe80::1%en0,example.com/path,bad\nEVIL=1,ok.example.com",
+			want: "ok.example.com",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeShellNoProxy(tc.raw); got != tc.want {
+				t.Fatalf("sanitizeShellNoProxy(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
 	}
 }

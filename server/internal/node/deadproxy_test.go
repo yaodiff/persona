@@ -7,7 +7,10 @@ import (
 	"log"
 	"maps"
 	"net"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -85,6 +88,148 @@ func TestLauncherEnvWinsAndClears(t *testing.T) {
 	codex := managedEnv(proto.ManagedLauncher{Name: "c", Agent: "codex", BaseURL: "https://a.example.com", Env: "OPENAI_BASE_URL=https://b.example.com\nFOO=1"})
 	if !slices.Equal(codex, []string{"OPENAI_BASE_URL=https://b.example.com", "FOO=1"}) {
 		t.Errorf("codex: %q", codex)
+	}
+}
+
+func TestManagedLauncherProxyEnv(t *testing.T) {
+	const proxy = "http://proxy.example:3128"
+	const bypass = "gateway.example"
+	inherited := []string{
+		"HTTP_PROXY=old-upper-http", "http_proxy=old-lower-http",
+		"HTTPS_PROXY=old-upper-https", "https_proxy=old-lower-https",
+		"NO_PROXY=old-upper-bypass", "no_proxy=old-lower-bypass",
+		"ALL_PROXY=old-upper-all", "all_proxy=old-lower-all", "PATH=/bin",
+	}
+	for _, tc := range []struct {
+		name, proxy, bypass, env string
+		want                     map[string]string
+	}{
+		{name: "inherit"},
+		{name: "bypass only", bypass: bypass, want: map[string]string{"NO_PROXY": bypass, "no_proxy": bypass}},
+		{name: "proxy and bypass", proxy: proxy, bypass: bypass, want: map[string]string{
+			"HTTP_PROXY": proxy, "http_proxy": proxy, "HTTPS_PROXY": proxy, "https_proxy": proxy,
+			"NO_PROXY": bypass, "no_proxy": bypass,
+		}},
+		{name: "proxy clears bypass", proxy: proxy, want: map[string]string{
+			"HTTP_PROXY": proxy, "http_proxy": proxy, "HTTPS_PROXY": proxy, "https_proxy": proxy,
+			"NO_PROXY": "", "no_proxy": "",
+		}},
+		{name: "env overrides fields", proxy: proxy, bypass: bypass,
+			env: "HTTP_PROXY=\nhttps_proxy=http://override.example:8080\nno_proxy=override.example",
+			want: map[string]string{
+				"HTTP_PROXY": "", "http_proxy": "",
+				"HTTPS_PROXY": "http://override.example:8080", "https_proxy": "http://override.example:8080",
+				"NO_PROXY": "override.example", "no_proxy": "override.example",
+			}},
+		{name: "explicit spellings stay distinct", bypass: bypass, env: "NO_PROXY=upper.example\nno_proxy=lower.example\nNO_PROXY=last.example",
+			want: map[string]string{"NO_PROXY": "last.example", "no_proxy": "lower.example"}},
+		{name: "env alone", env: "all_proxy=http://override.example:8080\nNO_PROXY=override.example", want: map[string]string{
+			"ALL_PROXY": "http://override.example:8080", "all_proxy": "http://override.example:8080",
+			"NO_PROXY": "override.example", "no_proxy": "override.example",
+		}},
+	} {
+		for _, agent := range []string{"claude", "codex", "agy"} {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				l := proto.ManagedLauncher{Agent: agent, Proxy: tc.proxy, NoProxy: tc.bypass, Env: tc.env}
+				env := managedEnv(l)
+				remaining := withoutEnv(inherited, envClearFor(l))
+				for _, old := range inherited {
+					key, _, _ := strings.Cut(old, "=")
+					value, overrides := tc.want[key]
+					var got, want []string
+					for _, entry := range env {
+						if strings.HasPrefix(entry, key+"=") {
+							got = append(got, entry)
+						}
+					}
+					if overrides {
+						want = []string{key + "=" + value}
+					}
+					if !slices.Equal(got, want) {
+						t.Errorf("managed %s: got %q, want %q", key, got, want)
+					}
+					if kept := slices.Contains(remaining, old); kept == overrides {
+						t.Errorf("kept inherited %s: got %t, want %t", key, kept, !overrides)
+					}
+				}
+			})
+		}
+	}
+}
+
+const printProxyEnv = `printf '%s|%s|%s|%s\n' "${HTTPS_PROXY-unset}" "${https_proxy-unset}" "${NO_PROXY-unset}" "${no_proxy-unset}"`
+const inheritedProxyEnv = "export HTTPS_PROXY=old https_proxy=old NO_PROXY=old no_proxy=old\n"
+
+func TestManagedLauncherCheckProxyEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX launch scripts")
+	}
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("requires zsh")
+	}
+	for _, agent := range []string{"codex", "agy"} {
+		t.Run(agent, func(t *testing.T) {
+			home := launchKeyHome(t)
+			t.Setenv("SHELL", zsh)
+			t.Setenv("ZDOTDIR", home)
+			t.Setenv("PATH", home+":/usr/bin:/bin")
+			writeFile(t, filepath.Join(home, ".zshrc"), "export PATH="+shellQuote(home+":/usr/bin:/bin")+"\n"+inheritedProxyEnv)
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			personad := filepath.Join(home, "personad")
+			if err := os.WriteFile(personad, []byte("#!/bin/sh\nNODE_TEST_LAUNCH=1 exec "+shellQuote(self)+" \"$@\"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, agent), []byte("#!/bin/sh\n"+printProxyEnv+"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			const proxy = "http://proxy.example:3128"
+			n, _ := testNode(t)
+			n.bin, n.home = personad, home
+			n.setCatalog([]proto.ManagedLauncher{{Name: "managed-proxy", Agent: agent, Proxy: proxy}})
+			ln, err := n.listenOnce(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { ln.Close() })
+			got := checkRun(t, n, map[string]any{"name": "managed-proxy"})
+			if want := proxy + "|" + proxy + "||"; !got.OK || got.Answer != want {
+				t.Fatalf("check result = %+v, want proxy environment %q", got, want)
+			}
+		})
+	}
+}
+
+func TestManagedCodexAssistantProxyEnv(t *testing.T) {
+	fakeCodexHome(t, testThread)
+	home := os.Getenv("HOME")
+	bin := filepath.Join(home, "bin")
+	for _, rc := range []string{".zshrc", ".bashrc"} {
+		writeFile(t, filepath.Join(home, rc), "export PATH="+shellQuote(bin+":/usr/bin:/bin")+"\n"+inheritedProxyEnv)
+	}
+	program := filepath.Join(bin, "codex")
+	script, err := os.ReadFile(program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(home, "proxy-env")
+	t.Setenv("PROXY_RECORD", record)
+	writeFile(t, program, "#!/bin/sh\n"+printProxyEnv+` > "$PROXY_RECORD"`+"\n"+strings.TrimPrefix(string(script), "#!/bin/sh\n"))
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	const proxy = "http://override.example:8080"
+	n.setCatalog([]proto.ManagedLauncher{{Name: "managed-proxy", Agent: "codex", Proxy: "http://proxy.example:3128", Env: "HTTPS_PROXY=" + proxy}})
+	p, err := n.spawnCodex("", t.TempDir(), "managed-proxy", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.stop)
+	got, err := os.ReadFile(record)
+	if want := proxy + "|" + proxy + "||\n"; err != nil || string(got) != want {
+		t.Fatalf("Codex proxy environment = %q, %v, want %q", got, err, want)
 	}
 }
 

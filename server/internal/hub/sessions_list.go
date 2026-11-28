@@ -188,6 +188,7 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 		items = make([]sessionlist.Item, len(ids))
 	}
 	var crossParents map[string]bool
+	var parentsShown shownSessions // read once per parent machine for this pass (#15899)
 	var localKids map[string]proto.SessionChildren
 	for _, i := range rows {
 		if list[i].Children().Total > 0 {
@@ -232,7 +233,7 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 					crossParents = map[string]bool{}
 				}
 				crossParents[rootMachine] = true
-				if !h.hubListsSessionLocked(rootMachine, root) {
+				if !parentsShown.lists(h, rootMachine, root) {
 					root, rootMachine = "", ""
 				}
 			}
@@ -257,22 +258,34 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 	}
 }
 
-// hubListsSessionLocked reports whether the hub currently lists (mid, sid) as a shown session.
-// Caller holds h.sessionsMu.
-func (h *Hub) hubListsSessionLocked(mid, sid string) bool {
+// shownSessions answers, for one index pass, whether the hub lists a session of another machine as a shown session:
+// each machine's shown session ids are read once, on first use, so the pass walks a parent machine's list once rather
+// than once for every row folded under it (#15899). The zero value is ready. It lives for one pass and is never kept:
+// a parent machine's update re-indexes the machines folded under it (reindexCrossDependentsLocked), whose passes read
+// the parent's list again. Caller holds h.sessionsMu.
+type shownSessions map[string]map[string]struct{}
+
+// lists reports whether the hub lists (mid, sid) as a shown session (Hub.shown of mid's kept list).
+func (p *shownSessions) lists(h *Hub, mid, sid string) bool {
 	if mid == "" || sid == "" {
 		return false
 	}
-	m := h.localMachine(mid)
-	if m == nil {
-		return false
-	}
-	for _, s := range h.shown(mid, m.keptSessions()) {
-		if s.SessionID == sid {
-			return true
+	ids, read := (*p)[mid]
+	if !read {
+		if m := h.localMachine(mid); m != nil {
+			shown := h.shown(mid, m.keptSessions())
+			ids = make(map[string]struct{}, len(shown))
+			for i := range shown {
+				ids[shown[i].SessionID] = struct{}{}
+			}
 		}
+		if *p == nil {
+			*p = shownSessions{}
+		}
+		(*p)[mid] = ids // nil when the hub has no such machine: it lists none of its sessions
 	}
-	return false
+	_, ok := ids[sid]
+	return ok
 }
 
 // updateCrossFoldedLocked tracks which parent machines child machine mid references across machine boundaries.
@@ -518,7 +531,7 @@ func rowText(s string, max int) string {
 // arrays (subagents, background, workflows, queued, ports) left out, what the chat routes serve. s's pointer fields
 // stay untouched: only scalars and slices change, and writeSessionLists encodes through a scratch copy.
 func legacyListCut(s *proto.Session) {
-	s.Title = rowText(s.Title, 256)
+	s.Title = rowText(s.Title, proto.TitleMax)
 	s.LastText = rowText(s.LastText, 180)
 	s.Activity = rowText(s.Activity, 120)
 	s.StartError = rowText(s.StartError, startErrorRow(*s))
@@ -611,7 +624,7 @@ func (s *runtimeRowSummary) MarshalJSONTo(enc *jsontext.Encoder) error {
 func runtimeSummary(s proto.Session) runtimeRowSummary {
 	out := proto.Session{
 		Manager: s.Manager, MachineID: s.MachineID, SessionID: s.SessionID,
-		Title: rowText(s.Title, 256), Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
+		Title: rowText(s.Title, proto.TitleMax), Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
 		Status: s.Status, State: s.State, UpdatedAt: s.UpdatedAt, StateSince: s.StateSince, SeenAt: s.SeenAt,
 		LastText: rowText(s.LastText, 180), Activity: rowText(s.Activity, 120), ActivityAt: s.ActivityAt,
 		AwaitsReply: s.AwaitsReply, BackgroundWorking: s.BackgroundWorking, BackgroundWaiting: s.BackgroundWaiting, BackgroundStalledSince: s.BackgroundStalledSince,
@@ -908,6 +921,9 @@ func (h *Hub) heldNeedsIDs(crossMachine bool) (held, supervised []string) {
 	}
 	byHome := map[[2]string]flags{}
 	for _, ix := range interactions {
+		if ix.MirrorOf != "" {
+			continue
+		}
 		home := ix.FoldedUnder
 		homeMachine := ix.FoldedUnderMachineID
 		if home == "" || (!crossMachine && homeMachine != "" && homeMachine != ix.MachineID) {

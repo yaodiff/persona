@@ -48,10 +48,10 @@ func (s *Service) inboxRoutes() {
 			return
 		}
 		if q := r.URL.Query(); q.Has("since") { // only what changed since a list it had (inbox_delta.go)
-			s.writeInboxSince(w, inboxShape{all: q.Get("sources") == "all", lean: q.Get("chain") == "last"}, q.Get("since"))
+			s.writeInboxSince(r.Context(), w, inboxShape{all: q.Get("sources") == "all", lean: q.Get("chain") == "last"}, q.Get("since"))
 			return
 		}
-		s.writeInboxList(w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
+		s.writeInboxList(r.Context(), w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
 	})
 	s.handle("GET /api/v1/inbox/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
@@ -68,6 +68,10 @@ func (s *Service) inboxRoutes() {
 		var c InboxItem
 		if ok {
 			c = it.shown()
+			if it.Source == "larkx" {
+				cutoff := time.Now().Add(-inboxKeepDone)
+				b.larkDuplicates(cutoff, b.listedDoneCut(cutoff, true), true).link(&c)
+			}
 		}
 		b.mu.Unlock()
 		if !ok { // a done item of the history memory no longer holds (inbox_history.go)
@@ -82,10 +86,16 @@ func (s *Service) inboxRoutes() {
 			apierr.Write(w, http.StatusNotFound, errNoInboxItem)
 			return
 		}
+		// Its knowledge base chat (inbox_kb_chat.go), for the user's own apps.
+		var chat *inboxKBChat
+		if fullRole(r) {
+			chat = s.itemKBChat(r.Context(), &c)
+		}
 		apierr.WriteJSON(w, struct {
 			InboxItem
 			ReplyTarget *inboxMailTarget `json:"reply_target,omitempty"`
-		}{c, mailTarget(c)})
+			KBChat      *inboxKBChat     `json:"kb_chat,omitempty"`
+		}{c, mailTarget(c), chat})
 	})
 	s.handle("POST /api/v1/inbox/{id}/done", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
@@ -150,6 +160,7 @@ func (s *Service) inboxRoutes() {
 			ClientID        string      `json:"client_id"`
 			ExpectedUID     *uint32     `json:"expected_uid"`
 			ExpectedVersion *string     `json:"expected_version"`
+			ExpectedSender  string      `json:"expected_sender_identity"`
 			Card            string      `json:"card"` // the message card it is sent from (sendFromCard)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Text) == "" && len(in.Changes) == 0 {
@@ -163,8 +174,16 @@ func (s *Service) inboxRoutes() {
 				return
 			}
 		}
+		ctx := r.Context()
+		if in.ExpectedSender != "" {
+			if !validMessageIdentity(in.ExpectedSender) {
+				apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-outbound.scope_changed"))
+				return
+			}
+			ctx = context.WithValue(ctx, inboxExpectedSenderKey{}, in.ExpectedSender)
+		}
 		send := func() (InboxItem, error) {
-			return s.replyInboxCheckedRole(r.Context(), r.PathValue("id"), strings.TrimSpace(in.Text), in.ClientID, in.Card != "", fullRole(r), in.ExpectedUID, in.ExpectedVersion, in.Changes...)
+			return s.replyInboxCheckedRole(ctx, r.PathValue("id"), strings.TrimSpace(in.Text), in.ClientID, in.Card != "", fullRole(r), in.ExpectedUID, in.ExpectedVersion, in.Changes...)
 		}
 		var it InboxItem
 		var err error
@@ -174,6 +193,8 @@ func (s *Service) inboxRoutes() {
 			it, err = send()
 		}
 		switch {
+		case errors.Is(err, errInboxSenderChanged):
+			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "outbound_sender_changed", "error": i18n.T(i18n.OfWriter(w), "assistant-outbound.scope_changed"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errMailReplyTargetChanged):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "mail_reply_target_changed", "error": i18n.T(i18n.OfWriter(w), "assistant-inbox.mail_target_changed"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errDraftDismissed):
@@ -227,7 +248,7 @@ func (s *Service) inboxRoutes() {
 				"error": i18n.T(l, "assistant-inbox.refresh_failed"), "detail": i18n.Localize(err, l), "retryable": true})
 			return
 		}
-		s.writeInboxList(w, r.URL.Query().Get("sources") == "all")
+		s.writeInboxList(r.Context(), w, r.URL.Query().Get("sources") == "all")
 	})
 }
 
@@ -315,13 +336,16 @@ func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
 	now := time.Now()
 	cutoff := now.Add(-inboxKeepDone)
 	cut := b.listedDoneCut(cutoff, all)
+	duplicates := b.larkDuplicates(cutoff, cut, all)
 	out := make([]InboxItem, 0, len(b.items))
 	for _, it := range b.items {
-		if !inboxShows(it, cutoff, cut, all) {
+		if duplicates.hidden[it.ID] || !inboxShows(it, cutoff, cut, all) {
 			continue
 		}
 		it.arrived(now)
-		out = append(out, it.listed())
+		item := it.listed()
+		duplicates.link(&item)
+		out = append(out, item)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return inboxListOrder(out[i].UpdatedAt, out[i].ID, out[j].UpdatedAt, out[j].ID) < 0

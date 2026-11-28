@@ -13,6 +13,7 @@ import { ChannelPage } from "../../views/settings/Channels";
 import { IntegrationDetail } from "../../views/settings/IntegrationDetail";
 import { SourcesUI } from "../../views/subscriptions/SourcesUI";
 import type { BindingInput, ExternalBinding, ExternalPolicy, ExternalRef } from "./api";
+import { ExternalSourceSettings } from "./ExternalSourceSettings";
 
 const assistant = "assistant";
 const direction = { id: "launch-direction", name: "Product launch" };
@@ -297,5 +298,24 @@ describe("external sources in Settings", () => {
     expect(request("/external-source-policies", "PUT")?.body).toEqual({});
     expect(JSON.parse(request("/external-source-policies", "PUT")!.query.get("external_ref")!)).toEqual({ provider: "lark" });
     expect(calls.filter((c) => c.path.includes("external-source-bindings") && c.method !== "GET")).toEqual([]);
+  });
+
+  it("uses context copy on an extension page and hides an empty connected-work block", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ok({ bindings: [] })));
+    await render(<ExternalSourceSettings
+      manager={assistant}
+      provider="lark"
+      copy={{
+        channelDefaultsTitle: "How its updates are handled",
+        channelHint: "Default handling for this connector.",
+        flowsTitle: "Where its updates go",
+        flowsHint: "To-dos and directions that receive updates.",
+        hideEmptyFlows: true,
+      }}
+    />);
+    await wait(() => expect(host.textContent).toContain("How its updates are handled"));
+    expect(host.textContent).toContain("Default handling for this connector.");
+    expect(host.textContent).not.toContain("Where its updates go");
+    expect(host.textContent).not.toContain("Connected work");
   });
 });

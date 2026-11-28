@@ -145,6 +145,24 @@ stands as far below the group before it, all within 0.5 px (iOS: `SidebarHeading
 mock's own requests leave the browser. Screenshots and `results.json` go to the artifact directory; a four-minute
 watchdog ends the run, and the last line is the verdict.
 
+## Unread Persona chats in the sidebar (#13425)
+
+```sh
+MOCK_LEADERS=1 MOCK_RECENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --host 127.0.0.1 --port <web port> --strictPort &)
+node web/e2e/sidebar-unread-chats.mjs <loopback-web-origin> <loopback-mock-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, at 1440 × 1000 and 390 × 844 (the phone's drawer),
+standard and Large text, light and dark. The mock's `GET /mock/incoming` puts a reply nobody has opened in two pinned leads (one with Agents
+at work under it, whose arc its own Unread replaces) and two Recent chats, pushed as the hub pushes it; each row is
+measured before and after: its height and where its mark's slot, title and time sit stay, the slot draws the unread
+mark in place of the chat icon and the title takes the unread weight. Folded, Recent's heading counts its two and the
+Persona chats heading all four ("Folded chats: N unread"); open, neither does. Opening a chat clears its mark at once
+(the time from the click is recorded) and it stays clear after the hub has it; closed, a later reply brings it back.
+Screenshots of the sidebar read, unread and folded, and `results.json`, go to the artifact directory; a four-minute
+watchdog ends the run, and the last line is the verdict.
+
 ## Start page (#9071)
 
 ```sh
@@ -241,6 +259,23 @@ graph as a 200-px still preview whose only press is opening Full screen. It wait
 never for a fixed time. Only the mock's own requests leave the browser. Screenshots and `results.json` go to the artifact
 directory; a 180-second watchdog ends the run, and the last line is the verdict.
 
+## An extension's home scene: UI version 11's scene (#12641)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_SCENE=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-scene.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, light and dark at 1440 × 900. It checks a nonempty Canvas,
+`alt` / floor labels / pins reading order, opaque pin contrast of at least 4.5:1, the default camera, keyboard orbit, zoom buttons,
+Reset, drag, wheel and real Chromium two-finger touch events. A pin opens its device page and Back keeps the touched camera through
+a state redraw. Full screen keeps every pin inside the canvas and hit-testable, closes with Escape and returns focus. The Overview
+card checks its 200 px still preview, absence of nested controls and interactive Full screen. Large text and Reduce Motion add
+light/dark page, compact and full-screen captures, pin hit-testing and immediate camera input without a scene animation. Only the
+loopback origin is allowed; expected mock 404 resources are excluded from console errors, while page errors and other console errors fail the run. Screenshots
+go to the artifact directory, never the repository. A 180-second watchdog ends the run and the last line is the verdict.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.
@@ -332,6 +367,10 @@ node web/e2e/todo-progress-board.mjs <loopback-web-origin> [--shots <artifact-di
 ```
 
 Runs against an exclusively owned mock-backed web server, replacing every to-do, session and project with synthetic data over REST and the socket; no real hub data is read. At desktop and phone widths, light and dark, and default and large text, it checks stored-project and No-project groups, responsibility, latest progress with its own timestamp, owner decisions, per-project counts, closed/shelved exclusion, the exact 72-hour boundary, positive-hour persistence and invalid input, read-only rows, detail navigation and browser Back. It records and rejects every non-GET request and permits no client socket command other than the ordinary read-only `client_hello`, including across a Board reload, then checks viewport fit and browser errors and optionally saves four screenshots. The browser clock is fixed; no fixed sleeps are used. A failing check exits non-zero, and a four-minute watchdog prints a timeout verdict.
+
+## Download deadlines from the To-dos calendar
+
+Run `node web/e2e/todo-calendar-export.mjs <loopback-web-origin>` with Chrome and the mock-backed Web app. The test supplies dated to-dos, opens a week at desktop and phone widths, disconnects the page and reads the downloaded files. It checks the filenames, visible dates, source revision times and removal of credential-bearing links.
 
 ## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
 
@@ -600,3 +639,26 @@ and that every colored icon reads at 3:1 on the sidebar and on the hover fill, a
 
 After building the web bundle, run `node web/e2e/native-fetch-settings.mjs <artifact-directory>` with an output directory outside the checkout.
 The runner starts its own loopback HTTP hub fixture on an ephemeral port and opens the actual Managers settings page in installed Chrome, in light and dark mode. It uses a fresh browser context and synthetic credentials, blocks external requests, rejects HTTP writes, and leaves native browser fetch untouched. It checks that hub-provided manager data reaches the settings UI, that health and explicitly bound fetch succeed, and that the original member-call pattern really throws `Illegal invocation`. JSON results and screenshots stay outside the repository. This verifies browser transport and rendering against an isolated fixture, not a deployed hub or account.
+
+## Click a word to look it up (#10977)
+
+```sh
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<unused port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/text-lookup.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app with every hub request and the socket answered in the browser by invented data. In light and dark
+it clicks a word in an assistant reply, an Agent transcript and an Inbox item and waits for the word card with its
+meaning; it checks the saved-word underline is painted (Custom Highlight ranges, one style element, the text node
+not split); and with `available: false` and with no `text_lookup` feature it checks the same click adds no card, no
+style and no highlight. Fails on any page error. Writes `results.json` and screenshots; a 180-second watchdog ends
+the run with a timeout verdict.
+
+## macOS desktop Frosted Glass backdrop-filter suppression (#17761)
+
+```sh
+(cd web && npm run build && npx vite preview --host 127.0.0.1 --port <web port> --strictPort &)
+node web/e2e/desktop-glass-backdrop.mjs http://127.0.0.1:<web port> [--chromium <executable>] [--shots <artifact-directory>]
+```
+
+Opens the built web client in headless Chromium with every hub HTTP/WebSocket request answered by synthetic data. Verifies in both light and dark modes under `data-surface-style="liquid-glass"` + `data-desktop-glass="1"` (including split-panel `<aside>`, Palette, Modal, and ImageViewer) that every visible `[class*="backdrop-"]` node resolves `backdropFilter === "none"`, while Web-only Frosted Glass (`data-desktop-glass` unset) retains shell and utility blur and Default appearance remains unblurred.

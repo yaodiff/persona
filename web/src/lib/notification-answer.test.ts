@@ -53,6 +53,18 @@ describe("哪张卡、发什么", () => {
     expect(planClick(note("allow"), interactions, Date.now())).toEqual({ ix: perm, allow: true, body: allowBody() });
   });
 
+  it("a notification for A cannot answer same-ID replacement B", () => {
+    const first = { ...perm, created_at: "2026-01-02T03:04:05.000000001Z" };
+    const replacement = { ...perm, created_at: "2026-01-02T03:04:05.000000002Z" };
+    const now = Date.now();
+    expect(planClick(note("allow", "p1", { created_at: first.created_at }), [replacement], now)).toBeUndefined();
+    expect(planClick(note("allow", "p1", { created_at: replacement.created_at }), [replacement], now))
+      .toEqual({ ix: replacement, allow: true, body: { allow: true } });
+    // Notifications posted by an older app retain their legacy ID-only behavior.
+    expect(planClick(note("allow"), [replacement], now))
+      .toEqual({ ix: replacement, allow: true, body: { allow: true } });
+  });
+
   it("不是授权卡、页面上没有这张卡、消息来晚了、不认识的消息：不接，交给 worker 打开对话", () => {
     const now = Date.now();
     expect(planClick(note("allow", "q1"), interactions, now)).toBeUndefined();
@@ -100,7 +112,7 @@ describe("页面收到 worker 的消息", () => {
     deliver(note("allow"));
     answers[0]!({ ok: false, error: "这个请求已经过期，回答没有送到" });
     await settle();
-    expect(posted).toEqual([expect.objectContaining({ title: "没能允许", body: "这个请求已经过期，回答没有送到", url: "/s/m/a" })]);
+    expect(posted).toEqual([expect.objectContaining({ title: "无法允许", body: "这个请求已经过期，回答没有送到", url: "/s/m/a" })]);
     expect(toasts).toEqual([]);
   });
 

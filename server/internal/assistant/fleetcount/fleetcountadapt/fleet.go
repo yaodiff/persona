@@ -14,8 +14,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Fleet is one round's agents and cards, as the caller lists them, and the rows fleetcount decides on them for a
-// surface or two. Each agent and card keeps the caller's session or interaction at its slot, which the renderers read
+// Fleet is one round's agents and cards, as the caller lists them, and the rows fleetcount decides for each surface.
+// Each agent and card keeps the caller's session or interaction at its slot, which the renderers read
 // the wire's text from. A caller keeps a Fleet from round to round, so the arrays it fills are reused; nothing
 // fleetcount owns is. The zero Fleet is empty.
 type Fleet struct {
@@ -23,6 +23,7 @@ type Fleet struct {
 	ixs    []card
 	agents []fleetcount.Agent
 	cards  []fleetcount.Card
+	quiet  []fleetcount.Agent // quiet task agents supplied for the Persona count only
 	core   coreValues
 	live   liveRows
 	link   linkRows
@@ -60,7 +61,9 @@ func (f *Fleet) Reset() {
 	clear(f.ixs)
 	clear(f.agents)
 	clear(f.cards)
+	clear(f.quiet)
 	f.seats, f.ixs, f.agents, f.cards = f.seats[:0], f.ixs[:0], f.agents[:0], f.cards[:0]
+	f.quiet = f.quiet[:0]
 	f.core = coreValues{}
 }
 
@@ -72,6 +75,15 @@ func (f *Fleet) Agent(machine string, s *proto.Session, muted bool) outcome.Of[f
 		f.seats = append(f.seats, seat{machine: machine, session: s, muted: muted})
 		f.agents = append(f.agents, a)
 		f.core = coreValues{}
+	}
+	return built
+}
+
+// PersonaAgent adds a quiet task's agent for the Persona card count, apart from the other surfaces' agents.
+func (f *Fleet) PersonaAgent(s *proto.Session, muted bool) outcome.Of[fleetcount.Agent, fail.Fail] {
+	built := Agent(s, muted, len(f.quiet))
+	if a, failed := outcome.Unpack(built); failed == nil {
+		f.quiet = append(f.quiet, a)
 	}
 	return built
 }
@@ -198,7 +210,10 @@ func Card(ix *proto.Interaction, told bool, at int) outcome.Of[fleetcount.Card, 
 	return outcome.Then(agentref.ParseInteractionID(ix.ID), func(id agentref.InteractionID) outcome.Of[fleetcount.Card, fail.Fail] {
 		return outcome.Then(asker(ix), func(by opt.Option[agentref.Ref]) outcome.Of[fleetcount.Card, fleetcount.Fail] {
 			standing := fleetcount.CardStandingStands()
-			if ix.Kind == proto.IxElicitation {
+			switch {
+			case ix.MirrorOf != "":
+				standing = fleetcount.CardStandingDisplayCopy()
+			case ix.Kind == proto.IxElicitation:
 				standing = fleetcount.CardStandingForm()
 			}
 			telling := fleetcount.TellingUntold()

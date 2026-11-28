@@ -321,7 +321,10 @@ class MainWatch:
         if len(parts) != 2 or parts[1] != "refs/heads/" + base or not SHA.fullmatch(parts[0]):
             raise WatchError("could not resolve exactly one remote main commit")
         head = parts[0]
-        checked(["git", "fetch", "--no-tags", "origin", head],
+        # Baseline guards read origin/<base>, not FETCH_HEAD. Keep that ref at
+        # the exact fetched main too, or a lowered baseline looks like a raise.
+        checked(["git", "fetch", "--no-tags", "origin", head,
+                 "+" + head + ":refs/remotes/origin/" + base],
                 cwd=self.config["checkout"], timeout=180)
         checked(["git", "cat-file", "-e", head + "^{commit}"], cwd=self.config["checkout"], timeout=60)
         return head

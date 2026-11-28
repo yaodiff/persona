@@ -63,8 +63,8 @@ describe("the setup a Persona chat's next message runs on", () => {
     expect(assistantSetup(running, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "own" });
     expect(assistantPillView(running, assistantSetup(running, info), info, listOf("codex"))).toMatchObject({ engine: "codex", provider: "Codex", model: "GPT-5.5" });
     const fastRunning = chat({ isMain: true, session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5", service_tier: "priority" }) });
-    expect(assistantSetup(fastRunning, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", fast: true, source: "own" });
-    expect(assistantPillView(fastRunning, assistantSetup(fastRunning, info), info, listOf("codex"))).toMatchObject({ engine: "codex", model: "GPT-5.5", fast: true });
+    expect(assistantSetup(fastRunning, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", speed: "fast", source: "own" });
+    expect(assistantPillView(fastRunning, assistantSetup(fastRunning, info), info, listOf("codex"))).toMatchObject({ engine: "codex", model: "GPT-5.5", speed: "fast" });
     const sameKind = { ...info, def: { provider: "codex" } };
     expect(assistantSetup(running, sameKind)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "default" });
     const sameProviderID = { ...info, launchers: [{ name: "launcher.codex", source: "builtin" }], def: { provider: "launcher.codex" } };
@@ -280,9 +280,9 @@ describe("the panel's providers", () => {
   it("Codex's Fast on the model it runs, as it runs", () => {
     const c = chat({ session: session({ launcher: "codex", model: "gpt-5.5", service_tier: "priority" }) });
     const withList = (name: string) => (name === "codex" ? { list: { agent: "codex", models: [{ id: "gpt-5.5", name: "GPT-5.5", efforts: ["low", "high"] }] } } : listOf(name));
-    const { providers, state } = assistantPanel(assistantSetup(c, info), info, withList, { fast: true, fastOn: true });
-    expect(providers.find((p) => p.id === "codex")!.models![0].fast).toBe(true);
-    expect(state.current).toMatchObject({ provider: "codex", model: "gpt-5.5", fast: true });
+    const { providers, state } = assistantPanel(assistantSetup(c, info), info, withList, { speeds: [{ id: "standard" }, { id: "fast" }] });
+    expect(providers.find((p) => p.id === "codex")!.models![0].speeds?.map((tier) => tier.id)).toEqual(["standard", "fast"]);
+    expect(state.current).toMatchObject({ provider: "codex", model: "gpt-5.5", speed: "fast" });
   });
 });
 

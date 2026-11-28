@@ -13,6 +13,7 @@ import (
 
 func TestSupervisionBatchImmediateSignals(t *testing.T) {
 	immediate := []string{sigNeedsYou, sigAsk, sigEscalated, sigDecide, sigDecisionReply, sigParkDecided, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigParkedDue}
+	immediate = append(immediate, sigBlockersUnblocked, sigMergeTrainTurn, sigWriteConflict)
 	for _, kind := range immediate {
 		if !supervisionBatchImmediate(superviseSignal{Kind: kind}) {
 			t.Errorf("%s must bypass routine batching", kind)

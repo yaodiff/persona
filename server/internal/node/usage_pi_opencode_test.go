@@ -55,10 +55,10 @@ func TestUsageMeterPiAndOmp(t *testing.T) {
 		t.Fatalf("listed %d files, want pi's two and omp's one", listed)
 	}
 	minute := now.Unix() / 60 * 60
-	if b := m.buckets[usageKey{minute, "model-a", "l", tokenuse.Pi}]; b == nil || b.Requests != 2 || b.Output != 42 || b.CacheRead != 500 {
+	if b := m.buckets[usageKey{minute, "model-a", "l", tokenuse.Pi, ""}]; b == nil || b.Requests != 2 || b.Output != 42 || b.CacheRead != 500 {
 		t.Fatalf("pi = %+v, want a1 once and a2", b)
 	}
-	if b := m.buckets[usageKey{minute, "model-b", "l", tokenuse.Omp}]; b == nil || b.Requests != 1 || b.Input != 5 {
+	if b := m.buckets[usageKey{minute, "model-b", "l", tokenuse.Omp, ""}]; b == nil || b.Requests != 1 || b.Input != 5 {
 		t.Fatalf("omp = %+v", b)
 	}
 	for _, s := range []string{"0f1e2d3c", "4b5a6978", "019a7c00-0000-7000-8000-000000000001"} {
@@ -136,6 +136,16 @@ func TestUsageOpencode(t *testing.T) {
 	if total != 3 {
 		t.Fatalf("requests %d, want 3", total)
 	}
+	// Each session's directory (#16530): none without a session table, while its usage is read all the same; with
+	// one, read once for the sessions the rows name.
+	if q.dir("ses_1") != "" {
+		t.Fatalf("dir without a session table = %q", q.dir("ses_1"))
+	}
+	sql(`CREATE TABLE session (id text PRIMARY KEY, directory text NOT NULL)`, `INSERT INTO session VALUES ('ses_1', '/work/shop')`)
+	withDirs := &opencodeUsage{}
+	if recs := withDirs.poll(ctx, n, cutoff); len(recs) != 3 || withDirs.dir("ses_1") != "/work/shop" {
+		t.Fatalf("poll = %d records, dir %q", len(recs), withDirs.dir("ses_1"))
+	}
 	// The backfill: a span by the steps' times; the earliest step.
 	old, err := q.between(ctx, n, now.Add(-31*time.Hour), now.Add(-29*time.Hour))
 	if err != nil || len(old) != 1 || old[0].Key != "opencode:msg_old" {
@@ -196,7 +206,7 @@ func TestUsageCodexSegmentsAndOldRollouts(t *testing.T) {
 	if len(listed) != 2 || listed[filepath.Base(old)] {
 		t.Fatalf("listed %v, want the thread's two segments", listed)
 	}
-	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "codex", "codex", tokenuse.Codex}]; b == nil || b.Requests != 2 || b.Output != 60 {
+	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "codex", "codex", tokenuse.Codex, ""}]; b == nil || b.Requests != 2 || b.Output != 60 {
 		t.Fatalf("bucket = %+v, want both segments' requests", b)
 	}
 	if len(sessions) != 1 || !sessions[thread] {

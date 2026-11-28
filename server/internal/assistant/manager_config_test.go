@@ -96,6 +96,7 @@ func TestMoveConfigFailsClosed(t *testing.T) {
 		{"broken marker", `{"token":"t","google":{"client_id":"x"}}`, `{"moved_from_hub_json":"yes"}`, false},
 		{"wrong shape", `{"token":"t"}`, `{"lark_gate":{"method":"CLI"}}`, false},
 		{"a gate rule the gate can't use", `{"token":"t"}`, `{"connector_gate":[{"connector":"github","action":"*","decision":"denied"}]}`, false},
+		{"an auto-confirm policy the gate can't use", `{"token":"t"}`, `{"connector_auto_confirm":[{"extension":"example","connector":"example","actions":["example_*"]}]}`, false},
 		{"hub.json's own part of the wrong shape", `{"token":"t","listen":18660}`, `{"lark_gate":[]}`, false},
 	}
 	for _, c := range cases {

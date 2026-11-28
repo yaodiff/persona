@@ -273,6 +273,44 @@ test('a wake batch reaches a watcher before the first live text of the new excha
   assert.deepEqual(events[0].params.items.map(item => item.id), ['reply#0', 'reply#-1'])
 })
 
+test('live text waits for held catch-up wake batches and flushes pending items before sending delta', async (t) => {
+  const n = await startFakeNode(t)
+  let releaseCatchup
+  let inCatchup = false
+  const catchup = new Promise((resolve) => { releaseCatchup = resolve })
+  const rt = createRuntime(minimal({
+    items: async () => {
+      inCatchup = true
+      await catchup
+      return { items: [{ id: 'reply#0', seq: 1, kind: 'text' }], history: 'h', to_seq: 1 }
+    },
+  }), { runtime: 'toy', socketPath: n.path })
+  t.after(() => { releaseCatchup?.(); rt.stop() })
+  rt.start()
+  await n.ready
+  const watching = n.peer.call('session.watch', { session_id: 's1', since_seq: 0 })
+  await until('driver is catching up', () => inCatchup)
+  rt.append('s1', { items: [{ id: 'reply#-1', seq: 2, kind: 'notice', wake: true }], fromSeq: 1, toSeq: 2, history: 'h' })
+  rt.stream('s1', 'Resumed progress.')
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(n.all('session.delta').length, 0, 'delta must not overtake held wake items during catch-up')
+  releaseCatchup()
+  await watching
+  await until('resumed progress streams after wake', () => n.last('session.delta')?.text === 'Resumed progress.')
+  const events = n.events.filter((entry) => entry.event === 'session.items' || entry.event === 'session.delta')
+  assert.deepEqual(events.map((entry) => entry.event), ['session.items', 'session.delta'])
+  assert.equal(events[0].params.items.some((item) => item.wake === true), true)
+
+  // A buffered non-wake batch must also flush before a following live delta.
+  const before = n.events.length
+  rt.append('s1', { items: [{ id: 'step#0', seq: 3, kind: 'thinking', text: 'Working' }], fromSeq: 2, toSeq: 3, history: 'h' })
+  rt.stream('s1', 'Next line.')
+  await until('next delta arrives after buffered item', () => n.last('session.delta')?.text === 'Next line.')
+  const tail = n.events.slice(before).filter((entry) => entry.event === 'session.items' || entry.event === 'session.delta')
+  assert.deepEqual(tail.map((entry) => entry.event), ['session.items', 'session.delta'])
+  assert.deepEqual(tail[0].params.items.map((item) => item.id), ['step#0'])
+})
+
 test('in-place item updates under the same history go out without advancing seq and coalesce by id', async (t) => {
   const n = await startFakeNode(t)
   const rt = createRuntime(minimal({ items: async () => ({ items: [], history: 'h1', to_seq: 5 }) }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
@@ -1097,6 +1135,18 @@ test('a runtime running several agents: launchers in hello and when they change,
   assert.deepEqual(n.last('runtime.launchers').launchers, [{ name: 'paseo-codex', agent: 'paseo' }])
 })
 
+test('session.modes forwards optional settled permission_mode returned by the driver (#17239)', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal({
+    modes: async (p) => (p.permission_mode === 'auto' ? { permission_mode: 'bypassPermissions' } : undefined),
+  }), { runtime: 'agy', socketPath: n.path, retryMs: 20 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  assert.deepEqual(await n.peer.call('session.modes', { session_id: 's1', permission_mode: 'auto' }), { ok: true, permission_mode: 'bypassPermissions' })
+  assert.deepEqual(await n.peer.call('session.modes', { session_id: 's1', permission_mode: 'plan' }), { ok: true })
+})
+
 test('archive: caps.archive only with both ways, calls reach the driver, one way alone is not offered', async (t) => {
   const n = await startFakeNode(t)
   const got = []
@@ -1509,4 +1559,22 @@ test('hello carries codex_claims only when codexClaims names an app-server insta
     assert.equal(none.hello.codex_claims, undefined, 'nothing to claim sends no codex_claims')
     if (typeof codexClaims === 'function') assert.ok(logged.some((line) => line.includes('codexClaims: not yet')), 'a failing function is logged')
   }
+})
+
+test('compactionSettled notifies the node with session_id and optional error', async (t) => {
+  const n = await startFakeNode(t)
+  const rt = createRuntime(minimal(), { runtime: 'toy', socketPath: n.path, retryMs: 20, refreshMs: 0 })
+  t.after(() => rt.stop())
+  assert.equal(rt.compactionSettled('s1'), false)
+  assert.equal(rt.compactionSettled(''), false)
+  assert.equal(rt.compactionSettled(null), false)
+  await rt.start()
+  await n.ready
+  assert.equal(rt.compactionSettled('s1'), true)
+  assert.equal(rt.compactionSettled('s1', 'boom'), true)
+  await until('both compaction settlement events received', () => n.all('session.compaction.settled').length === 2)
+  assert.deepEqual(n.all('session.compaction.settled'), [
+    { session_id: 's1' },
+    { session_id: 's1', error: 'boom' },
+  ])
 })

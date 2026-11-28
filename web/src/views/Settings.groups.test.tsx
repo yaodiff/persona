@@ -27,7 +27,7 @@ vi.mock("./settings/StartPage", () => ({ StartPageGroup: () => <div data-page="s
 vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import("../lib/pwa")>()), useInstall: () => "installed" }));
 vi.mock("./settings/AgentSettings", () => ({ AgentSettings: ({ agent }: { agent: string }) => <div data-page="agent" data-agent={agent} /> }));
 vi.mock("./settings/Extensions", () => ({
-  Extensions: ({ open }: { open: string | null }) => <div data-page="extensions" data-open={open ?? ""} />,
+  Extensions: ({ open, prefill }: { open: string | null; prefill?: unknown }) => <div data-page="extensions" data-open={open ?? ""} data-prefill={prefill ? JSON.stringify(prefill) : ""} />,
 }));
 vi.mock("./settings/FeishuBot", () => ({ FeishuBot: () => null }));
 vi.mock("./settings/HubConnector", () => ({ ConnectorList: () => <div data-page="connector-list" />, ConnectorDetail: () => <div data-page="connector-detail" /> }));
@@ -227,6 +227,14 @@ describe("the current assistant's pages", () => {
     await switchTo("m-1");
     expect(host.querySelector('[data-page="extensions"]')?.getAttribute("data-open")).toBe("");
     expect(location.search).toBe("?tab=extensions");
+  });
+
+  it("passes an extension settings link's proposed values to the page", async () => {
+    setRoster(ROSTER);
+    await mount(`/settings?tab=extensions&extension=example&set=${encodeURIComponent(JSON.stringify({ machine: "studio" }))}`);
+    const page = host.querySelector('[data-page="extensions"]');
+    expect(page?.getAttribute("data-open")).toBe("example");
+    expect(JSON.parse(page?.getAttribute("data-prefill") ?? "null")).toEqual({ machine: "studio" });
   });
 
   it("keep a page of this device's as it is when the pick changes", async () => {

@@ -687,7 +687,7 @@ struct AssistantActionBar: View {
         let entries = AssistantEntries.split(
             conversation: conversation, main: model.assistantMain?.sessionID, group: model.hub?.group ?? "", todos: todos,
             sessions: todos.filter { $0.doneAt == nil || $0.failedToStart }.flatMap { store.sessions($0) },
-            interactions: model.pendingInteractions, plans: store.plans,
+            interactions: model.aggregatePendingInteractions, plans: store.plans,
             feed: store.feed(conversation), restored: TodoRestores.load(), going: model.goingAgents,
             // the hub's fields, the inbox's word on the item, and Later
             messageWaits: { item in

@@ -3,6 +3,8 @@
   "waiting_idle_message": "Waiting for the agents on this computer to go idle before updating the node…",
   "transferring": "Transferring",
   "transferring_message": "Sending the hub's node version to this computer…",
+  "draining": "Waiting to restart",
+  "draining_message": "Update installed. Waiting for active work to finish before restarting…",
   "restarting": "Restarting",
   "restarting_message": "Restarting the node on this computer…",
   "confirming": "Confirming",

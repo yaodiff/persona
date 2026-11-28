@@ -11,5 +11,8 @@
   "retry": "Retry",
   "confirm_title": "Confirm",
   "ok": "OK",
-  "updating": "Updating…"
+  "updating": "Updating…",
+  "setup_title": "Set up {name}",
+  "missing_settings": "Required settings",
+  "open_settings": "Open extension settings"
 }

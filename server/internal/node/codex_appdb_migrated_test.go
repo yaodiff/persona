@@ -57,6 +57,28 @@ func TestCodexAppMigratedChatsAreListed(t *testing.T) {
 	}
 }
 
+func TestCodexAppMigratedSharedStampWithoutRollout(t *testing.T) {
+	n := remoteTestNode(t)
+	home, project := n.codexHome(), t.TempDir()
+	updated := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	writeMigratedCodexApp(t, home, codexAppSchema+
+		codexAppRow(appMigrated, "", project, "Shared App chat", updated, 0, "persona")+
+		codexAppRow(appExec, "", project, "Shared non-sidebar run", updated, 0, "persona")+
+		fmt.Sprintf("UPDATE threads SET source = 'exec' WHERE id = '%s';", appExec))
+
+	rows := rowsByThread(n.codexSessions(map[string]bool{}))
+	chat, ok := rows[appMigrated]
+	if !ok || chat.SpaceKind != "codex_app" || chat.Title != "Shared App chat" {
+		t.Fatalf("the database-only shared App chat: title=%q kind=%q listed=%v", chat.Title, chat.SpaceKind, ok)
+	}
+	if !codexDesktopChat(codexSource{home: home, thread: appMigrated}) {
+		t.Fatal("the shared App chat was not eligible for App-bus delivery")
+	}
+	if _, ok := rows[appExec]; ok {
+		t.Fatal("a shared one-shot run is not an App sidebar chat")
+	}
+}
+
 // A migrated App's project lives only in the database: a chat's project is found by its cwd there (the json's
 // local-projects is gone), and a cwd outside every root falls back to the ungrouped row.
 func TestCodexAppProjectFromMigratedDatabase(t *testing.T) {

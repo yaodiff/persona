@@ -9,7 +9,7 @@ struct OwnerApprovalReplyTests {
     private let path = "/api/v1/sessions/m/s/messages"
 
     private func proposal() throws -> Interaction {
-        let json = #"{"id":"proposal-1","machine_id":"m","session_id":"s","kind":"permission","tool_name":"owner_action_prepare","approval_batch_id":"batch-1","owner_proposal":true,"no_expiry":true,"owner_approval_phrases":["发","同意"]}"#
+        let json = #"{"id":"proposal-1","machine_id":"m","session_id":"s","kind":"permission","tool_name":"owner_action_prepare","approval_batch_id":"batch-1","owner_proposal":true,"no_expiry":true,"owner_approval_phrases":["发","同意"],"created_at":"2026-11-21T12:00:00.123456789Z"}"#
         return try JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
     }
 
@@ -68,12 +68,41 @@ struct OwnerApprovalReplyTests {
         let bodies = try requests.map { request -> [String: Any] in
             let body = try #require(request.body)
             let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-            #expect(Set(object.keys) == ["text", "client_msg_id", "approval_reply_to"])
+            #expect(Set(object.keys) == ["text", "client_msg_id", "approval_reply_to", "approval_reply_created_at"])
             #expect(object["text"] as? String == "发" && object["approval_reply_to"] as? String == "proposal-1")
+            #expect(object["approval_reply_created_at"] as? String == ix.createdAtWire)
             #expect((object["client_msg_id"] as? String)?.caseInsensitiveCompare(request.headers[OpRetry.header] ?? "") == .orderedSame)
             return object
         }
         #expect((bodies[0]["client_msg_id"] as? String) == (bodies[1]["client_msg_id"] as? String))
+    }
+
+    @Test func aSameIDReplacementStartsANewOwnerEventWithItsOwnOccurrence() async throws {
+        let hub = FakeHub()
+        var fail = true
+        hub.on("POST", path) { _ in
+            if fail {
+                fail = false
+                throw APIError(status: 400, message: "try again")
+            }
+            return Data(#"{"ok":true,"approval_reply":true,"interaction_id":"proposal-1"}"#.utf8)
+        }
+        let first = try proposal()
+        let replacement = try JSON.decoder.decode(Interaction.self, from: Data(#"{"id":"proposal-1","machine_id":"m","session_id":"s","kind":"permission","tool_name":"owner_action_prepare","approval_batch_id":"batch-1","owner_proposal":true,"no_expiry":true,"owner_approval_phrases":["发","同意"],"created_at":"2026-11-21T12:00:01.123456789Z"}"#.utf8))
+        let model = try model(hub, first)
+        let answer = Resolution(allow: true, ownerApprovalPhrase: "发")
+        await model.resolve(first, answer)
+        model.replaceInteractions("", [replacement])
+        await model.resolve(replacement, answer)
+        let requests = hub.sent("POST", path)
+        #expect(requests.count == 2)
+        let bodies = try requests.map { request -> [String: Any] in
+            let body = try #require(request.body)
+            return try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        }
+        #expect((bodies[0]["client_msg_id"] as? String) != (bodies[1]["client_msg_id"] as? String))
+        #expect(bodies[0]["approval_reply_created_at"] as? String == first.createdAtWire)
+        #expect(bodies[1]["approval_reply_created_at"] as? String == replacement.createdAtWire)
     }
 
     @Test func anUnadvertisedReplyCannotFallBackToAllowOrAModelMessage() async throws {

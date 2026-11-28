@@ -3,17 +3,23 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/larkhost"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+const botGroupReplyTool = "bot_group_reply"
 
 // A proxy reply's guest lists exactly bot_group_reply, and the owner's conversation never sees it. The guest is
 // registered before the node starts it, and dropped when the start fails.
 func TestHandoffGuestListsOnlyItsTool(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newFleetTest(t)
 	ft.f.hello.Assistant = assistantwire.Placement{MachineID: "mac", Machines: []string{"mac"}}
 	ft.f.sessions["mac"] = nil // the node the fake hub starts conversations on
@@ -116,6 +122,7 @@ func botHandoffCall(session, name string) []byte {
 
 // A start that fails leaves no guest behind.
 func TestHandoffGuestDroppedWhenTheStartFails(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newFleetTest(t)
 	ft.f.hello.Assistant = assistantwire.Placement{MachineID: "mac", Machines: []string{"mac"}}
 	s := ft.s
@@ -134,6 +141,67 @@ func TestHandoffGuestDroppedWhenTheStartFails(t *testing.T) {
 		if g.Kind == guestKindBotHandoff {
 			t.Errorf("guest %s left behind: %+v", id, g)
 		}
+	}
+}
+
+// Without the lark module (switched off or left out of the build), no handoff guest starts and a pre-existing handoff
+// guest exposes no tools and refuses calls.
+func TestHandoffGuestAbsentWithoutLarkModule(t *testing.T) {
+	verifyAbsent := func(t *testing.T, s *Service, f *fakeHub) {
+		t.Helper()
+		ctx := context.Background()
+		if _, _, err := s.StartHandoffGuest(ctx, "bh_off", "answer this", ""); !errors.Is(err, larkhost.ErrNoChannel) {
+			t.Fatalf("StartHandoffGuest error = %v, want %v", err, larkhost.ErrNoChannel)
+		}
+		b := &s.guests
+		b.mu.Lock()
+		for id, g := range b.m {
+			if g.Kind == guestKindBotHandoff {
+				t.Errorf("unexpected handoff guest %s created: %+v", id, g)
+			}
+		}
+		b.mu.Unlock()
+		f.mu.Lock()
+		sends := len(f.sends)
+		f.mu.Unlock()
+		if sends != 0 {
+			t.Fatalf("expected 0 assistant.send calls, got %d", sends)
+		}
+
+		// A pre-existing handoff guest exposes no tools and refuses botGroupReplyTool calls.
+		if err := s.guestSetHandoff(ctx, "mac", "legacy-handoff", "bh_old", []string{botGroupReplyTool}); err != nil {
+			t.Fatal(err)
+		}
+		if names := sessionToolNames(t, s, "mac", "legacy-handoff"); len(names) != 0 {
+			t.Fatalf("pre-existing handoff guest tools = %v, want empty", names)
+		}
+		res, handled, err := s.NodeRequest(ctx, "mac", "mcp.call", botHandoffCall("legacy-handoff", botGroupReplyTool))
+		if err != nil || !handled {
+			t.Fatal(err, handled)
+		}
+		if out, _ := res.(proto.ToolResult); !out.IsError {
+			t.Fatalf("expected error tool result for %s without lark module, got %+v", botGroupReplyTool, out)
+		}
+	}
+
+	t.Run("modules_off", func(t *testing.T) {
+		f := newFakeHub()
+		f.hello.Assistant = assistantwire.Placement{MachineID: "mac", Machines: []string{"mac"}}
+		f.sessions["mac"] = nil
+		d := newFleetDevs()
+		d.add("mac", "Mac")
+		st := newFleetMem()
+		s := New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Devices: d, ModulesOff: []string{larkhost.ModuleID}})
+		verifyAbsent(t, s, f)
+	})
+
+	if !larkhost.InBuild(moduleswitch.Set{}) {
+		t.Run("excluded_from_build", func(t *testing.T) {
+			ft := newFleetTest(t)
+			ft.f.hello.Assistant = assistantwire.Placement{MachineID: "mac", Machines: []string{"mac"}}
+			ft.f.sessions["mac"] = nil
+			verifyAbsent(t, ft.s, ft.f)
+		})
 	}
 }
 

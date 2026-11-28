@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"html"
 	"sort"
 	"strings"
@@ -209,18 +211,67 @@ func cutPartialTag(s string) string {
 // blockTitleRe is an attributed block's whole opening tag with its title.
 var blockTitleRe = lazyre.New(`<` + compat.ContextPattern() + `\b[^>]*?\stitle="([^"]*)"[^>]*>`)
 
+const startScriptFilename = `agent-start-\d+\.sh`
+
+var startScriptTitleRe = lazyre.New(`^(?:\.|source)[ \t]+(?:` +
+	`(?:[^'" \t\r\n;&|<>]*[/\\])?` + startScriptFilename + `|` +
+	`'(?:[^'\r\n]*[/\\])?` + startScriptFilename + `'|` +
+	`"(?:[^"\r\n]*[/\\])?` + startScriptFilename + `"` +
+	`)(?:[ \t]+&&(?:[ \t]+(?:t|tr|tru|true(?:[ \t]+[A-Za-z0-9_.-]+)?))?)?(?:…|\.\.\.)?$`)
+
+// IsStartScriptTitle recognizes the shell echo of Persona's sourced startup script, including clipped echoes.
+func IsStartScriptTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	return (strings.HasPrefix(title, ".") || strings.HasPrefix(title, "source")) && startScriptTitleRe.MatchString(title)
+}
+
 // Title is a message (or a title someone made of one) as a title or a preview line: what the user wrote, else the
 // title of the first attributed block ("Continuing the old main chat" for a main conversation handed over), else "" (the caller
 // falls back to the agent's project). A tag cut off by a clip ("<persona-context kind="context" title="Continuing…") has
 // no title to take: it is dropped. Strip first, then clip: a clip first can end inside a tag.
 func Title(s string) string {
 	if t := dropLeadingBlocks(StripInjected(s)); t != "" {
+		if IsStartScriptTitle(t) {
+			return ""
+		}
 		return t
 	}
 	if m := blockTitleRe.FindStringSubmatch(s); m != nil {
 		return strings.TrimSpace(html.UnescapeString(m[1]))
 	}
 	return ""
+}
+
+// listTitleWindow is how much of an over-long title ListTitle strips before it cuts: the blocks in front of what the
+// user wrote go within it, at a bounded cost however long the title is (a whole pasted prompt can be hundreds of KB,
+// and the node lists its sessions about every second). A leading block longer than the window is dropped as a block a
+// clip cut off is (Title).
+const listTitleWindow = 16 * proto.TitleMax
+
+// ListTitle is title as a list of sessions carries it (#16343): as it is when it has at most proto.TitleMax runes,
+// else what Title makes of its first listTitleWindow runes (stripped first, so the cut never ends inside an injected
+// block) cut to proto.TitleMax runes, on a rune boundary. A title that long is an opening prompt an agent stored as its
+// title; the transcript keeps it whole. A title that fits is left for its readers to strip, as before.
+func ListTitle(title string) string {
+	if !moreRunes(title, proto.TitleMax) {
+		return title
+	}
+	return textfmt.Cut(Title(textfmt.Cut(title, listTitleWindow)), proto.TitleMax)
+}
+
+// moreRunes says whether s has more than n runes, reading no further than rune n+1.
+func moreRunes(s string, n int) bool {
+	if len(s) <= n { // n bytes are at most n runes
+		return false
+	}
+	runes := 0
+	for range s {
+		if runes == n {
+			return true
+		}
+		runes++
+	}
+	return false
 }
 
 // leadingTagRe is an opening tag with attributes at the start of a message (`<memory-index file="MEMORY.md">`), or one a

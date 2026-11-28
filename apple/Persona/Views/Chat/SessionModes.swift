@@ -425,24 +425,36 @@ nonisolated enum SessionModes {
         }
     }
 
-    /// GPT display names only: keep the version and every variant, without changing the id used by the agent.
+    /// GPT display names only: preserve the GPT- prefix, version, and every variant without changing the agent wire id.
     static func gptModelName(_ model: String?) -> String? {
         guard let raw = Fmt.model(model)?.trimmingCharacters(in: .whitespacesAndNewlines),
               raw.lowercased().hasPrefix("gpt-") else { return nil }
         let parts = raw.dropFirst(4).split(separator: "-", omittingEmptySubsequences: false)
         guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty }) else { return nil }
-        return parts.map { part in
+        return "GPT-" + parts.map { part in
             guard let first = part.first, first.isLetter else { return String(part) }
             return String(first).uppercased() + part.dropFirst().lowercased()
         }.joined(separator: " ")
     }
 
-    /// A model's short name for that button: "claude-opus-5-5-20260101" → "Opus 5.5", "opus" / "opus[1m]" → "Opus",
-    /// "gpt-6.1-sol" → "6.1 Sol"; other names retain the existing `Fmt.model` behavior.
+    /// The composer displays effort separately from Gemini's family and variant.
+    private static func geminiModelName(_ raw: String) -> String? {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard id.hasPrefix("gemini-") else { return nil }
+        var parts = id.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.allSatisfy({ !$0.isEmpty && !$0.contains(where: \.isWhitespace) }) else { return nil }
+        if parts.count > 2, let suffix = parts.last, ["low", "medium", "high", "xhigh", "max"].contains(String(suffix)) {
+            parts.removeLast()
+        }
+        return parts.map { $0.capitalized }.joined(separator: " ")
+    }
+
+    /// Model display names for the composer. The session keeps its original model ID.
     static func modelName(_ model: String?) -> String? {
         guard let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let raw = Fmt.model(model) else { return nil }
         if let gpt = gptModelName(raw) { return gpt }
+        if let gemini = geminiModelName(raw) { return gemini }
         // A context-window suffix ("[1m]") is not part of the version; the name keeps no 1M marker.
         let lower = raw.lowercased().replacingOccurrences(of: #"\[[^\]]*\]$"#, with: "", options: .regularExpression)
         for family in ["fable", "opus", "sonnet", "haiku"] {
@@ -607,8 +619,9 @@ struct SessionModesMenu: View {
 
     /// The button's title for this conversation; the effort carries the workflow mark while ultracode is on (#1307).
     static func title(_ session: Session?, setsModes: Bool) -> SessionModes.ComposerTitle? {
+        let showsEffort = setsModes || session?.sourceKind == Launcher.claudeDesktopSource
         var title = SessionModes.composerTitle(model: SessionModes.modelName(session?.model),
-                                               effort: setsModes ? SessionModes.effortLabel(session?.effort) : nil)
+                                               effort: showsEffort ? SessionModes.effortLabel(session?.effort) : nil)
         if setsModes {
             title?.mark = Ultracode.chipMark(session)
             title?.effortChange = SessionModes.effortChange(session)
@@ -718,6 +731,10 @@ struct SessionModesMenu: View {
                 }
             }
             if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
+        } else if session?.sourceKind == Launcher.claudeDesktopSource {
+            Section("Thinking Effort") {
+                Text(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]"))
+            }
         }
         if setsModes {
             // A restart into Allow Everything waits for the turn to end (#6513): said by the mode's row, which keeps the

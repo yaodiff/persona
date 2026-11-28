@@ -427,7 +427,9 @@ test('A2A tools send and report from the active pi session', async (t) => {
   const { Type } = await import('./typebox-stub.js')
   const { n, host } = await setup(t)
   const a = piSession('s-a2a')
-  host.register(a.pi, { A2AType: Type })
+  const integerCalls = []
+  const trackedType = { ...Type, Integer(opts) { integerCalls.push(opts); return Type.Integer(opts) } }
+  host.register(a.pi, { A2AType: trackedType })
   await a.fire('session_start')
   await n.ready
   await until('A2A session listed', () => n.last('runtime.sessions')?.sessions.some(s => s.session_id === 's-a2a'))
@@ -437,6 +439,34 @@ test('A2A tools send and report from the active pi session', async (t) => {
   const result = await report.execute('call', args, a.ctx.signal, undefined, a.ctx)
   assert.equal(result.details.error, false)
   assert.deepEqual(n.toolCalls.at(-1), { name: 'a2a_report', args, session_id: 's-a2a' })
+
+  const read = a.pi.tools.find(t => t.name === 'a2a_read')
+  assert.deepEqual(integerCalls, [{ minimum: 1, maximum: 10 }])
+  assert.deepEqual(read.parameters.properties.turns, { type: 'integer', minimum: 1, maximum: 10, optional: true })
+  assert.deepEqual(read.parameters.properties.machine_id, { type: 'string' })
+  assert.deepEqual(read.parameters.properties.session_id, { type: 'string' })
+  const send = a.pi.tools.find(t => t.name === 'a2a_send')
+  assert.deepEqual(send.parameters.properties.wake, { type: 'boolean', optional: true })
+  assert.deepEqual(report.parameters.properties.state, { type: 'string', enum: ['progress', 'input_required', 'completed', 'failed'] })
+  const readArgs = { machine_id: 'm1', session_id: 's1', turns: 5 }
+  const readRes = await read.execute('call-read', readArgs, a.ctx.signal, undefined, a.ctx)
+  assert.equal(readRes.details.error, false)
+  assert.deepEqual(n.toolCalls.at(-1), { name: 'a2a_read', args: readArgs, session_id: 's-a2a' })
+
+  // A minimal Type builder without Type.Integer still preserves integer bounds instead of throwing or downgrading to string.
+  const b = piSession('s-a2a-minimal')
+  const { Integer: _omitInt, Number: _omitNum, ...minimalType } = Type
+  host.register(b.pi, { A2AType: minimalType })
+  const minimalRead = b.pi.tools.find(t => t.name === 'a2a_read')
+  assert.deepEqual(minimalRead.parameters.properties.turns, { type: 'integer', minimum: 1, maximum: 10, optional: true })
+
+  // When Type.Unsafe is available without Type.Integer, delegate to Type.Unsafe.
+  const c = piSession('s-a2a-unsafe')
+  const unsafeCalls = []
+  host.register(c.pi, { A2AType: { ...minimalType, Unsafe(schema) { unsafeCalls.push(schema); return { ...schema, unsafe: true } } } })
+  const unsafeRead = c.pi.tools.find(t => t.name === 'a2a_read')
+  assert.deepEqual(unsafeCalls, [{ type: 'integer', minimum: 1, maximum: 10 }])
+  assert.deepEqual(unsafeRead.parameters.properties.turns, { type: 'integer', minimum: 1, maximum: 10, unsafe: true, optional: true })
 })
 
 /** A phone that has not answered yet: resolve(answer) answers the card it holds. */

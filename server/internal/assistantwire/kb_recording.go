@@ -1,5 +1,10 @@
 package assistantwire
 
+import (
+	"github.com/nwverse/persona/server/internal/buswire"
+	"github.com/nwverse/persona/server/internal/recordingwire"
+)
+
 const (
 	// MethodKBPutRecording creates or updates the calling extension's own recording with its minutes and, optionally,
 	// its transcript (kb.write; docs/extensions/extensions.md "Writing recordings and minutes"). Only for extensions.
@@ -13,4 +18,5 @@ const (
 	CodeKBDeleted = "deleted"
 )
 
-// The params are recordingwire.RecordingWrite, the result recordingwire.RecordingWriteResult.
+// KBExtensionPutRecordingMethod carries a recordingwire.RecordingWrite in the manager's envelope.
+var KBExtensionPutRecordingMethod = buswire.Method[KBExtensionUpdate, recordingwire.RecordingWriteResult]{Name: MethodKBExtensionPutRecording}

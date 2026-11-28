@@ -117,7 +117,7 @@ describe("a to-do's responsible party (#12712)", () => {
     const rowResp = row!.querySelector<HTMLElement>("[data-testid=todo-responsible]");
     expect(rowResp?.textContent).toContain("deploy-watch");
     expect(rowResp?.dataset.kind).toBe("session");
-    expect(row!.textContent).not.toContain("还没交给 Agent");
+    expect(row!.textContent).not.toContain("尚未交给 Agent");
 
     const detailResp = document.querySelector<HTMLElement>("[data-testid=todo-detail-responsible]");
     expect(detailResp?.textContent).toContain("deploy-watch");
@@ -148,7 +148,7 @@ describe("a to-do's responsible party (#12712)", () => {
 
     const row = document.querySelector<HTMLElement>("[data-todo=t-plain]");
     expect(row!.querySelector("[data-testid=todo-responsible]")).toBeNull();
-    expect(row!.textContent).toContain("还没交给 Agent");
+    expect(row!.textContent).toContain("尚未交给 Agent");
     expect(document.querySelector("[data-testid=todo-detail-responsible]")).toBeNull();
     expect(document.querySelector("[data-testid=todo-responsible-section]")).toBeNull();
   });

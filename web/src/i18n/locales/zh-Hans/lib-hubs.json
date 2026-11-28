@@ -1,9 +1,9 @@
 {
-  "url_empty": "填 hub 的地址",
-  "url_invalid": "不是一个地址",
-  "url_scheme": "只能是 http:// 或 https:// 的地址",
-  "url_credentials": "地址里不要带用户名和密码",
-  "url_path": "只填 hub 的地址（可以带反向代理的子路径），不要带 ? 或 # 之后的部分",
-  "already_added": "这台 hub 已经在列表里",
-  "too_many_other": "最多记 {count} 台 hub"
+  "url_empty": "请输入 hub 地址",
+  "url_invalid": "请输入有效的地址",
+  "url_scheme": "地址必须以 http:// 或 https:// 开头",
+  "url_credentials": "地址中不能包含用户名和密码",
+  "url_path": "请仅填写 hub 地址（支持反向代理子路径），不要包含 ? 或 # 及其后的内容",
+  "already_added": "该 hub 已在列表中",
+  "too_many_other": "最多可保存 {count} 台 hub"
 }

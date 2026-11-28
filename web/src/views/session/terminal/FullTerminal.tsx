@@ -18,6 +18,7 @@ import { type FullFeed, type FullView } from "./full";
 import { acquireFeed, releaseFeed } from "./full-registry";
 import { KeyBar } from "./KeyBar";
 import { saveKeyBar, savedKeyBar } from "./keybar-pref";
+import { PaneActions } from "./PaneActions";
 import { ShortcutsEditor } from "./Shortcuts";
 import { AppearanceRow, OptionsPopover } from "./TerminalOptions";
 import { UploadStatus } from "./UploadStatus";
@@ -62,6 +63,7 @@ export function FullTerminal({
   delay,
   onFallback,
   onFailed,
+  compact,
 }: {
   mid: string;
   sid: string;
@@ -77,10 +79,13 @@ export function FullTerminal({
   onFallback: () => void;
   /** The client did not start on this machine (why, in words): the panel falls back to "Single pane" by itself. */
   onFailed: (why: string) => void;
+  /** Compact standalone header: fold secondary actions into a single overflow menu. */
+  compact?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
+  const overflowAnchor = useRef<HTMLElement | null>(null);
   const [feed, setFeed] = useState<FullFeed | null>(null);
   const v = useFull(feed);
   const unseen = useUnseen(root);
@@ -194,6 +199,12 @@ export function FullTerminal({
 
   // The grid stays out of the line (#3667): it is in the hint, in plain columns and rows.
   const grid = v && v.cols && v.rows ? t("terminal-full.live_grid", { cols: v.cols, rows: v.rows }) : "";
+  const compactMenuItems: MenuItem[] = compact ? [
+    ...(onFiles && cwd ? [{ key: "files", label: t("terminal-full.files"), icon: "folder" as const, onSelect: onFiles }] : []),
+    { key: "keybar", label: keyBar ? t("terminal-full.keybar_hide") : t("terminal-full.keybar_show"), icon: "keyboard", checked: keyBar, onSelect: () => chooseKeyBar(!keyBar) },
+    { key: "settings", label: t("terminal-full.settings"), icon: "gear", onSelect: () => setOptions(overflowAnchor.current) },
+    { key: "reconnect", label: t("terminal-full.reconnect"), icon: "retry", disabled: !feed, onSelect: () => feed?.reconnect() },
+  ] : [];
   const actions = (
     <>
       <span
@@ -218,18 +229,32 @@ export function FullTerminal({
           {t("terminal-full.elsewhere")}
         </button>
       )}
-      {onFiles && cwd && <IconButton icon="folder" label={t("terminal-full.files")} onClick={onFiles} className="max-lg:hidden" />}
-      <IconButton icon="keyboard" label={keyBar ? t("terminal-full.keybar_hide") : t("terminal-full.keybar_show")} active={keyBar} onClick={() => chooseKeyBar(!keyBar)} />
-      <IconButton
-        icon="gear"
-        label={t("terminal-full.settings")}
-        active={Boolean(options)}
-        onClick={(e) => {
-          const target = e.currentTarget;
-          setOptions((o) => (o ? null : target));
-        }}
-      />
-      <IconButton icon="retry" label={t("terminal-full.reconnect")} onClick={() => feed?.reconnect()} disabled={!feed} />
+      {compact ? (
+        <PaneActions
+          mid={mid}
+          sid={sid}
+          fullSupported
+          onSplit={() => {}}
+          compact
+          extraItems={compactMenuItems}
+          onButton={(el) => { overflowAnchor.current = el; }}
+        />
+      ) : (
+        <>
+          {onFiles && cwd && <IconButton icon="folder" label={t("terminal-full.files")} onClick={onFiles} className="max-lg:hidden" />}
+          <IconButton icon="keyboard" label={keyBar ? t("terminal-full.keybar_hide") : t("terminal-full.keybar_show")} active={keyBar} onClick={() => chooseKeyBar(!keyBar)} />
+          <IconButton
+            icon="gear"
+            label={t("terminal-full.settings")}
+            active={Boolean(options)}
+            onClick={(e) => {
+              const target = e.currentTarget;
+              setOptions((o) => (o ? null : target));
+            }}
+          />
+          <IconButton icon="retry" label={t("terminal-full.reconnect")} onClick={() => feed?.reconnect()} disabled={!feed} />
+        </>
+      )}
     </>
   );
 

@@ -14,7 +14,7 @@ import "./machines/machine-views.css";
 import { ENGINE_SECTION_ID } from "./machines/engine-anchor";
 import { openNewAgent } from "../lib/new-agent";
 import { stateCount } from "../lib/state-labels";
-import { stateOf } from "../lib/format";
+import { activityOf } from "../lib/format";
 import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
@@ -495,7 +495,7 @@ function agentCounts(list: readonly Session[]) {
   const by = new Map<string, { total: number; working: number; needsYou: number; waitingSid?: string }>();
   for (const s of list) {
     if (s.assistant) continue;
-    const state = stateOf(s);
+    const state = activityOf(s);
     if (state === "offline") continue;
     const counts = by.get(s.machine_id) ?? { total: 0, working: 0, needsYou: 0 };
     counts.total++;
@@ -577,7 +577,7 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
 }) {
   const m = sheet ? machines.find((x) => x.id === sheet.mid) : undefined;
   const mm = m ? metrics?.find((x) => x.machine_id === m.id) : undefined;
-  const agents = useMemo(() => (m ? sessions.filter((s) => s.machine_id === m.id && !s.assistant && stateOf(s) !== "offline") : []), [m, sessions]);
+  const agents = useMemo(() => (m ? sessions.filter((s) => s.machine_id === m.id && !s.assistant && activityOf(s) !== "offline") : []), [m, sessions]);
   const alerts = m ? machineAlerts({ machine: m, metrics: mm, launchers: launcherIssues(m.id), managerOffline: !!offlineManagerOf(roster, m) }) : [];
   return (
     <MachineAlertSheet

@@ -12,6 +12,12 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+const (
+	feishuMirrorRetry   = 30 * time.Second // expected production bounds
+	feishuMirrorRetries = 3
+	quickMirrorRetry    = 10 * time.Millisecond
+)
+
 type mirrorWorld struct {
 	f        *fakeHub
 	s        *Service
@@ -31,9 +37,6 @@ func (w *mirrorWorld) setFeatures(f FeishuFeatures) { w.mu.Lock(); w.features = 
 // mirrorRetryHub: the main conversation's turn is synced to Feishu; fail decides each post (n from 1).
 func mirrorRetryHub(t *testing.T, fail func(n int) error) *mirrorWorld {
 	t.Helper()
-	oldDelay, oldTries := feishuMirrorRetry, feishuMirrorRetries
-	feishuMirrorRetry = 10 * time.Millisecond
-	t.Cleanup(func() { feishuMirrorRetry, feishuMirrorRetries = oldDelay, oldTries })
 	w := &mirrorWorld{features: FeishuFeatures{Main: true, Sync: true}}
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
@@ -58,6 +61,7 @@ func mirrorRetryHub(t *testing.T, fail func(n int) error) *mirrorWorld {
 		return map[string]any{"message_id": "om_card"}, nil
 	})
 	w.f, w.s = f, newTestService(t, f)
+	w.s.setLarkTiming("mirror_retry", quickMirrorRetry)
 	return w
 }
 

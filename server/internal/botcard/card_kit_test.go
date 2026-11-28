@@ -208,7 +208,7 @@ func TestStreamingCard(t *testing.T) {
 		t.Fatalf("element = %v", el)
 	}
 	c.EndStreaming()
-	if _, on := c.Config["streaming_mode"]; on {
+	if c.Config.StreamingMode || c.Config.StreamingConfig != nil {
 		t.Errorf("config after the end = %v", c.Config)
 	}
 }

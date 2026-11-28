@@ -151,3 +151,35 @@ func TestIMessageExtensionPicksTheMac(t *testing.T) {
 		t.Fatalf("config %s", cfg)
 	}
 }
+
+func TestIMessageManifestAvoidsLegacyConnectorPath(t *testing.T) {
+	needsIMessageModule(t)
+	h := imessageHub(t, newExtensionStore(), "")
+	m := imessageManifest(h)
+	if m == nil {
+		t.Fatal("expected imessage manifest")
+	}
+	if strings.Contains(m.Description, "设置 › 连接器 › 信息") {
+		t.Fatalf("manifest description still hardcodes legacy path: %q", m.Description)
+	}
+	if !strings.Contains(m.Description, "交给 Persona") {
+		t.Fatalf("manifest description missing expected guidance: %q", m.Description)
+	}
+	var schema struct {
+		Properties struct {
+			Machines struct {
+				Description string `json:"description"`
+			} `json:"machines"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(m.Configuration, &schema); err != nil {
+		t.Fatalf("unmarshal imessage config schema: %v", err)
+	}
+	desc := schema.Properties.Machines.Description
+	if strings.Contains(desc, "设置 › 连接器 › 信息") {
+		t.Fatalf("machines description still hardcodes legacy path: %q", desc)
+	}
+	if !strings.Contains(desc, "完全磁盘访问权限") {
+		t.Fatalf("machines description missing Full Disk Access guidance: %q", desc)
+	}
+}

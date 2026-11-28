@@ -227,7 +227,7 @@ func TestProjectReferenceOnlyEnforcesWritesAfterReopen(t *testing.T) {
 	if err := store.PutChat(c); err != nil {
 		t.Fatal(err)
 	}
-	if id := e.evolveProject("Guide", "long", []string{"Generated alias"}, "Generated role", c, "Do not store", projectEvidenceTime); id != "example" {
+	if id := e.evolveProject("Guide", "long", []string{"Generated alias"}, "Generated role", c, true, "Do not store", projectEvidenceTime); id != "example" {
 		t.Fatalf("could not route using the alias: %q", id)
 	}
 	if len(logs) != 1 || !strings.Contains(logs[0], "reference-only") || strings.Contains(logs[0], "Do not store") {

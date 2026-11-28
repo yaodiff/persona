@@ -563,7 +563,7 @@ func codexItemLines(seq int, ts time.Time, turnID string, it *codexItem, meta *M
 			meta.ContextStats.ConversationBytes += int64(len(images)) * imageTokenBytesEstimate
 		}
 		u := mk(0, it.ID, "user", proto.KindText)
-		u.Text = clip(fullText)
+		clipUserText(&u, fullText)
 		if visibleParts == 1 {
 			u.QuestionReplies = quoted
 		}

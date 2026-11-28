@@ -11,22 +11,8 @@ import { herdrOwnsKey, inFullSurface } from "./terminal-conflicts";
 
 // ── platform ─────────────────────────────────────────────
 
-export type Platform = "mac" | "other";
-
-/** ⌘ is Mod on Apple platforms (Mac, iPad Safari asking for the desktop site), Ctrl everywhere else. */
-export function platformOf(nav?: { platform?: string; userAgent?: string; userAgentData?: { platform?: string } }): Platform {
-  const hint = nav?.userAgentData?.platform || nav?.platform || nav?.userAgent || "";
-  return /mac|iphone|ipad|ipod/i.test(hint) ? "mac" : "other";
-}
-
-let detected: Platform | null = null;
-export function currentPlatform(): Platform {
-  detected ??= platformOf(typeof navigator === "undefined" ? undefined : (navigator as unknown as Parameters<typeof platformOf>[0]));
-  return detected;
-}
-
-/** What the modifier is called on this platform, for messages: "needs Ctrl" / "needs ⌘". */
-export const modName = (p: Platform) => (p === "mac" ? "⌘" : "Ctrl");
+import { currentPlatform, modName, type Platform } from "./platform";
+export { currentPlatform, modName, platformOf, type Platform } from "./platform";
 
 // ── chords ───────────────────────────────────────────────
 

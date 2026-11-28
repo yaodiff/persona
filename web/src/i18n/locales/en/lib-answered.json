@@ -18,6 +18,7 @@
   "entered": "(Entered)",
   "separator": ", ",
   "ended_expired": "This request expired, so the answer wasn't delivered",
+  "question_closed": "Question closed without an answer",
   "ended_cancelled": "The computer withdrew this request, so the answer wasn't delivered",
   "ended_dismissed": "This request was handed back to the computer, so the answer wasn't delivered",
   "ended_generic": "This request is over, so the answer wasn't delivered",

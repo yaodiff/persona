@@ -1,5 +1,19 @@
 # Lessons: hub / node and networking
 
+## A stale write gives way only to a newer one already written (2026-11-28, #17826)
+
+#17817 ordered the node's host refreshes so an older snapshot cannot replace a newer one (#2133): each refresh numbers
+its snapshot and its merge, and the lower number gives way. It gave way as soon as a higher number was taken, while that
+refresh was still running. The refresh that gave way returned success, and its caller (`sessions.list`, the list
+`engine.use` sends) read `n.agents` as they were before both refreshes: right after switching to Orca, none, in about
+half the runs of `TestOrcaEngineUse`.
+
+- Drop a write only for a newer one already done (`agentsCommitted` in `server/internal/node/placement.go`), never for
+  one that has only started; the newer one still replaces it when it lands.
+- A refresh whose own snapshot was superseded still merges what is current (the newer snapshots, never its own), so a
+  caller that reads after it gets state at least as new as what it asked for.
+- Test both orders: the older one finishing while the newer one is still merging, and the newer one finishing first.
+
 ## An IMAP retry that replays the step that ended the connection fails the same way (2026-11-22, #12808)
 
 go-imap/v2 completes a command when its tagged answer arrives, before it reads on. A server that hangs up right after
@@ -169,6 +183,14 @@ or one of this machine's, never a name or an address the machine no longer has, 
 `managerconf.CLIDial` dials it from loopback, which the kernel delivers locally; the hub's trust rules stay as they were.
 A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
 the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
+
+## Handover notifications follow the machine state they announce (#6819)
+
+A configured machine's durable assignment and its cached `Machine.owner` are updated in separate steps. Publish the
+forced viewer refresh only after the cached owner and offline state are updated, even when the scoped report already
+uses the new assignment. A test with only a configured entry never exercises the cached machine's handover; create
+that machine too, and block the first notification write to check its state instead of accepting any later matching
+report.
 
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
@@ -406,6 +428,22 @@ in bus order, but one worker persists only the latest pending report, with a bou
 write is logged and left for the next report, never retried in a tight loop. Both kinds of worker join the hub's
 `nodeWorkers`, whose shutdown wait is bounded. Tests hold the node or `PutSetting`, prove a later message or bus event
 is still handled, then release the dependency and join the workers before checking the final value and call count.
+
+## A node's event handler in the manager must not wait for that node (2026-11-26, #16214)
+
+The manager takes a node's events on the read loop of that node's connection: `rpc.Peer.Serve` calls `OnEvent` in
+place, and devices pass the event to the assistant's `NodeEvent` from there. Only that loop reads the node's answers.
+`setSessions` (a `sessions.changed`) classified the main conversation's latest round by reading its history from the
+same node, so after every finished main-chat turn the read waited for an answer nobody could read and ran into its
+15 s deadline. Meanwhile nothing else the node sent was read: pongs, answers to the apps' reads, item pushes, the
+reply's live text and the turn's end. The log shows it as one `session.items result=deadline took=14.998s` followed by
+a burst of answers that each took about 15 s, with `ping` deadlines in between. The transcript's size played no part:
+the pages it read took under a millisecond on a 100 MB transcript.
+
+Anything a node's event needs from that node runs on a goroutine of its own: one at a time per conversation, taking the
+newest revision asked for, and the list is published again when its result changes a row. Test it as the hub's read
+loops are tested: hold every call to the node, check that the event is still taken, then release it and wait for the
+result (`server/internal/assistant/conversation_attention_readloop_test.go`).
 
 ## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
 
@@ -645,6 +683,11 @@ Treat a node binary directory symlink as publisher-owned. Swapping files or
 removing version markers through it corrupts the immutable release manifest.
 Protect both enabled installs and disabled-policy cleanup, and let the publisher
 activate its verified directory after Hub health confirmation.
+
+When a managed program is atomically replaced, the installed path can point to the new
+inode while the service runs the old one. Inspect the live executable and its supervisor's
+main PID. Send a resident node's idle reload once per observed pair of inodes, and let a
+manager's service watcher wait for the confirmed Hub build and its own idle boundary (#16517).
 
 ## Durable storage receipts do not extend authority (#1187)
 
@@ -2356,6 +2399,13 @@ What each `ProcessType` gives a LaunchAgent, measured with short-lived test agen
 - The first preflight ran `ls` / `head` per path from `sh`. On a Mac whose security software inspects every exec, 108 linked skills took 5.2 s, longer than the whole rest of the doctor. Re-running the same binary in a hidden child mode (`node doctor --preflight-child`) does all the reads in one process: 1.7 s for the whole doctor. It also gives the exact errno (EPERM = TCC, EACCES = file mode) instead of locale-dependent shell messages; dash says "No such file" where bash says "No such file or directory". Tests start the test binary in that mode from `TestMain`, never `node doctor` (which would run the tests again).
 - A client's deadline must be longer than the server's worst case for the same request. The command line first waited 20 s for the node's preflight while the node allowed itself 30 s plus cleanup: a slow but working run was reported as "node not running" and read again from the wrong process (wrong TCC identity). Derive both from the same constants and test the inequality.
 
+## A Go program on macOS waits for its folder before main (Go 1.27, seen 2026-11; #14400)
+
+- Go's os package asks for the working directory while it initializes, on macOS only (`os/executable_darwin.go`: `var initCwd, initCwdErr = Getwd()`), before any code of the program runs. `Getwd` stats `.` and `$PWD` (or calls `getcwd`) and makes each call again for as long as it fails with EINTR (`ignoringEINTR`). On a Mac where, for about an hour, every call into several home folders (Desktop, Documents and Downloads among them) stalled about 21 seconds and then failed with EINTR (the system's doing, not Persona's), every Go program started in one of them waited there: it printed nothing, logged nothing, and none of its own timeouts ran. An Agent's `personad tool a2a_read …` hung until its harness killed it, while the same command from the home folder answered in a second. The node never saw the call.
+- So when a command prints nothing and the same command works from another folder, suspect the folder before the call. `ls` on it fails after the stall with "Interrupted system call", and a shell started in it says `shell-init: … getcwd … Interrupted system call`.
+- Nothing after `main` can help: no code of the program runs yet, and Go code cannot interrupt a blocked system call anyway. `server/internal/startdir` runs before package os, because Go initializes packages in the order of their import paths, each after its imports, and it imports only packages os imports itself. When the folder and `$PWD` do not answer within 2 seconds, it moves the process to `/`; `server/internal/startdir/settle` then lets a `tool` call go on from there and sends every other command back to its folder. Keep `startdir` and its internal test files free of anything that imports os, `testing` included: `TestStartsBeforeOS` checks the order.
+- The same stall holds after `main`: `os.Stat`, `os.ReadDir` and `filepath.EvalSymlinks` retry EINTR too. A goroutine with a deadline lets the caller stop waiting, but the goroutine itself stays until the folder answers. A read that can be retried is better given a short deadline than the long one a write waiting for the owner needs (`personad tool`'s `readTimeout`).
+
 ## Moving a node service to another program (2026-11-06, #5821)
 
 - A service file's new `ExecStart` (or a plist's `ProgramArguments`) takes effect only when the service starts again: systemd after `daemon-reload` and a restart, launchd only after `bootout` and `bootstrap` (KeepAlive restarts a job from the definition it loaded, not from the file). So `persona-link node switch` writes the file, restarts, and only then knows whether the new program runs.
@@ -3230,3 +3280,21 @@ A fixture's next `SetConversationPick` can collide with its final `ClaimConversa
 input remains. `FOR UPDATE NOWAIT` maps PostgreSQL lock contention to `ErrConversationSwitchBusy`. Use the existing
 bounded wait for that specific error, keep the original expected epoch, and fail immediately on other errors.
 Do not treat the error text as proof of an unfinished operation or wait for an unrelated batch state.
+
+## Prerequisite waits survive a Labs rollback (#17693)
+
+An approved plan can still name a PR blocker when Labs is switched off. Keep checking that
+stored wait on the legacy queue and at launch. A failed read leaves the queue available for
+another check. An `after` mirror follows the live dependency verdict, including reopening.
+Publish blocker changes after the compare-and-set commits so the next read sees the result.
+
+## A built-in bridge is a runtime to every check that counts them (#17049)
+
+The manager update inventory refuses while any runtime is connected (`updateSourceCoverage`). The Orca bridge
+(`node/orcabridge.go`) is one: it connects to the runtime host through a pipe whenever Orca is enabled, even with Orca
+not running, so the inventory refused every machine with Orca enabled before any host was read, and the error a review
+saw first ("configured host lacks a fresh update inventory contract") was not the only blocker. Before exempting a
+built-in connection, give its sessions an authority (here Orca's own update read, which refuses any Orca chat) and tell
+the connection by something only the node knows (the bridge's hello instance), never by its runtime id or a zero peer
+PID. A test fixture with its own runtime registry does not show this: in production `n.runtimes` is the runtime
+host's registry (`node/runtimehost.go`).

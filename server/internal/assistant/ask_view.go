@@ -54,7 +54,10 @@ func (s *Service) ixRoute(ctx context.Context, ix proto.Interaction) assistantwi
 		out.Private = &assistantwire.AskRun{ReplyTo: private.ReplyTo}
 	}
 	if topic != nil {
-		out.Topic = &assistantwire.AskRun{ReplyTo: topic.ReplyTo, To: runTo(s.runExts(topic, "chat", "thread"))}
+		out.Topic = &assistantwire.AskRun{ReplyTo: topic.ReplyTo}
+		if ext := s.runExts(topic, "chat", "thread"); ext["chat"] != "" && ext["thread"] != "" {
+			out.Topic.To = assistantwire.ChannelTarget{ChatID: ext["chat"], InThread: true}
+		}
 	}
 	out.Main = ix.SessionID != "" && s.isMainOn(ctx, ix.MachineID, ix.SessionID)
 	return out
@@ -84,11 +87,11 @@ func (s *Service) interactionRuns(ix proto.Interaction) (private, topic *channel
 		if r.MachineID != ix.MachineID || r.SessionID != ix.SessionID {
 			continue
 		}
-		if readRun(s.runExts(&r, readChatKey)) {
+		if s.runExt(&r, assistantwire.FeishuReadChatKey) != "" {
 			read = true
 			continue
 		}
-		if runTo(s.runExts(&r, "chat", "thread")).ChatID == "" {
+		if ext := s.runExts(&r, "chat", "thread"); ext["chat"] == "" || ext["thread"] == "" {
 			if private == nil || !r.Started.Before(private.Started) {
 				private = &r
 			}

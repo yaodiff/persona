@@ -381,6 +381,21 @@ func TestAnswerKeepsAReportBeforeAToolCall(t *testing.T) {
 	}
 }
 
+func TestAnswerSeparatesWokenReplyFromPriorDeliveredReply(t *testing.T) {
+	items := []proto.Item{
+		{Role: "user", Kind: proto.KindText, Text: "Run the checks."},
+		{Role: "assistant", Kind: proto.KindText, Text: "Initial complete report."},
+		{Role: "system", Kind: proto.KindNotice, Wake: true, Text: "后台任务有更新"},
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "Read"},
+		{Role: "user", Kind: proto.KindToolResult, Text: "ok"},
+		{Role: "assistant", Kind: proto.KindText, Text: "Follow-up task finished."},
+	}
+	got := Answer(items)
+	if len(got) != 1 || got[0].Text != "Follow-up task finished." {
+		t.Fatalf("answer %+v, want only the woken reply after the wake notice", got)
+	}
+}
+
 // A turn that ends on the conversation's own notice (an API error, "interrupted") says why it stopped; one that ends on
 // words, a tool call, or a notice that is no reason (a compaction, a task reporting back) does not.
 func TestStoppedIsTheClosingNotice(t *testing.T) {

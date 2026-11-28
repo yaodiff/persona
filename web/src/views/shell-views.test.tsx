@@ -73,7 +73,7 @@ describe("the Agents page", () => {
 
 describe("the drawer's page grid", () => {
   const pages: NavPage[] = [
-    { k: "home", to: { name: "home" }, icon: "home", label: "总览", badge: 2, badgeTone: "red" },
+    { k: "home", to: { name: "home" }, icon: "grid", label: "总览", badge: 2, badgeTone: "red" },
     { k: "workspace-board", to: { name: "workspace-board" }, icon: "layers", label: "工作流看板", short: "看板" },
     { k: "settings", to: { name: "settings" }, icon: "gear", label: "设置" },
   ];

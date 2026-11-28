@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -261,6 +262,19 @@ const (
 	EventSessionSeen = "session.seen"
 )
 
+// AgentTabNameMethod asks the manager for an Agent tab name.
+var AgentTabNameMethod = buswire.Method[AgentTabNameParams, AgentTabNameResult]{Name: MethodAgentTabName}
+
+// AgentTabNameParams carries the prompt used to name the tab.
+type AgentTabNameParams struct {
+	Prompt string `json:"prompt"`
+}
+
+// AgentTabNameResult carries the tab name, which can be empty.
+type AgentTabNameResult struct {
+	Name string `json:"name"`
+}
+
 // AgentStartParams is agents.start_params's params: Params are POST /api/v1/sessions's (the node's session.start);
 // NameFrom is what the tab is named from now ("": not now: it has a name, resumes a session, or is named later). Lang
 // is the app's language, the one a refusal is said in ("": the user's; an older hub sends none).
@@ -309,6 +323,7 @@ type SessionSeen struct {
 var agentRoutes = []string{
 	"GET /api/v1/agents/display-settings",
 	"PUT /api/v1/agents/display-settings",
+	"GET /api/v1/agents/botmux-owner-candidates",
 	"GET /api/v1/agents/triage",
 	"PUT /api/v1/agents/triage",
 	"GET /api/v1/agents/work/stats",

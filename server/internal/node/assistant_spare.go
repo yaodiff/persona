@@ -40,7 +40,7 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 	}
 	// A Claude spare was generated with the ordinary built-in list. It cannot become an Inbox process without
 	// reintroducing SendMessage outside the MCP origin policy; let the Inbox start cold with its restricted list.
-	if p.agent == "claude" && executionOption(options).Origin == originInbox {
+	if (p.agent == "claude" && executionOption(options).Origin == originInbox) || p.agent == traexAgent {
 		return nil
 	}
 	// A Claude start names the profile it resolved (assistantProfileSelection), Persona's own included; a spare warmed in
@@ -78,7 +78,7 @@ func (n *Node) assistantWarm(cwd, launcher string, options ...modelExecution) er
 		return err
 	}
 	// The main chat's spare starts with its window as the main conversation's start carries it (assistantSend, #7314).
-	execution.MainCompactWindow = n.mainWindowOn(launcher, execution.IsMain, execution.MainCompactWindow)
+	execution.MainCompactWindow = n.mainWindowOn(launcher, execution.MainCompactWindow)
 	if agent, err := n.assistantAgent(context.Background(), launcher); err != nil {
 		return err
 	} else if agent == "claude" && execution.Interactive {

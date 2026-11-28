@@ -1,14 +1,14 @@
 {
   "title": "权限 · {name}",
-  "group": "同组的人",
+  "group": "同组用户",
   "others": "其他人",
   "read": "读",
   "write": "写",
   "run": "运行",
   "change": "修改…",
   "changed": "权限已修改",
-  "before": "之前：{code}",
-  "run_hint": "「运行」让脚本能直接执行；文件夹的「运行」是能进入。",
+  "before": "修改前：{code}",
+  "run_hint": "「运行」权限允许直接执行脚本；对于文件夹，则允许打开并访问。",
   "confirm_title": "修改「{name}」的权限？",
   "menu": "权限…"
 }

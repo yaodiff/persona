@@ -25,4 +25,5 @@ export class Symbols {
   static readonly up: Resource = $r('sys.symbol.chevron_up');
   static readonly down: Resource = $r('sys.symbol.chevron_down');
   static readonly check: Resource = $r('sys.symbol.checkmark');
+  static readonly search: Resource = $r('sys.symbol.magnifyingglass');
 }

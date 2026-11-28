@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -19,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.data.HubInteractionCenter
 import persona.core.domain.answer.AnswerAction
 
 /**
@@ -53,12 +55,12 @@ class AgentsUnconfirmedAnswerTest {
         Dispatchers.resetMain()
     }
 
-    private fun TestScope.start() {
+    private fun TestScope.start(center: InteractionCenter? = null) {
         model = AgentsViewModel(object : SessionsRepository {
             override val sessions = MutableStateFlow(listOf(Session("m", "s", state = "needs_input")))
             override val machines = MutableStateFlow(listOf(Machine("m", online = true)))
             override suspend fun refresh() = Unit
-        }, object : InteractionCenter {
+        }, center ?: object : InteractionCenter {
             override val pending = this@AgentsUnconfirmedAnswerTest.pending
             override suspend fun refresh() { refreshes++; this@AgentsUnconfirmedAnswerTest.refresh() }
             override suspend fun resolve(id: String, resolution: Resolution) { resolves++; this@AgentsUnconfirmedAnswerTest.resolve() }
@@ -128,5 +130,44 @@ class AgentsUnconfirmedAnswerTest {
         pending.value = emptyList()
         runCurrent()
         assertNull(model.delivery.value[request.id])
+    }
+
+    @Test fun aTapAnswersTheDisplayedOccurrenceWhenAReplacementArrivesBeforeItsCoroutine() = runTest {
+        val first = request.copy(createdAt = "2026-01-02T03:04:05.000000001Z")
+        val replacement = request.copy(createdAt = "2026-01-02T03:04:05.000000002Z", summary = "replacement")
+        val events = MutableSharedFlow<ServerEvent>(extraBufferCapacity = 4)
+        val answered = mutableListOf<Interaction>()
+        val transport = object : ChatTransport {
+            override suspend fun machines(): List<Machine> = error("unused")
+            override suspend fun sessions(): List<Session> = error("unused")
+            override suspend fun items(session: SessionKey, query: ItemsQuery): ItemsResponse = error("unused")
+            override suspend fun interactions(): List<Interaction> = error("unused")
+            override suspend fun resolve(id: String, resolution: Resolution) = error("unused")
+            override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean): ResolveOutcome {
+                answered += interaction
+                return ResolveOutcome()
+            }
+            override suspend fun image(session: SessionKey, itemId: String): ByteArray = error("unused")
+            override suspend fun fullItem(session: SessionKey, itemId: String): Item = error("unused")
+        }
+        val centerScope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        try {
+            val center = HubInteractionCenter(transport, object : HubConnection {
+                override val state = this@AgentsUnconfirmedAnswerTest.state
+                override val events = events
+                override val resumed = true
+                override fun reconnect() = Unit
+                override fun send(message: JsonObject) = true
+            }, centerScope)
+            events.emit(InteractionEvent(first))
+            start(center)
+            model.answer(first, AnswerAction.Allow)
+            // The tap passed the page's current-card check, but its coroutine has not reached the center yet.
+            events.emit(InteractionEvent(replacement))
+            runCurrent()
+            assertEquals("The displayed A must not turn into an approval of its replacement B", listOf(first), answered)
+        } finally {
+            centerScope.cancel()
+        }
     }
 }

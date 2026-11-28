@@ -128,7 +128,8 @@ describe("where a link opens", () => {
     expect(linkRoute(`${hub}/s/m1/abc-1/more`, false, hub).kind).toBe("page"); // the router draws its agent
     expect(linkRoute(`${hub}/admin`, false, hub).kind).toBe("web");
     expect(linkRoute(`${hub}/share/abc`, false, hub).kind).toBe("web");
-    expect(linkRoute(`https://user:pw@hub.example.com/s/m1/abc-1`, false, hub).kind).toBe("web");
+    // embedded credentials are rejected completely rather than falling through to window.open
+    expect(linkRoute(`https://user:pw@hub.example.com/s/m1/abc-1`, false, hub).kind).toBe("none");
     // the app's other pages (the Inbox, settings, knowledge…) open in place (docs/protocol/deep-links.md, #9930)
     for (const path of ["/todos", "/inbox", "/inbox/assistant%3A9f?manager=m2", "/settings?tab=extensions&extension=gh", "/overview", "/persona", "/persona/new", "/kb/spells/x"]) {
       expect(linkRoute(`${hub}${path}`, false, hub), path).toEqual({ kind: "page", path });
@@ -232,6 +233,57 @@ describe("where a link opens", () => {
     expect(linkRoute("/relative/path").kind).toBe("none");
     expect(opensInApp("javascript:alert(1)")).toBe(false);
   });
+
+  it("rejects single-slash relative URLs, userinfo, backslashes, control chars, and unsafe linkHref schemes", () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("window", { open: openSpy });
+    try {
+      for (const bad of [
+        "https:/admin",
+        "https:admin",
+        "https://user:pw@evil.example/a",
+        "https://@evil.example/a",
+        "https://good.example\\@evil.example/a",
+        "https://evil.example/a\tb",
+        "https://user:@example.feishu.cn/docx/AbC",
+        "https://@example.feishu.cn/docx/AbC",
+        "persona://user:pw@session/macbook/abc-1",
+        "mailto:",
+        "tel:",
+        "mailto://user:pw@evil.example",
+        "mailto:me@example.com\r\nBcc:evil@example.com",
+        "javascript:alert(1)",
+        "data:text/html,hi",
+        "file:///etc/hosts",
+        "//evil.example/a",
+        "/admin",
+        "/api/../admin",
+        "/api/..",
+      ]) {
+        expect(linkRoute(bad, true), bad).toEqual({ kind: "none" });
+        expect(linkHref(bad), bad).toBeUndefined();
+        openLink(bad);
+      }
+      expect(openSpy).not.toHaveBeenCalled();
+
+      // Same-origin /api/ download/media paths remain valid for <a href={linkHref(...)}>.
+      expect(linkHref("/api/v1/media/1?token=t")).toBe("/api/v1/media/1?token=t");
+      expect(linkHref("mailto:me@example.com")).toBe("mailto:me@example.com");
+
+      // Valid external http(s) links open their normalized URL.
+      openLink("  https://example.com/a  ");
+      expect(openSpy).toHaveBeenCalledWith("https://example.com/a", "_blank", "noopener,noreferrer");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a link to a section of the page or to a file beside it, never one above its folder (#17669)", () => {
+    for (const ok of ["#heading", "./other.md", "./notes/a.md#L3"]) expect(linkHref(ok), ok).toBe(ok);
+    for (const bad of ["other.md", "../other.md", "./notes/../../admin", "./%2e%2e/admin", "./..%2fadmin", "./a%5c..%5cadmin", "./a\\b.md", "#a\tb"]) {
+      expect(linkHref(bad), bad).toBeUndefined();
+    }
+  });
 });
 
 describe("<persona-context>", () => {
@@ -255,15 +307,15 @@ describe("<persona-context>", () => {
   it("puts the contexts before the message, with a stand-in when nothing was typed", () => {
     expect(withContexts([], "  hi ")).toBe("hi");
     expect(withContexts([ref, { ...ref, text: "二" }], "改一下")).toBe(`${contextXML(ref)}\n${contextXML({ ...ref, text: "二" })}\n\n改一下`);
-    expect(withContexts([ref], "  ")).toBe(`${contextXML(ref)}\n\n参考上面的内容。`);
-    expect(withContexts([ref], "", true)).toBe(`${contextXML(ref)}\n\n请看图片`);
+    expect(withContexts([ref], "  ")).toBe(`${contextXML(ref)}\n\n请参考以上内容。`);
+    expect(withContexts([ref], "", true)).toBe(`${contextXML(ref)}\n\n请查看图片`);
   });
 
   it("writes 「AI 修改」 as an edit context and the request", () => {
     const m = editMessage(ref, " 更简洁 ");
     expect(m.startsWith('<persona-context kind="edit"')).toBe(true);
-    expect(m.endsWith("\n\n按要求修改上面选中的内容：更简洁")).toBe(true);
-    expect(editMessage(ref, "").endsWith("\n\n按上面选中的内容修改。")).toBe(true);
+    expect(m.endsWith("\n\n请按要求修改以上选中的内容：更简洁")).toBe(true);
+    expect(editMessage(ref, "").endsWith("\n\n请基于以上选中的内容进行修改。")).toBe(true);
     expect(parseUserText(m).contexts[0].kind).toBe("edit");
   });
 
@@ -364,8 +416,8 @@ describe("reading a Feishu document", () => {
 
   it("explains failures", async () => {
     await expect(readDoc(url, undefined, async () => { throw fail(404, { error: { code: "DOCUMENT_NOT_FOUND" } }); })).rejects.toThrow("文档不存在或已被删除");
-    expect(fail(401, { error: { code: "AUTH_SESSION_EXPIRED" } }).message).toContain("没有登录飞书");
-    expect(fail(502, { error: "lark: the Lark gateway is not configured (set lark.token or lark.container in hub.json)", code: "upstream_error" }).message).toContain("没有接入飞书");
+    expect(fail(401, { error: { code: "AUTH_SESSION_EXPIRED" } }).message).toContain("尚未登录飞书");
+    expect(fail(502, { error: "lark: the Lark gateway is not configured (set lark.token or lark.container in hub.json)", code: "upstream_error" }).message).toContain("尚未接入飞书");
     expect(fail(403, { error: "forbidden", code: "forbidden" }).message).toBe("没有访问权限");
   });
 });

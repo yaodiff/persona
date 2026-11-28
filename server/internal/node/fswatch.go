@@ -55,9 +55,15 @@ type fsChanged struct {
 	Git  []string `json:"git,omitempty"`
 }
 
+type dirSig struct {
+	sig string
+	ver uint64
+}
+
 type gitSig struct {
 	sig     string
 	checked time.Time
+	ver     uint64
 }
 
 // fsWatcher is a node's set of watched folders and the one goroutine looking at them while the set is not empty.
@@ -66,20 +72,26 @@ type fsWatcher struct {
 	ctx  context.Context // the hub connection's: ends every run
 	emit func(fsChanged)
 
-	dirs    map[fsWatchDir]string // folder → the signature last seen
+	dirs    map[fsWatchDir]dirSig // folder → the signature last seen
 	git     map[string]gitSig     // cwd → the signature last seen
 	stop    chan struct{}         // closes to end the run in progress
 	exited  chan struct{}         // closes when that run's goroutine has returned
 	running bool
 
-	every, gitEvery time.Duration
-	generation      uint64
-	beforeSet       func() // test gate between baseline work and the final generation-checked assignment
+	every, gitEvery  time.Duration
+	generation       uint64
+	epoch            uint64 // incremented on start and close to fence in-flight set calls across connections
+	nextVer          uint64 // monotonic baseline version for newly added watched targets
+	beforeSet        func() // test gate between baseline work and the final generation-checked assignment
+	beforePollCommit func() // test gate between poll scans and the final locked commit
 }
 
 // start binds the watcher to a connection: ctx ending ends any run, emit sends the events.
 func (w *fsWatcher) start(ctx context.Context, emit func(fsChanged)) {
 	w.mu.Lock()
+	w.endLocked()
+	w.dirs, w.git = nil, nil
+	w.epoch++
 	w.ctx, w.emit, w.generation = ctx, emit, 0
 	if w.every == 0 {
 		w.every, w.gitEvery = fsWatchEvery, gitWatchEvery
@@ -90,12 +102,6 @@ func (w *fsWatcher) start(ctx context.Context, emit func(fsChanged)) {
 // set replaces the watched set. Folders that stay keep their signature (no event for them); new ones are looked at
 // now, so only changes after this call are reported. An empty set ends the run.
 func (w *fsWatcher) set(n *Node, p fsWatchParams) {
-	w.mu.Lock()
-	if p.Generation > 0 && p.Generation < w.generation {
-		w.mu.Unlock()
-		return // a stale hub generation must not replace a newer watch set
-	}
-	w.mu.Unlock()
 	dirs := p.Dirs
 	if len(dirs) > maxFsWatchDirs {
 		dirs = dirs[:maxFsWatchDirs]
@@ -104,9 +110,20 @@ func (w *fsWatcher) set(n *Node, p fsWatchParams) {
 	if len(gits) > maxFsWatchGit {
 		gits = gits[:maxFsWatchGit]
 	}
-	nd := make(map[fsWatchDir]string, len(dirs))
-	ng := make(map[string]gitSig, len(gits))
 	w.mu.Lock()
+	if w.ctx == nil || w.ctx.Err() != nil {
+		w.mu.Unlock()
+		return
+	}
+	if p.Generation > 0 && p.Generation < w.generation {
+		w.mu.Unlock()
+		return // a stale hub generation must not replace a newer watch set
+	}
+	epoch := w.epoch
+	runCtx := w.ctx
+	beforeSet := w.beforeSet
+	nd := make(map[fsWatchDir]dirSig, len(dirs))
+	ng := make(map[string]gitSig, len(gits))
 	for _, d := range dirs {
 		nd[d] = w.dirs[d]
 	}
@@ -115,47 +132,59 @@ func (w *fsWatcher) set(n *Node, p fsWatchParams) {
 	}
 	w.mu.Unlock()
 	// Baselines of what is new, outside the lock (they read the disk and run git).
-	for d, sig := range nd {
-		if sig == "" {
-			nd[d] = n.dirSignature(d)
+	for d, s := range nd {
+		if s.sig == "" {
+			nd[d] = dirSig{sig: n.dirSignature(d)}
 		}
 	}
 	for g, s := range ng {
 		if s.sig == "" {
-			ng[g] = gitSig{sig: n.gitSignature(w.runCtx(), g), checked: time.Now()}
+			ng[g] = gitSig{sig: n.gitSignature(runCtx, g), checked: time.Now()}
 		}
 	}
 
-	if w.beforeSet != nil {
-		w.beforeSet()
+	if beforeSet != nil {
+		beforeSet()
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.epoch != epoch || w.ctx == nil || w.ctx.Err() != nil {
+		return // connection restarted, closed, or canceled while computing baselines
+	}
 	if p.Generation > 0 && p.Generation < w.generation {
 		return // an ambiguous/error return cannot prove this older handler finished last
 	}
 	if p.Generation > 0 {
 		w.generation = p.Generation
 	}
+	for d, s := range nd {
+		if s.ver == 0 {
+			w.nextVer++
+			s.ver = w.nextVer
+			nd[d] = s
+		} else if cur, ok := w.dirs[d]; ok {
+			nd[d] = cur
+		}
+	}
+	for g, s := range ng {
+		if s.ver == 0 {
+			w.nextVer++
+			s.ver = w.nextVer
+			ng[g] = s
+		} else if cur, ok := w.git[g]; ok {
+			ng[g] = cur
+		}
+	}
 	w.dirs, w.git = nd, ng
 	if len(nd) == 0 && len(ng) == 0 {
 		w.endLocked()
 		return
 	}
-	if !w.running && w.ctx != nil && w.ctx.Err() == nil {
+	if !w.running {
 		w.running = true
 		w.stop, w.exited = make(chan struct{}), make(chan struct{})
 		go w.run(n, w.ctx, w.stop, w.exited, w.every, w.gitEvery)
 	}
-}
-
-func (w *fsWatcher) runCtx() context.Context {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.ctx == nil {
-		return context.Background()
-	}
-	return w.ctx
 }
 
 // endLocked ends the run in progress, if any. w.mu is held.
@@ -169,7 +198,9 @@ func (w *fsWatcher) endLocked() {
 // close drops the set and ends the run (the hub connection is over).
 func (w *fsWatcher) close() {
 	w.mu.Lock()
+	w.ctx, w.emit = nil, nil
 	w.dirs, w.git, w.generation = nil, nil, 0
+	w.epoch++
 	w.endLocked()
 	w.mu.Unlock()
 }
@@ -182,7 +213,9 @@ func (w *fsWatcher) run(n *Node, ctx context.Context, stop <-chan struct{}, exit
 		select {
 		case <-ctx.Done():
 			w.mu.Lock()
-			w.endLocked()
+			if w.running && w.stop == stop {
+				w.endLocked()
+			}
 			w.mu.Unlock()
 			return
 		case <-stop:
@@ -195,52 +228,95 @@ func (w *fsWatcher) run(n *Node, ctx context.Context, stop <-chan struct{}, exit
 
 // poll looks at every watched folder (and, when due, every Git directory) once and emits what changed.
 func (w *fsWatcher) poll(n *Node, ctx context.Context, stop <-chan struct{}, every, gitEvery time.Duration) {
-	w.mu.Lock()
-	dirs := make([]fsWatchDir, 0, len(w.dirs))
-	for d := range w.dirs {
-		dirs = append(dirs, d)
+	type dirSnap struct {
+		d   fsWatchDir
+		ver uint64
 	}
-	var gits []string
+	type gitSnap struct {
+		g   string
+		ver uint64
+	}
+	w.mu.Lock()
+	if !w.running || w.stop != stop || ctx.Err() != nil {
+		w.mu.Unlock()
+		return
+	}
+	beforePollCommit := w.beforePollCommit
+	dirs := make([]dirSnap, 0, len(w.dirs))
+	for d, s := range w.dirs {
+		dirs = append(dirs, dirSnap{d: d, ver: s.ver})
+	}
+	var gits []gitSnap
 	for g, s := range w.git {
 		if time.Since(s.checked) >= gitEvery-every/2 {
-			gits = append(gits, g)
+			gits = append(gits, gitSnap{g: g, ver: s.ver})
 		}
 	}
 	w.mu.Unlock()
 
 	var ch fsChanged
 	dsig := make(map[fsWatchDir]string, len(dirs))
-	for _, d := range dirs {
-		dsig[d] = n.dirSignature(d)
-	}
-	gsig := make(map[string]string, len(gits))
-	for _, g := range gits {
+	for _, snap := range dirs {
 		select {
 		case <-stop:
 			return
+		case <-ctx.Done():
+			return
 		default:
 		}
-		gsig[g] = n.gitSignature(ctx, g)
+		dsig[snap.d] = n.dirSignature(snap.d)
+	}
+	gsig := make(map[string]string, len(gits))
+	for _, snap := range gits {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		default:
+		}
+		gsig[snap.g] = n.gitSignature(ctx, snap.g)
+	}
+
+	if beforePollCommit != nil {
+		beforePollCommit()
 	}
 
 	w.mu.Lock()
-	for d, sig := range dsig {
-		if old, ok := w.dirs[d]; ok && old != sig {
-			w.dirs[d] = sig
-			ch.Dirs = append(ch.Dirs, d.Path)
+	if !w.running || w.stop != stop || ctx.Err() != nil {
+		w.mu.Unlock()
+		return
+	}
+	for _, snap := range dirs {
+		sig, ok := dsig[snap.d]
+		if !ok {
+			continue
+		}
+		if old, ok := w.dirs[snap.d]; ok && old.ver == snap.ver && old.sig != sig {
+			w.dirs[snap.d] = dirSig{sig: sig, ver: old.ver}
+			ch.Dirs = append(ch.Dirs, snap.d.Path)
 		}
 	}
-	for g, sig := range gsig {
-		if old, ok := w.git[g]; ok {
+	for _, snap := range gits {
+		sig, ok := gsig[snap.g]
+		if !ok {
+			continue
+		}
+		if old, ok := w.git[snap.g]; ok && old.ver == snap.ver {
 			if old.sig != sig {
-				ch.Git = append(ch.Git, g)
+				ch.Git = append(ch.Git, snap.g)
 			}
-			w.git[g] = gitSig{sig: sig, checked: time.Now()}
+			w.git[snap.g] = gitSig{sig: sig, checked: time.Now(), ver: old.ver}
 		}
 	}
 	emit := w.emit
 	w.mu.Unlock()
 
+	select {
+	case <-stop:
+		return
+	default:
+	}
 	if (len(ch.Dirs) > 0 || len(ch.Git) > 0) && emit != nil && ctx.Err() == nil {
 		sort.Strings(ch.Dirs)
 		sort.Strings(ch.Git)

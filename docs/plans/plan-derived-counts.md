@@ -136,13 +136,10 @@ CountsView {                       // per manager; schema/wire, generated for Go
 }
 ```
 
-The first schema is only what today's rules and section 6 say. `held` lists the muted rows that `AgentsNeedsYou.rows`
-keeps and the badge leaves out, and the held cards (D11); the header draws them in uncounted groups (D6). Quiet rows are
-not in it: fleetInputsInto drops them before any input is built (its quiet line in `assistant/fleet_live.go`), so listing them would
-mean widening that function inside the repair PRs' hunks (and still keeping them out of FleetState and Link) or reading
-the lists a second time. So the header's quiet rows (D6) come from the client's own list, until a later optional
-`why: quiet` comes with that cost stated. There is no `surfaces: {<surface>: <id>}` map (D5): each client names the ids
-it draws.
+The schema follows section 6. In `agents_needs_you`, `held` lists muted agents and rows whose only cards are held
+(D11). The header draws them in uncounted groups (D6). It draws quiet agent rows from the client's own list.
+The live round supplies quiet agents exclusively to `persona_cards`, which lists their eligible cards
+individually. Each client names the ids it draws (D5).
 
 - **Manager to hub.** The manager names the capability `counts_view` and tells a one-way `counts.view` event, built in
   liveLoop's round after tellLive from the same fleetInputs, so `agents_needs_you`, FleetState and Link's summary come
@@ -190,11 +187,9 @@ it draws.
    absence: the hub's hello lists no `counts_view` feature (an old or rolled-back hub), or a connected manager's roster
    entry has no `counts_view: true` (an old or rolled-back manager), or a manager has never sent a view this client
    kept. A surface uses it while any manager in its scope is absent (D10), so one number never mixes two rules.
-7. **The switcher's Persona conversations, until step 12 (D9).** `agents_needs_you` leaves Persona conversations out,
-   while every client's switcher counts one with a pending card (section 2). So with a view the switcher draws
-   `agents_needs_you` plus that part, counted locally by today's rule, and its Persona conversations keep today's value.
-   The two parts share no key, so this is not D10's mixing. Under D9 the part becomes the view id `persona_cards` at
-   step 12.
+7. **The switcher's Persona part (D9).** The server part of step 12 supplies `persona_cards` beside
+   `agents_needs_you`. Clients adopt it in their step 12 changes. The existing local rule covers this part until
+   adoption and during rollout when a manager omits the field.
 
 ### 3.4 Old clients and old hubs
 
@@ -495,6 +490,13 @@ has them (`assistantwire.TodoCounts`, in an `opt.Option`), and once the projecti
 clients' To-dos rows stay `differs` until each draws N. `BenchmarkRound` with the to-dos counted: 266 to 267 allocs/op
 and 35,096 to 35,184 B/op against `origin/main` on one machine, the to-dos count's one allocation; `BenchmarkLiveRound`
 (no to-dos counted) and telling an unchanged view are unchanged (139 allocs/op; 0).
+
+*Server Persona cards (P6 of #15397):* the optional `persona_cards` count and total carry a card tally from
+`fleetcount.PersonaCards`. The live round supplies quiet agents for this tally alone, before any surface folds sides.
+`Fleet.View` writes the oldest card keys that fit after the Agents rows and accounts for the rest in `more`.
+`spec/fixtures/persona-cards` pins the D9/D11 rule, including forms, original asking sessions, held cards and display
+copies. The live-round test checks the view's revisions and the quiet-agent exclusions for Agents, Live Activity and
+Persona Link. Client adoption and pushes remain steps under D9 and D12.
 
 **13. Retire the fallbacks.** *Change:* when D14's window ends, delete each client's fallback file with its fixture
 replay and step-3 marks (the view-path cases stay); the hub keeps FleetState, `inbox_needs_you` and Link for old apps;

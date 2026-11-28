@@ -2,8 +2,11 @@ package extmgr
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -682,5 +685,145 @@ func TestNodeProgramsForgotten(t *testing.T) {
 	h.NodeEvent("box", "plugin.node.state", json.RawMessage(`{"id":"example-helper","version":"2.0.0","state":"stopped"}`))
 	if v := h.extensions.nodes.views("example-helper"); len(v) != 0 {
 		t.Fatalf("a state for a plugin that is gone: %+v", v)
+	}
+}
+
+func TestNodePackageConcurrentSamePlatform(t *testing.T) {
+	ctx := context.Background()
+	h, _ := extensionTestHub(t)
+	boxA, seenA := extensionNodeMachine(t, h, "box-a", "darwin", "arm64", false)
+	boxB, seenB := extensionNodeMachine(t, h, "box-b", "darwin", "arm64", false)
+
+	reg := h.extensions.reg
+	pv, err := reg.Preview(ctx, "dir:"+helperPackage(t), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetConfig(ctx, "example-helper", json.RawMessage(`{"computers": ["box-a", "box-b"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for _, m := range []*Machine{boxA, boxB} {
+		wg.Add(1)
+		go func(m *Machine) {
+			defer wg.Done()
+			h.syncExtensionNodes(ctx, m)
+		}(m)
+	}
+	wg.Wait()
+
+	ext := reg.Get("example-helper")
+	pkgA, err := h.extensions.nodePackage(ext, "darwin-arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkgA.size <= 0 || pkgA.digest == "" {
+		t.Fatalf("invalid package: %+v", pkgA)
+	}
+	for _, v := range h.extensions.view(ctx, ext).Nodes {
+		if v.State != "running" || v.Error != "" {
+			t.Fatalf("concurrent same-platform sync failed for %s: %+v", v.MachineID, v)
+		}
+	}
+	if len(seenA()) == 0 || len(seenB()) == 0 {
+		t.Fatalf("expected calls to both machines: a=%d b=%d", len(seenA()), len(seenB()))
+	}
+}
+
+// Every caller of nodePackage gets a file whose bytes match the digest and size it was handed, even while other
+// callers for the same platform are building the same package (#15444).
+func TestNodePackageFileMatchesWhileOthersBuild(t *testing.T) {
+	ctx := context.Background()
+	h, _ := extensionTestHub(t)
+	dir := helperPackage(t)
+	payload := make([]byte, 4<<20)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node", "helper-mac"), payload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := h.extensions.reg
+	pv, err := reg.Preview(ctx, "dir:"+dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	ext := reg.Get("example-helper")
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			time.Sleep(time.Duration(i) * 3 * time.Millisecond) // sleep-ok: stagger callers so reads overlap competing builds
+			pkg, err := h.extensions.nodePackage(ext, "darwin-arm64")
+			if err != nil {
+				t.Errorf("caller %d: build node package: %v", i, err)
+				return
+			}
+			raw, err := os.ReadFile(pkg.file)
+			if err != nil {
+				t.Errorf("caller %d: read node package: %v", i, err)
+				return
+			}
+			if got := int64(len(raw)); got != pkg.size {
+				t.Errorf("caller %d: package size = %d, want %d", i, got, pkg.size)
+			}
+			if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != pkg.digest {
+				t.Errorf("caller %d: package digest = %s, want %s", i, got, pkg.digest)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestNodePackageBuildLocksReleasedAfterDrop(t *testing.T) {
+	ctx := context.Background()
+	h, _ := extensionTestHub(t)
+	ps := h.extensions
+	pv, err := ps.reg.Preview(ctx, "dir:"+helperPackage(t), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.reg.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	ext := ps.reg.Get("example-helper")
+	pn := &ps.nodes
+	key := ext.Record.ID + "/" + ext.Record.Version + "/darwin-arm64"
+
+	// Keep a build lock held across drop to check that another builder cannot get a different lock for the key.
+	unlockBuild := pn.lockPkgBuild(key)
+	pn.mu.Lock()
+	entry := pn.pkgLocks[key]
+	pn.mu.Unlock()
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			if _, err := ps.nodePackage(ext, "darwin-arm64"); err != nil {
+				t.Errorf("build node package: %v", err)
+			}
+		})
+	}
+	pn.drop(ps.root, ext.Record.ID, "")
+	pn.mu.Lock()
+	retained := entry != nil && pn.pkgLocks[key] == entry
+	pn.mu.Unlock()
+	unlockBuild()
+	wg.Wait()
+	if !retained {
+		t.Error("drop removed an active package build lock")
+	}
+
+	pn.mu.Lock()
+	defer pn.mu.Unlock()
+	if got := len(pn.pkgLocks); got != 0 {
+		t.Fatalf("retained %d package build locks, want 0", got)
 	}
 }

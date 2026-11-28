@@ -8,6 +8,8 @@ type PublicConfig struct {
 	CertFile  string   `json:"cert_file,omitempty"`
 	KeyFile   string   `json:"key_file,omitempty"`
 	Advertise []string `json:"advertise,omitempty"`
+	// LinkAdvertise names HTTPS endpoints that serve the hub's pinned certificate.
+	LinkAdvertise []string `json:"link_advertise,omitempty"`
 	// Nil means enabled, including when an older hub.json has no public section.
 	AdvertiseIPv6 *bool `json:"advertise_ipv6,omitempty"`
 	AdvertiseLAN  *bool `json:"advertise_lan,omitempty"`

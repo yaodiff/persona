@@ -118,6 +118,35 @@ func TestConnectorPackageOwnBuild(t *testing.T) {
 	})
 }
 
+func TestConnectorPackageOwnBuildKeepsHubEdition(t *testing.T) {
+	full := updatetest.VersionedProgram(t, programConnector, otherOS, otherArch, "v2")
+	core := updatetest.CoreProgram(t, programConnector, otherOS, otherArch, "v2")
+	for _, tc := range []struct {
+		name    string
+		manager nodeproto.Edition
+		build   string
+		accept  bool
+	}{
+		{"full manager, full connector", nodeproto.EditionFull, full, true},
+		{"full manager, core connector", nodeproto.EditionFull, core, false},
+		{"core manager, core connector", nodeproto.EditionCore, core, true},
+		{"core manager, full connector", nodeproto.EditionCore, full, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, dir, _ := packageDevices(t, "v2", "")
+			d.opts.Edition = tc.manager
+			local := putConnector(t, dir, tc.build, "v2")
+			path, _, err := d.connectorPackage(context.Background(), otherOS, otherArch)
+			if tc.accept && (err != nil || path != local) {
+				t.Fatalf("the manager's own connector edition: %s %v", path, err)
+			}
+			if !tc.accept && (!errors.Is(err, errNoConnector) || path != "") {
+				t.Fatalf("a connector of the other edition was taken: %s %v", path, err)
+			}
+		})
+	}
+}
+
 // Without a build of its own, the connector of the release of the hub's version is downloaded, checked and kept in
 // the cache, which serves it again (the site asked only for the manifest) and while the site does not answer, also
 // to a manager started since.

@@ -182,7 +182,7 @@ func testManagedClaudeWithNode(t *testing.T, setup string, ordinaryLaunch bool) 
 	if shellSetup {
 		shellBin := filepath.Join(home, "shell runtime", "bin")
 		link(node, filepath.Join(shellBin, "node"))
-		wantPath = shellBin + ":" + serviceBin
+		wantPath = shellBin + ":" + loginShellPATH(t, serviceBin)
 		rc = `: > "$HOME/rc-ran"` + "\nexport PATH=" + shellQuote(shellBin) + `:"$PATH"` + "\n"
 	}
 	t.Setenv("FIXTURE_EXPECTED_PATH", wantPath)
@@ -443,6 +443,85 @@ sleep 60
 	}
 }
 
+func TestManagedCodexModelProbeHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a Unix npm launcher and node socket")
+	}
+	home := launchKeyHome(t)
+	n, _ := testNode(t)
+	n.home, n.dir = home, filepath.Dir(nodeclient.SocketPath())
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.bin = self
+	localBin := filepath.Join(home, ".local", "bin")
+	writeExecutable(t, filepath.Join(localBin, "codex"), `#!/usr/bin/env node
+case " $* " in *" app-server "*) ;; *) exit 17 ;; esac
+[ -z "$PERSONA_MANAGED_MODEL_PROBE" ] || exit 18
+printf '%s' "$CODEX_HOME"
+`)
+	writeExecutable(t, filepath.Join(localBin, "node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n")
+	serviceBin := filepath.Join(home, "service-bin")
+	writeExecutable(t, filepath.Join(serviceBin, "node"), "#!/bin/sh\nexit 19\n")
+	writeFile(t, filepath.Join(home, ".zshrc"), `: > "$HOME/rc-ran"`+"\n")
+	t.Setenv("PATH", serviceBin+":/usr/bin:/bin")
+	t.Setenv("PERSONA_NODEJS", "")
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("NODE_TEST_LAUNCH", "1")
+	inheritedHome := filepath.Join(home, "inherited codex")
+	providerHome := filepath.Join(home, "provider codex")
+	t.Setenv("CODEX_HOME", inheritedHome)
+	if _, err := n.listenOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	const gateway = "https://gw.example.com/v1"
+	for _, tc := range []struct {
+		name, baseURL, providerEnv, wantHome string
+		isolate                              bool
+	}{
+		{name: "custom gateway", baseURL: gateway, isolate: true},
+		{name: "default gateway", wantHome: inheritedHome},
+		{name: "provider home", baseURL: gateway, providerEnv: "export CODEX_HOME=" + shellQuote(providerHome), wantHome: providerHome},
+		{name: "explicit empty home", baseURL: gateway, providerEnv: "CODEX_HOME="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n.setManaged([]proto.ManagedLauncher{{Name: "gw", Agent: "codex", BaseURL: tc.baseURL, Env: tc.providerEnv}})
+			dir := t.TempDir()
+			isolatedHome := filepath.Join(dir, "codex-home")
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			cmd, err := n.agentModelsCommand(ctx, "gw", "codex", dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd.Path != n.bin || cmd.Dir != dir {
+				t.Fatalf("probe executable = %q in %q, want %q in %q", cmd.Path, cmd.Dir, n.bin, dir)
+			}
+			if !slices.Equal(cmd.Args[1:], []string{"launch", "gw", "app-server"}) {
+				t.Fatalf("probe command args = %q, want launch gw app-server", cmd.Args[1:])
+			}
+			wantHome := tc.wantHome
+			if tc.isolate {
+				wantHome = isolatedHome
+				if st, err := os.Stat(isolatedHome); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
+					t.Fatalf("private Codex home: %v, %v", st, err)
+				}
+			} else if _, err := os.Stat(isolatedHome); !os.IsNotExist(err) {
+				t.Fatalf("unexpected temporary Codex home: %v", err)
+			}
+			out, err := cmd.CombinedOutput()
+			if err != nil || string(out) != wantHome {
+				t.Fatalf("Codex saw CODEX_HOME %q, want %q: %v", out, wantHome, err)
+			}
+			if _, err := os.Stat(filepath.Join(home, "rc-ran")); !os.IsNotExist(err) {
+				t.Fatalf("shell startup ran during the direct probe: %v", err)
+			}
+		})
+	}
+}
+
 // A list past its TTL is answered at once, and the CLI is asked again in the background for the next ask (#1501): the
 // picker does not wait seconds for the login shell and the CLI every ten minutes.
 func TestLauncherModelsAnswersAnExpiredListAtOnce(t *testing.T) {
@@ -590,12 +669,59 @@ func TestLauncherModelsKnowsRuntimeLaunchers(t *testing.T) {
 	}
 }
 
-func TestLauncherModelsOtherAgents(t *testing.T) {
+func TestLauncherModelsTraex(t *testing.T) {
 	n, _ := testNode(t)
-	res, err := n.launcherModels(context.Background(), "traex", "", false)
-	if err != nil || res.Agent != traexAgent || res.Models == nil || len(res.Models) != 0 {
+	t.Setenv("HOME", n.home)
+	t.Setenv("ZDOTDIR", n.home)
+	for _, rc := range []string{".bashrc", ".zshrc"} {
+		if err := os.WriteFile(filepath.Join(n.home, rc), []byte("printf 'Shell startup [notice]\\n'\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := `#!/bin/sh
+case "$#:$*" in
+  '2:debug models')
+    test "$TRAE_TEST_LEGACY" != 1 || exit 2
+    printf '%s\n' '{"models":[{"config_name":"example-fast","slug":"Example Fast","description":"Fast model","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"medium"},{"effort":"xhigh"}],"visibility":"list"},{"config_name":"hidden","visibility":"hide"},{"config_name":"example-fast","slug":"Duplicate"},{"slug":"Display only"},{"config_name":"--flag"},{"config_name":"example-small"}]}'
+    ;;
+  '2:models --json')
+    printf '%s\n' '[{"config_name":"example-fast","name":"Example Fast","description":"Fast model","backend_model":"backend-only"},{"config_name":"example-small"}]'
+    ;;
+  *) exit 2 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "traex"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res, err := n.launcherModels(context.Background(), traexAgent, "", true)
+	want := []proto.AgentModel{
+		{ID: "example-fast", Name: "Example Fast", Description: "Fast model", Efforts: []string{"medium", "xhigh"}, DefaultEffort: "medium"},
+		{ID: "example-small", Name: "example-small"},
+	}
+	if err != nil || res.Agent != traexAgent || len(res.Models) != len(want) {
 		t.Fatalf("got %+v %v", res, err)
 	}
+	for i, m := range res.Models {
+		if m.ID != want[i].ID || m.Name != want[i].Name || m.Description != want[i].Description || m.Default ||
+			!slices.Equal(m.Efforts, want[i].Efforts) || m.DefaultEffort != want[i].DefaultEffort {
+			t.Errorf("model %d = %+v, want %+v", i, m, want[i])
+		}
+	}
+	t.Setenv("TRAE_TEST_LEGACY", "1")
+	cached, err := n.launcherModels(context.Background(), traexAgent, "", false)
+	if err != nil || len(cached.Models) != 2 || !slices.Equal(cached.Models[0].Efforts, []string{"medium", "xhigh"}) {
+		t.Fatalf("cached TRAE catalog: %+v, %v", cached, err)
+	}
+	fallback, err := n.launcherModels(context.Background(), traexAgent, "", true)
+	if err != nil || len(fallback.Models) != 2 || fallback.Models[0].ID != "example-fast" || len(fallback.Models[0].Efforts) != 0 {
+		t.Fatalf("public TRAE catalog: %+v, %v", fallback, err)
+	}
+}
+
+func TestLauncherModelsRejectsInvalidName(t *testing.T) {
+	n, _ := testNode(t)
 	if _, err := n.launcherModels(context.Background(), "bad name;", "", false); err == nil {
 		t.Fatal("ran an invalid launcher name")
 	}
@@ -644,4 +770,30 @@ func TestLauncherProbesOnlyRunKnownLaunchers(t *testing.T) {
 	if _, err := os.ReadFile(marker); err != nil {
 		t.Fatalf("a launcher in hub.json was not probed: %v", err)
 	}
+}
+
+// loginShellPATH is the PATH a zsh started as the node starts it (shellFlag) has before ~/.zshrc, from path: on macOS
+// a login shell, whose /etc/zprofile puts path_helper's directories first (#16217); elsewhere path as it is.
+func loginShellPATH(t *testing.T, path string) string {
+	t.Helper()
+	const helper = "/usr/libexec/path_helper"
+	if !strings.Contains(shellFlag("zsh"), "l") {
+		return path
+	}
+	if _, err := os.Stat(helper); err != nil {
+		return path
+	}
+	cmd := exec.Command(helper, "-s")
+	cmd.Env = []string{"PATH=" + path}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PATH="<dirs>"; export PATH;
+	v, ok := strings.CutPrefix(strings.TrimSpace(string(out)), `PATH="`)
+	v, _, found := strings.Cut(v, `";`)
+	if !ok || !found {
+		t.Fatalf("path_helper printed %q", out)
+	}
+	return v
 }

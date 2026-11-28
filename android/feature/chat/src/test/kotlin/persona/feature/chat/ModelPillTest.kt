@@ -176,7 +176,7 @@ class ModelPillTest {
     }
 
     @Test fun thePaseoCliUsesItsTitleAndKeepsItsMarkForEveryIdentifier() {
-        val cliKinds = mapOf("traex" to null, "traecli" to AgentMarkKind.Trae, "trae-cli" to AgentMarkKind.Trae)
+        val cliKinds = mapOf("traex" to AgentMarkKind.Trae, "traecli" to AgentMarkKind.Trae, "trae-cli" to AgentMarkKind.Trae)
         for ((engine, kind) in cliKinds) {
             for ((title, expected) in listOf(null to "TRAE CLI", "TRAEX" to "TRAE CLI", "My CLI" to "My CLI")) {
                 val launcher = AgentLauncher(engine, agentType = "paseo", displayName = title)

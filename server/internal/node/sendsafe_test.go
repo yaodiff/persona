@@ -37,8 +37,9 @@ type fakePane struct {
 	state   int
 	keys    [][]string
 	// clearAfter: after this many reads the pane moves to the next screen by itself (the TUI catching up).
-	clearAfter int
-	reads      int
+	clearAfter   int
+	reads        int
+	readFailures int
 	// cutOver / plainCutOver: a colored / plain read of more lines than this gets herdr 0.9.4's cut answer (the start
 	// of it, no line end). With either set, a read is the screen's last `lines` rows, as herdr keeps the newest.
 	cutOver, plainCutOver int
@@ -87,6 +88,12 @@ func (f *fakePane) serve(t *testing.T) *herdr.Client {
 			var result any = map[string]any{}
 			switch req.Method {
 			case "pane.read":
+				if f.readFailures > 0 {
+					f.readFailures--
+					f.mu.Unlock()
+					c.Close()
+					continue
+				}
 				lines, _ := req.Params["lines"].(float64)
 				ansi := req.Params["format"] == "ansi"
 				f.readLines = append(f.readLines, map[bool]int{true: -int(lines), false: int(lines)}[ansi])

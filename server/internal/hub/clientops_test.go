@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -186,5 +187,56 @@ func TestClientOpsCleanupRetention(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("client operations were not cleaned up at startup")
+	}
+}
+
+// #13360: which answers let an operation's receipt go (the same op id runs again) and which are kept. Besides
+// assistant_offline (no manager had it), a conversation's start, an approval question and an inbox hand-off let go
+// the manager's answer that their node got nothing (apierr.Body of ErrOffline: delivered "none", retryable). A refusal
+// that is not retryable, and anything that may have been delivered, stays; so does every answer of the kinds whose
+// clients take a manager's answer as final for that id.
+func TestClientOpRetryNodeGotNothing(t *testing.T) {
+	const (
+		offline      = `{"code":"assistant_offline","error":"the assistant is offline"}`
+		inDoubt      = `{"code":"assistant_in_doubt","delivered":"unknown","retryable":false}`
+		gotNothing   = `{"code":"node_unreachable","delivered":"none","retryable":true,"error":"machine is offline"}`
+		askNothing   = `{"code":"bad_request","delivered":"none","retryable":true,"error":"machine is offline"}` // a question's ErrOffline (400)
+		itemDone     = `{"code":"inbox_item_done","delivered":"none","retryable":false}`
+		busy         = `{"code":"conversation_busy","delivered":"none","retryable":false}`
+		sourceFailed = `{"code":"inbox_send_failed","delivered":"none","retryable":true}`
+		mayHave      = `{"code":"node_unreachable","delivered":"unknown","retryable":true}`
+		typed        = `{"code":"send_in_doubt","delivered":"yes","retryable":true}`
+		noDelivered  = `{"code":"search_changed","retryable":true}`
+		noRetryable  = `{"code":"forbidden","delivered":"none"}`
+		retryText    = `{"code":"node_unreachable","delivered":"none","retryable":"true"}`
+		started      = `{"session":{"machine_id":"m1","session_id":"s1"}}`
+		notJSON      = `node unreachable`
+	)
+	bodies := []string{offline, inDoubt, gotNothing, askNothing, itemDone, busy, sourceFailed, mayHave, typed, noDelivered,
+		noRetryable, retryText, started, notJSON, ``}
+	released := map[string][]string{
+		"assistant_start":   {offline, gotNothing, askNothing, sourceFailed},
+		"clarify":           {offline, inDoubt, gotNothing, askNothing, sourceFailed},
+		"inbox_handoff":     {offline, inDoubt, gotNothing, askNothing, sourceFailed},
+		"inbox_reply":       {offline, inDoubt}, // a source's refusal is replayed as it is (protocol.md "Lark API")
+		"choose":            {offline},
+		meetingJustMeOp:     {offline},
+		meetingFollowupOp:   {offline},
+		todoAnswerOp:        {offline},
+		todoRouteOp:         {offline},
+		todoCreateOp:        {offline},
+		"resolve":           nil,
+		"message":           {offline},
+		"start":             nil,
+		"worktree_create":   nil,
+		"lark_send":         nil,
+		"lark_thread_reply": nil,
+	}
+	for kind, want := range released {
+		for _, body := range bodies {
+			if got, want := clientOpRetry(kind, []byte(body)), slices.Contains(want, body); got != want {
+				t.Errorf("%s: clientOpRetry(%s) = %v, want %v", kind, body, got, want)
+			}
+		}
 	}
 }

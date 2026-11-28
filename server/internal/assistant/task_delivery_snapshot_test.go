@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -140,8 +141,8 @@ func TestSnapshotAcceptedOpenConcernDoesNotComplete(t *testing.T) {
 	}
 	for _, task := range s.snapshotTasks(ctx, "") {
 		if task.ID == todo.ID {
-			if task.State != "还没开始" || task.Health != "正常" {
-				t.Fatalf("accepted open concern projection = %+v, want State 还没开始 and Health 正常", task)
+			if task.State != "跟进中" || task.Health != "正常" {
+				t.Fatalf("accepted open concern projection = %+v, want State 跟进中 and Health 正常", task)
 			}
 			return
 		}
@@ -274,4 +275,176 @@ func snapshotStatesForTest(s *Service, ctx context.Context) map[string]struct{ S
 		out[task.ID] = struct{ State, Health string }{task.State, task.Health}
 	}
 	return out
+}
+
+func TestSnapshotOpenPRParkedAndConcernStates(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	st := &fakeTodoRepoStore{
+		planMemStore: &planMemStore{memStore: &memStore{}},
+		repos:        map[string][]repository.TaskRepository{},
+	}
+	f := newFakeHub().withMachine()
+	s := newServiceOn(t, f, st)
+	ctx := context.Background()
+
+	makeRepo := func(repoID, path string, links []repository.TaskLink) repository.TaskRepository {
+		return repository.TaskRepository{
+			RepoID: repoID,
+			SourceSnapshot: repository.SourceSnapshot{
+				Identity: repository.Identity{
+					Provider:     "github",
+					InstanceURL:  "https://github.com",
+					Path:         path,
+					CanonicalURL: "https://github.com/" + path,
+				},
+			},
+			Links: links,
+		}
+	}
+
+	s.todos.mu.Lock()
+	s.todos.loaded = true
+	s.todos.todos = map[string]*Todo{
+		"pr_merge": {
+			ID: "pr_merge", Title: "Ready PR", CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/1",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/1", State: "open", Draft: false,
+				Review: "approved", Checks: "success", CheckedAt: now,
+			},
+		},
+		"pr_review": {
+			ID: "pr_review", Title: "Review PR", CreatedAt: now.Add(-9 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/2",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/2", State: "open", Draft: false,
+				Review: "required", Checks: "success", CheckedAt: now,
+			},
+		},
+		"pr_conflict": {
+			ID: "pr_conflict", Title: "Conflict PR", CreatedAt: now.Add(-8 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/3",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/3", State: "open", Draft: false,
+				Review: "changes_requested", Checks: "failure", Conflicts: true, CheckedAt: now,
+			},
+		},
+		"pr_changes": {
+			ID: "pr_changes", Title: "Changes PR", CreatedAt: now.Add(-7 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/4",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/4", State: "open", Draft: false,
+				Review: "changes_requested", Checks: "success", CheckedAt: now,
+			},
+		},
+		"pr_ci_fail": {
+			ID: "pr_ci_fail", Title: "Failing CI PR", CreatedAt: now.Add(-6 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/5",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/5", State: "open", Draft: false,
+				Review: "approved", Checks: "failure", CheckedAt: now,
+			},
+		},
+		"pr_ci_pending": {
+			ID: "pr_ci_pending", Title: "Pending CI PR", CreatedAt: now.Add(-5 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/6",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/6", State: "open", Draft: false,
+				Review: "pending", Checks: "pending", CheckedAt: now,
+			},
+		},
+		"pr_draft": {
+			ID: "pr_draft", Title: "Draft PR", CreatedAt: now.Add(-4 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/7",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/7", State: "open", Draft: true,
+				Review: "pending", Checks: "none", CheckedAt: now,
+			},
+		},
+		"pr_stale": {
+			ID: "pr_stale", Title: "Stale PR", CreatedAt: now.Add(-3 * time.Minute), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/8",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/8", State: "open", Draft: false,
+				Review: "approved", Checks: "success", CheckedAt: now.Add(-time.Hour),
+			},
+		},
+		"pr_repo_linked": {
+			ID: "pr_repo_linked", Title: "Repo linked open PR", CreatedAt: now.Add(-2 * time.Minute), UpdatedAt: now,
+		},
+		"pr_ref_only": {
+			ID: "pr_ref_only", Title: "Reference only repo PR", CreatedAt: now.Add(-90 * time.Second), UpdatedAt: now,
+		},
+		"parked_only": {
+			ID: "parked_only", Title: "Parked task", CreatedAt: now.Add(-60 * time.Second), UpdatedAt: now,
+			Supervision: &Supervision{
+				Supervisor: "conv1",
+				State:      reviewParked,
+				Reviews: []TaskReview{{
+					At:        now,
+					Verdict:   reviewParked,
+					Reason:    "Wait for partner",
+					Until:     now.Add(24 * time.Hour),
+					WaitingOn: "someone_else",
+				}},
+			},
+		},
+		"concern_open": {
+			ID: "concern_open", Title: "Main chat concern", Kind: db.KindConcern, CreatedAt: now.Add(-45 * time.Second), UpdatedAt: now,
+		},
+		"concern_with_pr": {
+			ID: "concern_with_pr", Title: "Concern with PR", Kind: db.KindConcern, CreatedAt: now.Add(-30 * time.Second), UpdatedAt: now,
+			PRURL: "https://github.com/org/app/pull/9",
+			PRStatus: &TodoPRStatus{
+				URL: "https://github.com/org/app/pull/9", State: "open", Draft: false,
+				Review: "required", Checks: "success", CheckedAt: now,
+			},
+		},
+		"concern_working": {
+			ID: "concern_working", Title: "Working concern", Kind: db.KindConcern, CreatedAt: now.Add(-20 * time.Second), UpdatedAt: now,
+			Agents: []TodoAgent{{MachineID: "box", SessionID: "s-work", LinkedAt: now}},
+		},
+		"ordinary": {
+			ID: "ordinary", Title: "Ordinary unstarted", CreatedAt: now.Add(-10 * time.Second), UpdatedAt: now,
+		},
+	}
+	s.todos.mu.Unlock()
+
+	st.repos["pr_repo_linked"] = []repository.TaskRepository{
+		makeRepo("repo_app", "org/app", []repository.TaskLink{
+			{Kind: "pull_request", Number: "42", CanonicalURL: "https://github.com/org/app/pull/42", Role: repository.LinkRoleDelivery},
+		}),
+	}
+	st.repos["pr_ref_only"] = []repository.TaskRepository{
+		makeRepo("repo_ref", "org/ref", []repository.TaskLink{
+			{Kind: "pull_request", Number: "43", CanonicalURL: "https://github.com/org/ref/pull/43", Role: repository.LinkRoleReference},
+		}),
+	}
+	f.setSessions("box", proto.Session{
+		SessionID: "s-work", MachineID: "box", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: now,
+	})
+
+	got := snapshotStatesForTest(s, ctx)
+	want := map[string]string{
+		"pr_merge":        "等合入",
+		"pr_review":       "PR 评审中",
+		"pr_conflict":     "PR 有冲突",
+		"pr_changes":      "PR 待修改",
+		"pr_ci_fail":      "PR 检查失败",
+		"pr_ci_pending":   "PR 检查中",
+		"pr_draft":        "还没开始",
+		"pr_stale":        "还没开始",
+		"pr_repo_linked":  "等合入",
+		"pr_ref_only":     "还没开始",
+		"parked_only":     "已搁置",
+		"concern_open":    "跟进中",
+		"concern_with_pr": "PR 评审中",
+		"concern_working": "在做",
+		"ordinary":        "还没开始",
+	}
+	for id, wantState := range want {
+		if got[id].State != wantState {
+			t.Errorf("%s: State = %q, want %q", id, got[id].State, wantState)
+		}
+	}
 }

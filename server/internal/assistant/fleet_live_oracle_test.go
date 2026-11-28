@@ -85,11 +85,15 @@ func oracleBuildFleetIn(l i18n.Lang, agents []oracleInput, ixs []proto.Interacti
 		if ix := n.card; ix != nil {
 			item.Kind, item.Detail = ix.Kind, clip(oneLine(interactionDetail(l, *ix)), fleetDetailMax)
 			item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
+			if !ix.CreatedAt.IsZero() {
+				item.InteractionCreatedAt = ix.CreatedAt.UTC().Format(time.RFC3339Nano)
+			}
 			// #12982: no buttons for a permission without a summary or a plan without a title.
 			blind := ix.Kind == proto.IxPermission && strings.TrimSpace(ix.Summary) == "" ||
 				ix.Kind == proto.IxPlan && strings.TrimSpace(planTitle(ix.Plan)) == ""
 			if len(ix.Fields) > 0 || blind {
 				item.Interaction = ""
+				item.InteractionCreatedAt = ""
 			}
 		}
 		needs = append(needs, item)

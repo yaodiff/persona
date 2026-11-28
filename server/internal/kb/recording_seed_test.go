@@ -67,7 +67,7 @@ func (e *Engine) PutRecording(rawID string, u RecordingUpload, now time.Time) (R
 	if exists {
 		put.Revision = r.Revision
 	}
-	if u.StartedAt.Before(now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))) || exists && r.Trimmed() {
+	if pastRetention(u.StartedAt, now, e.RecordingDays()) || exists && r.Trimmed() {
 		put.Status = RecordingExpired
 		return put, nil
 	}

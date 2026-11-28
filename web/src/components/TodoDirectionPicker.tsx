@@ -28,6 +28,7 @@ export function TodoDirectionPicker({
   todoId,
   currentDirectionId,
   currentDirectionLabel,
+  currentDirectionInherited = false,
   childCount,
   directions,
   onApply,
@@ -36,12 +37,15 @@ export function TodoDirectionPicker({
   todoId: string;
   currentDirectionId?: string;
   currentDirectionLabel?: string;
+  /** True when `currentDirectionId` is inherited (not explicitly set on `todo.direction_id`). */
+  currentDirectionInherited?: boolean;
   childCount: number;
   directions: readonly ReorganizeDirectionOption[];
   onApply: (req: TodoReorganizeRequest) => Promise<void>;
   onClose: () => void;
 }) {
   const normalizedCurrent = currentDirectionId?.trim() ?? "";
+  const inherited = Boolean(currentDirectionInherited && normalizedCurrent);
   const [selectedValue, setSelectedValue] = useState(normalizedCurrent);
   const [includeChildren, setIncludeChildren] = useState(true);
   const [transferSupervision, setTransferSupervision] = useState(false);
@@ -76,7 +80,9 @@ export function TodoDirectionPicker({
     }
   }, [transferAllowed, transferSupervision]);
 
-  const changed = selectedValue.trim() !== normalizedCurrent;
+  const changed =
+    selectedValue.trim() !== normalizedCurrent ||
+    (inherited && selectedValue.trim() !== "");
   const request = useMemo(() => {
     if (!changed) return null;
     return buildReorganizeRequest({
@@ -110,6 +116,13 @@ export function TodoDirectionPicker({
       className="mb-3 rounded-control border border-line bg-surface p-3"
     >
       <div className="flex flex-col gap-2">
+        {inherited && (
+          <p data-testid="todo-detail-direction-inherited" className="text-submeta text-ink-3">
+            {t("todos.detail_direction_inherited_picker_hint", {
+              name: currentDirectionLabel?.trim() || normalizedCurrent,
+            })}
+          </p>
+        )}
         <label className="flex flex-col gap-1">
           <span className="text-label font-medium text-ink-2">{t("todos.reorganize_direction_label")}</span>
           <select

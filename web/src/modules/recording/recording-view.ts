@@ -4,6 +4,7 @@
 // lib/kb.ts with the recording module (#13407), so none of it loads with the first screen.
 import { formatDate, t } from "../../i18n";
 import { knownZone, wallClock, type DayRecapEntry, type DayRecapGap, type KBSegment, type MeetingConversation, type MeetingRoom, type RecordingPhoto } from "../../lib/kb";
+import { isValidSpeakerId } from "../../lib/recording-speakers";
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
@@ -90,7 +91,7 @@ export interface RecordingView {
   /** Transcription still going (more will come). */
   partial: boolean;
   /** A line per segment and bookmark, at its clock time, in order. */
-  lines: { seconds: number; clock: string; text: string; bookmark?: boolean }[];
+  lines: { seconds: number; clock: string; text: string; bookmark?: boolean; speaker?: string; speakerUnsure?: boolean }[];
   /** Persona attends the meeting in this role (#2981); absent when off. */
   attendance?: "listener" | "participant";
   /** A room meeting whose room only takes notes (#8851): Persona is not in it and answers nothing. */
@@ -135,10 +136,26 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   const tz = day && knownZone(meta?.tz) ? (meta.tz as string) : undefined;
   const clock = (sec: number) => recordingClock(started, sec, tz);
   const at: { sec: number; line: RecordingView["lines"][number] }[] = [];
-  for (const s of segments ?? []) {
+  const trimmed = str(meta?.trimmed_at);
+  const trimmedAt = trimmed && Number.isFinite(Date.parse(trimmed)) ? trimmed : undefined;
+  // Detail refreshes can briefly pair new retention metadata with an older segment list.
+  for (const s of trimmedAt ? [] : segments ?? []) {
     if (s?.echo === true) continue; // Persona's echo is not the meeting's: hidden, as the phone hides it
     const sec = Number(s?.start) || 0;
-    if (typeof s?.text === "string" && s.text.trim()) at.push({ sec, line: { seconds: sec, clock: clock(sec), text: s.text.trim() } });
+    if (typeof s?.text === "string" && s.text.trim()) {
+      const speaker = isValidSpeakerId(s.speaker) ? s.speaker : undefined;
+      const speakerUnsure = speaker && s.speaker_unsure === true ? true : undefined;
+      at.push({
+        sec,
+        line: {
+          seconds: sec,
+          clock: clock(sec),
+          text: s.text.trim(),
+          ...(speaker ? { speaker } : {}),
+          ...(speakerUnsure ? { speakerUnsure: true } : {}),
+        },
+      });
+    }
   }
   const marks = Array.isArray(meta?.bookmarks) ? (meta.bookmarks as { at?: unknown; label?: unknown }[]) : [];
   for (const b of marks) {
@@ -152,7 +169,6 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   const role = str(meta?.attendance);
   const attending = meta?.attending_session as { machine_id?: unknown; session_id?: unknown } | null | undefined;
   const machineId = str(attending?.machine_id), sessionId = str(attending?.session_id);
-  const trimmed = str(meta?.trimmed_at);
   const part = meta?.part;
   return {
     startedAt: Number.isFinite(t0) ? started : undefined,
@@ -165,7 +181,7 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
     ...(role === "notes" ? { notesOnly: true } : {}),
     // Both ids or none: anything else names no session, and the main chat attends.
     ...(machineId && sessionId ? { attendingSession: { machineId, sessionId } } : {}),
-    ...(trimmed && Number.isFinite(Date.parse(trimmed)) ? { trimmedAt: trimmed } : {}),
+    ...(trimmedAt ? { trimmedAt } : {}),
     ...(day ? { allDay: { day: str(meta?.day) ?? "", part: typeof part === "number" && Number.isInteger(part) && part >= 1 && part <= 99 ? part : 1 } } : {}),
     ...(tz ? { tz } : {}),
   };
@@ -240,4 +256,3 @@ function formatSeconds(sec: number): string {
   const h = Math.floor(s / 3600);
   return h > 0 ? `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}` : `${Math.floor(s / 60)}:${pad(s % 60)}`;
 }
-

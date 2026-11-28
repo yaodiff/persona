@@ -66,7 +66,7 @@ const render = (sessions: Session[], interactions: Interaction[] = [], { machine
   Object.assign(fake, { sessions, interactions, machines }, loaded === undefined ? {} : { loaded });
   return renderToStaticMarkup(<Home onNewAgent={() => {}} onToggleSidebar={() => {}} />);
 };
-const markAll = (html: string) => html.match(/<button [^>]*title="把 (\d+) 个完成未看的会话标为已看"[^>]*>/)?.[1];
+const markAll = (html: string) => html.match(/<button [^>]*title="将 (\d+) 个完成未看的会话标为已看"[^>]*>/)?.[1];
 // where a group's heading is in the page (-1: not there)
 const heading = (html: string, title: string) => html.indexOf(`>${title}</h2>`);
 const buttonLabels = (html: string) => (html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? []).map((button) => button.replace(/<[^>]*>/g, ""));
@@ -89,7 +89,7 @@ describe("the overview", () => {
     ]);
     expect(html).toContain("先做 A 还是 B？");
     expect(html).toContain("swift test");
-    expect(html).toContain("计划写好了，等你批准");
+    expect(html).toContain("计划已就绪，等待你的批准");
   });
 
   it("answers a permission or a one-choice question on its row, and sends a plan to its chat (#4090)", () => {
@@ -104,18 +104,18 @@ describe("the overview", () => {
     expect(html).toContain("Bash：swift test");
     const plan = render([a], [{ id: "l", kind: "plan", machine_id: "mac", session_id: a.session_id, plan: "# 计划" } as Interaction]);
     expect(buttons(plan)).not.toContain("允许");
-    expect(plan).toContain("计划写好了，等你批准");
+    expect(plan).toContain("计划已就绪，等待你的批准");
   });
 
   it("asks for a computer before offering to create an agent (#3729)", () => {
     const html = render([], [], { machines: [] });
-    expect(html).toContain("还没有电脑");
-    expect(html).toContain("先接入一台电脑，再开始使用 Agent。");
-    expect(html).toContain("把一台电脑接入 hub 后，就能在这里新建 Agent、查看进展。");
+    expect(html).toContain("暂无电脑");
+    expect(html).toContain("连接一台电脑即可开始使用 Agent。");
+    expect(html).toContain("将电脑连接到 hub 后，即可在这里新建 Agent 并随时跟进进展。");
     expect(buttonLabels(html)).toContain("打开机器页");
     expect(buttonLabels(html)).not.toContain("新建 Agent");
     expect(html).not.toContain("一切就绪");
-    expect(html).not.toContain("所有 Agent 都在等你");
+    expect(html).not.toContain("所有 Agent 都在等待你的指令");
   });
 
   it("waits for the initial load before showing the no-computers guidance", () => {
@@ -125,12 +125,12 @@ describe("the overview", () => {
     } finally {
       fake.loaded = true;
     }
-    expect(html).toContain("正在连上 hub");
-    expect(html).not.toContain("还没有电脑");
-    expect(html).not.toContain("先接入一台电脑");
+    expect(html).toContain("正在连接 hub");
+    expect(html).not.toContain("暂无电脑");
+    expect(html).not.toContain("连接一台电脑");
     expect(buttonLabels(html)).not.toContain("打开机器页");
     expect(html).not.toContain("一切就绪");
-    expect(html).not.toContain("所有 Agent 都在等你");
+    expect(html).not.toContain("所有 Agent 都在等待你的指令");
   });
 
   it("says it is loading, not connecting, once the hub is connected and its first answers are on their way (audit item 85)", () => {
@@ -143,10 +143,10 @@ describe("the overview", () => {
       }
     };
     const connected = at("online");
-    expect(connected).toContain("正在读取…");
-    expect(connected).not.toContain("正在连上 hub");
-    expect(at("connecting")).toContain("正在连上 hub…");
-    expect(at("offline")).toContain("正在连上 hub…");
+    expect(connected).toContain("正在加载…");
+    expect(connected).not.toContain("正在连接 hub");
+    expect(at("connecting")).toContain("正在连接 hub…");
+    expect(at("offline")).toContain("正在连接 hub…");
   });
 
   describe("when a paging hub's Agents list has not come back (audit item 30)", () => {
@@ -165,7 +165,7 @@ describe("the overview", () => {
     it("says it couldn't read them, with Retry, instead of a lone full stop", () => {
       const html = as("failed", () => render([], [ix], { machines: [studio] }));
       const line = summaryLine(html);
-      expect(line).toContain("没能读到 Agent 的状态。");
+      expect(line).toContain("无法加载 Agent 状态。");
       expect(buttonLabels(line)).toContain("重试");
       expect(line).not.toMatch(/>。<\/p>/);
       // the cards still wait below it
@@ -180,7 +180,7 @@ describe("the overview", () => {
         expect(html).not.toContain("0 个 Agent");
         // and does not say nothing needs you, or that all is set: nobody knows yet
         expect(html).not.toContain("一切就绪");
-        expect(html).not.toContain("所有 Agent 都在等你");
+        expect(html).not.toContain("所有 Agent 都在等待你的指令");
       }
       const plain = as("failed", () => render([], [], { machines: [mac] }));
       expect(plain.match(/data-machine-line="true">([^<]*)</)?.[1]).toBe("在线");
@@ -201,14 +201,14 @@ describe("the overview", () => {
 
     it("says it is loading while the list is read", () => {
       const line = summaryLine(as("loading", () => render([], [ix], { machines: [studio] })));
-      expect(line).toContain("正在读取…");
+      expect(line).toContain("正在加载…");
       expect(buttonLabels(line)).not.toContain("重试");
     });
 
     it("keeps asking for a computer first when there is none", () => {
       const html = as("failed", () => render([], [], { machines: [] }));
-      expect(html).toContain("先接入一台电脑，再开始使用 Agent。");
-      expect(html).not.toContain("没能读到 Agent 的状态");
+      expect(html).toContain("连接一台电脑即可开始使用 Agent。");
+      expect(html).not.toContain("无法加载 Agent 状态");
     });
   });
 
@@ -238,16 +238,16 @@ describe("the overview", () => {
   it("never builds an empty sentence: with only a card whose agent is not counted, it says how many requests wait (audit item 30)", () => {
     const other = { id: "q3", machine_id: "mac", session_id: "assistant-1", kind: "question" } as Interaction;
     const html = render([], [other]);
-    expect(html).toContain("有 1 件事等你处理。");
+    expect(html).toContain("有 1 项请求待你处理。");
     expect(html).not.toMatch(/>。<\/p>/);
   });
 
   it("keeps the ready state with an existing online computer and no agents", () => {
     const html = render([], [], { machines: [mac] });
     expect(html).toContain("一切就绪");
-    expect(html).toContain("所有 Agent 都在等你");
+    expect(html).toContain("所有 Agent 都在等待你的指令");
     expect(buttonLabels(html)).toContain("新建 Agent");
-    expect(html).not.toContain("还没有电脑");
+    expect(html).not.toContain("暂无电脑");
     expect(buttonLabels(html)).not.toContain("打开机器页");
   });
 
@@ -255,7 +255,7 @@ describe("the overview", () => {
     const html = render([], [], { machines: [{ ...mac, online: false }] });
     expect(html).not.toContain("一切就绪");
     expect(html).toContain('data-actionable-computer="mac"');
-    expect(html).toContain("有 1 件事等你处理");
+    expect(html).toContain("有 1 项请求待你处理");
     expect(buttonLabels(html)).toContain("新建 Agent");
   });
 
@@ -301,7 +301,7 @@ describe("the overview", () => {
     const asking = agent(1, 0, "needs_you");
     const bg = { background_working: true, background_waiting: true };
     const html = render([asking, agent(2, 0, "needs_you"), agent(3, 0, "working"), agent(5, 0, "working", bg), agent(4, 0, "unread")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
-    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "完成未看"), heading(html, "电脑"), cards(html)];
+    const at = [heading(html, "需要你"), heading(html, "遇到阻塞，请查看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "完成未看"), heading(html, "电脑"), cards(html)];
     expect(at.every((x) => x > -1)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
     // nothing to do: the ready card and the computers still come first
@@ -321,16 +321,16 @@ describe("the overview", () => {
     const asking = agent(1, 0, "needs_you");
     const html = render([asking, agent(2, 0, "idle")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
     expect(heading(html, "需要你")).toBeGreaterThan(-1);
-    expect(html).not.toContain("没有需要你处理的");
+    expect(html).not.toContain("暂无需要你处理的事项");
     expect(html).not.toContain("一切就绪");
-    expect(render([agent(2, 0, "idle")])).toContain("没有需要你处理的");
+    expect(render([agent(2, 0, "idle")])).toContain("暂无需要你处理的事项");
   });
 
   it("offers 全部标为已看 beside the summary when the unread agents' tabs are working or need you", () => {
     const html = render([agent(1, 0, "working"), agent(1, 1, "unread"), agent(2, 0, "needs_you"), agent(2, 1, "unread")]);
     expect(heading(html, "完成未看")).toBe(-1);
     expect(heading(html, "工作中")).toBeGreaterThan(-1);
-    expect(html).toContain("卡住了，要你去看");
+    expect(html).toContain("遇到阻塞，请查看");
     expect(markAll(html)).toBe("2");
   });
 
@@ -348,21 +348,21 @@ describe("the overview", () => {
     const card = (id: string) => ({ id, machine_id: "mac", session_id: a.session_id, kind: "question" }) as Interaction;
     const two = render([a], [card("q1"), card("q2")]);
     expect(two).toContain("1 个 Agent 需要你");
-    expect(two).toContain("同一个 Agent 可能连着问你几件事");
+    expect(two).toContain("同一个 Agent 可能会连续向你发起多项请求");
     // one card per agent: the numbers agree, nothing to explain
-    expect(render([a], [card("q1")])).not.toContain("同一个 Agent 可能连着问你几件事");
+    expect(render([a], [card("q1")])).not.toContain("同一个 Agent 可能会连续向你发起多项请求");
     // two cards on one agent beside a stuck agent without a card: still one agent with several (#2956 review)
     const stuck = agent(3, 0, "needs_you");
-    expect(render([a, stuck], [card("q1"), card("q2")])).toContain("同一个 Agent 可能连着问你几件事");
+    expect(render([a, stuck], [card("q1"), card("q2")])).toContain("同一个 Agent 可能会连续向你发起多项请求");
     // a card per agent, its agent not counted (an assistant session): nothing to explain
     const other = { id: "q3", machine_id: "mac", session_id: "assistant-1", kind: "question" } as Interaction;
-    expect(render([a], [card("q1"), other])).not.toContain("同一个 Agent 可能连着问你几件事");
+    expect(render([a], [card("q1"), other])).not.toContain("同一个 Agent 可能会连续向你发起多项请求");
   });
 
   it("explains the agents that need you without a card (#2956)", () => {
     const html = render([agent(2, 0, "needs_you")]);
-    expect(html).toContain("卡住了，要你去看");
-    expect(html).toContain("这些 Agent 没发来要你处理的卡片，多半是出错或卡住了");
+    expect(html).toContain("遇到阻塞，请查看");
+    expect(html).toContain("这些 Agent 未发送待处理卡片，可能是遇到错误或已阻塞");
   });
 
   it("before the first snapshot shows only 加载中, not the agents and cards the socket has streamed in so far", () => {
@@ -372,7 +372,7 @@ describe("the overview", () => {
     try {
       const early = render([asking, agent(2, 0, "working"), agent(3, 0, "unread")], [ix]);
       expect(early).toContain("加载中");
-      for (const group of ["需要你", "卡住了，要你去看", "工作中", "完成未看", "电脑"]) expect(heading(early, group)).toBe(-1);
+      for (const group of ["需要你", "遇到阻塞，请查看", "工作中", "完成未看", "电脑"]) expect(heading(early, group)).toBe(-1);
       expect(early).not.toContain("全部标为已看");
     } finally {
       fake.loaded = true;
@@ -421,6 +421,28 @@ describe("compact rows", () => {
     expect(html).toContain("@container");
   });
 
+  it("lets a section's only card fill a two-column row, capped at two of three in every grid", () => {
+    const a = agent(1, 0, "needs_you");
+    fake.todos = [{ id: "only", title: "Only task", created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z" }];
+    let html: string;
+    try {
+      html = render([a, agent(2, 0, "working")], [{ id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash" } as Interaction]);
+    } finally {
+      fake.todos = [];
+    }
+    const grids = [...html.matchAll(/class="([^"]*\bgrid\b[^"]*)"/g)].map((m) => m[1]!.replaceAll("&amp;", "&").replaceAll("&gt;", ">"));
+    const rows = grids.filter((c) => c.includes("@min-[60rem]:grid-cols-2") && c.includes("@min-[100rem]:grid-cols-3") && c.includes("items-start"));
+    const tasks = grids.filter((c) => c.includes("@min-[60rem]:grid-cols-2") && c.includes("@min-[100rem]:grid-cols-3") && c.includes("items-stretch"));
+    const cards = grids.filter((c) => c.includes("@min-[84rem]:grid-cols-2") && c.includes("@min-[120rem]:grid-cols-3"));
+    expect([rows.length, tasks.length, cards.length]).toEqual([1, 1, 1]);
+    expect(rows[0]).toContain("[&>:only-child]:col-span-full");
+    expect(rows[0]).toContain("@min-[100rem]:[&>:only-child]:col-span-2");
+    expect(tasks[0]).toContain("[&>:only-child]:col-span-full");
+    expect(tasks[0]).toContain("@min-[100rem]:[&>:only-child]:col-span-2");
+    expect(cards[0]).toContain("[&>:only-child]:col-span-full");
+    expect(cards[0]).toContain("@min-[120rem]:[&>:only-child]:col-span-2");
+  });
+
   it("keeps a short space name that only starts the title, and drops a repeat", () => {
     expect(rowTags("app store listing", ["Mac", "app", "#2"])).toEqual(["Mac", "app", "#2"]);
     expect(rowTags("Fix the login redirect loop", ["Mac", "web", "Fix the login redir…"])).toEqual(["Mac", "web"]);
@@ -442,7 +464,7 @@ describe("an offline computer's line on the overview (#4038)", () => {
     expect(offlineLine({ id: "b", name: "b", online: false })).toBe("离线");
   });
   it("reads it in the machines page's order: waiting to be confirmed, then the hub's error_code", () => {
-    expect(offlineLine({ id: "b", name: "b", online: false, trust: "pending", error: "ssh: connect to host b port 22: Operation timed out" } as Machine)).toBe("还没连上来过");
+    expect(offlineLine({ id: "b", name: "b", online: false, trust: "pending", error: "ssh: connect to host b port 22: Operation timed out" } as Machine)).toBe("从未连接");
     expect(offlineLine({ id: "b", name: "b", online: false, error_code: "node_service_down", error: "dial tcp: i/o timeout" } as Machine)).not.toBe("连接超时");
   });
 });
@@ -468,7 +490,7 @@ describe("tasks in progress", () => {
     // the agent's computer (its row has no model or effort to name; Home.task-agents.test.tsx has the rest, #10904)
     expect(html.slice(html.indexOf('data-task="a"'), html.indexOf('data-task="b"'))).toContain('<span class="truncate">Mac</span>');
     expect(html).not.toContain("查看全部");
-    expect(html).toContain("已合未上线");
+    expect(html).toContain("已合入，未上线");
   });
   it("labels a concern beside its existing status, without labelling an ordinary task", () => {
     fake.todos = [todo("concern", { kind: "concern" }), todo("ordinary")];
@@ -550,7 +572,7 @@ describe("a card the task's supervisor holds (lib/supervisor-held.ts)", () => {
     expect(buttonLabels(html)).not.toContain("No");
     expect(html).not.toContain("1 个 Agent 需要你");
     // waiting on the supervisor, not stuck on the user
-    expect(heading(html, "卡住了，要你去看")).toBe(-1);
+    expect(heading(html, "遇到阻塞，请查看")).toBe(-1);
     expect(heading(html, "工作中")).toBeGreaterThan(-1);
     expect(html).toContain("清理构建目录");
   });

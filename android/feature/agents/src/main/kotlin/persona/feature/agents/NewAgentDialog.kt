@@ -245,7 +245,7 @@ private fun LazyListScope.newAgentItems(
         newAgentWorkspaceItems(state, editable, model::pickWorkspace)
     }
     // A branch and a checkout of its own (#4532, iOS NewAgentWorktreeSection), for a folder in a Git repository or a
-    // Paseo workspace picked in one (#8856).
+    // Paseo or Orca workspace picked in one (#8856, #17050).
     state.repo?.takeIf { state.worktreeOffered }?.let { repo -> item("worktree") {
         val suggested = AgentWorktree.branch(AgentWorktree.nameHint(state.prompt, state.selection.cwd))
         JSectionHeader(stringResource(R.string.agents_worktree_title))
@@ -453,6 +453,11 @@ private fun NewAgentFooter(state: NewAgentState, model: NewAgentViewModel, machi
         if (state.pending != null) PendingBadge(if (state.starting) PendingStatus.Verifying else PendingStatus.Unconfirmed)
         state.error?.let { Text(it.resolve(), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout) }
         if (!online) Text(stringResource(R.string.agents_new_offline_footer), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout)
+        // Where this start goes when the computer starts new Agents as Orca chats (#17650): said over Start
+        state.opensAsOrcaChat?.takeIf { state.pending == null && !state.browsing }?.let {
+            Text(stringResource(if (it.dropped) R.string.agents_new_opens_orca_chat_own else R.string.agents_new_opens_orca_chat, it.title),
+                Modifier.testTag("newAgent.orcaChat"), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout)
+        }
         if (state.presetNeedsModels) Text(stringResource(R.string.agents_new_preset_loading),
             Modifier.testTag("newAgent.presetLoading"), color = PersonaTheme.palette.ink2, style = PersonaTheme.type.callout)
         // What the attachments hold Start back for (iOS `notReadyReason`): uploads still going, a failed one, a launcher that takes none.

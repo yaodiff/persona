@@ -1,0 +1,12 @@
+{
+  "empty": "This recording has no transcript to export.",
+  "expired": "The transcript expired under the recording retention settings.",
+  "bad_timing": "The transcript contains an invalid caption time.",
+  "invalid": "The hub returned unreadable recording details.",
+  "format": "Choose Markdown or WebVTT as the recording export format.",
+  "minutes": "Meeting minutes",
+  "recap": "Day recap",
+  "summary": "Summary",
+  "transcript": "Transcript",
+  "echo": "[Persona echo] {text}"
+}

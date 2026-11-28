@@ -5,7 +5,9 @@
   "takeover_title": "Codex を引き継ぐ",
   "takeover_confirm": "引き継ぐ",
   "takeover_running_confirm": "ターミナルで実行中のターンを終了します。",
+  "takeover_app_confirm": "コンピュータ上のCodexアプリからこのセッションを引き継ぎます。",
   "takeover_done": "引き継ぎました",
   "reason_encrypted_context": "暗号化された会話コンテキストはこのセッションで再開できません。新しいセッションで続けてください。",
+  "reason_app_running": "コンピュータ上でCodexアプリが実行中です。新しいセッションで続けるか、デスクトップアプリをご利用ください。",
   "reason_unavailable": "この会話は現在のセッションで再開できません。新しいセッションで続けてください。"
 }

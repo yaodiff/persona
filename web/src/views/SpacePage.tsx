@@ -271,4 +271,3 @@ function Heading({ title, count, right }: { title: string; count?: number; right
     </div>
   );
 }
-

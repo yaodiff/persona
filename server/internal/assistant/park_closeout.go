@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -328,25 +329,72 @@ func lastAutomatic(v *Supervision) *automaticPark {
 	return v.Reviews[len(v.Reviews)-1].Automatic
 }
 
+func runtimeCloseoutPark(t Todo, now time.Time) (Parked, bool) {
+	w := t.WaitState
+	if t.Phase != assistantwire.TaskPhaseWaiting || w == nil {
+		return Parked{}, false
+	}
+	e := &ParkEvidence{Target: w.Target.Ref, Wake: w.Reason, NextActor: nextActorExternal}
+	var until string
+	if !w.Until.IsZero() {
+		until = w.Until.UTC().Format(time.RFC3339)
+	}
+	switch w.WaitingOn {
+	case assistantwire.WaitDate:
+		e.Kind = parkDate
+	case assistantwire.WaitExternal:
+		switch w.Target.Kind {
+		case assistantwire.WaitTargetPR:
+			for _, u := range polledPRs(t) {
+				if sameReplyPR(u, w.Target.Ref) {
+					e.URL = u
+					break
+				}
+			}
+			if e.URL == "" {
+				return Parked{}, false
+			}
+		case assistantwire.WaitTargetURL, assistantwire.WaitTargetIssue:
+			e.URL = w.Target.Ref
+		default:
+			return Parked{}, false
+		}
+		e.Kind = parkExternalEvent
+	default:
+		return Parked{}, false // an owner decision or an unresolved reference goes through supervision
+	}
+	p, err := readPark(w.Reason, until, e.Kind, e, now)
+	return p, err == nil
+}
+
 // A third unchanged attempt goes to the supervisor. Replaying one stopped turn never spends another attempt.
 func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now time.Time) bool {
-	if s.agentSupervised(t) || c.UpdatedAt.After(now) {
+	if cur, ok := s.todoNow(t.ID); ok {
+		t = cur
+	}
+	if t.Supervision == nil || s.agentSupervised(t) || c.UpdatedAt.After(now) {
 		return false
 	}
-	_, reply := s.triageRead(ctx, c.MachineID, c)
-	if reply == "" {
-		reply = c.LastText
+	var p Parked
+	var ok bool
+	if t.hasTaskRuntime() {
+		p, ok = runtimeCloseoutPark(t, now)
+	} else {
+		_, reply := s.triageRead(ctx, c.MachineID, c)
+		if reply == "" {
+			reply = c.LastText
+		}
+		if reply == "" {
+			s.retryCloseoutBackfill(t.ID)
+			return false
+		}
+		var previous *TaskReview
+		if n := len(t.Supervision.Reviews); n > 0 {
+			previous = &t.Supervision.Reviews[n-1]
+		}
+		p, ok = closeoutPark(reply, previous, now, s.location(ctx))
 	}
-	if reply == "" {
-		s.retryCloseoutBackfill(t.ID)
-		return false
-	}
-	var previous *TaskReview
-	if n := len(t.Supervision.Reviews); n > 0 {
-		previous = &t.Supervision.Reviews[n-1]
-	}
-	p, ok := closeoutPark(reply, previous, now, s.location(ctx))
-	if !ok {
+	if !ok || verifyParkTarget(t.ID, p.Evidence) != nil {
 		return false
 	}
 	dependency := automaticDependency(p)
@@ -375,10 +423,13 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 		return false
 	}
 	parked := false
-	_, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+	_, _, err := s.updateSupervisionGuarded(ctx, t.ID, func(cur Todo) bool {
+		return s.investigationTransitionError(ctx, cur, cur.Supervision, p.Evidence) == nil
+	}, func(v *Supervision) bool {
 		cur, exists := s.todoNow(t.ID)
 		if !exists || cur.DoneAt != nil || v.state(cur) != "" && v.state(cur) != reviewRework || v.Waits != nil ||
 			!v.UpdatedAt.Equal(t.Supervision.UpdatedAt) ||
+			!sameTaskRuntime(cur, t) ||
 			cur.PRURL != t.PRURL || !slices.Equal(cur.PRs, t.PRs) ||
 			!slices.EqualFunc(cur.Agents, t.Agents, func(a, b TodoAgent) bool {
 				return a.MachineID == b.MachineID && a.SessionID == b.SessionID &&

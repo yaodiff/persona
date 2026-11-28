@@ -94,8 +94,9 @@ func (b AgentBuilder) Build() (out outcome.Of[Agent, Fail]) {
 // cards; beyond that, the Live Activity leaves out muted agents and subtasks, whose parent's row stands for them, and
 // Persona Link's summary counts, as the web app's badge does, every agent whose row says it needs you but the
 // assistant's conversations, muted ones included. The Agents list leaves out the assistant's conversations,
-// directory-hidden agents, and muted and quiet agents, which it lists without counting them. The zero Agent and the
-// zero Surface are defects.
+// directory-hidden agents, and muted and quiet agents, which it lists without counting them. Persona counts cards
+// from its conversations and quiet tasks' agents when the asking session is neither muted nor directory-hidden.
+// The zero Agent and the zero Surface are defects.
 func (a Agent) Counts(on Surface) bool {
 	a.known("fleetcount.Agent.Counts")
 	switch on {
@@ -105,6 +106,9 @@ func (a Agent) Counts(on Surface) bool {
 		return !a.visibility.LeftOut() && a.role == RoleWorker() && a.state == StateNeedsYou()
 	case SurfaceBadge():
 		return a.listed() && a.muting == MutingHeard() && a.visibility == VisibilityListed()
+	case SurfacePersonaCards():
+		return a.muting == MutingHeard() && a.visibility != VisibilityHiddenByDirectory() &&
+			(a.role == RoleAssistant() || a.visibility == VisibilityQuiet())
 	}
 	defect.Raise("fleetcount.Agent.Counts", "the zero Surface")
 	return false

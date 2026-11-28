@@ -10,6 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // What the inbox asks of the hub: its settings, the sources' (a mail's text, a reply, a connector's group tools…),
@@ -129,13 +130,72 @@ func (s *Service) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 	return m, err
 }
 
+type inboxExpectedSenderKey struct{}
+
+var errInboxSenderChanged = i18n.Err("assistant-outbound.scope_changed")
+
 // connectorReply sends a reply (or a document's status moves) through connector source at the hub, once per sendID
 // ("": no such guard; inboxSent).
-func (s *Service) connectorReply(ctx context.Context, source string, r connector.InboxReply, sendID string) error {
+func (s *Service) connectorReply(ctx context.Context, source string, r connector.InboxReply, sendID string) (bool, error) {
 	var sent assistantwire.InboxSent
-	err := s.appCall(ctx, AppInbox, inboxReplyMethod, map[string]any{"source": source, "reply": r, "send_id": sendID}, &sent)
+	params := map[string]any{"source": source, "reply": r, "send_id": sendID}
+	if source == "larkcli" {
+		identity, err := s.outboundIdentity(ctx)
+		if err != nil {
+			return false, err
+		}
+		params["sender_identity"] = identity
+	}
+	if expected, _ := ctx.Value(inboxExpectedSenderKey{}).(string); expected != "" && params["sender_identity"] != expected {
+		return false, errInboxSenderChanged
+	}
+	approval, automatic := ctx.Value(outboundApprovalKey{}).(outboundApproval)
+	if automatic && params["sender_identity"] != approval.Identity {
+		return false, i18n.Err("assistant-outbound.scope_changed")
+	}
+	if automatic && approval.Kind == "standing_authorization" {
+		// Collection may have updated the item after its suggestion was checked.
+		// Authorize the actual recipient at the transport boundary, not the snapshot.
+		grant, err := s.messageGrant(ctx, source, messageTarget(r.Thread), approval.Scenario, approval.Identity)
+		if err != nil {
+			return false, err
+		}
+		if grant == nil || grant.ID != approval.ID {
+			return false, i18n.Err("assistant-outbound.scope_changed")
+		}
+	}
+	if automatic || params["sender_identity"] == "user" {
+		var policy struct {
+			SenderIdentity bool `json:"sender_identity"`
+		}
+		if err := s.appCall(ctx, AppInbox, assistantwire.InboxMessagePolicy, map[string]any{}, &policy); err != nil || !policy.SenderIdentity {
+			return false, errors.New("message not sent: upgrade the extension manager before using outward-message settings")
+		}
+	}
+	send := func() (bool, error) {
+		err := s.appCall(ctx, AppInbox, inboxReplyMethod, params, &sent)
+		return sent.Already, err
+	}
+	var err error
+	var already bool
+	if automatic {
+		approval.Thread = r.Thread
+		params["sender_identity"] = approval.Identity
+		if approval.Kind == "standing_authorization" && approval.Scenario == "inbox_reply" {
+			// Rewording a failed/uncertain draft must not turn it into a new
+			// automatic attempt against the same incoming message.
+			sendID = "auto-reply:" + namedClientID(source+"\n"+r.Thread+"\n"+r.Last+"\n"+approval.Identity)
+			params["send_id"] = sendID
+		}
+		already, err = s.auditedMessage(ctx, source, messageTarget(r.Thread), r.Text, sendID, approval, send)
+		if errors.Is(err, errOutboundAuditUnrecorded) {
+			return false, unrecordedSuggestionReply()
+		}
+	} else {
+		already, err = send()
+	}
 	s.inboxSent(sent, sendID)
-	return err
+	return already, err
 }
 
 // inboxSent notes a reply the hub had sent before under the same send id (a retry after the answer was lost): it is

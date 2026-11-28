@@ -26,17 +26,17 @@ func (s *Service) hasPending(ctx context.Context, machine, session string) bool 
 	})
 }
 
-// pendingIDs are the cards waiting for an answer now (nil when the hub could not be asked).
-func (s *Service) pendingIDs(ctx context.Context) map[string]bool {
+// pendingIDs maps each waiting card's ID to its occurrence timestamp (nil when the hub could not be asked).
+func (s *Service) pendingIDs(ctx context.Context) map[string]time.Time {
 	var res struct {
 		Interactions []proto.Interaction `json:"interactions"`
 	}
 	if err := s.call(ctx, DeviceAll, DeviceInteractionsList, map[string]any{}, &res); err != nil {
 		return nil
 	}
-	out := make(map[string]bool, len(res.Interactions))
+	out := make(map[string]time.Time, len(res.Interactions))
 	for _, ix := range res.Interactions {
-		out[ix.ID] = true
+		out[ix.ID] = ix.CreatedAt
 	}
 	return out
 }
@@ -314,7 +314,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) (unrelat
 		r.Hold(res.Last, now.UTC())
 		prog.unsettled = time.Time{}
 		delete(r.Ext, "card") // the next turn gets its own progress message
-		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off"} {
+		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off", "cot_answer"} {
 			delete(r.Ext, k) // the next turn gets its own agent message (and asks for one again)
 		}
 		prog.steps, prog.live, prog.dirty = nil, "", false

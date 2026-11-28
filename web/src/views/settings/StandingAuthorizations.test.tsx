@@ -129,5 +129,5 @@ it("words a known source in the page's language, whatever language it was writte
   expect(sourceLabel("Weekly review with Sam")).toBe("Weekly review with Sam");
   await initI18n("zh-Hans");
   expect(sourceLabel("Main conversation")).toBe("主对话"); // i18n-ignore: expected words
-  expect(sourceLabel(suggested)).toBe("建议的规则：14 天内 3 次相同的回答，点「总是」确认。"); // i18n-ignore: expected words
+  expect(sourceLabel(suggested)).toBe("推荐规则：14 天内给出 3 次相同回复，并点击「总是」确认。"); // i18n-ignore: expected words
 });

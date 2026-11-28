@@ -11,8 +11,27 @@ import (
 )
 
 type questionPersistence struct {
-	done chan struct{}
-	err  error
+	done  chan struct{}
+	err   error
+	retry bool // a rejected owner decision released its claim; await must arbitrate again
+}
+
+// persistenceWakeLocked returns a channel closed by every owner-proposal
+// claim transition. Replacing it at each signal lets the next await select
+// distinguish a completed transition from a newly started attempt.
+func persistenceWakeLocked(p *pending) <-chan struct{} {
+	if p.persistenceWake == nil {
+		p.persistenceWake = make(chan struct{})
+	}
+	return p.persistenceWake
+}
+
+func signalPersistenceWakeLocked(p *pending) {
+	if p.persistenceWake == nil {
+		return
+	}
+	close(p.persistenceWake)
+	p.persistenceWake = make(chan struct{})
 }
 
 func durableQuestion(ix proto.Interaction) bool {

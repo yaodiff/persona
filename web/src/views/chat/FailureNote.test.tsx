@@ -4,7 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session } from "../../lib/types";
-import { FailureNote, showsFailureNote } from "./FailureNote";
+import { FailureNote } from "./FailureNote";
+import { showsFailureNote } from "./failure-note-state";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

@@ -22,7 +22,7 @@ import {
 import { stripBase } from "./base";
 import { requestRoute } from "./card-focus";
 import { homeKey } from "./folded-rows";
-import { attentionReason, interactionCanAnswer, sessionTitle, stateOf } from "./format";
+import { attentionReason, interactionCanAnswer, sessionTitle, activityOf } from "./format";
 import { hubNotice } from "./hub-notify";
 import { defaultManager } from "./manager-choice";
 import { failedTagsOver, listenForNotificationClicks } from "./notification-answer";
@@ -150,9 +150,10 @@ function notify(s: Session | undefined, kind: "needs" | "finished", card?: Inter
   // a permission card's gets Allow / Deny (#4464), when the session can be answered from here and nothing has to be
   // filled in first (fields: as the hub's push and the overview's quick answers); the rest need the conversation
   // (never on a card a task's supervisor holds: it is not the user's to answer, lib/supervisor-held.ts)
-  const ix = waiting.ix?.kind === "permission" && !supervisorHeld(waiting.ix) && !needsFieldValues(waiting.ix) && interactionCanAnswer(waiting.ix, s) ? waiting.ix.id : undefined;
+  const answerable = waiting.ix?.kind === "permission" && !supervisorHeld(waiting.ix) && !needsFieldValues(waiting.ix) && interactionCanAnswer(waiting.ix, s) ? waiting.ix : undefined;
+  const ix = answerable?.id;
   // inside quiet hours a "Needs you" one comes without a sound (a finished one doesn't come at all: wants)
-  postNotification({ title, body, tag, url: href(route), icon, ix, silent: inQuietHours(notifyPrefs()) }, () => navigate(route));
+  postNotification({ title, body, tag, url: href(route), icon, ix, created_at: answerable?.created_at, silent: inQuietHours(notifyPrefs()) }, () => navigate(route));
   return { about: waiting.ix?.id };
 }
 
@@ -282,7 +283,7 @@ export function createAttentionRuntime(initial: AttentionSnapshot, opts: Attenti
   const allow = rateLimiter();
   let latest = initial.sessions;
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  // the card ids seen pending (undefined before the first run), the card each "Needs you" notification is about, and the
+  // the card occurrence keys seen pending (undefined before the first run), the card each "Needs you" notification is about, and the
   // sessions whose "Needs you" came before any card (its first card is the same wait, CardEvent.follows)
   let cards: ReadonlyMap<string, number> | undefined = undefined;
   const announced = new Map<string, string>();
@@ -369,7 +370,7 @@ export function createAttentionRuntime(initial: AttentionSnapshot, opts: Attenti
       if (getState().pushGrading) return;
       const keys = batch.keys;
       batch = { keys: [], firstAt: 0 };
-      const unread = new Map(latest.filter((x) => stateOf(x) === "unread").map((x) => [agentKey(x), sessionTitle(x)]));
+      const unread = new Map(latest.filter((x) => activityOf(x) === "unread").map((x) => [agentKey(x), sessionTitle(x)]));
       if (finishedBatch(keys, unread).kind === "none") return;
       // it replaces the batch notification on screen: the agents that one named and are still unseen stay in it
       const shown = finishedBatch([...batched, ...keys], unread);
@@ -420,7 +421,7 @@ export function createAttentionRuntime(initial: AttentionSnapshot, opts: Attenti
         timers.delete(timer);
         if (getState().pushGrading) return;
         const s = find(done.key);
-        if (!s || stateOf(s) !== "unread") return;
+        if (!s || activityOf(s) !== "unread") return;
         if (!first) speak("finished", done.key);
         gather(done.key);
       }, SETTLE_MS);
@@ -452,7 +453,8 @@ export function createAttentionRuntime(initial: AttentionSnapshot, opts: Attenti
     if (at < quietUntil) return;
     const state = getState();
     const ixId = typeof msg.interaction_id === "string" ? msg.interaction_id : "";
-    const cardLevel = ixId ? state.interactions.find((c) => c.id === ixId)?.push_level : undefined;
+    const occurrence = typeof msg.interaction_created_at === "string" ? msg.interaction_created_at : undefined;
+    const cardLevel = ixId ? state.interactions.find((c) => c.id === ixId && (!occurrence || c.created_at === occurrence))?.push_level : undefined;
     const msgLevel = typeof msg.push_level === "string" ? msg.push_level : undefined;
     if (state.pushGrading && (isHeldLevel(msgLevel) || isHeldLevel(cardLevel))) return;
     const n = hubNotice(msg, (k) => prev.has(k), state.interactions);
@@ -468,11 +470,12 @@ export function createAttentionRuntime(initial: AttentionSnapshot, opts: Attenti
     const looking = inFront() && Boolean(n.key) && (n.key === viewing || (on.name === "persona" && (on.sid ?? state.assistant?.main) === sid));
     if (attentionSoundEnabled() && !hushed && !looking && allow(Date.now())) playSound("needs");
     if (unannounced() || !claimNotification(n.card ? `${n.tag}@${n.card}` : n.tag)) return;
-    const ix = n.card ? state.interactions.find((c) => c.id === n.card) : undefined;
-    const answer = ix?.kind === "permission" && !supervisorHeld(ix) && !needsFieldValues(ix) && interactionCanAnswer(ix, row) ? ix.id : undefined;
+    const ix = n.card ? state.interactions.find((c) => c.id === n.card && (!n.created_at || c.created_at === n.created_at)) : undefined;
+    const answerable = ix?.kind === "permission" && !supervisorHeld(ix) && !needsFieldValues(ix) && interactionCanAnswer(ix, row) ? ix : undefined;
+    const answer = answerable?.id;
     const route = parse(n.path);
     const icon = currentIcon();
-    postNotification({ title: n.title, body: n.body, tag: n.tag, url: href(route), icon, ix: answer, silent: hushed }, () => navigate(route));
+    postNotification({ title: n.title, body: n.body, tag: n.tag, url: href(route), icon, ix: answer, created_at: answerable?.created_at, silent: hushed }, () => navigate(route));
     // taken back once its card is answered or withdrawn (answeredTags), as a card the page announced itself
     if (n.card && n.key) announced.set(n.key, n.card);
   };

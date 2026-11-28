@@ -178,10 +178,8 @@ func (h *Hub) defaultAssistantMachine() string {
 
 // Start asks the assistant to start a conversation (assistant.start).
 func (a assistantRemote) Start(ctx context.Context, p assistantwire.StartParams) (*proto.Session, error) {
-	var res struct {
-		Session proto.Session `json:"session"`
-	}
-	if err := a.call(ctx, assistantwire.MethodStart, p, &res); err != nil {
+	res, err := callAssistant(ctx, a, assistantwire.StartMethod, p)
+	if err != nil {
 		return nil, err
 	}
 	return &res.Session, nil

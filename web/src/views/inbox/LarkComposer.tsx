@@ -4,6 +4,7 @@
 // still names. With a `draft` key, what is typed and who is @-ed stay as the chat's draft until sent (lib/lark-chat.ts;
 // the quote is the page's and is kept with it; the box is drawn again for each chat).
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { useComposition } from "../../lib/ime";
 import { fitPick, releaseLarkAttachments, stageLarkAttachment, type LarkAttachment } from "../../lib/lark-attachments";
 import { chatMembers, loadDraft, saveDraft, withEveryone } from "../../lib/lark-chat";
 import { useItemManager } from "../../lib/manager-choice";
@@ -60,27 +61,53 @@ export const LarkComposer = forwardRef<LarkComposerHandle, LarkComposerProps>(fu
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
-  const filesRef = useRef(files);
-  filesRef.current = files;
+  const ime = useComposition();
+  const mountedRef = useRef(true);
+  const sendingRef = useRef(false);
+  const draftRevRef = useRef(0);
+  const liveAttachmentsRef = useRef<Map<string, LarkAttachment>>(new Map());
+  const inFlightFileIdsRef = useRef<Set<string>>(new Set());
   const stagingRef = useRef(0);
 
-  // previews left in the box go with it
-  useEffect(() => () => releaseLarkAttachments(filesRef.current), []);
+  // previews left in the box go with it; StrictMode re-runs mount after cleanup so reset mountedRef
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const toRelease: LarkAttachment[] = [];
+      for (const [id, att] of liveAttachmentsRef.current) {
+        if (!inFlightFileIdsRef.current.has(id)) {
+          toRelease.push(att);
+          liveAttachmentsRef.current.delete(id);
+        }
+      }
+      if (toRelease.length) releaseLarkAttachments(toRelease);
+    };
+  }, []);
 
   const addFiles = (list: FileList | File[]) => {
-    if (!canAttach) return;
-    const { take, dropped } = fitPick(filesRef.current.length + stagingRef.current, Array.from(list));
+    if (!canAttach || !mountedRef.current) return;
+    const { take, dropped } = fitPick(liveAttachmentsRef.current.size + stagingRef.current, Array.from(list));
     if (dropped) toast(t("inbox-larkcomposer.too_many", { count: dropped }), "error");
     if (!take.length) return;
     stagingRef.current += take.length;
     setStaging(stagingRef.current);
     for (const f of take) {
       stageLarkAttachment(f)
-        .then((a) => setFiles((cur) => [...cur, a]))
-        .catch((e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"))
+        .then((a) => {
+          if (!mountedRef.current) {
+            releaseLarkAttachments([a]);
+            return;
+          }
+          liveAttachmentsRef.current.set(a.id, a);
+          setFiles((cur) => [...cur, a]);
+        })
+        .catch((e: unknown) => {
+          if (mountedRef.current) toast(e instanceof Error ? e.message : String(e), "error");
+        })
         .finally(() => {
-          stagingRef.current -= 1;
-          setStaging(stagingRef.current);
+          stagingRef.current = Math.max(0, stagingRef.current - 1);
+          if (mountedRef.current) setStaging(stagingRef.current);
         });
     }
   };
@@ -88,8 +115,11 @@ export const LarkComposer = forwardRef<LarkComposerHandle, LarkComposerProps>(fu
   useImperativeHandle(ref, () => ({ addFiles, focus: () => input.current?.focus() }));
 
   // The draft: kept a moment after the last change, and right away when the box goes (another chat, the page closing).
-  const latest = useRef({ text, replyTo, picked });
-  latest.current = { text, replyTo, picked };
+  const clearedReplyIdRef = useRef<string | undefined>(undefined);
+  if (replyTo?.id !== clearedReplyIdRef.current) clearedReplyIdRef.current = undefined;
+  const effectiveReplyTo = replyTo && replyTo.id !== clearedReplyIdRef.current ? replyTo : undefined;
+  const latest = useRef({ text, replyTo: effectiveReplyTo as LarkReplyTarget | null | undefined, picked });
+  latest.current = { text, replyTo: effectiveReplyTo, picked };
   const save = useCallback(() => {
     if (!draft) return;
     const d = latest.current;
@@ -135,8 +165,12 @@ export const LarkComposer = forwardRef<LarkComposerHandle, LarkComposerProps>(fu
     caret,
     open: focused && group && Boolean(feed),
     find,
-    onPicked: (p) => setPicked((cur) => [...cur, p]),
+    onPicked: (p) => {
+      draftRevRef.current += 1;
+      setPicked((cur) => [...cur, p]);
+    },
     apply: (next, at) => {
+      draftRevRef.current += 1;
       place.current = at;
       setText(next);
       setCaret(at);
@@ -144,42 +178,82 @@ export const LarkComposer = forwardRef<LarkComposerHandle, LarkComposerProps>(fu
   });
 
   const remove = (id: string) => {
-    setFiles((cur) => {
-      releaseLarkAttachments(cur.filter((a) => a.id === id));
-      return cur.filter((a) => a.id !== id);
-    });
+    if (inFlightFileIdsRef.current.has(id)) return;
+    const doomed = liveAttachmentsRef.current.get(id);
+    if (doomed) {
+      liveAttachmentsRef.current.delete(id);
+      releaseLarkAttachments([doomed]);
+    }
+    setFiles((cur) => cur.filter((a) => a.id !== id));
   };
 
   const ready = (text.trim() !== "" || files.length > 0) && staging === 0;
   const submit = async () => {
-    if (!ready || sending) return;
-    const chosen = files;
-    const trimmed = text.trim();
+    if (sendingRef.current || stagingRef.current > 0) return;
+    const chosen = Array.from(liveAttachmentsRef.current.values());
+    const trimmed = latest.current.text.trim();
+    if (!trimmed && chosen.length === 0) return;
+    const sentRev = draftRevRef.current;
+    const sentIds = new Set(chosen.map((a) => a.id));
+    const sentReply = latest.current.replyTo ?? undefined;
+    const sentMentions = mentionsIn(trimmed, latest.current.picked);
+    sendingRef.current = true;
+    inFlightFileIdsRef.current = sentIds;
     setSending(true);
+    let handedOff = false;
     try {
-      const sent = await onSend(trimmed, chosen, replyTo ?? undefined, mentionsIn(text.trim(), picked));
+      const sent = await onSend(trimmed, chosen, sentReply, sentMentions);
       if (sent === false) return;
-      // the attachments' previews now belong to the messages drawn for them
-      setText("");
-      setPicked([]);
-      setCaret(0);
-      setFiles([]);
-      if (input.current) input.current.style.height = "auto";
+      handedOff = true;
+      // Ownership of submitted attachments transfers to the sent message bubble; keep any newly staged files.
+      for (const id of sentIds) liveAttachmentsRef.current.delete(id);
+      const unchanged = draftRevRef.current === sentRev;
+      if (!mountedRef.current) {
+        if (unchanged && draft) {
+          const cur = loadDraft(draft);
+          const curMentions = cur.mentions ?? [];
+          const sameDraft = cur.text.trim() === trimmed
+            && (cur.replyTo?.id ?? undefined) === sentReply?.id
+            && curMentions.length === sentMentions.length
+            && curMentions.every((m, i) => m.user_id === sentMentions[i].user_id);
+          if (sameDraft) saveDraft(draft, { text: "", replyTo: undefined, mentions: [] });
+        }
+        return;
+      }
+      setFiles((cur) => cur.filter((a) => !sentIds.has(a.id)));
+      if (unchanged) {
+        clearedReplyIdRef.current = sentReply?.id;
+        if (draft) saveDraft(draft, { text: "", replyTo: undefined, mentions: [] });
+        latest.current = { text: "", replyTo: undefined, picked: [] };
+        setText("");
+        setPicked([]);
+        setCaret(0);
+        if (input.current) input.current.style.height = "auto";
+      }
+    } catch (e: unknown) {
+      if (mountedRef.current) toast(e instanceof Error ? e.message : String(e), "error");
     } finally {
-      setSending(false);
+      if (!handedOff && !mountedRef.current && chosen.length) {
+        for (const id of sentIds) liveAttachmentsRef.current.delete(id);
+        releaseLarkAttachments(chosen);
+      }
+      inFlightFileIdsRef.current = new Set();
+      sendingRef.current = false;
+      if (mountedRef.current) setSending(false);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (ime.busy(e.nativeEvent)) return;
     if (people.onKeyDown(e)) return;
-    if (e.key === "Enter" && !e.shiftKey) {
-      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       void submit();
     }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    draftRevRef.current += 1;
     setText(e.target.value);
     setCaret(e.target.selectionStart);
   };
@@ -263,10 +337,14 @@ export const LarkComposer = forwardRef<LarkComposerHandle, LarkComposerProps>(fu
           <textarea
             ref={input}
             value={text}
+            {...ime.handlers}
             onChange={handleChange}
             onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
             onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
+            onBlur={() => {
+              ime.onBlur();
+              setFocused(false);
+            }}
             onKeyDown={handleKeyDown}
             onPaste={(e) => {
               const pasted = Array.from(e.clipboardData.files);

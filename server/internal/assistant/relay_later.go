@@ -95,8 +95,14 @@ func (s *Service) keepRelayLater(to string, msg relayMsg) (int, bool) {
 	if b.st.Later == nil {
 		b.st.Later = map[string][]relayMsg{}
 	}
+	q := b.st.Later[to]
+	if msg.Tool == prFollowupTool && msg.OnceID != "" && slices.ContainsFunc(q, func(old relayMsg) bool {
+		return old.Tool == msg.Tool && old.OnceID == msg.OnceID
+	}) {
+		return len(q), true
+	}
 	msg.QueuedAt = time.Now().UTC()
-	q := append(b.st.Later[to], msg)
+	q = append(q, msg)
 	if len(q) > relayLaterMax {
 		q = slices.Clone(q[len(q)-relayLaterMax:])
 	}

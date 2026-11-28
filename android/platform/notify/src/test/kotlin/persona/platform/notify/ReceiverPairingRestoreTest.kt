@@ -138,6 +138,42 @@ class ReceiverPairingRestoreTest {
         assertEquals(1, app.center.resolutions)
     }
 
+    @Test fun staleActionCannotRetractOrOverwriteItsReplacementNotification() = runTest {
+        val original = app.center.request.copy(createdAt = "2030-01-01T00:00:00.000000001Z")
+        val replacement = app.center.request.copy(createdAt = "2030-01-01T00:00:00.000000002Z")
+        app.center.request = replacement
+        app.center.pending.value = listOf(replacement)
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        app.showForTest(replacement)
+        app.restoring.completeRestore()
+        val intent = Intent(ActionReceiver.RESOLVE)
+            .putExtra(ActionReceiver.EXTRA_ID, original.id)
+            .putExtra(ActionReceiver.EXTRA_ACTION, "allow")
+            .putExtra(ActionReceiver.EXTRA_CREATED_AT, original.createdAt)
+        val pending = receive(ActionReceiver(), intent)
+        awaitRealCondition("stale notification action did not finish") { shadowOf(pending).future.isDone }
+        assertEquals("the replacement's notification must survive the old action", setOf(replacement.id), app.notifier().showingRequests())
+        assertEquals(0, app.center.resolutions)
+    }
+
+    @Test fun failedActionCannotOverwriteItsReplacementNotification() = runTest {
+        val original = app.center.request.copy(createdAt = "2030-01-01T00:00:00.000000001Z")
+        val replacement = app.center.request.copy(createdAt = "2030-01-01T00:00:00.000000002Z")
+        app.center.request = replacement
+        app.center.pending.value = emptyList() // cold action: the old occurrence is not cached
+        app.restoring.failure = RuntimeException("restore failed")
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        app.showForTest(replacement)
+        val intent = Intent(ActionReceiver.RESOLVE)
+            .putExtra(ActionReceiver.EXTRA_ID, original.id)
+            .putExtra(ActionReceiver.EXTRA_ACTION, "allow")
+            .putExtra(ActionReceiver.EXTRA_CREATED_AT, original.createdAt)
+        val pending = receive(ActionReceiver(), intent)
+        awaitRealCondition("failed notification action did not finish") { shadowOf(pending).future.isDone }
+        assertEquals("the exception result must retain the displayed occurrence fence", setOf(replacement.id), app.notifier().showingRequests())
+        assertEquals(0, app.center.resolutions)
+    }
+
     @Test fun extensionActionWaitsForRestoreBeforeClaimingOrExecuting() = runTest {
         val scope = ExtensionNotificationScope("hub/generation", null, "assistant")
         val ui = RestoreUi()
@@ -221,6 +257,11 @@ internal class NotifyRestoreApplication : Application(), GeneratedComponent, Not
     override fun journal(): ExitJournal = exits
     override fun runtime(): NotificationRuntime = notificationRuntime
     override fun extensionNotifications(): ExtensionNotificationEnvironment = extensions
+
+    internal fun showForTest(request: Interaction) {
+        preferences.preferences.value = DeviceNotificationPreferences(input = true)
+        notificationManager.postInteraction(request)
+    }
 }
 
 internal class RecordingConnection : HubConnection {
@@ -232,7 +273,7 @@ internal class RecordingConnection : HubConnection {
 }
 
 internal class RecordingCenter : InteractionCenter {
-    val request = Interaction("restore-action", machineId = "machine", sessionId = "session", kind = "permission")
+    var request = Interaction("restore-action", machineId = "machine", sessionId = "session", kind = "permission")
     override val pending = MutableStateFlow(listOf(request))
     val answered = CompletableDeferred<Unit>()
     var refreshes = 0

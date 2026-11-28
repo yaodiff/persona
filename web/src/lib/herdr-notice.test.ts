@@ -33,6 +33,14 @@ describe("herdrWatched", () => {
     expect(herdrWatched(m("a", true, "orca"))).toBe(false);
     expect(herdrWatched(m("a", false))).toBe(false);
   });
+
+  it("follows the engine set, not only its default (#17037)", () => {
+    const set = (hosts: string[], def: string) => ({ ...m("a", true, def), engine_hosts: hosts, engine_default: def });
+    expect(herdrWatched(set(["herdr", "orca"], "orca"))).toBe(true); // herdr in the set, Orca the default
+    expect(herdrWatched(set(["herdr-core", "orca"], "orca"))).toBe(false);
+    expect(herdrWatched(set([], ""))).toBe(false); // no terminal engine
+    expect(herdrWatched({ ...set(["herdr", "orca"], "orca"), online: false })).toBe(false);
+  });
 });
 
 describe("HerdrWatch", () => {
@@ -84,7 +92,7 @@ describe("HerdrWatch", () => {
     await w.refresh([m("mac")]);
     await w.start("mac");
     const failure = w.snapshot().failures.get("mac")!;
-    expect(failure.text).toBe("herdr 起来后马上退出了（退出码 1）");
+    expect(failure.text).toBe("herdr 启动后立即退出（退出码 1）");
     expect(failure.text).not.toContain("req-42");
     expect(failure.detail).toContain("exit status 1");
     expect(failure.detail).toContain("req-42");
@@ -104,13 +112,13 @@ describe("HerdrWatch", () => {
 
 describe("herdrFailureText", () => {
   it("the known failures in words, anything else as it came", () => {
-    expect(herdrFailureText("herdr server stopped right after starting: signal: killed")).toBe("herdr 起来后马上被结束了（killed）");
-    expect(herdrFailureText("herdr server stopped right after starting: exited")).toBe("herdr 起来后马上退出了");
-    expect(herdrFailureText("herdr is not installed (no herdr command in PATH or the login shell)")).toMatch(/^这台电脑上没装 herdr/);
-    expect(herdrFailureText("herdr did not answer on /tmp/h.sock within 20s")).toBe("herdr 启动了，但 20 秒内没有应答");
-    expect(herdrFailureText("unknown method herdr.server.start")).toContain("版本太旧");
-    expect(herdrFailureText("MacBook: machine is offline")).toBe("这台电脑现在离线");
-    expect(herdrFailureText("context deadline exceeded")).toMatch(/^等了很久/);
+    expect(herdrFailureText("herdr server stopped right after starting: signal: killed")).toBe("herdr 启动后立即被终止（killed）");
+    expect(herdrFailureText("herdr server stopped right after starting: exited")).toBe("herdr 启动后立即退出");
+    expect(herdrFailureText("herdr is not installed (no herdr command in PATH or the login shell)")).toMatch(/^这台电脑未安装 herdr/);
+    expect(herdrFailureText("herdr did not answer on /tmp/h.sock within 20s")).toBe("herdr 已启动，但在 20 秒内未响应");
+    expect(herdrFailureText("unknown method herdr.server.start")).toContain("版本过旧");
+    expect(herdrFailureText("MacBook: machine is offline")).toBe("这台电脑当前离线");
+    expect(herdrFailureText("context deadline exceeded")).toMatch(/^herdr 启动耗时较长/);
     expect(herdrFailureText("这台电脑没有 herdr")).toBe("这台电脑没有 herdr");
     expect(herdrFailure(new Error("boom")).text).toBe("boom");
   });

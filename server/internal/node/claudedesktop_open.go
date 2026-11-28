@@ -122,6 +122,41 @@ func (n *Node) sendOpened(ctx context.Context, id, text string, images []proto.I
 	return true, refusal(peerUnsupported, peerNoInboxMsg, nil)
 }
 
+// wentOnKey marks a send that already went on from an earlier transcript (sendWentOn): it goes on once at most.
+type wentOnKey struct{}
+
+// desktopWentOn is the transcript the desktop app's session runs now when that session went on from transcript id and
+// is unarchived (#14394); "" for any other id (a session's current transcript, one no entry names, an archived
+// session's), for one a claude has open (a terminal's that took it up: refused as open elsewhere, as before), for a
+// send that already went on, and where sendThroughDesktopApp does not look (a scoped node, an app that cannot be
+// opened).
+func (n *Node) desktopWentOn(ctx context.Context, id string) string {
+	if n.sessionScope != nil || !claudeDesktopOpens || !validID(id) || ctx.Value(wentOnKey{}) != nil {
+		return ""
+	}
+	for _, s := range readClaudeDesktopIndex(n.home).earlier[id] {
+		if !s.archived {
+			if _, _, open := n.claudeOpenElsewhere(id); open {
+				return ""
+			}
+			return s.transcript
+		}
+	}
+	return ""
+}
+
+// sendWentOn sends the message for transcript id, which its desktop session went on from, as one to the transcript
+// the session runs now (cur): the inbox of its claude, or the app opens it (sendThroughDesktopApp), never a claude
+// --resume of id in a terminal beside the app's session. The settings queued for id go with it, as when the app goes on
+// in a new transcript as it opens a session. Sent as cur's, it takes cur's turn (inputTurn) inside id's, and the host
+// id last ran in (withResumeHost) is not cur's.
+func (n *Node) sendWentOn(ctx context.Context, id, cur, text string, images []proto.Image, opts sendOpts) error {
+	log.Printf("send %s: its desktop session went on in %s", id, cur)
+	n.transferDesktopSettings(id, cur)
+	ctx = context.WithValue(context.WithValue(ctx, startHostKey{}, ""), wentOnKey{}, id)
+	return n.send(ctx, cur, text, images, opts)
+}
+
 // desktopTranscript is the transcript the app's session local runs now, by its entry; id when no entry names it.
 func (n *Node) desktopTranscript(local, id string) string {
 	for t, a := range readClaudeDesktopIndex(n.home).about {

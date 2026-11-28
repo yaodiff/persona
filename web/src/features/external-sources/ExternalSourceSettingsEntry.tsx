@@ -5,7 +5,7 @@ import { lazyPage } from "../../lib/lazy-page";
 import { useShownManager } from "../../lib/manager-choice";
 import { Loading } from "../../ui/atoms";
 import { OverlayBoundary } from "../../views/LazyOverlay";
-import type { ExternalSourceSettingsProps } from "./ExternalSourceSettings";
+import type { ExternalSourceSettingsCopy, ExternalSourceSettingsProps } from "./ExternalSourceSettings";
 
 const SettingsPanel = lazyPage(() => import("./ExternalSourceSettings").then((module) => module.ExternalSourceSettings), { listed: false });
 
@@ -16,9 +16,9 @@ export function externalProviderForConnector(id: string) {
   return id;
 }
 
-export function ConnectorExternalSourceSettings({ ids, manager }: { ids: readonly string[]; manager?: string }) {
+export function ConnectorExternalSourceSettings({ ids, manager, copy }: { ids: readonly string[]; manager?: string; copy?: ExternalSourceSettingsCopy }) {
   const providers = [...new Set(ids.filter(Boolean).map(externalProviderForConnector))];
-  return providers.map((provider) => <ExternalSourceSettingsEntry key={provider} provider={provider} manager={manager} />);
+  return providers.map((provider) => <ExternalSourceSettingsEntry key={provider} provider={provider} manager={manager} copy={copy} />);
 }
 
 export function ExternalSourceSettingsEntry({ manager: named, ...props }: Omit<ExternalSourceSettingsProps, "manager"> & { manager?: string }) {

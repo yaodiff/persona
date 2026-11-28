@@ -6,6 +6,7 @@ import { todoDetailPatchAccepted } from './PhoneTodoDetailEditor';
 import { ResourceRow, Wire } from './Wire';
 import { TODO_HUB_CHOICES, TODO_HUB_SECTIONS, TodoHubCounts, TodoHubRow, todoHubChoiceIncludes, todoHubLabel } from './TodoHubView';
 import { TODO_LIST_SECTIONS, type TodoListSection } from './TodoViewWire';
+import { type TodoWait, type TodoWaitContact, type TodoWaitPRBlocker, parseTodoWaitKind, parseTodoWaitPRBlocker } from './TodoWaitWire';
 import type { TodoPhonePlacement } from './TodoPhoneSections';
 import { TODO_PHONE_SECTIONS, TodoPhoneRowContext, TodoPhoneSections, phoneTodoSeenCanFile, phoneTodoTitle } from './TodoPhoneSections';
 
@@ -124,6 +125,58 @@ export function todoCalendarDays(mode:string, anchor:number, weekStart:number):n
   return days;
 }
 
+interface ParsedTodoWait {
+  wait: TodoWait;
+  unknownKind: string;
+}
+
+function parseTodoWait(raw: Record<string, Object>): ParsedTodoWait | undefined {
+  const kindRaw = Wire.text(raw, 'kind').trim();
+  if (!kindRaw) return undefined;
+  const parsedKind = parseTodoWaitKind(kindRaw);
+  const knownKind = typeof parsedKind === 'string' ? parsedKind : 'parked';
+  const unknownKind = typeof parsedKind === 'string' ? '' : kindRaw;
+
+  const blockersRaw = raw['pr_blockers'];
+  const blockers: TodoWaitPRBlocker[] = [];
+  if (Array.isArray(blockersRaw)) {
+    for (const item of blockersRaw as Object[]) {
+      if (typeof item !== 'string') continue;
+      const parsedBlocker = parseTodoWaitPRBlocker(item as string);
+      if (typeof parsedBlocker === 'string') blockers.push(parsedBlocker);
+    }
+  }
+
+  let contact: TodoWaitContact | undefined = undefined;
+  const contactObj = Wire.object(raw, 'contact');
+  const channel = Wire.text(contactObj, 'channel').trim();
+  if (channel) {
+    contact = {
+      channel: channel,
+      sender: Wire.text(contactObj, 'sender') || undefined,
+      sent_at: Wire.text(contactObj, 'sent_at') || undefined,
+      url: Wire.text(contactObj, 'url') || undefined,
+      request: Wire.text(contactObj, 'request') || undefined
+    };
+  }
+
+  const wait: TodoWait = {
+    kind: knownKind,
+    waiting_on: Wire.text(raw, 'waiting_on') || undefined,
+    reason: Wire.text(raw, 'reason') || undefined,
+    wake_condition: Wire.text(raw, 'wake_condition') || undefined,
+    wake_at: Wire.text(raw, 'wake_at') || undefined,
+    until: Wire.text(raw, 'until') || undefined,
+    since: Wire.text(raw, 'since') || undefined,
+    url: Wire.text(raw, 'url') || undefined,
+    handoff_todo_id: Wire.text(raw, 'handoff_todo_id') || undefined,
+    contact: contact,
+    pr_blockers: blockers.length ? blockers : undefined,
+    step: Wire.text(raw, 'step') || undefined
+  };
+  return { wait: wait, unknownKind: unknownKind };
+}
+
 export class TodoWorkspaceItem {
   id: string = '';
   title: string = '';
@@ -146,7 +199,10 @@ export class TodoWorkspaceItem {
   priority: string = '';
   partOf: string = '';
   hubView: TodoHubRow | undefined;
+  wait: TodoWait | undefined;
+  waitUnknownKind: string = '';
   stage: string = '';
+  stageKind: string = '';
   prUrl: string = '';
   kind: string = '';
   agents: TodoWorkspaceAgent[] = [];
@@ -188,7 +244,11 @@ export class TodoWorkspaceItem {
     this.priority = Wire.text(data, 'priority');
     this.partOf = Wire.text(data, 'part_of');
     this.hubView = TodoHubRow.read(data);
+    const parsedWait = parseTodoWait(Wire.object(data, 'wait'));
+    this.wait = parsedWait?.wait;
+    this.waitUnknownKind = parsedWait?.unknownKind || '';
     this.stage = Wire.text(data, 'stage');
+    this.stageKind = Wire.text(data, 'stage_kind');
     this.prUrl = Wire.text(data, 'pr_url');
     this.kind = Wire.text(data, 'kind');
     this.agents = Wire.rows(data, 'agents').map((item: Record<string, Object>) => new TodoWorkspaceAgent(item));
@@ -1329,7 +1389,8 @@ export class TodoWorkspace {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return true;
     const values: string[] = [todo.title, todo.notes, todo.project, this.projectTitle(todo),
-      Wire.text(todo.thread, 'title'), Wire.text(todo.source, 'channel')];
+      Wire.text(todo.thread, 'title'), Wire.text(todo.source, 'channel'),
+      todo.wait?.waiting_on || '', todo.wait?.reason || '', todo.wait?.step || ''];
     todo.agents.forEach((agent: TodoWorkspaceAgent) => values.push(agent.title, agent.cwd));
     todo.spaces.forEach((space: TodoWorkspaceSpace) => values.push(space.space, this.machineName(space.machineId)));
     return values.some((value: string) => value.toLocaleLowerCase().includes(needle));
@@ -1392,12 +1453,13 @@ export class TodoWorkspace {
     this.items.forEach((item: TodoWorkspaceItem) => {
       if (item.hubView ? item.hubView.phase !== 'done' : !item.isDone() || !!item.startError) open.add(JSON.stringify([item.manager, item.id]));
     });
-    const choice = this.search.trim() || this.hubCalm() ? 'all' : this.hubChoice;
+    const searching = !!this.search.trim();
+    const choice = searching || this.hubCalm() ? 'all' : this.hubChoice;
     const fallbackRanks = new Map<string, number>();
     const nextRank = new Map<string, number>();
     for (const item of visible.slice().sort(compareTodoRecent)) {
       const identity = JSON.stringify([item.manager, item.id]);
-      if (item.partOf && item.partOf !== item.id && open.has(JSON.stringify([item.manager, item.partOf]))) continue;
+      if (!searching && item.partOf && item.partOf !== item.id && open.has(JSON.stringify([item.manager, item.partOf]))) continue;
       const key = this.hubSection(item, now);
       if (!todoHubChoiceIncludes(choice, key)) continue;
       if (!item.hubView) {
@@ -1438,7 +1500,9 @@ export class TodoWorkspace {
   }
 
   sections(now:number=Date.now(),firstWeekday:number=1): TodoWorkspaceSection[] {
-    let visible = this.items.filter((item: TodoWorkspaceItem) => this.searchMatches(item,this.search) && todoMatchesDue(item,this.dueFilter,now,firstWeekday));
+    const searching = !!this.search.trim();
+    let visible = this.items.filter((item: TodoWorkspaceItem) => this.searchMatches(item,this.search) &&
+      (todoMatchesDue(item,this.dueFilter,now,firstWeekday) || (searching && item.isDone() && !item.startError)));
     if (this.effectiveGroup() === 'hub') return this.hubSections(visible, now);
     if (this.statusFilter !== 'all') visible = visible.filter((item: TodoWorkspaceItem) => this.state(item) === this.statusFilter);
     const directory = new TodoPhoneSections(this.sessions,now);
@@ -1449,7 +1513,9 @@ export class TodoWorkspace {
     for (const group of groups) {
       let key = this.state(group.lead), title = this.stateLabelKey(group.lead);
       if (phone) { key=phone.get(group.lead)!.section; title=phoneTodoTitle(key); }
-      else if (this.groupBy === 'project') {
+      else if (searching && group.lead.isDone() && !group.lead.startError) {
+        key = 'done'; title = phoneTodoTitle('done');
+      } else if (this.groupBy === 'project') {
         key = group.lead.project || 'unsorted'; title = group.lead.project ? this.projectTitle(group.lead) : 'todo_unsorted';
       } else if (this.groupBy === 'thread') {
         const chatId = Wire.text(group.lead.thread, 'chat_id'), threadId = Wire.text(group.lead.thread, 'thread_id');
@@ -1462,7 +1528,11 @@ export class TodoWorkspace {
     }
     const order: string[] = Array.from(grouped.keys());
     if (phone) order.sort((left:string,right:string)=>TODO_PHONE_SECTIONS.indexOf(left)-TODO_PHONE_SECTIONS.indexOf(right));
-    else order.sort((left: string, right: string) => (titles.get(left) || left).localeCompare(titles.get(right) || right));
+    else order.sort((left: string, right: string) => {
+      if (left === 'done' && right !== 'done') return 1;
+      if (right === 'done' && left !== 'done') return -1;
+      return (titles.get(left) || left).localeCompare(titles.get(right) || right);
+    });
     return order.map((key: string) => {
       const rows = grouped.get(key) || [];
       const priority=(g:TodoWorkspaceGroup):number => g.members.reduce((best:number,item:TodoWorkspaceItem) => Math.min(best,item.priority === 'high' ? 0 : item.priority === 'low' ? 2 : 1),2);

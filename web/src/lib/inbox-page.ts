@@ -53,6 +53,10 @@ export function fetchInboxTree(kind: InboxParentKind, id: string, manager?: stri
 export function parentRoute(p: InboxParent, manager?: string): Route | undefined {
   if (p.kind === "inbox") return itemRoute({ id: p.id, manager });
   if (p.kind === "todo") return { name: "todos", id: p.id };
+  if (p.kind === "agent") {
+    const colon = p.id.indexOf(":");
+    return colon > 0 && colon < p.id.length - 1 ? { name: "agents", id: p.id } : undefined;
+  }
   const i = p.id.indexOf("/");
   return i > 0 && i < p.id.length - 1 ? { name: "session", mid: p.id.slice(0, i), sid: p.id.slice(i + 1) } : undefined;
 }

@@ -143,14 +143,16 @@ func (h *Hub) notifyReply(owner, machineID, machine, sessionID, title, text stri
 
 // notifyReplyKeyed is notifyReply with the manager's related key for the question it waits on (low-distraction mode keeps one key
 // quiet for 12 hours after it rang): reminders of the same question merge, a new question of the same agent rings.
-// "" (an older manager) keys by the session and what it asks.
-func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text, key string) {
+// "" (an older manager) keys by the session and what it asks. Returns the held reason when suppressed.
+func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text, key string) string {
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	wants := pushWants{Kind: "input"}
 	policy := pushPolicy{kind: assistantwire.NotifyReply, level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
-	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+	_, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil)
+	if heldReason == "" {
 		h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
 	}
+	return heldReason
 }
 
 // replyKey is the related key of a reply reminder: the manager's when it named one, else the session and a digest of
@@ -179,14 +181,14 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 // payload carries todo_id (never interaction_id: the iOS app clears a delivered push whose interaction_id is not in its
 // card list as stale, and a decision is never in that list) and records withdraw-capable devices under TodoAskCardID so
 // EventFleetResolved(todo-ask:<id>) recalls it (#13916).
-func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo, relatedKey string) {
+func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo, relatedKey string) string {
 	key := strings.TrimSpace(relatedKey)
-	if id, _, ok := assistantwire.TodoPushKeyParts(key); !ok || id != todo.ID {
+	if _, id, _, ok := structuredPushKeyParts(key); !ok || id != todo.ID {
 		// One key a round: the same decision does not ring twice in 12 hours, but a new round of it (asked again) does.
 		key = "todo:" + todo.ID + "@" + todo.AskedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if !h.push.claimTodoPush(key) {
-		return // the same to-do's decision rang and still waits on the owner
+		return interceptReasonDedup // the same to-do's decision rang and still waits on the owner
 	}
 	// The decision's card (TodoAskCardID): once the to-do no longer waits on the owner, the manager names it
 	// (EventFleetResolved) and the push leaves the devices it went to. card_id and todo_id only, never interaction_id:
@@ -214,9 +216,11 @@ func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, tex
 	wants := pushWants{Kind: "input"}
 	sum := sha256.Sum256([]byte("todo_decide\x00" + todo.ID))
 	policy := pushPolicy{kind: assistantwire.NotifyDecide, level: assistantwire.LevelP0, relatedKey: key, title: title, body: text}
-	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, sent); heldReason == "" {
+	_, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, sent)
+	if heldReason == "" {
 		h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
 	}
+	return heldReason
 }
 
 // notifyInteraction pushes a new card. linkCovered: owner says its Persona Link summary rings for this card
@@ -233,8 +237,9 @@ func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine st
 }
 
 // notifyInteractionHinted is notifyInteractionAt with what an attention mode reads of the card (push_attention.go): its
-// depth (assistantwire.DepthDeep for a plan or a long review) and the track it comes from ("" for none).
-func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key, depth, track string) {
+// depth (assistantwire.DepthDeep for a plan or a long review) and the track it comes from ("" for none). Returns the
+// held reason when suppressed.
+func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key, depth, track string) string {
 	switch level {
 	case assistantwire.LevelP0, assistantwire.LevelP1, assistantwire.LevelP2:
 	default:
@@ -242,6 +247,9 @@ func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machin
 	}
 	if key = strings.TrimSpace(key); key == "" {
 		key = "ix:" + ix.ID
+	}
+	if !h.push.claimTodoPushCard(key, ix.ID) {
+		return interceptReasonDedup
 	}
 	build := func(l i18n.Lang) map[string]any { return interactionPayloadIn(l, ix, machine) }
 	summary := ix.Summary
@@ -253,11 +261,13 @@ func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machin
 			"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
 	}
 	wants := pushWants{Kind: "input"}
+	var heldReason string
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
 		policy := pushPolicy{kind: assistantwire.NotifyInput, level: level, relatedKey: key, title: summary, depth: depth, track: track}
-		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation); heldReason == "" {
+		heldReason = h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
+		if heldReason == "" {
 			h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
 		}
 	} else {
@@ -266,10 +276,12 @@ func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machin
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
 		policy := pushPolicy{kind: assistantwire.NotifyInput, level: level, relatedKey: key, title: summary, depth: depth, track: track}
-		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil); heldReason == "" {
+		heldReason = h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil)
+		if heldReason == "" {
 			h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
 		}
 	}
+	return heldReason
 }
 
 // notifyWSFrom projects a push onto the opt-in WebSocket notification event, written in each connection's language
@@ -382,6 +394,9 @@ func notifyMessage(kind string, payload map[string]any) map[string]any {
 	}
 	if id, ok := payload["interaction_id"]; ok {
 		msg["interaction_id"] = id
+	}
+	if at, ok := payload["interaction_created_at"]; ok {
+		msg["interaction_created_at"] = at
 	}
 	if id, ok := payload["id"]; ok { // alert: the caller's id (POST /api/v1/notify)
 		msg["id"] = id

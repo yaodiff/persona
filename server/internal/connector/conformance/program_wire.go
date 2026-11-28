@@ -197,6 +197,15 @@ func checkDescribe(name string, raw json.RawMessage) error {
 	if res.Action.Visible == "" {
 		is.add("no action.visible (the card cannot say who will see it)")
 	}
+	if res.AutoConfirm != nil {
+		tok := res.AutoConfirm.Token
+		if strings.TrimSpace(tok) == "" || strings.TrimSpace(tok) != tok || len(tok) > connector.AutoConfirmTokenMaxLen {
+			is.add("auto_confirm.token must be a non-empty trimmed string of at most %d bytes", connector.AutoConfirmTokenMaxLen)
+		}
+		if res.AutoConfirm.ExpiresAt.IsZero() {
+			is.add("auto_confirm.expires_at is required")
+		}
+	}
 	return is.err()
 }
 

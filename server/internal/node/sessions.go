@@ -78,13 +78,21 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
 
+	// Hand the row agents to the pass so per-row transcript lookup can skip the TRAE probe for non-TRAE rows.
+	if pass != nil {
+		pass.agentKinds = make(map[string]string, len(agents))
+		for id, a := range agents {
+			pass.agentKinds[id] = a.Agent
+		}
+	}
+
 	agyConversations := map[string]string{}
 	agyRuntimeIDs := map[string]string{}
 	for id, agent := range agents {
 		if agent.Agent == agyAgent {
 			if conversation := n.agyConversation(id, agent.PaneID); conversation != "" {
 				agyConversations[id] = conversation
-				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+				if !agyStopped(agent.AgentStatus) {
 					agyRuntimeIDs[id] = agyAgent + "-" + conversation
 				}
 			}
@@ -153,7 +161,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			seen[id] = true
 			continue
 		}
-		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
+		pane := host.ParsePane(a.PaneID)
+		viaBotmux := pane.Kind == host.Botmux
+		if viaBotmux {
+			if h, ok := n.hosts.Get(host.Botmux).(*botmuxHost); ok {
+				s.SetBotmuxExternalTrigger(h.externalTriggerNotice())
+				h.refreshCapsAsync(pane.ID)
+			}
+		}
 		switch {
 		case viaBotmux && (a.Agent == "codex" || a.Agent == traexAgent):
 			// The thread's name, else botmux's title of the topic; messages go through botmux, neither route.
@@ -317,6 +332,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		}
 		if a.Agent == "codex" {
 			n.codexPaneControls(&s, rollout)
+		} else if a.Agent == "claude" {
+			n.claudeTerminalSpeedRow(&s, rollout)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -338,10 +355,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Capabilities = caps
 			}
 			hasRuntimeRow := false
+			var companionPreview agyPreview
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+				if runtimeRow, preview, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
 					hasRuntimeRow = true
+					companionPreview = preview
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
@@ -351,15 +370,15 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
 						s.ContextWindow = runtimeRow.ContextWindow
 					}
-					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
-						s.OutputTokens = runtimeRow.OutputTokens
+					if s.OutputTokensValue() == 0 && runtimeRow.OutputTokensValue() > 0 {
+						s.SetOutputTokens(int(runtimeRow.OutputTokensValue()))
 					}
 					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
 						s.UpdatedAt = runtimeRow.UpdatedAt
 					}
-					if s.LastText == "" && runtimeRow.LastText != "" {
-						s.LastText = runtimeRow.LastText
-					}
+					// The companion has already applied the native rewind cut.
+					agyBackgroundTasks{running: runtimeRow.Background, ended: runtimeRow.BackgroundEnded()}.apply(&s)
+					n.agyRuntimeTaskLogs(&s, agyConversations[id])
 					if bd := runtimeRow.ContextBreakdown(); bd != nil {
 						if existing := s.ContextBreakdown(); existing == nil || existing.Source != proto.ContextBreakdownExact {
 							s.SetContextBreakdown(bd)
@@ -368,11 +387,33 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 			}
 			if a.Agent == agyAgent {
+				conversation := agyConversations[id]
+				u, readable := n.agyTranscriptMeta(conversation)
+				if readable {
+					// Rev changes whenever the transcript does (its size), as on every transcript-backed row: the apps
+					// pull a session's new items from the light revs event, which carries only rows whose Rev changed
+					// (proto.Session.Rev, revsChanged). A pane the companion lists before its transcript is on this
+					// computer keeps Rev 0 until the file appears, so the pane's Rev only ever moves up from there.
+					if s.Rev == 0 && u.size > 0 {
+						s.Rev = u.size
+					}
+					transcriptAt := u.turn.lastTextAt
+					if transcriptAt.IsZero() {
+						transcriptAt = u.modTime
+					}
+					if u.turn.lastText != "" && companionPreview.text != "" && companionPreview.at.After(transcriptAt) {
+						u.turn.lastText = companionPreview.text
+					}
+					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+				} else if s.LastText == "" && companionPreview.text != "" && n.agyConversation(id, a.PaneID) == conversation {
+					s.LastText = companionPreview.text
+				}
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])
 				} else {
-					n.mergeAgyTranscript(&s, agyConversations[id])
+					n.mergeAgyTranscript(&s, conversation)
 				}
+				n.agyPaneControls(&s, id)
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					liveBusyAgy[a.PaneID] = true
@@ -431,6 +472,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if m := n.assistantModeOf(s.SessionID); m != "" {
 				s.PermissionMode = m
 			}
+		} else if s.Agent == agyAgent {
+			s.PermissionMode = agyShownMode(s.PermissionMode, n.agyRuntimeMode(s.SessionID))
 		}
 		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes. Under
 		// an id of its own, the ids it went by go too, named on the row for the manager's archive (runtimealiases.go).
@@ -451,6 +494,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			}
 		} else if s.Agent == agyAgent {
 			n.resolveAgyContextWindow(s)
+			if s.SourceInstanceID == agyRuntimeID {
+				agyBackgroundTasks{running: s.Background, ended: s.BackgroundEnded()}.apply(s)
+				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); ok {
+					n.agyRuntimeTaskLogs(s, conversation)
+				}
+			}
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -527,6 +576,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if s.Status == proto.StatusWorking && (s.Agent == "" || s.Agent == "claude" || s.Agent == "codex") {
 			s.ToolLoop = n.toolLoopOf(s.SessionID)
 		}
+		// The row leaves with a title it can show (#16343): whatever source named it (a Codex thread name, a runtime's
+		// own title, a terminal's) may hold a whole opening prompt, which the list would otherwise carry everywhere.
+		// Every lookup by title above has read the whole one already.
+		s.Title = transcript.ListTitle(s.Title)
 		if pass == nil || !pass.unavailable[s.SessionID] {
 			s.WorkspaceCwd = n.sessionWorkspaceCwd(s.Cwd)
 			fillGitPlace(s)            // project, worktree and branch for the apps' tree (gitplace.go)
@@ -546,10 +599,21 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	out = out[:j]
 	n.nameAgyAliases(out, agyConversations) // the ids an agy conversation went by, on the row listing it (agyaliases.go)
 	n.markAgyStopped(out, agyRuntimeIDs)    // and one the user closed, stopped by them (agystopped.go)
+	// The desktop app's sessions once each: a transcript one went on from folds into its current row (#14394).
+	if folds := n.offlineFolds(); len(folds.earlier) > 0 {
+		if out = foldDesktopEarlier(out, folds, n.alwaysListed()); len(out) == 0 {
+			return nil // as above
+		}
+	}
 	parents, origins := n.offlineDesktop()
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
+	linkOrcaBotRuns(out, n.orcaBotHomes())   // an Orca bot's own runs under its Home Chat (orcabots.go, #16891)
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
+	n.joinFolderSpaces(out)                  // one folder, one space, whichever app placed a session there (folderspace.go)
+	if n.peer != nil {
+		n.noteCheckpointEnds(out)
+	}
 	sortNewestFirst(out)
 	return out
 }
@@ -862,4 +926,7 @@ func (n *Node) codexPaneControls(s *proto.Session, rollout quickMeta) {
 	n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 	n.codexTerminalRow(id, s, rollout)                   // on the terminal route: typed /model (codex_terminal_modes.go)
 	n.codexSpeedRow(s)
+	if s.ServiceTier == "" {
+		s.ServiceTier = rollout.speed.Tier
+	}
 }

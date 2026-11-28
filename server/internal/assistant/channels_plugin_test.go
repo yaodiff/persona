@@ -362,6 +362,84 @@ func TestChannelAnswerDeletedOnResolveOK(t *testing.T) {
 	}
 }
 
+func TestChannelAnswerStaleOccurrenceCannotResolveReplacement(t *testing.T) {
+	firstAt := time.Date(2026, 11, 24, 10, 0, 0, 123456789, time.UTC)
+	replacementAt := firstAt.Add(time.Second)
+	first := proto.Interaction{ID: "ix_same", Kind: proto.IxPermission, Summary: "first", CreatedAt: firstAt}
+	replacement := proto.Interaction{ID: "ix_same", Kind: proto.IxPermission, Summary: "replacement", CreatedAt: replacementAt}
+	s, _, _, resolves := newTextAskService(t, replacement)
+	s.chans.mu.Lock()
+	s.chans.st.Asks = []*channel.Ask{channel.NewAsk("examplechat", first, time.Unix(100, 0))}
+	s.saveChannelStateLocked()
+	s.chans.mu.Unlock()
+
+	s.channelReceive("examplechat", channel.Message{ID: "m_stale", Text: "允许"}, "act")
+	if len(*resolves) != 0 {
+		t.Fatalf("the first occurrence's text answer resolved its replacement: %+v", *resolves)
+	}
+}
+
+func TestChannelAnswerSuccessKeepsSameIDReplacementAsk(t *testing.T) {
+	firstAt := time.Date(2026, 11, 24, 10, 0, 0, 123456789, time.UTC)
+	replacementAt := firstAt.Add(time.Second)
+	first := proto.Interaction{ID: "ix_same", Kind: proto.IxPermission, Summary: "first", CreatedAt: firstAt}
+	replacement := proto.Interaction{ID: "ix_same", Kind: proto.IxPermission, Summary: "replacement", CreatedAt: replacementAt}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	resolve := func(p json.RawMessage) (any, error) {
+		var params map[string]any
+		_ = json.Unmarshal(p, &params)
+		if params["created_at"] != firstAt.Format(time.RFC3339Nano) {
+			t.Errorf("resolve occurrence = %v, want the first occurrence %s", params["created_at"], firstAt.Format(time.RFC3339Nano))
+		}
+		close(started)
+		<-release
+		return map[string]any{"ok": true}, nil
+	}
+	s, _, notes, _ := newTextAskServiceWithResolve(t, resolve, first)
+	done := make(chan struct{})
+	go func() {
+		s.channelReceive("examplechat", channel.Message{ID: "m_first", Text: "允许"}, "act")
+		close(done)
+	}()
+	<-started
+	s.chans.mu.Lock()
+	s.chans.st.Asks = append(s.chans.st.Asks, channel.NewAsk("examplechat", replacement, time.Unix(200, 0)))
+	s.chans.noteEndedLocked(channel.NewAsk("examplechat", replacement, time.Unix(200, 0)))
+	s.saveChannelStateLocked()
+	s.chans.mu.Unlock()
+	close(release)
+	<-done
+
+	kept := askInState(s, "ix_same")
+	if kept == nil || !kept.CreatedAt.Equal(replacementAt) {
+		t.Fatalf("the first answer removed the replacement ask: %+v", kept)
+	}
+	s.chans.mu.Lock()
+	ended, ok := s.chans.lastEnded["examplechat"]
+	s.chans.mu.Unlock()
+	if !ok || !ended.ask.CreatedAt.Equal(replacementAt) {
+		t.Fatalf("the first answer removed the replacement ended marker: %+v, present=%v", ended, ok)
+	}
+	if got := noteTexts(notes); !strings.Contains(got, "还有 1 个在等你回复") {
+		t.Fatalf("the preserved replacement was not counted as still waiting: %q", got)
+	}
+}
+
+func TestChannelDelayedEndKeepsNewerLateAnswerMarker(t *testing.T) {
+	firstAt := time.Date(2026, 11, 24, 10, 0, 0, 123456789, time.UTC)
+	first := proto.Interaction{ID: "ix_same", Kind: proto.IxPermission, CreatedAt: firstAt}
+	replacement := first
+	replacement.CreatedAt = firstAt.Add(time.Second)
+	book := channelsBook{now: func() time.Time { return time.Unix(1000, 0) }}
+	book.noteEndedLocked(channel.NewAsk("examplechat", replacement, time.Unix(200, 0)))
+	book.noteEndedLocked(channel.NewAsk("examplechat", first, time.Unix(100, 0)))
+	ended := book.lastEnded["examplechat"]
+	if ended.ask == nil || !ended.ask.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("an older delayed end replaced the newest late-answer marker: %+v", ended.ask)
+	}
+}
+
 // -race: while the final resolve marshals the answers unlocked, a concurrent heal must not touch that map.
 func TestChannelAnswerResolveInFlightNoMapRace(t *testing.T) {
 	ix := proto.Interaction{ID: "ix_multi", Kind: proto.IxQuestion,

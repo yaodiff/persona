@@ -220,7 +220,7 @@ func (s *Service) answerDecision(ctx context.Context, ask ownAsk, in assistantwi
 	case decision:
 		return errAnswerNeeded // a decision has no one action: its recommendation is an option like the others
 	default:
-		result, err = s.acceptTryFromBrief(ctx, ask.todo, ask.round)
+		result, err = s.acceptTryFromApp(ctx, ask.todo, ask.round)
 	}
 	if errors.Is(err, db.ErrTodoCompleted) && writeDelivered(err) == "none" {
 		return errAskStale // the send's guard: the to-do closed, or the round ended, before anything went out
@@ -341,6 +341,8 @@ func (s *Service) writeAnswerError(w http.ResponseWriter, r *http.Request, id st
 		}
 		body["delivered"] = "none"
 		apierr.WriteBody(w, http.StatusConflict, body)
+	case errors.Is(err, errCloseNotConfirmed):
+		writeTypedNothing(w, http.StatusUnprocessableEntity, "todo_close_not_confirmed", err)
 	case errors.Is(err, errNotDeclinable):
 		writeTypedNothing(w, http.StatusConflict, "not_declinable", err)
 	case errors.Is(err, errDecisionOption), errors.Is(err, errAnswerNeeded), errors.Is(err, errAnswerNotForThis):

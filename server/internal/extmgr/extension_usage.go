@@ -2,9 +2,7 @@ package extmgr
 
 import (
 	"context"
-	"encoding/json"
 
-	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -16,27 +14,18 @@ import (
 // key reaches). The devices in this process keep the lists from their last read of each source; nothing is asked of a
 // gateway here, and no key or address is in the answer.
 
-// gatewayInventory is the devices' side (devices.Devices.Request).
+// gatewayInventory exposes the same snapshot as the bus to a caller in the same process.
 type gatewayInventory interface {
-	Request(ctx context.Context, method string, params json.RawMessage) (any, bool, error)
+	UsageGatewayAccounts() proto.GatewayAccounts
 }
 
-func (h *Manager) usageGatewayAccounts(ctx context.Context, id string) (any, error) {
+func (h *Manager) usageGatewayAccounts(_ context.Context, id string) (any, error) {
 	p := h.extensions.reg.Get(id)
 	if p == nil || !p.Record.Granted.UsageGateways {
 		return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: "usage.gateway_accounts needs the permission usage_gateways"}
 	}
-	none := proto.GatewayAccounts{Sources: []proto.GatewaySource{}, Accounts: []proto.GatewayAccount{}}
-	d, ok := h.opts.Devices.(gatewayInventory)
-	if !ok {
-		return none, nil
+	if d, ok := h.opts.Devices.(gatewayInventory); ok {
+		return d.UsageGatewayAccounts(), nil
 	}
-	out, handled, err := d.Request(ctx, devicewire.MethodUsageGatewayAccounts, json.RawMessage(`{}`))
-	if err != nil {
-		return nil, err
-	}
-	if !handled || out == nil {
-		return none, nil
-	}
-	return out, nil
+	return proto.GatewayAccounts{Sources: []proto.GatewaySource{}, Accounts: []proto.GatewayAccount{}}, nil
 }

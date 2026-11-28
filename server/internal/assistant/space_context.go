@@ -3,9 +3,11 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
@@ -27,25 +29,39 @@ const spaceLookupTimeout = 2 * time.Second
 // The main conversation, a leader and the background supervisor are the main space's and are not looked up, so their
 // context is what it was. Another is told as the manager noted it (notedSpaces), else as its computer lists it, a
 // directory inside a track counting as the track (runSpace: telling a track's conversation for the main space's would
-// show it the snapshot). One that cannot be told (never noted, its computer not answering) gets the main space's.
-func (s *Service) contextTrack(ctx context.Context, p ContextParams, background bool) string {
+// show it the snapshot). Before the first turn's session is noted or listed (including an empty-id Codex start), the
+// node's reported directory p.Cwd resolves the space; for older nodes without Cwd, in-flight starts on the machine
+// resolve an unambiguous space, and suppressMain is true when concurrent starts span different spaces so a space
+// conversation never receives the main snapshot (#17557).
+func (s *Service) contextTrack(ctx context.Context, p ContextParams, background bool) (track string, suppressMain bool) {
 	id := p.SessionID
-	if id == "" || background || s.isMain(ctx, id) || s.isLeader(ctx, id) {
-		return ""
+	if background || (id != "" && (s.isMain(ctx, id) || s.isLeader(ctx, id))) {
+		return "", false
 	}
-	if space, ok := s.notedSpaces(ctx, []string{id})[id]; ok {
-		return space
+	if id != "" {
+		if space, ok := s.notedSpaces(ctx, []string{id})[id]; ok {
+			return space, false
+		}
 	}
 	machine := cmp.Or(p.MachineID, s.settings(ctx).MachineID)
-	if machine == "" {
-		return ""
+	if id != "" && machine != "" {
+		lctx, cancel := context.WithTimeout(ctx, spaceLookupTimeout)
+		defer cancel()
+		if c, ok := s.session(lctx, machine, id); ok {
+			return runSpace(c), false
+		}
 	}
-	lctx, cancel := context.WithTimeout(ctx, spaceLookupTimeout)
-	defer cancel()
-	if c, ok := s.session(lctx, machine, id); ok {
-		return runSpace(c)
+	if cwd := strings.TrimSpace(p.Cwd); cwd != "" {
+		return runSpace(proto.Session{Cwd: cwd}), false
 	}
-	return ""
+	if machine != "" {
+		if space, known, ambiguous := s.startingSpace(machine, id); known {
+			return space, false
+		} else if ambiguous {
+			return "", true
+		}
+	}
+	return "", false
 }
 
 // spaceContext is the context of a conversation in track slug (prompts/assistant/space_context.md), at most

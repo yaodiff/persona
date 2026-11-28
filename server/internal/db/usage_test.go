@@ -321,3 +321,84 @@ func TestUsageByAgent(t *testing.T) {
 		t.Fatal("records")
 	}
 }
+
+// Token usage by project (#16530): a bucket's directory is part of its key through the minute, ten-minute and hour
+// rows and the backfill, the nodes' resolutions are kept (the latest of each), and UsageDirSpans sums by directory.
+func TestUsageByDir(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now().Truncate(time.Hour)
+	old := now.Add(-12 * 24 * time.Hour) // hours no other test here uses
+	b := func(at time.Time, dir string, out int64) proto.UsageBucket {
+		return proto.UsageBucket{Minute: at.Unix(), Model: "m", Launcher: "l", Agent: "claude", Dir: dir, CacheRead: 10, Output: out, Requests: 1}
+	}
+	app := proto.UsageDir{Dir: "~/code/app", Project: "git:github.com/acme/app", Name: "acme/app", Host: "github.com", Place: "~/code/app"}
+	// The same minute, model, launcher and agent in two directories, and one of before (no directory): three rows.
+	if _, err := d.PutUsages(ctx, []UsageWrite{{Machine: "dirs", Dirs: []proto.UsageDir{app},
+		Buckets: []proto.UsageBucket{b(old.Add(5*time.Minute), "~/code/app", 1), b(old.Add(5*time.Minute), "~/notes", 2), b(old.Add(5*time.Minute), "", 4)}}}); err != nil {
+		t.Fatal(err)
+	}
+	// Sent again: a bucket replaces its own directory's row only.
+	if err := d.PutUsage(ctx, "dirs", []proto.UsageBucket{b(old.Add(5*time.Minute), "~/code/app", 8)}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RollupUsage(ctx, now.Add(-27*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RollupUsageHours(ctx, now.Add(-7*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	h1, h2 := old, old.Add(time.Hour)
+	// The backfill keeps the directory too (h2 had nothing of the machine's).
+	if stored, err := d.PutUsageBackfill(ctx, "dirs", []string{"claude"}, []proto.UsageBucket{b(h2, "~/notes", 16)}, h2, false); err != nil || stored != 1 {
+		t.Fatalf("backfill stored %d, %v", stored, err)
+	}
+	spans, err := d.UsageDirSpans(ctx, []time.Time{h1, h2, h2.Add(time.Hour)}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 4 || spans[0].Dir != "" || spans[0].Output != 4 || spans[1].Dir != "~/code/app" || spans[1].Output != 8 ||
+		spans[2].Dir != "~/notes" || spans[2].Output != 2 || spans[3].Span != 1 || spans[3].Dir != "~/notes" || spans[3].Output != 16 ||
+		spans[1].Machine != "dirs" || spans[1].Agent != "" {
+		t.Fatalf("by dir = %+v", spans)
+	}
+	// Only some directories, by agent, model and launcher too.
+	spans, err = d.UsageDirSpans(ctx, []time.Time{h1, h2.Add(time.Hour)}, true, []string{"~/notes"})
+	if err != nil || len(spans) != 1 || spans[0].Output != 18 || spans[0].Agent != "claude" || spans[0].Model != "m" || spans[0].Launcher != "l" {
+		t.Fatalf("one dir in detail = %+v, %v", spans, err)
+	}
+	// The calendar's sums are every directory's.
+	if all, err := d.UsageSpans(ctx, []time.Time{h1, h2.Add(time.Hour)}, UsageSum); err != nil || len(all) != 1 || all[0].Output != 30 {
+		t.Fatalf("all = %+v, %v", all, err)
+	}
+
+	// A later resolution replaces the earlier one: the latest of each directory is kept, per machine.
+	moved := app
+	moved.Project, moved.Name = "git:github.com/acme/app2", "acme/app2"
+	if _, err := d.PutUsages(ctx, []UsageWrite{{Machine: "dirs", Dirs: []proto.UsageDir{moved}}, {Machine: "other", Dirs: []proto.UsageDir{app}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutUsageDirs(ctx, "backfill", []proto.UsageDir{app}); err != nil { // a backfill's
+		t.Fatal(err)
+	}
+	dirs, err := d.UsageDirs(ctx)
+	if err != nil || len(dirs) != 3 || dirs[0].Machine != "backfill" || dirs[0].UsageDir != app || dirs[1].Machine != "dirs" ||
+		dirs[1].Project != moved.Project || dirs[1].Name != "acme/app2" || dirs[2].Machine != "other" || dirs[2].UsageDir != app {
+		t.Fatalf("dirs = %+v, %v", dirs, err)
+	}
+
+	// A runtime's deltas keep their directory as they add up.
+	if err := d.AddUsage(ctx, "dirs", []proto.UsageBucket{{Minute: now.Add(-time.Hour).Unix(), Model: "m", Agent: "dsh", Dir: "~/a", Output: 1, Requests: 1},
+		{Minute: now.Add(-time.Hour).Unix(), Model: "m", Agent: "dsh", Dir: "~/a", Output: 2, Requests: 1},
+		{Minute: now.Add(-time.Hour).Unix(), Model: "m", Agent: "dsh", Dir: "~/b", Output: 4, Requests: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	recent, err := d.RecentRuntimeUsage(ctx, now.Add(-2*time.Hour))
+	if err != nil || len(recent["dirs"]) != 2 {
+		t.Fatalf("runtime = %+v, %v", recent, err)
+	}
+	for _, r := range recent["dirs"] {
+		if r.Dir == "~/a" && r.Output != 3 || r.Dir == "~/b" && r.Output != 4 {
+			t.Fatalf("runtime = %+v", recent)
+		}
+	}
+}

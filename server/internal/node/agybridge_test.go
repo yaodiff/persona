@@ -457,53 +457,109 @@ func TestAgyBridgeJSRuntimeRequiresSQLite(t *testing.T) {
 	}
 }
 
-func TestAgyProviderEnvFromManagedLauncher(t *testing.T) {
-	n := &Node{}
+func TestAgyChannelForResolvesIsolatedPoolsOnDemand(t *testing.T) {
+	n := &Node{bin: "/usr/local/bin/personad"}
 	n.setCatalog([]proto.ManagedLauncher{
 		{Name: "claude-gw", APIKey: "claude-key"},
-		{Name: "b-agy", Agent: "agy", BaseURL: "https://gateway.example.com", APIKey: "key-b"},
-		{Name: "a-agy", Agent: "agy", BaseURL: "https://gateway.example.com", APIKey: "key-a"},
+		{Name: "gw-b", Agent: "agy", BaseURL: "https://gw-b.example.com", APIKey: "key-b", Rev: "rev-b1"},
+		{Name: "gw-a", Agent: "agy", BaseURL: "https://gw-a.example.com", APIKey: "key-a", Rev: "rev-a1"},
 		{Name: "agy-signin", Agent: "agy"},
 	})
-	env := n.agyProviderEnv()
-	want := []string{"GOOGLE_GEMINI_BASE_URL=https://gateway.example.com", "GEMINI_API_KEY=key-a", "PERSONA_AGY_MODEL_PROVIDER=gemini"}
-	if !slices.Equal(env, want) {
-		t.Fatalf("provider env = %v, want %v", env, want)
+
+	// Native agy and a keyless managed agy launcher both route to the native OAuth pool (nil channel spec).
+	if ch, err := n.agyChannelFor(t.Context(), "agy"); err != nil || ch != nil {
+		t.Fatalf("native agy channel = %+v, %v; want nil", ch, err)
 	}
-	n.setCatalog([]proto.ManagedLauncher{{Name: "agy-signin", Agent: "agy"}, {Name: "claude-gw", APIKey: "claude-key"}})
-	if env := n.agyProviderEnv(); env != nil {
-		t.Fatalf("a launcher without a key gives no provider, got %v", env)
+	if ch, err := n.agyChannelFor(t.Context(), "agy-signin"); err != nil || ch != nil {
+		t.Fatalf("keyless agy channel = %+v, %v; want nil", ch, err)
+	}
+
+	// Each managed agy launcher resolves its own isolated pool key and credentials without overwriting others.
+	chA, err := n.agyChannelFor(t.Context(), "gw-a")
+	if err != nil || chA == nil {
+		t.Fatalf("gw-a channel = %+v, %v", chA, err)
+	}
+	chB, err := n.agyChannelFor(t.Context(), "gw-b")
+	if err != nil || chB == nil {
+		t.Fatalf("gw-b channel = %+v, %v", chB, err)
+	}
+	if chA.ID != "gw-a" || chA.AuthMode != "gemini-api-key" || chA.Rev != "rev-a1" ||
+		chA.Env["GOOGLE_GEMINI_BASE_URL"] != "https://gw-a.example.com" ||
+		chA.Env["GEMINI_API_KEY"] != "key-a" || chA.Env["PERSONA_AGY_MODEL_PROVIDER"] != "gemini" {
+		t.Fatalf("unexpected gw-a spec: %+v", chA)
+	}
+	if chB.ID != "gw-b" || chB.AuthMode != "gemini-api-key" || chB.Rev != "rev-b1" ||
+		chB.Env["GOOGLE_GEMINI_BASE_URL"] != "https://gw-b.example.com" ||
+		chB.Env["GEMINI_API_KEY"] != "key-b" || chB.Env["PERSONA_AGY_MODEL_PROVIDER"] != "gemini" {
+		t.Fatalf("unexpected gw-b spec: %+v", chB)
+	}
+
+	// Rotating the key without an explicit rev still yields a distinct deterministic rev hash.
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "gw-a", Agent: "agy", BaseURL: "https://gw-a.example.com", APIKey: "key-a-v2"},
+	})
+	chA2, err := n.agyChannelFor(t.Context(), "gw-a")
+	if err != nil || chA2 == nil || chA2.Rev == "" || chA2.Rev == chA.Rev {
+		t.Fatalf("rotated gw-a spec = %+v, %v; want new rev != %q", chA2, err, chA.Rev)
+	}
+
+	// Companion control-plane env never carries channel secrets or PERSONA_AGY_MODEL_PROVIDER.
+	rh := NewRuntimeHost("test", filepath.Join(t.TempDir(), "runtime.sock"))
+	bridgeEnv := agyBridgeEnv(t.Context(), rh, []string{"PATH=/usr/bin"})
+	for _, kv := range bridgeEnv {
+		if strings.HasPrefix(kv, "GEMINI_API_KEY=") || strings.HasPrefix(kv, "GOOGLE_GEMINI_BASE_URL=") || strings.HasPrefix(kv, "PERSONA_AGY_MODEL_PROVIDER=") {
+			t.Fatalf("companion control-plane env leaked channel setting: %s", kv)
+		}
 	}
 }
 
-func TestAgyBridgeRestartsWhenTheProviderChanges(t *testing.T) {
-	oldFind, oldCmd := findAgyExecutable, agyBridgeCommand
-	t.Cleanup(func() { findAgyExecutable, agyBridgeCommand = oldFind, oldCmd })
-	findAgyExecutable = func() string { return "agy" }
-	envs := make(chan []string, 4)
+// Redline regression test: catalog updates (adding a managed agy launcher, expanding scope, rotating key/BaseURL)
+// must never stop or restart a running Antigravity companion or interrupt active sessions.
+func TestAgyCatalogChangesNeverRestartRunningCompanion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script fixture")
+	}
+	dir := t.TempDir()
+	marks := filepath.Join(dir, "starts")
+	oldFind, oldCmd, oldProbe := findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery
+	t.Cleanup(func() { findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery = oldFind, oldCmd, oldProbe })
+	agyBridgeProbeEvery = 10 * time.Millisecond
+	var probes atomic.Int32
+	findAgyExecutable = func() string {
+		probes.Add(1)
+		return filepath.Join(dir, "agy")
+	}
+	writeAgy(t, filepath.Join(dir, "agy"), "v1")
 	agyBridgeCommand = func(_ context.Context, rh *RuntimeHost, _, _ string) (*exec.Cmd, error) {
-		envs <- rh.agyProviderEnv()
-		return exec.Command("sleep", "30"), nil
-	}
-	host := NewRuntimeHost("test", filepath.Join(t.TempDir(), "runtime.sock"))
-	host.logger = log.New(io.Discard, "", 0)
-	host.setAgyBridge(true)
-	defer host.setAgyBridge(false)
-	next := func() []string {
-		select {
-		case env := <-envs:
-			return env
-		case <-time.After(10 * time.Second):
-			t.Fatal("the companion was not (re)started")
-			return nil
+		for _, kv := range agyBridgeEnv(t.Context(), rh, []string{"PATH=/usr/bin"}) {
+			if strings.HasPrefix(kv, "GEMINI_API_KEY=") || strings.HasPrefix(kv, "PERSONA_AGY_MODEL_PROVIDER=") {
+				t.Errorf("companion started with channel secret in control-plane env: %s", kv)
+			}
 		}
+		script := fmt.Sprintf("echo start >> %q; trap 'echo stopped >> %q; exit 0' TERM; while :; do sleep 0.02; done", marks, marks)
+		return exec.Command("/bin/sh", "-c", script), nil
 	}
-	if got := next(); got != nil {
-		t.Fatalf("first start had provider env %v", got)
-	}
-	host.setAgyProviderEnv([]string{"GEMINI_API_KEY=k", "PERSONA_AGY_MODEL_PROVIDER=gemini"})
-	if got := next(); len(got) != 2 {
-		t.Fatalf("restart did not carry the provider env: %v", got)
+
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	n.runtimeHost.setAgyBridge(true)
+	defer n.runtimeHost.setAgyBridge(false)
+	waitFor(t, "companion started once", func() bool { return slices.Equal(starts(marks), []string{"start"}) })
+
+	// Push managed agy launchers, expand scope, rotate key/BaseURL/rev, and remove them.
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "gw-one", Agent: "agy", BaseURL: "https://gw1.example.com", APIKey: "secret-1", Rev: "r1"},
+	})
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "gw-one", Agent: "agy", BaseURL: "https://gw1.example.com", APIKey: "secret-2", Rev: "r2"},
+		{Name: "gw-two", Agent: "agy", BaseURL: "https://gw2.example.com", APIKey: "secret-3", Rev: "r1"},
+	})
+	n.setCatalog(nil)
+
+	probesAfter := probes.Load()
+	waitFor(t, "probes continued after catalog changes", func() bool { return probes.Load() >= probesAfter+5 })
+	if got := starts(marks); !slices.Equal(got, []string{"start"}) {
+		t.Fatalf("catalog/scope/key changes restarted the running companion: %v", got)
 	}
 }
 
@@ -694,7 +750,8 @@ func TestAgyBridgeRestartWaitsForAWorkingSession(t *testing.T) {
 
 	writeAgy(t, bin, "v2")
 	waitFor(t, "the restart to wait for the session", func() bool {
-		return strings.Contains(logs.String(), "agy at "+bin+" was replaced; restarting once no agy session is working")
+		return strings.Contains(logs.String(), "agy at "+bin+" was replaced; restarting once no agy session is working") &&
+			host.agyDraining(instance)
 	})
 	if got := starts(marks); !slices.Equal(got, []string{"start"}) {
 		t.Fatalf("the companion was stopped while its session was working: %v", got)
@@ -702,7 +759,231 @@ func TestAgyBridgeRestartWaitsForAWorkingSession(t *testing.T) {
 
 	status(proto.StatusIdle)
 	waitFor(t, "the restart once the session is idle", func() bool { return slices.Contains(starts(marks), "stopped") })
+	if host.agyDraining(instance) {
+		t.Fatal("draining flag was not cleared after switching generations")
+	}
 	_ = client.Close() // the old companion's connection goes with it
+	waitFor(t, "the companion started again", func() bool { m := starts(marks); return len(m) >= 3 && m[2] == "start" })
+}
+
+// A session whose turn ended keeps the companion working while finite background work it started still runs (#17200):
+// a command, workflow or subagent, as a Background entry or a running Subagents / Workflows entry. A standing schedule
+// (kind monitor) never ends and does not.
+func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
+	idle := func(edit func(*proto.Session)) proto.Session {
+		s := proto.Session{SessionID: "s1", Status: proto.StatusIdle}
+		if edit != nil {
+			edit(&s)
+		}
+		return s
+	}
+	task := func(kind string) proto.BackgroundTask {
+		t := proto.BackgroundTask{ID: "s1/task-1", Kind: kind, StartedAt: time.Now()}
+		if kind == "shell" {
+			t.Command = "make test" // a matched run_command carries its command line
+		}
+		return t
+	}
+	for _, tc := range []struct {
+		name     string
+		sessions []proto.Session
+		want     bool
+	}{
+		{"no sessions", nil, false},
+		{"idle", []proto.Session{idle(nil)}, false},
+		{"working", []proto.Session{{SessionID: "s1", Status: proto.StatusWorking}}, true},
+		{"background command", []proto.Session{idle(func(s *proto.Session) { s.Background = []proto.BackgroundTask{task("shell")} })}, true},
+		{"background workflow", []proto.Session{idle(func(s *proto.Session) { s.Background = []proto.BackgroundTask{task("workflow")} })}, true},
+		{"background subagent", []proto.Session{idle(func(s *proto.Session) { s.Background = []proto.BackgroundTask{task("agent")} })}, true},
+		{"only monitor schedules", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "monitor"}}
+		})}, false},
+		{"cron schedule reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: */5 * * * * Poll"}}
+		})}, false},
+		{"command described as cron", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: rotate logs", Command: "./rotate.sh"}}
+		})}, true},
+		{"unmatched timer reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Timer: 60s"}}
+		})}, false},
+		{"unmatched task reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Check status"}}
+		})}, false},
+		{"one-shot timer (monitor)", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "monitor", Description: "Timer: 60s"}}
+		})}, false},
+		{"monitor beside a command", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "shell", Command: "./serve"}}
+		})}, true},
+		{"running subagent", []proto.Session{idle(func(s *proto.Session) { s.Subagents = []proto.Subagent{{ID: "a1", Running: true}} })}, true},
+		{"finished subagent", []proto.Session{idle(func(s *proto.Session) { s.Subagents = []proto.Subagent{{ID: "a1"}} })}, false},
+		{"running workflow", []proto.Session{idle(func(s *proto.Session) {
+			s.Workflows = []proto.Workflow{{TaskID: "w1", Status: proto.WorkflowRunning, Running: true}}
+		})}, true},
+		{"finished workflow", []proto.Session{idle(func(s *proto.Session) {
+			s.Workflows = []proto.Workflow{{TaskID: "w1", Status: proto.WorkflowCompleted}}
+		})}, false},
+		{"another session's command", []proto.Session{idle(nil), {SessionID: "s2", Status: proto.StatusDone,
+			Background: []proto.BackgroundTask{{ID: "s2/task-1", Kind: "shell", Command: "make test"}}}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &runtimeConn{sessions: tc.sessions}
+			if got := h.agyWorking(); got != tc.want {
+				t.Fatalf("agyWorking() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// agyWorking reads the companion's runtime.sessions as the node keeps them: the background rows the companion sends
+// (integrations/antigravity/lib/background.js backgroundRow) keep their kinds through normalizeRuntimeSessions, so a
+// command holds the drain and a schedule alone does not; a stopped session's tasks are dropped (#17200).
+func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
+	reg := newRuntimeRegistry()
+	h := reg.add(nil)
+	h.ready, h.hello.Runtime = true, agyRuntimeID
+	id := agyAgent + "-" + agyTestID
+	pushTasks := func(status string, tasks ...string) bool {
+		t.Helper()
+		raw := fmt.Sprintf(`{"sessions":[{"session_id":%q,"status":%q,"background":[%s]}]}`, id, status, strings.Join(tasks, ","))
+		var p struct {
+			Sessions []proto.Session `json:"sessions"`
+		}
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatal(err)
+		}
+		reg.setSessions(h, normalizeRuntimeSessions(h, p.Sessions))
+		return h.agyWorking()
+	}
+	push := func(status string, kinds ...string) bool {
+		t.Helper()
+		var tasks []string
+		for i, kind := range kinds {
+			command := ""
+			if kind == "shell" {
+				command = `,"command":"make test"` // a matched run_command carries its command line
+			}
+			tasks = append(tasks, fmt.Sprintf(`{"id":"%s/task-%d","kind":%q%s,"started_at":"2026-11-28T09:00:00Z"}`, agyTestID, i+1, kind, command))
+		}
+		return pushTasks(status, tasks...)
+	}
+	if !push(proto.StatusIdle, "monitor", "shell") {
+		t.Error("an idle session with a background command does not hold the drain")
+	}
+	if !push(proto.StatusIdle, "workflow") || !push(proto.StatusIdle, "agent") {
+		t.Error("an idle session with a background workflow or subagent does not hold the drain")
+	}
+	if push(proto.StatusIdle, "monitor") {
+		t.Error("a standing schedule alone holds the drain")
+	}
+	if push(proto.StatusOffline, "shell") {
+		t.Error("a stopped session's tasks hold the drain")
+	}
+	if push(proto.StatusIdle) {
+		t.Error("an idle session with nothing running holds the drain")
+	}
+	// A cron schedule whose start notice the companion could not match to its call arrives as a shell (background.js
+	// extractBackground's default); its description still says it is one.
+	unmatchedCron := `{"id":"` + agyTestID + `/task-1","kind":"shell","description":"Cron: */30 * * * * Check status","started_at":"2026-11-28T09:00:00Z"}`
+	if pushTasks(proto.StatusIdle, unmatchedCron) {
+		t.Error("a cron schedule reported as a shell holds the drain")
+	}
+	command := `{"id":"` + agyTestID + `/task-2","kind":"shell","description":"Run the tests","command":"make test","started_at":"2026-11-28T09:00:00Z"}`
+	unmatchedCommand := `{"id":"` + agyTestID + `/task-3","kind":"shell","description":"Wait for ready","started_at":"2026-11-28T09:00:00Z"}`
+	if !pushTasks(proto.StatusIdle, unmatchedCron, command) {
+		t.Error("a background command beside a cron schedule does not hold the drain")
+	}
+	// Unmatched tasks (no command line) and schedules cannot be told apart from the row, so neither holds the drain:
+	// a misread one must never keep an upgrade waiting forever.
+	if pushTasks(proto.StatusIdle, unmatchedCommand) {
+		t.Error("an unmatched task without its command line holds the drain")
+	}
+}
+
+// A new agy waits for a background command a session left running, as it does for a working turn (#17200), and both
+// the restart and waitAgyIdle go ahead once only a standing schedule (monitor) is left.
+func TestAgyBridgeRestartWaitsForFiniteBackgroundWork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script fixture")
+	}
+	dir := t.TempDir()
+	bin, marks := filepath.Join(dir, "agy"), filepath.Join(dir, "marks")
+	writeAgy(t, bin, "v1")
+	oldFind, oldCmd, oldProbe := findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery
+	t.Cleanup(func() { findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery = oldFind, oldCmd, oldProbe })
+	agyBridgeProbeEvery = 10 * time.Millisecond
+	var probes atomic.Int32 // the bridge looks up agy once per probe, before it asks whether the companion is busy
+	findAgyExecutable = func() string {
+		probes.Add(1)
+		return bin
+	}
+	agyBridgeCommand = func(context.Context, *RuntimeHost, string, string) (*exec.Cmd, error) {
+		script := fmt.Sprintf("echo start >> %q; trap 'echo stopped >> %q; exit 0' TERM; while :; do sleep 0.02; done", marks, marks)
+		return exec.Command("/bin/sh", "-c", script), nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	host := NewRuntimeHost("test", filepath.Join(dir, "runtime.sock"))
+	logs := &syncBuffer{}
+	host.logger = log.New(logs, "", 0)
+	host.setAgyBridge(true)
+	defer host.setAgyBridge(false)
+	waitFor(t, "the companion started", func() bool { return slices.Equal(starts(marks), []string{"start"}) })
+
+	instance := host.builtinAgyInstance()
+	client, hello := startAgyHello(t, ctx, host, instance)
+	if err := <-hello; err != nil {
+		t.Fatal(err)
+	}
+	var builtin *runtimeConn
+	waitFor(t, "the companion registered", func() bool { builtin, _ = host.agyPeers(instance); return builtin != nil })
+	monitor := proto.BackgroundTask{ID: "s1/task-1", Kind: "monitor", Description: "Cron: */5 * * * *"}
+	background := func(tasks ...proto.BackgroundTask) {
+		builtin.mu.Lock()
+		builtin.sessions = []proto.Session{{SessionID: "s1", Status: proto.StatusIdle, Background: tasks}}
+		builtin.mu.Unlock()
+	}
+	command := proto.BackgroundTask{ID: "s1/task-2", Kind: "shell", Command: "make test"}
+
+	// waitAgyIdle (the external-runtime handoff's wait) holds while the command runs. Without it waitAgyIdle returns on
+	// its first look, with no tick to wait for, so the window below only has to outlast a goroutine start.
+	background(monitor, command)
+	idle := make(chan struct{})
+	go func() {
+		builtin.waitAgyIdle(ctx)
+		close(idle)
+	}()
+	select {
+	case <-idle:
+		t.Fatal("waitAgyIdle returned while a background command was running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	background(monitor)
+	select {
+	case <-idle:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitAgyIdle still waits with only a monitor schedule left")
+	}
+
+	// So does the restart on a new agy.
+	background(monitor, command)
+	writeAgy(t, bin, "v2")
+	waitFor(t, "the restart to wait for the background command", func() bool {
+		return strings.Contains(logs.String(), "agy at "+bin+" was replaced; restarting once no agy session is working or running background work") &&
+			host.agyDraining(instance)
+	})
+	// Two more probes found the command still running. Had one restarted, it would have stopped the companion (and its
+	// trap written "stopped") before the next lookup of agy, the one for the companion's next start.
+	seen := probes.Load()
+	waitFor(t, "two more probes", func() bool { return probes.Load() >= seen+2 })
+	if got := starts(marks); !slices.Equal(got, []string{"start"}) {
+		t.Fatalf("the companion was stopped while a background command was running: %v", got)
+	}
+
+	background(monitor)
+	waitFor(t, "the restart once only the monitor is left", func() bool { return slices.Contains(starts(marks), "stopped") })
+	_ = client.Close()
 	waitFor(t, "the companion started again", func() bool { m := starts(marks); return len(m) >= 3 && m[2] == "start" })
 }
 
@@ -731,5 +1012,149 @@ func TestAgyChangeSettlesOnTwoProbes(t *testing.T) {
 	}
 	if c.see(bin, bin) || c.seen != nil {
 		t.Fatal("back to the companion's own agy is no change")
+	}
+}
+
+// The companion is told the node's own program, which serves its chats' Persona tools (`<program> mcp`): a Persona
+// Link install calls it persona-node, and the companion's lookup by name found only personad (#14582).
+func TestAgyBridgeCommandPassesTheNodeProgram(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script fixture")
+	}
+	dir := t.TempDir()
+	for rel, body := range map[string]string{
+		"antigravity/package.json":  `{"type":"module"}`,
+		"antigravity/companion.mjs": "console.log('ok')\n",
+		"runtime-sdk/package.json":  `{"type":"module"}`,
+		"runtime-sdk/index.js":      "export {}\n",
+	} {
+		p := filepath.Join(dir, "pkgs", agyPackage, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fakeNode := filepath.Join(dir, "node-22")
+	if err := os.WriteFile(fakeNode, []byte("#!/bin/sh\nprintf 22.19.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimepkg.OverrideEnv, filepath.Join(dir, "pkgs"))
+	t.Setenv("PERSONA_NODEJS", fakeNode)
+	program := filepath.Join(dir, "home", ".persona", "bin", "persona-node")
+	oldSelf := selfProgram
+	selfProgram = func(string, string) (string, string, error) { return program, program, nil }
+	t.Cleanup(func() { selfProgram = oldSelf })
+
+	rh := NewRuntimeHost("test", filepath.Join(dir, "state", "runtime.sock"))
+	cmd, err := agyBridgeCommand(context.Background(), rh, "/usr/local/bin/agy", "builtin-agy-1-1")
+	if err != nil {
+		t.Fatalf("agyBridgeCommand: %v", err)
+	}
+	i := slices.Index(cmd.Args, "--personad-bin")
+	if i < 0 || i+1 >= len(cmd.Args) || cmd.Args[i+1] != program {
+		t.Fatalf("cmd.Args %q: want --personad-bin %s", cmd.Args, program)
+	}
+}
+
+func TestManagedAgyRuntimeCallsCarryIsolatedChannelSpec(t *testing.T) {
+	n, f, home := herdrNode(t)
+	n.logger = log.New(io.Discard, "", 0)
+	n.runtimeSock = filepath.Join(filepath.Dir(f.sock), "runtime.sock")
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	if _, err := n.listenRuntimeSocket(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
+	hello["caps"].(map[string]any)["models"] = true
+	hello["launchers"] = []map[string]any{{"name": agyAgent, "agent": agyAgent}}
+	companion := dialRuntime(t, n, hello)
+	nextID := 0
+	sessionIDs := []string{"agy-native-1", "agy-managed-1"}
+	companion.mu.Lock()
+	companion.answer = func(method string, raw json.RawMessage) (any, error) {
+		switch method {
+		case "session.start":
+			id := sessionIDs[nextID]
+			nextID++
+			return map[string]any{"session": proto.Session{SessionID: id, Cwd: home, Status: proto.StatusIdle}}, nil
+		case "launchers.models":
+			var req struct {
+				Channel *agyChannelSpec `json:"channel"`
+			}
+			_ = json.Unmarshal(raw, &req)
+			if req.Channel != nil && req.Channel.ID == "gw-alpha" {
+				return proto.LauncherModels{Agent: agyAgent, Models: []proto.AgentModel{{ID: "gw-alpha-model"}}}, nil
+			}
+			return proto.LauncherModels{Agent: agyAgent, Models: []proto.AgentModel{{ID: "native-oauth-model"}}}, nil
+		default:
+			return map[string]any{"ok": true}, nil
+		}
+	}
+	companion.mu.Unlock()
+
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "gw-alpha", Agent: agyAgent, BaseURL: "https://alpha.example.com", APIKey: "alpha-secret", Rev: "r7"},
+	})
+
+	// 1. Native agy start carries no channel spec; managed agy start carries its isolated channel spec.
+	if _, err := nodeCall(t, n, "session.start", map[string]any{
+		"cwd": home, "launcher": agyAgent, "host": proto.HostAgy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nodeCall(t, n, "session.start", map[string]any{
+		"cwd": home, "launcher": "gw-alpha", "host": proto.HostAgy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	starts := companion.got("session.start")
+	if len(starts) != 2 {
+		t.Fatalf("session.start count = %d, want 2", len(starts))
+	}
+	var nativeStart, managedStart struct {
+		Channel *agyChannelSpec `json:"channel"`
+	}
+	_ = json.Unmarshal(starts[0], &nativeStart)
+	_ = json.Unmarshal(starts[1], &managedStart)
+	if nativeStart.Channel != nil {
+		t.Fatalf("native agy start unexpectedly carried channel: %+v", nativeStart.Channel)
+	}
+	if managedStart.Channel == nil || managedStart.Channel.ID != "gw-alpha" ||
+		managedStart.Channel.AuthMode != "gemini-api-key" || managedStart.Channel.Rev != "r7" ||
+		managedStart.Channel.Env["GEMINI_API_KEY"] != "alpha-secret" {
+		t.Fatalf("managed agy start channel = %+v", managedStart.Channel)
+	}
+
+	// 2. Follow-up session.send on the managed session replays its isolated channel spec.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": "agy-managed-1", "text": "hello",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sends := companion.got("session.send")
+	if len(sends) != 1 {
+		t.Fatalf("session.send count = %d, want 1", len(sends))
+	}
+	var managedSend struct {
+		Channel *agyChannelSpec `json:"channel"`
+	}
+	_ = json.Unmarshal(sends[0], &managedSend)
+	if managedSend.Channel == nil || managedSend.Channel.ID != "gw-alpha" || managedSend.Channel.Rev != "r7" {
+		t.Fatalf("managed agy send channel = %+v", managedSend.Channel)
+	}
+
+	// 3. launchers.models isolates native agy catalog from managed channel catalog.
+	nativeModels, err := nodeCall(t, n, "launchers.models", map[string]any{"name": agyAgent, "host": proto.HostAgy})
+	if err != nil || !strings.Contains(string(nativeModels), "native-oauth-model") {
+		t.Fatalf("native models = %s, %v", nativeModels, err)
+	}
+	managedModels, err := nodeCall(t, n, "launchers.models", map[string]any{"name": "gw-alpha", "host": proto.HostAgy})
+	if err != nil || !strings.Contains(string(managedModels), "gw-alpha-model") {
+		t.Fatalf("managed models = %s, %v", managedModels, err)
 	}
 }

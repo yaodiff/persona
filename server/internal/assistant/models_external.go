@@ -495,6 +495,7 @@ func (s *Service) externalLauncherSet(machine string) map[string]bool {
 // launchersChanged consumes the generic node event without blocking its read loop.
 // Model caches are machine-scoped; the existing snapshot refresher owns persistence.
 func (s *Service) launchersChanged(machine string) {
+	s.invalidateLauncherListCache(machine)
 	c := &s.models
 	c.cacheMu.Lock()
 	for key := range c.cacheAt {

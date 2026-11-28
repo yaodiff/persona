@@ -38,7 +38,12 @@ func fit(v *View, slot UISlot, uiVersion int, unsupported []string, native bool,
 	if v == nil {
 		return nil, errors.New("no view")
 	}
-	dropped = wire.StripAssistantFields(v)
+	if FullPage(slot.Name) {
+		// A full page may navigate to an existing Persona session or to-do; its open is kept only for those targets.
+		dropped = wire.StripAssistantFieldsForPage(v)
+	} else {
+		dropped = wire.StripAssistantFields(v)
+	}
 	if v.Sections == nil {
 		v.Sections = []Section{}
 	}
@@ -72,6 +77,9 @@ func fit(v *View, slot UISlot, uiVersion int, unsupported []string, native bool,
 		if err := checkCompact6(v); err != nil {
 			return dropped, err
 		}
+	}
+	if native || uiVersion < 13 {
+		downgrade13(v)
 	}
 	if uiVersion < 12 || slices.Contains(unsupported, wire.ComponentMap) {
 		downgrade12(v, native, compact, l)

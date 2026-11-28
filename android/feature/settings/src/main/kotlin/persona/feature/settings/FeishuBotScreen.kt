@@ -68,8 +68,12 @@ internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit, larkBot:
     val syncState = sync?.state?.collectAsState()?.value
     LaunchedEffect(sync, status?.appId) { sync?.load() }
     if (sync != null && syncState != null) LarkSyncEffects(sync, syncState)
+    // Group access (#16848): who else may @ the bot. Hidden until the bot is paired and the hub has the route.
+    val groupAccess = remember(api) { api.groupAccess?.let { FeishuGroupAccessModel(it) } }
+    val groupState = groupAccess?.state?.collectAsState()?.value
+    LaunchedEffect(groupAccess, status?.owner) { if (status?.owner != null) groupAccess?.load() }
     JListPage(title = stringResource(R.string.settings_feishu_bot_title), onBack = onBack, largeTitle = false,
-        refreshing = state.loading && status != null, onRefresh = { scope.launch { model.load(); sync?.load() } }) {
+        refreshing = state.loading && status != null, onRefresh = { scope.launch { model.load(); sync?.load(); if (status?.owner != null) groupAccess?.load() } }) {
         item("status") {
             Column {
                 JGroupItem(GroupPosition(first = true, last = false), Modifier.padding(top = Tokens.Space.s)) {
@@ -128,6 +132,7 @@ internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit, larkBot:
             }
         }
         if (sync != null && syncState != null) larkSyncItems(sync, syncState, scope)
+        if (status?.owner != null && groupAccess != null && groupState != null) feishuGroupAccessItems(groupAccess, groupState, scope)
         item("howto") {
             Column(Modifier.padding(top = Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JSectionHeader(stringResource(R.string.settings_feishu_bot_howto))

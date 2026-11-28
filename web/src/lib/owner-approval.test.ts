@@ -13,6 +13,7 @@ const proposal: Interaction = {
   approval_batch_id: "batch",
   owner_proposal: true,
   owner_approval_phrases: ["发", "Agree"],
+  created_at: "2026-11-21T12:00:00.123456789Z",
 };
 
 beforeEach(() => apiOp.mockReset());
@@ -25,6 +26,9 @@ describe("replyOwnerApproval", () => {
     const another = ownerApprovalAttempt({ ...proposal, id: "oa_batch_other" }, first);
     expect(another.target).toBe("oa_batch_other");
     expect(another.id).not.toBe(first.id);
+    const replacement = ownerApprovalAttempt({ ...proposal, created_at: "2026-11-21T12:00:01.123456789Z" }, first);
+    expect(replacement.target).toBe(proposal.id);
+    expect(replacement.id).not.toBe(first.id);
   });
 
   it("sends only the authenticated exact-reply envelope, with one stable owner event id", async () => {
@@ -33,7 +37,7 @@ describe("replyOwnerApproval", () => {
     expect(apiOp).toHaveBeenCalledWith("/sessions/m/s/messages", {
       method: "POST",
       opId: "client-event",
-      json: { text: "发", client_msg_id: "client-event", approval_reply_to: proposal.id },
+      json: { text: "发", client_msg_id: "client-event", approval_reply_to: proposal.id, approval_reply_created_at: proposal.created_at },
     });
     const body = apiOp.mock.calls[0][1].json;
     expect(body).not.toHaveProperty("quoteReply");

@@ -385,7 +385,7 @@ func (n *Node) ccPluginPermission(ctx context.Context, pid int, claude claudePro
 	if json.Unmarshal(body, &req) != nil || !validID(req.SessionID) || !validCCPluginReqID(req.ReqID) || req.ToolName == "" {
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
 	}
-	if !n.ccPluginServesPermissions(claude) || n.peer == nil {
+	if !n.ccPluginServesPermissions(claude) || n.peer == nil || n.ccPlugins.classicPassedOver(req.SessionID, pid) {
 		return http.StatusOK, map[string]any{"action": "passthrough"}
 	}
 	if sess := n.claudeProcHerdrSession(claude); n.herdrSessionBlocked(sess) && !n.isAssistantSession(req.SessionID) && !n.keptSessions()[req.SessionID] {

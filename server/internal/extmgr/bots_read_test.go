@@ -246,3 +246,69 @@ func TestReadGroupLeavesAISourcesAsTheyWere(t *testing.T) {
 		t.Fatal("a card under an /ai source went")
 	}
 }
+
+// read_group_direct (#14437) is off by default, so a /read's answer goes to the owner first; the settings page turns it
+// on and off like any other switch, and the channel lists it.
+func TestReadGroupDirectSwitch(t *testing.T) {
+	needsLarkModule(t)
+	w := newBotWorld(t)
+	w.pair(t)
+	if f, _ := w.feishu(t, assistantwire.FeishuStatusGet, nil)["features"].(map[string]any); f["read_group_direct"] != false {
+		t.Fatalf("read_group_direct must be off by default: %v", f)
+	}
+	for _, on := range []bool{true, false} {
+		if code, body := w.do(t, "PUT", "/api/v1/bots/feishu", fmt.Sprintf(`{"features":{"read_group_direct":%t}}`, on)); code != 200 {
+			t.Fatalf("switch %t: %d %s", on, code, body)
+		}
+		if f, _ := w.feishu(t, assistantwire.FeishuStatusGet, nil)["features"].(map[string]any); f["read_group_direct"] != on {
+			t.Fatalf("read_group_direct after switching it %t: %v", on, f)
+		}
+	}
+	if err := w.h.configureFeishu(w.ctx, nil, map[string]bool{"read_group_direct": true}); err != nil {
+		t.Fatalf("the assistant's switch: %v", err)
+	}
+	found := false
+	for _, f := range w.h.feishuChannel(w.ctx).Features {
+		if f.ID == "read_group_direct" {
+			found = f.On && f.Title != "" && f.Title != "hub-channels.feature_read_group_direct" && f.Description != ""
+		}
+	}
+	if !found {
+		t.Fatalf("the channel's features: %+v", w.h.feishuChannel(w.ctx).Features)
+	}
+}
+
+// The buttons of a /read answer held for the owner (Post to group, Don't post) go through the same card press as any
+// other: only the owner's press reaches the assistant, and it carries no owner action (it answers no interaction).
+func TestReadHeldPressIsTheOwnersOnly(t *testing.T) {
+	needsLarkModule(t)
+	w := newBotWorld(t)
+	w.pair(t)
+	w.readOn(t)
+	w.a.on(assistantwire.MethodFeishuAction, func(json.RawMessage) (any, error) {
+		return map[string]any{"toast": map[string]any{"type": "success", "content": "posted"}}, nil
+	})
+	press := func(from string) string {
+		b, _ := json.Marshal(map[string]any{"schema": "2.0", "header": map[string]any{"event_type": "card.action.trigger"},
+			"event": map[string]any{"operator": map[string]any{"open_id": from},
+				"action":  map[string]any{"value": map[string]any{"a": "rd", "id": "rd-example", "do": "post"}, "tag": "button"},
+				"context": map[string]any{"open_message_id": "om_held", "open_chat_id": "oc_p2p"}}})
+		res, err := w.h.botEvent(w.ctx, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(res)
+		return string(raw)
+	}
+	if out := press("ou_stranger"); !strings.Contains(out, "只有机器人的主人") || len(w.a.got(assistantwire.MethodFeishuAction)) != 0 {
+		t.Fatalf("a stranger's press: %s", out)
+	}
+	if out := press("ou_me"); !strings.Contains(out, "posted") {
+		t.Fatalf("the owner's press: %s", out)
+	}
+	got := w.a.got(assistantwire.MethodFeishuAction)
+	var a assistantwire.FeishuAction
+	if len(got) != 1 || json.Unmarshal(got[0], &a) != nil || a.Action != "" || !strings.Contains(string(a.Event), "rd-example") {
+		t.Fatalf("handed %s", got)
+	}
+}

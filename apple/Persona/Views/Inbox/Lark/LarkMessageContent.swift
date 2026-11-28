@@ -26,7 +26,7 @@ extension MarkdownUI.Theme {
             .text { FontSize(Theme.Level.body.size * Theme.Font.scale) } // the body level, as Lark messages are (LarkTextBase)
             .link { ForegroundColor(LarkColor.blue) }
             .paragraph { config in
-                config.label.fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(0.15)).markdownMargin(top: 0, bottom: 6)
+                config.label.lookUpWords(config.content).fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(0.15)).markdownMargin(top: 0, bottom: 6)
             }
     }
 }

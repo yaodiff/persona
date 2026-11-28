@@ -278,6 +278,7 @@ struct WorkspaceChildrenChip: View {
 
 struct WorkspaceAgentRow: View {
     var session: Session
+    let pendingTitle: String?
     var time: AgentTime?
     var muted: Bool
     /// Present when a folded side session keeps this parent row Unread (#13524); nil leaves the row unchanged.
@@ -316,7 +317,7 @@ struct WorkspaceAgentRow: View {
             ThemedIcon(Theme.Icon.success).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.success)
         } else { StatusDot(state: session.state, size: Theme.Size.dotS) }
         AgentMark(session, side: Theme.Size.markXS)
-        Text(session.displayTitle(preferTab: preferHerdrTabName)).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
+        Text(pendingTitle ?? session.displayTitle(preferTab: preferHerdrTabName)).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
             .foregroundStyle(session.state == .unread ? Theme.WorkspaceSidebar.foreground : Theme.WorkspaceSidebar.muted)
             .lineLimit(1).layoutPriority(1)
         if let detail = session.displayTitleDetail(preferTab: preferHerdrTabName) {
@@ -598,17 +599,23 @@ struct RepoTreeSelected: View {
 }
 
 /// A repository's header: its folder, its name and the chevron that turns as it folds. Its actions (the space's pin,
-/// mute, rename, to-do; Mark All as Seen) are its long-press menu: no ⋯ or list mark of its own.
+/// mute, rename, to-do; Mark All as Seen) are its long-press menu. A flattened workspace contributes its marks.
 struct RepoCardHeader: View {
     var name: String
     var folded: Bool
+    var workspace: RepoTree.Worktree? = nil
 
     var body: some View {
         RepoTreeLine(level: 0) {
-            ThemedIcon(Theme.Icon.folder).font(Theme.Font.secondary).foregroundStyle(.secondary)
+            ThemedIcon(workspace?.main == true ? Theme.Icon.home : Theme.Icon.folder)
+                .font(Theme.Font.secondary).foregroundStyle(.secondary)
         } content: {
             HStack(spacing: Theme.Space.s) {
-                Text(name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                Text(name).font(Theme.Font.bodyStrong)
+                    .foregroundStyle(workspace?.unavailable == true ? Color.secondary : Color.primary).lineLimit(1)
+                if workspace?.latestPinnedAt != nil {
+                    ThemedIcon(Theme.Icon.pinned).font(Theme.Font.caption).foregroundStyle(Theme.accent).accessibilityHidden(true)
+                }
                 Spacer(minLength: 0)
                 FoldChevron(folded: folded)
             }

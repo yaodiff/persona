@@ -59,11 +59,28 @@ type Hello struct {
 	// ArchivedApart: the hub takes a machine's archived rows apart from its list (EventFleetArchived, #6836). An older
 	// hub never sends it, and a manager then tells them inside EventFleetSessions as before.
 	ArchivedApart bool `json:"archived_apart,omitempty"`
+	// ApprovalMirrors: the hub validates deterministic display copies, normalizes their actions to the authoritative
+	// interaction and withdraws them with it. An older hub omits this; the manager then sends only authoritative cards.
+	ApprovalMirrors bool `json:"approval_mirrors,omitempty"`
 	// QuietPush: the hub's push tiering switch (the low-distraction switch, docs/server/server.md) is on. The manager
 	// then holds back what is its own to send, by the same levels the hub filters pushes by: a supervised card is not
 	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
 	// sends it: off. A change of the switch sends manager.updated.
 	QuietPush bool `json:"quiet_push,omitempty"`
+	// PushGradingCards is the effective cards section of the hub's push grading configuration for this manager when
+	// QuietPush is on. Nil from an older hub or while push grading is off for the manager.
+	PushGradingCards *PushGradingCards `json:"push_grading_cards,omitempty"`
+}
+
+// PushGradingCards is the effective cards section of the hub's push grading configuration, delivered per manager
+// in Hello and manager.updated.
+type PushGradingCards struct {
+	SupervisorHold  bool     `json:"supervisor_hold"`
+	EscalateReasons []string `json:"escalate_reasons"`
+	HoldConclusions bool     `json:"hold_conclusions"`
+	HoldAcceptance  bool     `json:"hold_acceptance"`
+	DecisionLevel   string   `json:"decision_level"`
+	ReportLevel     string   `json:"report_level"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -167,6 +184,8 @@ type Device struct {
 	ExternalInventory bool `json:"external_inventory,omitempty"`
 	// TaskInstructions: this node preserves delegated instructions separately, including fallback/resume.
 	TaskInstructions bool `json:"task_instructions,omitempty"`
+	// ScratchWorkspace: this node supports managed isolated scratch directories (workspace.scratch.prepare).
+	ScratchWorkspace bool `json:"scratch_workspace,omitempty"`
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`

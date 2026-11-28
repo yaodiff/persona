@@ -27,5 +27,9 @@
   "unhide_failed": "Couldn't restore: {error}",
   "prefs_save_failed": "Couldn't save the list settings: {error}",
   "removed_count": "Removed ({count})",
-  "removed_footer": "Removed chats stay in the Lark gateway and come back on their own when a new message arrives."
+  "removed_footer": "Removed chats stay in the Lark gateway and come back on their own when a new message arrives.",
+  "quota_left": "{percent}% left",
+  "quota_exhausted": "Used up",
+  "quota_stale": "not current",
+  "quota_resets": "resets {time}"
 }

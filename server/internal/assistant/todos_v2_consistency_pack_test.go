@@ -188,6 +188,7 @@ func TestTodosV2ConsistencyPackReviewNudgeSLA(t *testing.T) {
 func TestTodosV2ConsistencyPackReorganizePreservesValidAfter(t *testing.T) {
 	ctx := context.Background()
 	s, _ := transferEnv(t)
+	setBlockersTodosV2Flag(t, s, true, false)
 
 	goalA, err := s.createTodo(ctx, "Goal A", "", "", "")
 	if err != nil {

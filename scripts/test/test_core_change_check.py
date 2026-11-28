@@ -43,33 +43,30 @@ class RuleTests(unittest.TestCase):
             ok, message = self.ok(files)
             self.assertTrue(ok, (files, message))
 
-    def test_core_change_needs_label_and_reason(self):
-        for labels, body in (((), ""), ((), WHY), (("core-change",), "Fixes #1"), (("other",), WHY)):
+    def test_core_change_no_longer_blocked_without_label(self):
+        # #17195: a core change merges without the label; evaluate is advisory and always returns True.
+        for labels, body in (((), ""), ((), WHY), (("core-change",), "Fixes #1"), (("other",), WHY), (("core-change",), WHY)):
             ok, message = self.ok([CORE], labels, body)
-            self.assertFalse(ok, (labels, body))
+            self.assertTrue(ok, (labels, body))
             self.assertIn(CORE, message)
-        ok, message = self.ok([CORE], ("core-change",), WHY)
-        self.assertTrue(ok, message)
 
-    def test_message_says_what_to_add(self):
+    def test_message_mentions_label_and_reason_as_optional(self):
+        # #17195: the label and section are now optional (advisory), named for visibility only.
         ok, message = self.ok([CORE])
+        self.assertTrue(ok)
         self.assertIn("`core-change`", message)
         self.assertIn("## Why this must change the core", message)
-        ok, message = self.ok([CORE], ("core-change",), "")
-        self.assertNotIn("add the label", message)
-        self.assertIn("## Why this must change the core", message)
-        ok, message = self.ok([CORE], (), WHY)
-        self.assertIn("add the label", message)
-        self.assertNotIn("add a section", message)
+        ok, message = self.ok([CORE], ("core-change",), WHY)
+        self.assertIn("core change with label and reason", message)
 
-    def test_failure_names_the_tier_and_ignores_panel_files(self):
+    def test_core_paths_named_even_without_label(self):
         ok, message = self.ok(["web/src/views/chat/ChatView.tsx", "web/src/lib/model-config.ts"])
-        self.assertFalse(ok)
+        self.assertTrue(ok)
         self.assertIn("tier core", message)
         self.assertIn("web/src/lib/model-config.ts", message)
         self.assertNotIn("ChatView.tsx", message)
         for headless in ("android/core/hub/src/main/kotlin/A.kt", "apple/Packages/PersonaWire/Sources/A.swift", "native/app-core/src/lib.rs"):
-            self.assertFalse(self.ok([headless])[0], headless)
+            self.assertTrue(self.ok([headless])[0], headless)
 
     def test_lists_the_first_twenty(self):
         files = [f"server/internal/hub/f{i:02d}.go" for i in range(25)]
@@ -135,8 +132,8 @@ class CliTests(unittest.TestCase):
 
     def test_cli_verdicts(self):
         r = self.run_cli({"labels": [], "body": "", "files": rows(CORE)}, "9")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn(CORE, r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # advisory: no label needed to merge (#17195)
+        self.assertIn(CORE, r.stdout)
         r = self.run_cli({"labels": [{"name": "core-change"}], "body": WHY, "files": rows(CORE)}, "9")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         r = self.run_cli({"labels": [], "body": "", "files": rows("docs/a.md")}, "9")
@@ -145,15 +142,15 @@ class CliTests(unittest.TestCase):
     def test_the_jq_projection_reads_both_names_of_a_rename(self):
         # The fake runs the real jq program per page: a rename out of a core path is found through `previous_filename`.
         r = self.run_cli({"labels": [], "body": "", "files": rows("server/internal/hub/hub.go -> server/internal/modules/voice/hub.go")}, "9")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("server/internal/hub/hub.go", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("server/internal/hub/hub.go", r.stdout)
 
     def test_a_core_file_beyond_the_first_page_is_found(self):
         # 250 changed files, the one core file last: only --paginate (the fake serves 100 rows a page) reaches it.
         names = [f"docs/note{i:03d}.md" for i in range(249)] + [CORE]
         r = self.run_cli({"labels": [], "body": "", "files": rows(*names)}, "9")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn(CORE, r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(CORE, r.stdout)
 
     def test_the_fake_serves_one_page_without_paginate(self):
         # The fake itself: no --paginate means one page, like the real CLI (so a script that forgets it fails above).
@@ -176,8 +173,8 @@ class CliTests(unittest.TestCase):
             names = Path(d) / "names"
             names.write_bytes(b"docs/a.md\0server/internal/hub/hub.go\0")
             r = self.run_cli({"labels": [], "body": "", "files": []}, "--files-from", str(names), "9")
-            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-            self.assertIn(CORE, r.stderr)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn(CORE, r.stdout)
             names.write_bytes(b"docs/a.md\0")
             r = self.run_cli({"labels": [], "body": "", "files": rows(CORE)}, "--files-from", str(names), "9")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # the API's rows are not read

@@ -1,0 +1,47 @@
+{
+  "session": {
+    "total_cost_usd": 0,
+    "total_api_duration_ms": 0,
+    "total_duration_ms": 1120,
+    "total_lines_added": 0,
+    "total_lines_removed": 0,
+    "model_usage": {}
+  },
+  "subscription_type": "pro",
+  "rate_limits_available": true,
+  "rate_limits": {
+    "five_hour": {
+      "utilization": 42,
+      "resets_at": "2026-11-21T15:30:00.120000+00:00"
+    },
+    "seven_day": {
+      "utilization": 67.5,
+      "resets_at": "2026-11-26T08:00:00.250000+00:00"
+    },
+    "seven_day_opus": null,
+    "seven_day_sonnet": null,
+    "limits": [
+      {
+        "kind": "session",
+        "group": "session",
+        "percent": 42,
+        "resets_at": "2026-11-21T15:30:00.120000+00:00",
+        "scope": null
+      },
+      {
+        "kind": "weekly_all",
+        "group": "weekly",
+        "percent": 67.5,
+        "resets_at": "2026-11-26T08:00:00.250000+00:00",
+        "scope": null
+      }
+    ],
+    "model_scoped": [
+      {
+        "display_name": "Sonnet",
+        "utilization": 15,
+        "resets_at": "2026-11-26T08:00:00.250000+00:00"
+      }
+    ]
+  }
+}

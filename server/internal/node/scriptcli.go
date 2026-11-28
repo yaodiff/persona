@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -144,7 +145,8 @@ func (n *Node) handleDecision(ctx context.Context, req sockRequest) assistantwir
 	if n.peer == nil {
 		return assistantwire.OutsideDecisionReply{Code: "unavailable", Error: "this node is not connected to a hub"}
 	}
-	var params any
+	var reply assistantwire.OutsideDecisionReply
+	var err error
 	switch req.Kind {
 	case assistantwire.MethodDecisionRaise:
 		var in nodeclient.DecisionRaiseRequest
@@ -155,23 +157,23 @@ func (n *Node) handleDecision(ctx context.Context, req sockRequest) assistantwir
 		if n.sessionBlocked(sid, in.Cwd) {
 			return assistantwire.OutsideDecisionReply{Code: "forbidden", Error: "this folder is blocked in Persona"}
 		}
-		params = struct {
-			nodeclient.DecisionRaiseRequest
-			Source string `json:"source"`
-		}{DecisionRaiseRequest: in, Source: title}
+		reply, err = buswire.Call(ctx, n.peer, assistantwire.DecisionRaiseMethod, assistantwire.OutsideDecisionRaiseParams{
+			Decision: in.Decision, Cwd: in.Cwd, Source: title,
+		})
 	case assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
-		var in struct {
-			ID string `json:"id"`
-		}
+		var in assistantwire.OutsideDecisionIDParams
 		if err := json.Unmarshal(req.Input, &in); err != nil || in.ID == "" {
 			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: "a decision id is required"}
 		}
-		params = in
+		if req.Kind == assistantwire.MethodDecisionGet {
+			reply, err = buswire.Call(ctx, n.peer, assistantwire.DecisionGetMethod, in)
+		} else {
+			reply, err = buswire.Call(ctx, n.peer, assistantwire.DecisionWithdrawMethod, in)
+		}
 	default:
 		return assistantwire.OutsideDecisionReply{Code: "unavailable", Error: "this node does not support decisions"}
 	}
-	var reply assistantwire.OutsideDecisionReply
-	if err := n.peer.Call(ctx, req.Kind, params, &reply); err != nil {
+	if err != nil {
 		return assistantwire.OutsideDecisionReply{Code: "unavailable", Error: err.Error()}
 	}
 	return reply

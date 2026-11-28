@@ -10,5 +10,7 @@
   "runtime_required": "この拡張機能を有効にする前に、管理側で固定バージョンのソースランタイムを設定してください。",
   "isolation_required": "ソース拡張機能の隔離を無効にはできません。",
   "package_check_only": "ソースパッケージの検査に合格しました。ランタイムの検証には管理側の強制サンドボックスが必要です。エンジンだけの起動は検証に含まれません。",
-  "created": "ソース拡張機能を作成しました。personad extension pack でパッケージ化してください。有効化には固定ランタイムと強制 Linux 隔離が必要です。"
+  "created": "ソース拡張機能を作成しました。personad extension pack でパッケージ化してください。有効化には固定ランタイムと強制 Linux 隔離が必要です。",
+  "package_size_invalid": "パッケージ内のファイルサイズが無効です：{size}",
+  "package_too_big": "パッケージが大きすぎます"
 }

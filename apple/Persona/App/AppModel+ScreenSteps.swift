@@ -35,7 +35,7 @@ extension AppModel {
             let from = d.review ? d.steps.count : ScreenStepsLogic.current(d, trail: trail, now: now)
             screenTrails[key] = ScreenStepsLogic.sent(trail, from: from, move: move, answer: answer, now: now)
             if let prefix = ScreenStepsLogic.screenPrefix(ix.uid) {
-                endedInteractionIDs = endedInteractionIDs.filter { !$0.hasPrefix(prefix) || $0 == ix.uid }
+                retainEndedInteractions { !$0.hasPrefix(prefix) || $0 == ix.uid }
             }
             if waits {
                 screenMoves[key] = ScreenMove(card: ix, at: now)
@@ -76,7 +76,7 @@ extension AppModel {
         guard isMoving(ix) else { return }
         screenMoves[key] = nil
         screenTrails[key]?.walkTo = nil
-        endedInteractionIDs.remove(ix.uid)
+        forgetEndedInteraction(ix)
         toast = Toast(String(localized: "The terminal didn't move to another question. Check it with View Terminal."), style: .error)
         let asked = Date.now
         guard let ixs = try? await api(ix.group)?.interactions() else { return }

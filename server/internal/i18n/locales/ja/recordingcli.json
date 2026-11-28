@@ -1,0 +1,13 @@
+{
+  "usage": "使い方：\n  {command} list --hub <URL> [--token-file <ファイル>] [--query <検索語>] [--json]\n  {command} export --hub <URL> [--token-file <ファイル>] [--format markdown|vtt] [--output <新規ファイル>] <録音 ID>\n\nペアリング済み端末のトークンを --token-file または PERSONA_RECORDINGS_TOKEN で指定してください。タイトルと保存済みのテキストを検索し、最大 80 件の結果を返します。--output を省略すると標準出力に書き出します。",
+  "invalid_id": "一覧に表示された録音の UUID を指定してください。",
+  "invalid_format": "--format には markdown または vtt を指定してください。",
+  "token": "ペアリング済み端末のトークンを --token-file または PERSONA_RECORDINGS_TOKEN で指定してください。",
+  "bad_response": "ハブから返された録音データの形式が正しくありません。",
+  "read_failed": "ハブに接続できず、録音を読み込めませんでした。",
+  "http_error": "録音の読み込み時にハブが HTTP {status} を返しました。",
+  "output_failed": "録音の書き出しに失敗しました。保存先のフォルダと書き込み権限を確認してください。",
+  "empty": "録音が見つかりませんでした。",
+  "untitled": "無題の録音",
+  "saved": "録音を {path} に書き出しました。"
+}

@@ -593,10 +593,10 @@ func TestBusDeltasAreTakenTogether(t *testing.T) {
 	}
 	b.queueEvent(assistantwire.EventSessionDelta, delta("c2", "另一段"))
 	b.queueEvent(assistantwire.EventTurnEnded, json.RawMessage(`{"machine_id":"server","session_id":"c1"}`))
-	if n := len(b.events); n != 3 {
+	if n := b.events.len(); n != 3 {
 		t.Fatalf("%d events waiting, want 3", n)
 	}
-	first := <-b.events
+	first, _ := b.events.take()
 	var p SessionDelta
 	_ = json.Unmarshal(b.takeDelta(first.params), &p)
 	if p.SessionID != "c1" || p.Text != "第4999个字" {

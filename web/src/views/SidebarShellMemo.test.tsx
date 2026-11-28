@@ -88,6 +88,7 @@ class FakeSocket {
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); }); // NodeMenu comes in a chunk of its own
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
 const push = async (message: Record<string, unknown>) => {

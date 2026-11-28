@@ -39,10 +39,13 @@ function ownerDecision(item: Extract<NeedsYouItem, { kind: "task" }>, deferred: 
   // Delivery acceptance is its own explicit owner gate, not the dismissed review round that preceded it.
   if (heldDelivery(todo)?.unblock === "user") return true;
   if (item.status === "not_started" || decisionDismissed(todo) || deferred[decisionLaterKey(todo)]) return false;
-  const ask = openAsk(todo);
-  if (ask && (ask.questions?.length || ask.outcome === "decide" || !ask.outcome || ask.why_owner)) return true;
   const review = reviewState(todo);
-  return review === "needs_user" || review === "user_check";
+  const ask = openAsk(todo);
+  if (review === "user_check") {
+    return Boolean(ask && (ask.questions?.length || ask.outcome === "decide" || ask.outcome === "cannot"));
+  }
+  if (ask && (ask.questions?.length || ask.outcome === "decide" || !ask.outcome || ask.why_owner)) return true;
+  return review === "needs_user";
 }
 
 /** The one projection behind both the Needs-you number and the rows that number opens. */

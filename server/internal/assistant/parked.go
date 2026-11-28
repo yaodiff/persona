@@ -17,7 +17,8 @@ import (
 // records remain readable without inventing contacts. A parked task stays open: no new ask, push or conclusion card.
 // A verified interaction_id instead keeps the worker's existing pending request in Needs you, without another card.
 // No stalled, idle, orphaned, overdue or undecidable signal is raised for the park. At its time its
-// supervisor gets one parked_due signal: decide, park again with a new reason, or close it. Its agent starting a turn
+// supervisor gets a parked_due signal: decide, park again with a new reason, or close it. One the supervisor does not
+// act on (no task_review follows it) is resent a few times (#14048). Its agent starting a turn
 // (someone sent it something) ends the parking, and it is supervised as before. So does a decision of the owner's
 // recorded on a task parked for them or for someone else (parkDecided, #8044): its supervisor gets the decision.
 // Parking again and again is the old habit under a new name, so the parks in a row with no agent turn between them
@@ -48,6 +49,13 @@ var (
 	parkDefault = 24 * time.Hour
 	parkMin     = time.Minute
 	parkMax     = 30 * 24 * time.Hour
+)
+
+// parkedDueResendAfter is how long a told parked_due waits for the supervisor's task_review before it is told again, and
+// maxParkedDueResends how many times it is resent (#14048).
+const (
+	parkedDueResendAfter = time.Hour
+	maxParkedDueResends  = 3
 )
 
 // maxReparks is how many times in a row a task is parked again with no agent turn in between; one more is refused.
@@ -241,15 +249,46 @@ func parkedDueSignal(t Todo, now time.Time) (superviseSignal, bool) {
 		return superviseSignal{}, false
 	}
 	r := v.parking()
-	if r == nil || r.Handoff != nil || !r.DueAt.IsZero() || now.Before(r.Until) {
+	if r == nil || r.Handoff != nil || now.Before(r.Until) {
 		return superviseSignal{}, false
 	}
-	return superviseSignal{Todo: t.ID, Kind: sigParkedDue, Key: parkKey(r), Detail: r.Reason,
+	// Told already: a reminder the supervisor did not act on (no task_review since, the park is still this one) comes
+	// again after parkedDueResendAfter, at most maxParkedDueResends times. A supervision turn that ended on a model API
+	// error (a 429) writes no review, so such a turn does not count as handled.
+	if !r.DueAt.IsZero() && (r.DueResends >= maxParkedDueResends || now.Before(laterTime(r.DueAt, r.Until).Add(parkedDueResendAfter))) {
+		return superviseSignal{}, false
+	}
+	return superviseSignal{Todo: t.ID, Kind: sigParkedDue, Key: parkDueKey(r), Detail: r.Reason,
 		Minutes: int(now.Sub(r.At).Minutes())}, true
+}
+
+// laterTime is the later of a and b.
+func laterTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // parkKey names one park: when the review parked it.
 func parkKey(r *TaskReview) string { return "parked@" + r.At.UTC().Format(time.RFC3339Nano) }
+
+// parkDueKey names one parked_due reminder of park r: the first carries parkKey, each resend after it adds its number,
+// so a resend is news to the supervision dedup and a reminder already told is not raised under its old key again.
+func parkDueKey(r *TaskReview) string {
+	if r.DueAt.IsZero() {
+		return parkKey(r)
+	}
+	return parkKey(r) + "#resend=" + strconv.Itoa(r.DueResends+1)
+}
+
+// parkedDueResend is which resend of park r's parked_due its next reminder is: 0 for the first reminder.
+func parkedDueResend(r *TaskReview) int {
+	if r == nil || r.DueAt.IsZero() {
+		return 0
+	}
+	return r.DueResends + 1
+}
 
 // parkedDueTold keeps on each park in list that a supervision message carried its parked_due (sent, or queued where a
 // restart keeps it), so a manager started again does not tell it a second time; until then the signal is raised again
@@ -261,8 +300,11 @@ func (s *Service) parkedDueTold(ctx context.Context, list []superviseSignal) {
 		}
 		if _, _, err := s.updateSupervision(ctx, g.Todo, func(v *Supervision) bool {
 			r := v.parking()
-			if r == nil || parkKey(r) != g.Key || !r.DueAt.IsZero() {
+			if r == nil || parkDueKey(r) != g.Key {
 				return false
+			}
+			if !r.DueAt.IsZero() {
+				r.DueResends++
 			}
 			r.DueAt = time.Now().UTC()
 			return true

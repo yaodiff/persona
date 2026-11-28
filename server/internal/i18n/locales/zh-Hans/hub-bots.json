@@ -8,6 +8,8 @@
   "cannot_reach_app": "连不上这个应用：{error}（检查 App ID / App Secret，并在开放平台给应用开启机器人能力）",
   "topic_chats_many": "最多开启 {n} 个群",
   "topic_chat_bad": "群 ID 为空、含空格或重复",
+  "topic_todo_mode_bad": "请选择有效的群待办设置",
+  "topic_space_bad": "该空间不存在或不可绑定到话题群",
   "topic_chat_home_many": "主话题群只能有一个",
   "topic_needs_owner": "先配对机器人：开启的群属于主人的名单",
   "topic_chats_new_app": "群名单请单独提交：换 App ID 会解除主人配对",
@@ -24,5 +26,9 @@
   "handoff_chat_blocked": "这个会话已被禁止代答",
   "handoff_conflict": "这个引用已经用于另一次交接",
   "handoff_rate_limited": "代答太频繁，请稍后再试。",
-  "handoff_assistant_away": "助手暂时接不了这次交接，请稍后再试。"
+  "handoff_assistant_away": "助手暂时接不了这次交接，请稍后再试。",
+  "group_access_invalid": "群访问设置的 {field} 缺失或无效",
+  "group_access_tool_bad": "{tool} 不是只读的连接器工具",
+  "group_access_needs_owner": "先配对机器人：群访问是主人的",
+  "group_access_conflict": "群访问在别处被改过了。重新加载后再试。"
 }

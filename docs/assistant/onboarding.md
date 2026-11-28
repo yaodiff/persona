@@ -435,7 +435,7 @@ Lives under the assistant service, which already knows machine, launcher, and mo
 Evaluation order and data sources (all existing, plus one new node RPC):
 
 1. `computer`: device list, online status, trust state (5.3). Later steps are `unknown` until the computer is `ok`.
-2. `claude`: `claude-version` from node self-check (`node/doctor.go:454`), cached by the assistant service for 10 minutes.
+2. `claude`: `claude-version` from node self-check (`node/doctor_checks.go:96`), cached by the assistant service for 10 minutes.
 3. `model`: new node RPC `claude.auth_status` (4.3, runs `claude auth status --json` in the launcher's actual environment, cached 10 minutes; a signed-out answer is asked again after a minute and waited for, an answer that said nothing — timeout, unreadable output — is asked again after a minute in the background while the last one is used); the most recent `?probe=1` or "Try a message" result; `turn_error_kind` of main chat's last turn. **No proactive token spending** by default. If never verified, use `unknown` + `model_unverified`, not `problem`; `mode` can still be `full`.
 4. `first_message`: whether main chat has ever had a successful reply or a successful probe check (`?probe=1`). `todo` does not affect `mode`.
 

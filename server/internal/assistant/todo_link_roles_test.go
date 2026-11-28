@@ -1,6 +1,10 @@
 package assistant
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+)
 
 func TestReferenceReportLinks(t *testing.T) {
 	own := "https://github.com/o/r/pull/1"
@@ -33,7 +37,7 @@ func TestReferenceReportLinks(t *testing.T) {
 			want: []string{other},
 		},
 		{
-			name: "plain delivery report keeps delivery default",
+			name: "plain wording adds no legacy reference markers",
 			text: "Status: done\nPR: " + own + " and a follow-up " + foreign + " ready for review.",
 			want: nil,
 		},
@@ -77,5 +81,37 @@ func TestReferenceReportLinks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReferenceReportLinksUseBindingsAndCloseout(t *testing.T) {
+	const bound = "https://github.com/example/project/pull/1"
+	const explicit = "https://github.com/example/project/pull/2"
+	const incidental = "https://github.com/example/project/pull/10"
+	alias := "https://github.com/Example/Project/pull/1#discussion_r3"
+	rows := []repository.TaskRepository{{Links: []repository.TaskLink{{CanonicalURL: bound}}}}
+	raws := []string{alias, explicit, incidental}
+
+	_, got := reportLinkRoles(raws, []string{explicit}, rows)
+	if len(got) != 1 || got[incidental] != repository.LinkRoleReference {
+		t.Fatalf("report roles = %v, want only the incidental link marked reference", got)
+	}
+	_, got = reportLinkRoles(raws, nil, nil)
+	for _, raw := range raws {
+		if got[raw] != repository.LinkRoleReference {
+			t.Errorf("unselected URL %s got role %q, want reference", raw, got[raw])
+		}
+	}
+}
+
+func TestReferenceReportLinksKeepUnlinkedTarget(t *testing.T) {
+	const repo = "https://github.com/example/project"
+	const siblingPR = "https://github.com/example/project-tools/pull/3"
+	rows := []repository.TaskRepository{{SourceSnapshot: repository.SourceSnapshot{
+		Identity: repository.Identity{CanonicalURL: repo},
+	}}}
+	links, roles := reportLinkRoles([]string{repo + "/pull/1", repo + "/pull/2", siblingPR}, []string{repo + "/pull/2"}, rows)
+	if len(links) != 2 || links[0] != repo+"/pull/2" || links[1] != siblingPR || roles[siblingPR] != repository.LinkRoleReference {
+		t.Fatalf("report links = %v, roles = %v, want explicit delivery and reference outside the target repo", links, roles)
 	}
 }

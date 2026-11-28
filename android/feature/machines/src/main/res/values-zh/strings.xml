@@ -102,10 +102,10 @@
     <string name="machines_engine">引擎</string>
     <string name="machines_reconnecting">正在重新连接…</string>
     <string name="machines_reconnect">重新连接</string>
-    <string name="machines_engine_note">只显示所选引擎里的会话。</string>
+    <string name="machines_engine_note">只显示这台电脑所用引擎里的会话。</string>
     <string name="machines_engine_note_none">显示桌面 App 的会话，不能从手机新建或继续会话。</string>
     <string name="machines_botmux">同时显示 botmux 会话</string>
-    <string name="machines_botmux_note">这台电脑装了 botmux 时，botmux 里的会话和所选引擎的会话一起列出。关掉后不再列出，也不再运行 botmux。</string>
+    <string name="machines_botmux_note">这台电脑装了 botmux 时，botmux 里的会话和这台电脑所用引擎的会话一起列出。关掉后不再列出，也不再运行 botmux。</string>
     <string name="machines_notice_botmux_failed">botmux 开关没有保存：%1$s</string>
     <string name="machines_local_note">hub 所在的机器，直接运行 node。</string>
     <string name="machines_ssh_note">hub 通过 ssh %1$s 接入。</string>

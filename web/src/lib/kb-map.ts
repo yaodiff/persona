@@ -8,8 +8,9 @@
 import { t } from "../i18n";
 import { type KBDetail, type KBEntry } from "./kb";
 import { groupPoints, type PointGroup, type TopicPoint } from "./kb-points";
+import { type MilestoneState, type TreeEntry } from "./kb-tree";
 
-export type MapKind = "root" | "branch" | "group" | "project" | "section" | "text" | "link" | "day" | "topic" | "point";
+export type MapKind = "root" | "branch" | "group" | "project" | "section" | "text" | "link" | "day" | "topic" | "point" | "pnode";
 export type MapTone = "accent" | "green" | "orange";
 /** The icon a section node shows (icons.tsx names). */
 export type SectionIcon = "target" | "gauge" | "arrowRight" | "warning" | "flag" | "book" | "clock" | "calendar" | "folder" | "person" | "chat" | "light";
@@ -48,7 +49,13 @@ export interface MapNode {
   point?: TopicPoint;
   /** a topic or subtopic in the topic tree; the root says which view it is */
   isTopic?: boolean;
-  view?: "topics" | "projects";
+  view?: "topics" | "projects" | "tree";
+  /** the project tree (lib/kb-tree.ts): the project a node draws, its milestone flag, its depth (1 at the top), and in
+   *  the tag view where it sits in the tree */
+  project?: TreeEntry;
+  flag?: { text: string; state: MilestoneState };
+  depth?: number;
+  where?: string;
   icon?: SectionIcon;
   /** a topic: the entries its points name, to show sources by name */
   links?: KBEntry[];

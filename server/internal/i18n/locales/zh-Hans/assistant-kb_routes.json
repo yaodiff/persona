@@ -3,5 +3,11 @@
   "disabled": "此助手已关闭知识库。",
   "read_only": "知识库为只读模式，暂不支持修改。",
   "source_settings_forbidden": "只有所有者可以修改项目的来源设置。",
-  "unknown_kind": "未知的类别：只能搜 projects、chats、people、docs、meetings、events、recordings 或 topics。"
+  "unknown_kind": "未知的类别：只能搜 projects、chats、people、docs、meetings、events、recordings 或 topics。",
+  "parent_self": "项目不能放到自己下面。",
+  "parent_cycle": "那个项目已经在这个项目下面，这个项目不能再放到它下面。",
+  "parent_not_found": "这个父项目不存在、已合并到别的项目，或者被标为不是项目。",
+  "parent_with_merge": "修改父项目或里程碑要和合并、取消合并分开做。",
+  "milestone_invalid": "里程碑不完整：需要标题；有日期时写成 2026-12-31 这样；状态是未验收、已验收或未通过。",
+  "milestone_not_found": "这个里程碑已经不在这个项目上了。"
 }

@@ -2,6 +2,7 @@ package lark
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"regexp"
 	"strings"
@@ -10,15 +11,11 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
-
-// Opening a to-do from a topic (#5279, docs/assistant/todos.md "Opening a to-do from a topic"): in a group chat the hub
-// registered, a topic the owner starts opens a to-do bound to it and hands the first words to the main conversation,
-// the way a new topic starts a session in a bot that auto-starts on one. In a topic that exists but is bound to nothing,
-// "/ai" followed by a line does the same.
 
 // openNotesMax bounds the first words kept as the to-do's notes, in characters.
 const openNotesMax = 4000
@@ -177,27 +174,77 @@ func genericTopicRequest(text string) bool {
 	return false
 }
 
-// openTopicIfAsked opens a to-do for the message when it asks for one: it starts a topic that is bound to nothing, or
-// it is "/ai …" in such a topic. It says whether it took the message (everything the owner is to be told is said).
-func (s core) openTopicIfAsked(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, topic *feishuTopic) bool {
-	rest, asked := aiCommand(openingCommandWords(ev, content))
-	if !asked && !isTopicRoot(ev) {
-		return false
+var topicTodoRequest = lazyre.New(`(?i)^(?:(?:please +)?(?:make|create|add) +(?:me +)?a +to-do(?: +(?:to|for) +| *[:：] *|$)|(?:请)?(?:建个待办|创建待办|新建待办)(?: *[:：] *| +|$)|ToDoを作って(?:ください)?(?: *[:：] *| +|$))`) // i18n-ignore: incoming request phrases
+
+func topicTodoCommand(text string) (string, bool) {
+	if rest, ok := aiCommand(text); ok {
+		return rest, true
 	}
-	text := rest
-	if !asked {
-		text = openingWords(ev, content)
+	text = strings.TrimSpace(text)
+	if len(text) > 0 {
+		r, size := utf8.DecodeRuneInString(text)
+		if r == '/' || r == '／' { // i18n-ignore: command syntax
+			name := text[size:]
+			if at := strings.IndexFunc(name, unicode.IsSpace); at >= 0 {
+				if strings.EqualFold(name[:at], "todo") {
+					return strings.TrimSpace(name[at:]), true
+				}
+			} else if strings.EqualFold(name, "todo") {
+				return "", true
+			}
+		}
 	}
-	s.openTopicTodo(ctx, ev, st, content, text, topic)
-	return true
+	return "", false
+}
+
+func topicOpening(ev botcard.MessageEvent, content botcard.Content, mode assistantwire.TopicTodoMode) (string, bool) {
+	words := openingCommandWords(ev, content)
+	if text, ok := topicTodoCommand(words); ok {
+		return text, true
+	}
+	if prefix := topicTodoRequest.FindString(words); prefix != "" {
+		return strings.TrimSpace(words[len(prefix):]), true
+	}
+	if mode == assistantwire.TopicAlwaysTodo && isTopicRoot(ev) {
+		return openingWords(ev, content), true
+	}
+	return "", false
 }
 
 // openTopicTodo makes the to-do for the topic ev is in, with text (the first words, the command taken off) as its
 // notes, and hands the words to the main conversation (openTodoIn); what keeps it from doing so is said in the topic.
 func (s core) openTopicTodo(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, text string, topic *feishuTopic) {
-	if _, fail := s.openTodoIn(ctx, ev, st, content, text, "", topic, nil); fail != "" {
+	if _, fail := s.openTodoIn(ctx, ev, st, content, text, "", topic, nil, nil); fail != "" {
 		s.botNoteTo(ctx, topic.target(), ev.Message.MessageID, fail)
 	}
+}
+
+type topicTodoDecision struct {
+	title, origin string
+}
+
+// DecideTopicTodo opens a to-do for a main-conversation run that is already answering in this topic.
+func (l *Layer) DecideTopicTodo(ctx context.Context, run channel.Run, title, notes string) (string, error) {
+	s := l.chat()
+	topic := &feishuTopic{Chat: run.Ext["chat"], Thread: run.Ext["thread"]}
+	st, err := s.feishuStatus(ctx)
+	if err != nil {
+		return "", err
+	}
+	if st.TopicTodoModes[topic.Chat] != assistantwire.TopicMainDecides || s.botRecalled(run.ReplyTo) ||
+		run.Ext[assistantwire.FeishuTopicMayOpenTodo] != pairingKey(st) {
+		return "", errors.New("this Lark topic no longer allows the main conversation to open a to-do")
+	}
+	var ev botcard.MessageEvent
+	ev.Message.MessageID = run.ReplyTo
+	if notes == "" {
+		notes = title
+	}
+	todo, fail := s.openTodoIn(ctx, ev, st, botcard.Content{}, notes, "", topic, nil, &topicTodoDecision{title: title, origin: run.SessionID})
+	if fail != "" {
+		return "", errors.New(fail)
+	}
+	return todo, nil
 }
 
 // openTodoIn makes the to-do for the topic, with text (the first words, the command taken off) as its title and notes,
@@ -208,9 +255,10 @@ func (s core) openTopicTodo(ctx context.Context, ev botcard.MessageEvent, st Fei
 // and in the hand-over, as context. src, when given, is where the request came from, recorded on the to-do. A nil topic
 // is a to-do bound to no topic (a request taken in the owner's private chat, openInOwnerChat): ev is then a message of that
 // chat, and what is said goes there. todo is the to-do's id; fail says why no to-do was made, in the bot's language, ""
-// when one was; what goes wrong after the to-do exists is said in the topic (or the private chat).
+// when one was; what goes wrong after the to-do exists is said in the topic (or the private chat). A decision from
+// the main conversation is already in a run, so it receives the to-do ID without another handoff.
 func (s core) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, text, quote string,
-	topic *feishuTopic, src *assistantwire.ChatTodoSource) (todo, fail string) {
+	topic *feishuTopic, src *assistantwire.ChatTodoSource, decision *topicTodoDecision) (todo, fail string) {
 	msg := ev.Message
 	l := s.botLang(ctx)
 	to := topic.target()
@@ -229,7 +277,7 @@ func (s core) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st Feishu
 		// words to name it by.
 		return "", i18n.T(l, "assistant-feishu.thread_open_needs_text")
 	}
-	target, origin, why := s.h.OpenTarget(ctx, st)
+	target, origin, why := s.openTarget(ctx, st)
 	if why != "" {
 		return "", why
 	}
@@ -239,14 +287,26 @@ func (s core) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st Feishu
 	if quote != "" {
 		words += "\n\n" + i18n.T(l, "assistant-feishu.elsewhere_quote_label") + "\n" + prompts.ContextBody(quote)
 	}
-	titleWords, linkLabel := text, false
-	if topic != nil && src == nil {
-		titleWords, linkLabel = openingTitleWords(text, content, msg.Mentions)
-		if titleWords == "" {
-			titleWords = i18n.T(l, "assistant-tool_titles.todo_create")
+	var title string
+	var retitle bool
+	if decision == nil {
+		titleWords, linkLabel := text, false
+		if topic != nil && src == nil {
+			titleWords, linkLabel = openingTitleWords(text, content, msg.Mentions)
+			if titleWords == "" {
+				titleWords = i18n.T(l, "assistant-tool_titles.todo_create")
+			}
 		}
+		title, retitle = s.h.TodoTitle(ctx, titleWords, l, linkLabel)
+	} else {
+		if origin != decision.origin {
+			return "", i18n.T(l, "assistant-feishu.thread_open_no_main")
+		}
+		if existing, ok := s.h.TodoOfThread(topic.Chat, topic.Thread); ok && !existing.Done {
+			return existing.ID, "" // this topic already has an open to-do
+		}
+		title, _ = s.h.TodoTitle(ctx, decision.title, l, true)
 	}
-	title, retitle := s.h.TodoTitle(ctx, titleWords, l, linkLabel)
 	if src != nil && src.Anchor == "" {
 		src.Handoff = msg.MessageID
 	}
@@ -258,6 +318,11 @@ func (s core) openTodoIn(ctx context.Context, ev botcard.MessageEvent, st Feishu
 		return "", failed("thread_open_failed", err)
 	}
 	s.logf("bots: %s opened todo %s", where, todo)
+
+	if decision != nil {
+		say("thread_decided", i18n.Args{"title": title})
+		return todo, ""
+	}
 
 	line := i18n.T(l, "assistant-feishu.thread_open_done", i18n.Args{"title": title})
 	if link := s.h.TodoLink(strings.TrimRight(st.PublicURL, "/"), todo); isWebLink(link) {

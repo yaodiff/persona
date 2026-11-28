@@ -1,0 +1,22 @@
+{
+  "via": "{source} から送信",
+  "triggered": "トリガー送信",
+  "sent": "Lark に送信済み",
+  "sent_final": "Lark の最終返信",
+  "bot": "{name}（ボット）",
+  "quoted": "メッセージを引用",
+  "topic": "トピックに以前のメッセージあり",
+  "attachments_one": "添付 {count} 件",
+  "attachments_other": "添付 {count} 件",
+  "voice": "音声",
+  "truncated": "途中まで",
+  "original": "原文",
+  "hide_original": "原文を隠す",
+  "external_trigger_notice": "旧版 botmux：Persona からの送信はオーナーではなく外部イベントとして届きます。3.59.23 以降へ更新すると完全対応になります。",
+  "owner_unset_notice": "BotMux Owner Union ID が未設定のため、通常どおり送信しています。オーナーとして送るには設定 › Agents で入力してください。",
+  "raw": "botmux · 原文",
+  "show_raw": "botmux セッションを原文で表示",
+  "hide": "botmux セッションを非表示にする",
+  "hidden": "botmux · 非表示",
+  "decode": "botmux セッションを整形して表示"
+}

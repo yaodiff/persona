@@ -42,7 +42,7 @@ const second = { id: "review-second", title: "Write documentation" };
 describe("Today tasks awaiting review", () => {
   it.each([
     { lang: "en", single: "Waiting for your review: Update settings", multiple: "2 tasks waiting for your review", action: "View" },
-    { lang: "zh-Hans", single: "等你验收：Update settings", multiple: "2 件等你验收", action: "去看" },
+    { lang: "zh-Hans", single: "待你验收：Update settings", multiple: "2 个任务待你验收", action: "查看" },
     { lang: "ja", single: "検収待ち：Update settings", multiple: "検収待ち2件", action: "確認" },
   ])("names one task, counts several and opens the first in $lang", async ({ lang, single, multiple, action }) => {
     await initI18n(lang);
@@ -81,13 +81,15 @@ describe("Today tasks awaiting review", () => {
     });
     expect(host.textContent).toContain("已完成：Finished work");
     expect(host.textContent).toContain("需要你：Choose a format");
-    expect(host.textContent).toContain("等你验收：Update settings");
-    expect(host.textContent).toContain("1 个任务工作中");
-    const buttons = [...host.querySelectorAll("button")].filter((b) => b.textContent === "去看");
-    expect(buttons).toHaveLength(2);
+    expect(host.textContent).toContain("待你验收：Update settings");
+    expect(host.textContent).toContain("1 个任务进行中");
+    const buttons = [...host.querySelectorAll("button")].filter((b) => b.textContent === "查看");
+    expect(buttons).toHaveLength(3);
     act(() => buttons[0].click());
-    expect(getPanel()).toEqual({ kind: "task", todo: "waiting" });
+    expect(getPanel()).toEqual({ kind: "task", todo: "done" });
     act(() => buttons[1].click());
+    expect(getPanel()).toEqual({ kind: "task", todo: "waiting" });
+    act(() => buttons[2].click());
     expect(getPanel()).toEqual({ kind: "task", todo: first.id });
   });
 });

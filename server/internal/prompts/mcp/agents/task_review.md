@@ -2,9 +2,11 @@ accepted closes after delivery_gate (default merged: park verified open PRs; lin
 
 For accepted (outcome=done), list each done_when once in checks (met=true, nonblank evidence), even with user_check; outcome=cannot, cancelled and criteria-free tasks keep prior rules. Other verdicts may omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers/Agent claims; uncovered scope needs needs_user, user_check, or a linked follow-up to-do—never chat text alone.
 
-Give accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user defaults to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
+If an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.
 
-A non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.{{template "shared/mcp_language" .}}
+Give accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
+
+A non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel duplicates/unwanted tasks. Viewing alone permits untouched cancellation.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -17,7 +19,29 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "verdict": {
       "type": "string",
-      "enum": ["accepted", "rework", "needs_user", "parked", "cancelled"]
+      "enum": ["accepted", "rework", "needs_user", "parked", "cancelled", "findings"]
+    },
+    "findings_review": {
+      "type": "object",
+      "description": "verdict=findings: omit to read; supply the displayed version to confirm and record dispositions without moving task state.",
+      "required": ["version"],
+      "properties": {
+        "version": {"type":"integer","minimum":1},
+        "dispositions": {
+          "type":"array",
+          "items": {
+            "type":"object",
+            "required":["id"],
+            "properties": {
+              "id":{"type":"string"},
+              "follow_up_todo_id":{"type":"string","description":"Independent supervised to-do with the finding’s exact next action in done_when."},
+              "wait_target":{"type":"string","description":"A single finding may match the park evidence's target."},
+              "done_evidence":{"type":"string","description":"Evidence that this finding was resolved."},
+              "owner_drop_decision_id":{"type":"string","description":"Owner's manual decision, question 'Drop investigation finding <id>?', choice 'Drop', with reason."}
+            }
+          }
+        }
+      }
     },
     "rework_kind": {
       "type": "string",
@@ -115,6 +139,15 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     "user_check": {
       "type": "boolean",
       "description": "accepted only: user must inspect result (e.g. UI change); shows \"Please verify\" card awaiting \"Pass\" instead of auto-passing; default false"
+    },
+    "deferred_scope": {
+      "type": "string",
+      "maxLength": 600,
+      "description": "accepted: describe in the owner's language which work in the original brief is deferred or requires separate approval. The personal verification card shows the first 120 characters"
+    },
+    "follow_up_todo_id": {
+      "type": "string",
+      "description": "With deferred_scope and without user_check, identify the open to-do that owns the remaining work. Its part_of must name this to-do, or its after must name this piece of the same request"
     },
     "reversible": {
       "type": "boolean",

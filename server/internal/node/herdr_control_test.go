@@ -382,11 +382,10 @@ func TestHerdrAnExtensionsResumeOfAnUnlistedChat(t *testing.T) {
 }
 
 // The gate attack on #10941's resume rule, its finding 1: a run started in the health space whose shell left it is
-// listed at its latest folder (#12097), and the apps' Resume names that folder, which the start writes into the node's
-// record before Claude is up. Once Claude Code's cleanup took the transcript, the record was all the node had of the
-// run and said outside the space, so an extension's resume of the unlisted id passed and started a conversation under
-// the run's id outside the space, with the run's kept task instructions. A terminal record no longer lets a resume pass
-// alone: the run is refused, before herdr is asked anything, and its record keeps its instructions.
+// listed at its latest folder (#12097), and the apps' Resume names that folder. The record keeps its folder inside
+// the health space (#12216), and a terminal record no longer lets an extension resume pass alone: once Claude Code's
+// cleanup takes the transcript, an extension's resume is refused before herdr is asked anything, and its record keeps
+// its instructions.
 func TestHerdrAResumeElsewhereDoesNotLetAnExtensionPastAHealthRunsRecord(t *testing.T) {
 	const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a41"
 	n, f, home := herdrNode(t)
@@ -409,7 +408,7 @@ func TestHerdrAResumeElsewhereDoesNotLetAnExtensionPastAHealthRunsRecord(t *test
 	if _, err := request(t, n, "session.start", map[string]any{"cwd": elsewhere, "launcher": "claude", "resume_session_id": run}); err != nil {
 		t.Fatalf("the owner's resume: %v", err)
 	}
-	if st, _ := n.state.get(run); st.Cwd != elsewhere || st.TaskInstructions == "" {
+	if st, _ := n.state.get(run); st.Cwd != charts || st.TaskInstructions == "" {
 		t.Fatalf("the record after the owner's resume elsewhere: %+v", st)
 	}
 	// Claude Code's cleanup takes the transcript.
@@ -430,9 +429,145 @@ func TestHerdrAResumeElsewhereDoesNotLetAnExtensionPastAHealthRunsRecord(t *test
 	}) {
 		t.Fatalf("the refused resume reached herdr: %v", after)
 	}
-	if st, _ := n.state.get(run); st.TaskInstructions == "" {
+	if st, _ := n.state.get(run); st.Cwd != charts || st.TaskInstructions == "" {
 		t.Fatalf("the refused resume changed the record: %+v", st)
 	}
+}
+
+// A resume of a run whose transcript is gone starts fresh under the same id without the kept record's task
+// instructions, and keeps a record's folder inside its space (#12216 item 10).
+func TestHerdrResumeWithoutTranscriptDropsTaskInstructionsAndKeepsSpaceFolder(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		refusalOnly bool
+	}{
+		{name: "claude dedicated channel without a transcript"},
+		{name: "claude dedicated channel after removing a refusal-only transcript", refusalOnly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a42"
+			const rules = "Log the dose every night"
+			n, f, home := herdrNode(t)
+			charts := mkdir(t, filepath.Join(home, ".persona", "health", "charts"))
+			elsewhere := mkdir(t, filepath.Join(home, "elsewhere"))
+			n.state.put(run, sessionState{
+				Launcher:               "claude",
+				Cwd:                    charts,
+				TaskInstructions:       rules,
+				TaskInstructionChannel: "claude",
+			})
+			if tc.refusalOnly {
+				path := writePruneFile(t, refusalTurnLines("one"))
+				n.mu.Lock()
+				n.paths[run] = path
+				n.mu.Unlock()
+			}
+			f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+			f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w8"},
+				"tab": map[string]any{"tab_id": "w8:t1"}, "root_pane": map[string]any{"pane_id": "w8:p1"}})
+			startHerdr(f, "w8:p1", proto.StatusDone)
+			f.setScreen("w8:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+
+			if _, err := request(t, n, "session.start", map[string]any{
+				"cwd":               elsewhere,
+				"launcher":          "claude",
+				"resume_session_id": run,
+				"task_instructions": "Caller rule must not apply to transcriptless resume",
+			}); err != nil {
+				t.Fatalf("resume without transcript: %v", err)
+			}
+			sent := strings.Join(f.trace("pane.send_input"), "\n")
+			if !strings.Contains(sent, "--session-id "+run) || strings.Contains(sent, "--resume "+run) {
+				t.Fatalf("expected fresh --session-id start, got pane.send_input:\n%s", sent)
+			}
+			if strings.Contains(sent, "--append-system-prompt-file") || strings.Contains(sent, rules) {
+				t.Fatalf("transcriptless resume carried task instructions:\n%s", sent)
+			}
+			st, ok := n.state.get(run)
+			if !ok {
+				t.Fatal("missing session state after resume")
+			}
+			if st.Cwd != charts {
+				t.Fatalf("record Cwd = %q, want %q (stay in health space)", st.Cwd, charts)
+			}
+			if st.TaskInstructions != "" || st.TaskInstructionFile != "" || st.TaskInstructionChannel != "" {
+				t.Fatalf("record kept task instructions after transcriptless resume: %+v", st)
+			}
+		})
+	}
+
+	t.Run("fallback channel bare resume succeeds without kept instructions", func(t *testing.T) {
+		const run = "0a1b2c3d-7777-4f60-8a7b-9c0d1e2f3a43"
+		const rules = "Keep the health scope"
+		n, f, home := herdrNode(t)
+		charts := mkdir(t, filepath.Join(home, ".persona", "health", "charts"))
+		elsewhere := mkdir(t, filepath.Join(home, "elsewhere"))
+		n.state.put(run, sessionState{
+			Launcher:               "fallback_wrapper",
+			Cwd:                    charts,
+			TaskInstructions:       rules,
+			TaskInstructionChannel: "claude",
+		})
+		// Positive control: while the transcript exists, bare resume on a fallback launcher still refuses.
+		writeUserLine(t, home, charts, run, "Original health task")
+		if _, err := request(t, n, "session.start", map[string]any{
+			"cwd":               elsewhere,
+			"launcher":          "fallback_wrapper",
+			"resume_session_id": run,
+		}); rpcCode(err) != "task_instructions_resume" {
+			t.Fatalf("bare fallback resume with transcript = %v, want task_instructions_resume", err)
+		}
+		if err := os.Remove(n.transcriptPath(run)); err != nil {
+			t.Fatal(err)
+		}
+		f.reply("workspace.list", map[string]any{"workspaces": []any{}})
+		f.reply("workspace.create", map[string]any{"workspace": map[string]any{"workspace_id": "w9"},
+			"tab": map[string]any{"tab_id": "w9:t1"}, "root_pane": map[string]any{"pane_id": "w9:p1"}})
+		startHerdr(f, "w9:p1", proto.StatusDone)
+		f.setScreen("w9:p1", screenFixture(t, "claude-2.1.312-empty-162.txt"))
+
+		if _, err := request(t, n, "session.start", map[string]any{
+			"cwd":               elsewhere,
+			"launcher":          "fallback_wrapper",
+			"resume_session_id": run,
+		}); err != nil {
+			t.Fatalf("bare fallback resume without transcript failed: %v", err)
+		}
+		if sent := strings.Join(f.trace("pane.send_input"), "\n"); strings.Contains(sent, rules) || strings.Contains(sent, "--append-system-prompt-file") {
+			t.Fatalf("fallback transcriptless resume carried task instructions:\n%s", sent)
+		}
+		st, _ := n.state.get(run)
+		if st.Cwd != charts || st.TaskInstructions != "" || st.TaskInstructionChannel != "" {
+			t.Fatalf("unexpected state after fallback transcriptless resume: %+v", st)
+		}
+	})
+
+	t.Run("keepSpaceCwd", func(t *testing.T) {
+		home := t.TempDir()
+		charts := filepath.Join(home, ".persona", "health", "charts")
+		notes := filepath.Join(home, ".persona", "health", "notes")
+		otherSpace := filepath.Join(home, ".persona", "tracks", "work", "sub")
+		outside := filepath.Join(home, "proj")
+		otherOutside := filepath.Join(home, "other")
+
+		cases := []struct {
+			name string
+			prev string
+			next string
+			want string
+		}{
+			{"space to outside stays in space", charts, outside, charts},
+			{"space to another space stays in original space", charts, otherSpace, charts},
+			{"space to same space updates", charts, notes, notes},
+			{"outside to outside updates", outside, otherOutside, otherOutside},
+			{"outside to space updates", outside, charts, charts},
+		}
+		for _, tc := range cases {
+			if got := keepSpaceCwd(tc.prev, tc.next); got != tc.want {
+				t.Errorf("%s: keepSpaceCwd(%q, %q) = %q, want %q", tc.name, tc.prev, tc.next, got, tc.want)
+			}
+		}
+	})
 }
 
 // The owner's resume carries no resume_outside_health: a run started in the health space resumes as before, wherever
@@ -474,24 +609,36 @@ func TestHerdrStartIntoAGivenWorkspaceReturnsOnABlockedClaude(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitCalls(t, f, "session.snapshot", 2)
+	// A managed launcher's start gets Persona's settings with its gateway merged in (#1336), in a private per-start
+	// file with the model this start runs, not the shared "<launcher>-claude-settings.json" (#17035).
+	settings, err := filepath.Glob(filepath.Join(personaDir(home), "launcher-settings", "model-aliases-*.json"))
+	if err != nil || len(settings) != 1 {
+		t.Fatalf("per-start settings %v, %v; want one model-aliases file", settings, err)
+	}
+	if info, err := os.Stat(settings[0]); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the per-start settings must be private: %v", err)
+	}
+	s := readSettings(t, settings[0])
+	env, _ := s["env"].(map[string]any)
+	if env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || env["ANTHROPIC_MODEL"] != "m" || s["model"] != "m" {
+		t.Fatalf("the launcher's gateway and model are missing: %v", s)
+	}
 	assertTrace(t, f.trace(), []string{
 		call("session.snapshot", nil),
 		call("tab.create", map[string]any{"workspace_id": "w2", "cwd": home, "label": "a very long tab name that goes p", "focus": false, "env": agentEnvParam}),
 		markTab("w2:p5", startID),
-		// A managed launcher's start gets Persona's settings with its gateway merged in (#1336).
 		call("pane.send_input", map[string]any{"pane_id": "w2:p5", "keys": []string{"Enter"},
 			"text": inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --session-id "+startID+" --settings "+
-				shellQuote(filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json"))+
-				" --mcp-config "+shellQuote(filepath.Join(personaDir(home), "mcp.json"))+" --allowedTools "+shellQuote(ownToolsRule), shellQuote)}),
+				shellQuote(settings[0])+
+				" --mcp-config "+shellQuote(filepath.Join(personaDir(home), "mcp.json"))+" --allowedTools "+shellQuote(ownToolsRule)+" --model m", shellQuote)}),
 		readVisible("w2:p5"), agentGet("w2:p5"),
 		call("agent.rename", map[string]any{"target": "w2:p5", "name": "j-0e0000"}),
-		// herdr's restore resumes it through the launcher too, not with a bare `claude --resume` (#1879).
+		// herdr's restore resumes it through the launcher too, not with a bare `claude --resume` (#1879), with the
+		// same per-start settings and model.
 		resumeHeld("w2:p5", startID, inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
-			filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json")+
-			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule, dquote))[0],
+			settings[0]+" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule+" --model m", dquote))[0],
 		resumeHeld("w2:p5", startID, inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
-			filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json")+
-			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule, dquote))[1],
+			settings[0]+" --mcp-config "+filepath.Join(personaDir(home), "mcp.json")+" --allowedTools "+ownToolsRule+" --model m", dquote))[1],
 		call("session.snapshot", nil),
 	})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(startID, proto.StatusIdle, "w2:p5", "w2:t5", "w2", home, "")}, nil))

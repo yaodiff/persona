@@ -82,7 +82,7 @@ describe("the right-click menu", () => {
   });
 
   it("has the five rows in order", () => {
-    expect(terminalMenu({ selection: true, driving: true }).map((m) => m.label)).toEqual(["复制", "粘贴", "全选", "搜索…", "清除选区"]);
+    expect(terminalMenu({ selection: true, driving: true }).map((m) => m.label)).toEqual(["复制", "粘贴", "全选", "查找…", "清除选区"]);
   });
 
   it("enables copy and clear with a selection, paste when driving, the rest always", () => {

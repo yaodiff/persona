@@ -18,7 +18,7 @@ vi.mock("../../lib/ops", () => ({
   }),
 }));
 import { ApiError } from "../../lib/api";
-import { InteractionCard } from "./Interactions";
+import { InteractionCard, PendingCards } from "./Interactions";
 import { DelegatedCard, DelegatedHistory } from "./Delegated";
 import { getState, noteReanswer } from "../../lib/store";
 import { t } from "../../i18n";
@@ -79,8 +79,8 @@ afterEach(() => {
 describe("助手在看的问题卡", () => {
   it("标出助手在看；也可以直接答，照常发出", async () => {
     act(() => root.render(<InteractionCard ix={{ ...question, delegating: true }} />));
-    expect(host.querySelector("[data-delegating]")?.textContent).toContain("助手在看");
-    expect(host.textContent).toContain("助手正在判断能不能替你答");
+    expect(host.querySelector("[data-delegating]")?.textContent).toContain("助手查看中");
+    expect(host.textContent).toContain("助手正在评估能否代你回复");
     await click(choice("lib/pq"));
     expect(resolved).toEqual([{ path: "/interactions/ix1/resolve", body: { answers: { [Q]: "lib/pq" } } }]);
   });
@@ -88,7 +88,7 @@ describe("助手在看的问题卡", () => {
   it("交给你之后不再标，卡片和原来一样", () => {
     act(() => root.render(<InteractionCard ix={question} />));
     expect(host.querySelector("[data-delegating]")).toBeNull();
-    expect(host.textContent).not.toContain("助手在看");
+    expect(host.textContent).not.toContain("助手查看中");
     expect(host.textContent).toContain("驱动");
     expect(host.querySelector("[data-delegate-context]")).toBeNull();
   });
@@ -99,8 +99,8 @@ describe("助手补充的情况", () => {
     const delegate = { what: "换数据库驱动", why_now: "要开始写查询了", recommend: "pgx", cost: "以后再换要重写", reason: "影响依赖", deadline: "2026-11-08T10:00:00Z" };
     act(() => root.render(<InteractionCard ix={{ ...question, delegate }} />));
     const box = host.querySelector("[data-delegate-context]")!;
-    expect(box.textContent).toContain("助手补充的情况");
-    expect([...box.querySelectorAll("dt")].map((e) => e.textContent)).toEqual(["这件事", "为什么现在问", "不选的代价", "为什么要你定", "截止"]);
+    expect(box.textContent).toContain("助手了解到的情况");
+    expect([...box.querySelectorAll("dt")].map((e) => e.textContent)).toEqual(["事项", "为何此时询问", "不选的影响", "需你决定的原因", "截止时间"]);
     expect(box.textContent).toContain("换数据库驱动");
     expect(choice("pgx")!.querySelector("[data-assistant-pick]")?.textContent).toBe("助手推荐");
     expect(choice("lib/pq")!.querySelector("[data-assistant-pick]")).toBeNull();
@@ -110,7 +110,7 @@ describe("助手补充的情况", () => {
   it("推荐是助手自己的话：照原样列出，不标选项", () => {
     act(() => root.render(<InteractionCard ix={{ ...question, delegate: { recommend: "先别换，等压测", reason: "要你定方向" } }} />));
     const box = host.querySelector("[data-delegate-context]")!;
-    expect([...box.querySelectorAll("dt")].map((e) => e.textContent)).toEqual(["推荐", "为什么要你定"]);
+    expect([...box.querySelectorAll("dt")].map((e) => e.textContent)).toEqual(["推荐", "需你决定的原因"]);
     expect(box.textContent).toContain("先别换，等压测");
     expect(host.querySelector("[data-assistant-pick]")).toBeNull();
   });
@@ -124,73 +124,73 @@ describe("助手代答的问题", () => {
     expect(host.textContent).toContain("助手代答");
     expect(host.textContent).toContain("pgx");
     expect(host.textContent).toContain("理由：仓库里都用 pgx");
-    await click(button("改答"));
-    expect(host.textContent).toContain("Agent 已经按助手的答案往下做了");
+    await click(button("修改回答"));
+    expect(host.textContent).toContain("Agent 已按助手的回答继续执行");
     expect(choice("pgx")!.getAttribute("aria-pressed")).toBe("true");
-    expect(button("发送新答案")!.disabled).toBe(true);
+    expect(button("发送新回答")!.disabled).toBe(true);
     request.mockResolvedValue({ ok: true });
     await click(choice("lib/pq"));
-    expect(button("发送新答案")!.disabled).toBe(false);
-    await click(button("发送新答案"));
+    expect(button("发送新回答")!.disabled).toBe(false);
+    await click(button("发送新回答"));
     expect(request).toHaveBeenCalledWith("/interactions/ix1/reanswer", { method: "POST", json: { answers: { [Q]: "lib/pq" } } });
     expect(getState().reanswered.ix1.answers).toEqual({ [Q]: "lib/pq" });
-    expect(button("发送新答案")).toBeUndefined();
-    expect(host.textContent).toContain("你改答了");
+    expect(button("发送新回答")).toBeUndefined();
+    expect(host.textContent).toContain("你已修改回答");
     expect(host.querySelector("[data-delegated-answer]")?.textContent).toContain("lib/pq");
   });
 
   it("自己写的答案也能发", async () => {
     render();
-    await click(button("改答"));
+    await click(button("修改回答"));
     request.mockResolvedValue({ ok: true });
     type(host.querySelector<HTMLInputElement>(`input[aria-label="${t("chat-interactions.custom_answer")}"]`)!, "等压测完再定");
     expect(choice("pgx")!.getAttribute("aria-pressed")).toBe("false");
-    await click(button("发送新答案"));
+    await click(button("发送新回答"));
     expect(request).toHaveBeenCalledWith("/interactions/ix1/reanswer", { method: "POST", json: { answers: { [Q]: "等压测完再定" } } });
   });
 
   it("没发出去：在表单里说为什么，选的答案留着", async () => {
     render();
-    await click(button("改答"));
+    await click(button("修改回答"));
     request.mockRejectedValue(new ApiError(503, "assistant offline", { code: "assistant_offline" }));
     await click(choice("lib/pq"));
-    await click(button("发送新答案"));
-    expect(host.querySelector("[role=alert]")?.textContent).toBe("助手不在线，稍后再试");
+    await click(button("发送新回答"));
+    expect(host.querySelector("[role=alert]")?.textContent).toBe("助手当前离线，请稍后重试。");
     expect(choice("lib/pq")!.getAttribute("aria-pressed")).toBe("true");
     expect(getState().reanswered.ix1).toBeUndefined();
   });
 
   it("取消改答：表单收起，什么都不发", async () => {
     render();
-    await click(button("改答"));
+    await click(button("修改回答"));
     await click(button(t("common.cancel")));
-    expect(button("发送新答案")).toBeUndefined();
+    expect(button("发送新回答")).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
   });
 
   it("别处改的答案（hub 推来）也跟上", () => {
     render();
     act(() => noteReanswer("ix1", { [Q]: "lib/pq" }));
-    expect(host.textContent).toContain("你改答了");
+    expect(host.textContent).toContain("你已修改回答");
     expect(host.querySelector("[data-delegated-answer]")?.textContent).toContain("lib/pq");
   });
 
   it("新答案是作为消息发给 Agent 的：不能发消息的会话不能改答，只是不能审批的可以", () => {
     session({ source_kind: "runtime", capabilities: { approve: true, send: false } } as Partial<Session>);
     render();
-    expect(button("改答")!.disabled).toBe(true);
-    expect(button("改答")!.title).toBe(t("agents-agentsview.cannot_send"));
+    expect(button("修改回答")!.disabled).toBe(true);
+    expect(button("修改回答")!.title).toBe(t("agents-agentsview.cannot_send"));
     session({ source_kind: "runtime", capabilities: { approve: false, send: true } } as Partial<Session>);
     render({ ...answered });
-    expect(button("改答")!.disabled).toBe(false);
+    expect(button("修改回答")!.disabled).toBe(false);
   });
 
   it("别的管家的会话：改答发给那个管家", async () => {
     render({ ...answered, ix: { ...question, manager: "manager-2" } });
-    await click(button("改答"));
+    await click(button("修改回答"));
     request.mockResolvedValue({ ok: true });
     await click(choice("lib/pq"));
-    await click(button("发送新答案"));
+    await click(button("发送新回答"));
     expect(request).toHaveBeenCalledWith("/interactions/ix1/reanswer", { method: "POST", json: { answers: { [Q]: "lib/pq" } }, headers: { "X-Persona-Manager": "manager-2" } });
   });
 
@@ -198,9 +198,9 @@ describe("助手代答的问题", () => {
     const multi = { ...question, questions: [{ question: Q, header: "", multi_select: true, options: [{ label: "pgx" }, { label: "lib/pq" }] }] };
     render({ ...answered, ix: multi, answers: { [Q]: "pgx, lib/pq" } });
     act(() => noteReanswer("ix1", { [Q]: "lib/pq, pgx" }));
-    expect(host.textContent).not.toContain("助手原来答的");
+    expect(host.textContent).not.toContain("助手原回答");
     act(() => noteReanswer("ix1", { [Q]: "lib/pq" }));
-    expect(host.textContent).toContain("助手原来答的：pgx, lib/pq");
+    expect(host.textContent).toContain("助手原回答：pgx, lib/pq");
   });
 
   it("收起后不再留着", async () => {
@@ -225,14 +225,14 @@ describe("会话里看助手代答过的问题", () => {
     await render();
     await flush();
     expect(request).toHaveBeenCalledWith("/interactions/history?machine_id=m&session_id=s&limit=500", {});
-    expect(host.textContent).toContain("助手代答过的问题");
+    expect(host.textContent).toContain("助手代答的问题");
     expect(host.querySelectorAll("[data-delegated-row]")).toHaveLength(1);
     expect(host.textContent).toContain("理由：仓库里都用 pgx");
-    await click(button("改答"));
+    await click(button("修改回答"));
     await click(choice("lib/pq"));
-    await click(button("发送新答案"));
+    await click(button("发送新回答"));
     expect(request).toHaveBeenLastCalledWith("/interactions/ix1/reanswer", { method: "POST", json: { answers: { [Q]: "lib/pq" } } });
-    expect(host.textContent).toContain("你改答了");
+    expect(host.textContent).toContain("你已修改回答");
   });
 
   it("读不到：说为什么，可以重试", async () => {
@@ -257,5 +257,17 @@ describe("会话里看助手代答过的问题", () => {
     await render();
     await flush();
     expect(host.textContent).toBe("");
+  });
+});
+
+describe("the main chat's card stack", () => {
+  it("draws an answer the assistant gave from Delegated's own chunk, with the answered ones", async () => {
+    act(() => root.render(<PendingCards interactions={[]} answered={[]} delegated={[answered]} narrow={false} keyboard={false} onDismissKeyboard={() => {}} />));
+    await vi.waitFor(async () => {
+      await flush();
+      expect(host.textContent).toContain("助手代答");
+    });
+    expect(host.textContent).toContain("理由：仓库里都用 pgx");
+    expect(button("修改回答")).toBeTruthy();
   });
 });

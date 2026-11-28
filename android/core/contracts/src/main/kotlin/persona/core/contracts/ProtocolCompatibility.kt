@@ -13,9 +13,21 @@ object ProtocolCompatibility {
     val clientHeaders = listOf("X-Persona-Client", "X-Jarvis-Client")
     val operationHeaders = listOf("X-Persona-Op-Id", "X-Jarvis-Op-Id")
     val legacyBuiltins = setOf("jarvis", "jarvis-circuit", "jarvis-pixel", "jarvis-facet", "jarvis-blob")
-    val contextBlock = Regex("<(?:persona|jarvis)-context\\b([^>]*)>([\\s\\S]*?)</(?:persona|jarvis)-context>\\s*")
+    val contextTag = Regex("<(?:persona|jarvis)-context\\b([^>]*)>([\\s\\S]*?)</(?:persona|jarvis)-context>")
+    val contextBlock = Regex("${contextTag.pattern}\\s*")
     val leadContext = Regex("^\\s*<(?:persona|jarvis)-context\\b[^>]*>[\\s\\S]*?</(?:persona|jarvis)-context>")
     val contextClosingTag = Regex("<(\\s*/\\s*(?:persona|jarvis)-context\\s*>)", RegexOption.IGNORE_CASE)
+    private const val names = "(?:persona|jarvis)-(?:context|file)"
+    val unclosedContextBlock = Regex("<$names\\b[^>]*>[\\s\\S]*$", RegexOption.IGNORE_CASE)
+    val strayClosingTag = Regex("</\\s*$names\\s*>", RegexOption.IGNORE_CASE)
+    val internalTagBlock = Regex(
+        "<(system-reminder|command-name|command-message|command-args|local-command-[a-z-]+)\\b[^>]*>[\\s\\S]*?</\\1>",
+        RegexOption.IGNORE_CASE,
+    )
+    val internalTagSingle = Regex(
+        "</?(?:system-reminder|command-name|command-message|command-args|local-command-[a-z-]+|persona-[a-z-]+|" + "jarvis-[a-z-]+)\\b[^>]*>",
+        RegexOption.IGNORE_CASE,
+    )
     val fileTag = Regex("\\s*<(?:persona|jarvis)-file\\b([^>]*?)/?>(?:\\s*</(?:persona|jarvis)-file>)?\\s*")
     private val outgoingElement = Regex("<\\s*/?\\s*(?:persona|jarvis)-(?:context|file)\\b[^>]*>", RegexOption.IGNORE_CASE)
     private val outgoingTag = Regex("(^<\\s*/?\\s*)persona-(context|file)", RegexOption.IGNORE_CASE)

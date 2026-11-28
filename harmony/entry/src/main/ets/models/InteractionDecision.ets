@@ -95,6 +95,19 @@ export function interactionToolName(request: Decision): string {
   return Wire.text(rawInteraction(request), 'tool_name');
 }
 
+/** Whether the Hub forbids handing this interaction card back to the computer terminal (#16534). */
+export function interactionNoHandBack(request: Decision): boolean {
+  const data = rawInteraction(request);
+  if (Wire.bool(data, 'no_hand_back')) return true;
+  if (Wire.has(data, 'can_hand_back')) return !Wire.bool(data, 'can_hand_back');
+  return false;
+}
+
+/** Whether this interaction card may be handed back ("Handle in Terminal on Computer" / dismiss). */
+export function interactionCanHandBack(request: Decision): boolean {
+  return interactionToolName(request) !== 'ask_user' && !interactionNoHandBack(request);
+}
+
 export function interactionQuestionHeader(request:Decision, key:string):string {
   const question=Wire.rows(rawInteraction(request),'questions').find((item:Record<string,Object>) => Wire.text(item,'question')===key);
   return question ? Wire.text(question,'header') : '';
@@ -534,7 +547,7 @@ export function interactionResolution(request: Decision, action: string, values:
   if (!interactionCanSubmit(request)) throw new Error('not_pending');
   const data = rawInteraction(request);
   if (action === 'dismiss') {
-    if (interactionToolName(request) === 'ask_user') throw new Error('unsupported');
+    if (!interactionCanHandBack(request)) throw new Error('unsupported');
     return Wire.payload(['dismiss'], [true]);
   }
   if (request.kind === 'question') {

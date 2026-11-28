@@ -5,6 +5,9 @@ import test from 'node:test';
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (context.parentURL?.endsWith('.ets') && specifier === '../core/SessionNaming') {
+      return { url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true };
+    }
     if (context.parentURL?.endsWith('.ets') && ['./Wire','./ProjectCatalog','./SessionSpace','./AgentRepositoryPlace','./InteractionDecision'].includes(specifier)) {
       return { url: new URL(specifier + '.ets', context.parentURL).href, shortCircuit: true };
     }

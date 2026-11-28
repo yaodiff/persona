@@ -21,6 +21,11 @@ type browserCallSeen struct {
 // egoMac is a Mac whose node answers browser.* as a node with ego lite set up does, and says which it was asked.
 func egoMac(t *testing.T, h *Manager, id string) (*Machine, func() []browserCallSeen) {
 	t.Helper()
+	return egoMacWithCalls(t, h, id, nil)
+}
+
+func egoMacWithCalls(t *testing.T, h *Manager, id string, extra func(string, json.RawMessage) (any, error)) (*Machine, func() []browserCallSeen) {
+	t.Helper()
 	builtin := fakeNodesBuiltin
 	ctx, cancel := context.WithCancel(context.Background())
 	h2nR, h2nW := io.Pipe()
@@ -60,6 +65,9 @@ func egoMac(t *testing.T, h *Manager, id string) (*Machine, func() []browserCall
 				out.Removed, out.Sites = 2, nil
 			}
 			return out, nil
+		}
+		if extra != nil {
+			return extra(method, params)
 		}
 		return nil, &rpc.Error{Message: "unknown method " + method}
 	}
@@ -127,7 +135,7 @@ func TestEgoExtension(t *testing.T) {
 	if !h.portAllowed(mac, screenPort) || h.portAllowed(mac, 5901) {
 		t.Fatal("on for this Mac: its live screen (5900) and only that, without the plugin cua (#1507)")
 	}
-	if got := toolNames(toolsForAgents(t, h, true)); !strings.Contains(got, "browser_run") || !strings.Contains(got, "browser_look") {
+	if got := toolNames(toolsForAgents(t, h, true)); !strings.Contains(got, "browser_run browser_look browser_fetch_download") {
 		t.Fatal(got)
 	}
 	if strings.Contains(toolNames(toolsForAgents(t, h, false)), "browser_") {
@@ -142,11 +150,11 @@ func TestEgoExtension(t *testing.T) {
 		t.Fatal("only install, open and cancel")
 	}
 
-	look := h.callBrowserTool(ctx, "conv1234-5678", "browser_look", json.RawMessage(`{"machine": "mac"}`))
+	look := h.callBrowserTool(ctx, "mac", "conv1234-5678", "browser_look", json.RawMessage(`{"machine": "mac"}`))
 	if look.IsError || len(look.Content) != 2 || !strings.Contains(look.Content[0].Text, "[ref=3]") || look.Content[1].Type != "image" {
 		t.Fatalf("%+v", look)
 	}
-	run := h.callBrowserTool(ctx, "conv1234-5678", "browser_run", json.RawMessage(`{"machine": "mac", "script": "await page.goto(\"https://example.com\"); return await page.title();"}`))
+	run := h.callBrowserTool(ctx, "mac", "conv1234-5678", "browser_run", json.RawMessage(`{"machine": "mac", "script": "await page.goto(\"https://example.com\"); return await page.title();"}`))
 	if run.IsError || !strings.Contains(run.Content[0].Text, "Example Domain") {
 		t.Fatalf("%+v", run)
 	}
@@ -159,7 +167,7 @@ func TestEgoExtension(t *testing.T) {
 	if len(calls) != 2 || calls[0].Params["look"] != true || calls[1].Params["session"] != "persona-conv1234" || calls[1].Params["screenshot"] != true {
 		t.Fatalf("the conversation's own task space, a screenshot after a run: %+v", calls)
 	}
-	if res := h.callBrowserTool(ctx, "c", "browser_run", json.RawMessage(`{"machine": "mac", "script": " "}`)); !res.IsError {
+	if res := h.callBrowserTool(ctx, "mac", "c", "browser_run", json.RawMessage(`{"machine": "mac", "script": " "}`)); !res.IsError {
 		t.Fatal("an empty script")
 	}
 
@@ -171,7 +179,7 @@ func TestEgoExtension(t *testing.T) {
 	deskOf(h) // nobody answers on the phone
 	short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
-	if res := h.callBrowserTool(short, "c", "browser_run", json.RawMessage(`{"machine": "mac", "script": "return 1"}`)); !res.IsError ||
+	if res := h.callBrowserTool(short, "mac", "c", "browser_run", json.RawMessage(`{"machine": "mac", "script": "return 1"}`)); !res.IsError ||
 		strings.Contains(res.Content[0].Text, "declined") || !strings.Contains(res.Content[0].Text, "did NOT decline") {
 		t.Fatalf("%+v", res)
 	}

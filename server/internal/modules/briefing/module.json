@@ -6,5 +6,6 @@
   "title": "Daily briefing",
   "feature": "module.briefing",
   "settings": ["assistant.briefing_waits"],
+  "hub_routes": ["POST /api/v1/later/{id}/handled"],
   "schedules": ["facts"]
 }

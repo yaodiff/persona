@@ -29,6 +29,9 @@ struct RecordingMinutesOverview: View {
                 }
             }
         }
+        if !summary.debates.isEmpty {
+            MinutesDebatesSections(debates: summary.debates, recording: entry.id, show: show, byWidth: true)
+        }
         ForEach(overview.groups) { group in
             ForEach(group.topics) { topic in
                 if let title = group.title, topic.id == group.topics.first?.id {

@@ -1,6 +1,8 @@
 package persona.feature.agents
 
 import persona.core.designsystem.text
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -8,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -16,13 +19,19 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +39,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
+import persona.core.contracts.api.AgentWorkspace
 import persona.core.designsystem.*
 import persona.core.domain.sort.*
 import java.io.File
@@ -96,6 +106,70 @@ class AgentRepoTreeShotsTest {
                 assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
             }
         }
+    }
+
+    @Test fun drawsHerdrWorkspaceMarksOnTheRepositoryHeading() {
+        val machine = Machine("mac", "MacBook", online = true, home = "/Users/me")
+        val workspace = AgentWorkspace(
+            machineId = machine.id, source = "herdr", sourceId = "notes", title = "notes-fixture",
+            cwd = "/Users/me/code/notes-fixture", pinnedAt = "2026-11-16T10:00:00Z", available = false,
+        )
+        val notes = at("notes", "Notes agent", workspace.cwd, "offline").let {
+            it.copy(session = it.session.copy(status = "offline", spaceKind = "herdr", workspaceId = workspace.sourceId))
+        }
+        val projected = buildAgentList(
+            listOf(notes, at("main", "Main checkout agent", "/Users/me/code/repo-fixture", "working"),
+                at("removed", "Removed tree agent", "/Users/me/.herdr/worktrees/repo-fixture/removed", "working")),
+            listOf(machine), settings = AgentListSettings(grouping = AgentGrouping.Repo, workspaces = listOf(workspace)),
+        )
+        val heading = projected.groups.single { it.rows.any { row -> row.id == notes.id } }
+        assertTrue(heading.repo == RepoLevel.Repository && heading.worktree?.pinned == true && heading.worktree?.offline == true)
+        assertTrue(projected.machines.single().repoCount == 2)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, darkTheme = dark, reduceMotion = true) {
+                Column(Modifier.testTag("herdr").width(400.dp).background(PersonaTheme.palette.background).padding(Tokens.Space.l)) {
+                    projected.groups.forEach { group ->
+                        val title = group.title.text()
+                        val line = group.worktree
+                        if (group.repo == RepoLevel.Repository) {
+                            val pathAction = workspaceCopyPathAction(group.workspace)
+                            var actions by remember(group.id) { mutableStateOf(false) }
+                            AgentRepoHeader(title, group.folded, {}, main = line?.main == true,
+                                offline = line?.offline == true, pinned = line?.pinned == true,
+                                onLongClick = pathAction?.let { { actions = true } })
+                            if (actions && pathAction != null) JActionSheet(listOf(pathAction), { actions = false }, title = title)
+                        } else {
+                            AgentWorktreeLine(title, group.repo == RepoLevel.MainCheckout, group.folded, {}, offline = line?.offline == true)
+                        }
+                        group.visibleRows.forEach { row ->
+                            AgentRow(row.session.displayTitle, row.state.designStatus, {}, depth = 1)
+                        }
+                    }
+                }
+            }
+        }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val separator = context.getString(persona.core.designsystem.R.string.designsystem_separator)
+        val repoLabel = context.getString(persona.core.designsystem.R.string.designsystem_repository)
+        val notesHeading = "notes-fixture$separator$repoLabel"
+        for (appearance in listOf(false, true)) {
+            rule.runOnIdle { dark = appearance }
+            rule.onAllNodesWithContentDescription(notesHeading, substring = true).assertCountEquals(1)
+            rule.onAllNodesWithContentDescription("repo-fixture$separator$repoLabel", substring = true).assertCountEquals(1)
+            rule.onNodeWithText("Removed tree agent").assertIsDisplayed()
+            val bitmap = rule.onNodeWithTag("herdr").captureToImage().asAndroidBitmap()
+            val suffix = if (appearance) "dark" else "light"
+            File(out(), "herdr-repo-tree-$suffix.png").outputStream().use {
+                assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        }
+        rule.onNodeWithContentDescription(notesHeading, substring = true).performTouchInput { longClick() }
+        rule.onNodeWithText(context.getString(R.string.agents_copy_workspace_path)).performClick()
+        val copied = rule.runOnIdle {
+            context.getSystemService(ClipboardManager::class.java)?.primaryClip?.getItemAt(0)?.text?.toString()
+        }
+        assertEquals(workspace.cwd, copied)
     }
 
     @Test fun drawsOfflineHistoryUnderItsComputerAndHidesItWithComputerFold() {

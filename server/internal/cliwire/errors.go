@@ -17,6 +17,7 @@ const (
 	KindNotLoggedIn        ErrorKind = "not_logged_in"
 	KindExpired            ErrorKind = "expired"
 	KindMissingPermission  ErrorKind = "missing_permission"
+	KindBotNotInChat       ErrorKind = "bot_not_in_chat"
 	KindRateLimited        ErrorKind = "rate_limited"
 	KindUnsupportedVersion ErrorKind = "unsupported_version"
 	KindTimeout            ErrorKind = "timeout"
@@ -64,6 +65,8 @@ func (e *Error) Error() string {
 			return "lark-cli is missing permission: " + strings.Join(scopes, ", ")
 		}
 		return "lark-cli is missing permission"
+	case KindBotNotInChat:
+		return "the bot is not in this chat; add the bot to the group before sending; no alternative sender was tried"
 	case KindRateLimited:
 		return "lark-cli is rate limited"
 	case KindUnsupportedVersion:

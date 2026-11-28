@@ -1,7 +1,7 @@
 import { useMailbox } from "../../lib/mail";
 import { useEffect, useState } from "react";
 import { api, enc, errorText, isAbort } from "../../lib/api";
-import { clock } from "../../lib/format";
+import { clock, safeWebURL } from "../../lib/format";
 import { docTypeName, isDone, withToken, type InboxItem, type MomentComment, type MomentPost } from "../../lib/inbox";
 import { momentText } from "../../lib/inbox-page";
 import { itemHeaders, useItemManager, withManager } from "../../lib/manager-choice";
@@ -9,7 +9,7 @@ import { openLink } from "../../lib/links";
 import { t } from "../../i18n";
 import { Button, cx, Loading } from "../../ui/atoms";
 import { Glyph, Monogram, StatusMenu, Tag } from "./InboxParts";
-import { openMedia } from "./LarkThread";
+import { openMedia, safeMediaURL } from "./LarkThread";
 import { StoredMailBody } from "./StoredMailBody";
 
 export function MailBody(props: { item: InboxItem; onLatest?: () => void }) {
@@ -100,7 +100,13 @@ export function MomentBody({ item }: { item: InboxItem }) {
   }, [id, manager]);
 
   if (!post) return <div className="p-5">{error ? <p className="text-[12.5px] text-red">{error}</p> : <Loading label={t("inbox-inboxbodies.reading_post")} />}</div>;
-  const images = (post.images ?? []).map((i) => withToken(i.url && withManager(i.url, manager))).filter(Boolean) as string[];
+  const images = (post.images ?? [])
+    .map((i) => {
+      const raw = i.url?.trim();
+      if (!raw) return undefined;
+      return raw.startsWith("/") ? safeMediaURL(withToken(withManager(raw, manager))) : safeWebURL(raw);
+    })
+    .filter(Boolean) as string[];
   return (
     <div className="mx-auto max-w-[760px] px-4 py-4 sm:px-6">
       <article className="rounded-card bg-surface p-4 shadow-card">

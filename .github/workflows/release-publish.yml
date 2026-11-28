@@ -82,6 +82,7 @@ jobs:
       title: ${{ needs.source.outputs.title }}
       version: ${{ steps.source.outputs.version }}
       commit: ${{ steps.source.outputs.commit }}
+      merge_commit: ${{ steps.source.outputs.merge_commit }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -122,7 +123,7 @@ jobs:
             gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json state,isDraft,baseRefName,headRefOid,headRepository,author,mergedBy,mergeCommit,title > release/merged-pr.json
           fi
           printf 'number=%s\n' "$(python3 -c 'import json; print(json.load(open("release/merged-pr.json"))["number"])' 2>/dev/null || printf '%s' "$PR_NUMBER")" >> "$GITHUB_OUTPUT"
-      - name: Resolve the exact merged commit and channel
+      - name: Resolve the exact merged commit, pinned target and channel
         id: source
         env:
           REPOSITORY: ${{ github.repository }}
@@ -135,10 +136,12 @@ jobs:
           title="$TITLE"
           if [[ "$title" == *-beta.* ]]; then channel=beta; else channel=release; fi
           version="$(python3 -c 'import json,os,re; title=os.environ["TITLE"]; print(re.fullmatch(r"release: v?([0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+)?)",title).group(1))' )"
+          TARGET_COMMIT="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$channel" resolve-target --dir .github/release-prs --version "$version" --merge-commit "$MERGE_COMMIT")"
           {
             printf 'channel=%s\n' "$channel"
             printf 'version=%s\n' "$version"
-            printf 'commit=%s\n' "$MERGE_COMMIT"
+            printf 'commit=%s\n' "$TARGET_COMMIT"
+            printf 'merge_commit=%s\n' "$MERGE_COMMIT"
           } >> "$GITHUB_OUTPUT"
       - name: Verify the merged PR and current main retain this exact source
         env:
@@ -147,39 +150,39 @@ jobs:
           PR_NUMBER: ${{ steps.pr.outputs.number || inputs.pr }}
           CHANNEL: ${{ steps.source.outputs.channel }}
           COMMIT: ${{ steps.source.outputs.commit }}
+          MERGE_COMMIT: ${{ steps.source.outputs.merge_commit }}
           ACTOR: ${{ github.event.workflow_run.actor.login || github.actor }}
         run: |
           set -euo pipefail
-          version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-merged-pr --pr-json release/merged-pr.json --commit "$COMMIT" --actor "$ACTOR")"
+          version="$(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-merged-pr --pr-json release/merged-pr.json --commit "$MERGE_COMMIT" --actor "$ACTOR")"
           test "$version" = "${{ steps.source.outputs.version }}"
-          # Ordinary PRs may merge during the exact-source post-merge build. Keep this verified commit as the tag
-          # source, but require it to be retained by main rather than racing a moving branch head.
+          # Ordinary PRs may merge during the exact-source post-merge build. Keep this verified pinned source as the tag
+          # source, and require both the merged release PR commit and its pinned target to be retained by main.
           git fetch --no-tags origin main
+          git merge-base --is-ancestor "$MERGE_COMMIT" FETCH_HEAD
+          git merge-base --is-ancestor "$COMMIT" "$MERGE_COMMIT"
           git merge-base --is-ancestor "$COMMIT" FETCH_HEAD
       - name: Download the release PR's exact verified artifacts
         uses: actions/download-artifact@v4
         with:
           name: release-pr-verified-${{ steps.pr.outputs.number || inputs.pr }}-${{ steps.source.outputs.commit }}
           path: release
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.source.outputs.commit }}
-          fetch-depth: 0
-          persist-credentials: false
       - name: Verify plan identity and exact artifact bytes
         env:
           REPOSITORY: ${{ github.repository }}
           CHANNEL: ${{ steps.source.outputs.channel }}
           COMMIT: ${{ steps.source.outputs.commit }}
+          MERGE_COMMIT: ${{ steps.source.outputs.merge_commit }}
           PR_NUMBER: ${{ steps.pr.outputs.number || inputs.pr }}
         run: |
           set -euo pipefail
-          python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-artifacts --plan release/plan.json --commit "$COMMIT"
+          python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" verify-artifacts --plan release/plan.json --commit "$COMMIT" --merge-commit "$MERGE_COMMIT"
           python3 - <<'PY'
           import json,os
           from pathlib import Path
           plan=json.loads(Path('release/plan.json').read_text())
           assert plan['pr']==int(os.environ['PR_NUMBER'])
+          assert plan['merge_commit']==os.environ['MERGE_COMMIT']
           store=plan['stores']['iphone_watch']
           assert store['build']==str(plan['build'])
           assert store['processing']=='VALID'

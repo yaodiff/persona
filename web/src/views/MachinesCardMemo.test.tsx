@@ -69,14 +69,14 @@ describe("a sessions push on the machines page", () => {
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     expect(card("MacBook")).toContain("2 个 Agent");
-    expect(card("NAS")).toContain("1 个 Agent，1 个在工作");
+    expect(card("NAS")).toContain("1 个 Agent，1 个正在工作");
     expect([...renders.keys()].sort()).toEqual(["mac", "nas"]);
     renders.clear();
 
     // MacBook's agent starts working: its card says so, the NAS card does not render
     act(() => upsertSession({ ...getState().sessions.mac[0], status: "working", state: "working" }));
     await flush();
-    expect(card("MacBook")).toContain("2 个 Agent，1 个在工作");
+    expect(card("MacBook")).toContain("2 个 Agent，1 个正在工作");
     expect(renders.has("mac")).toBe(true);
     expect(renders.has("nas")).toBe(false);
     renders.clear();

@@ -239,7 +239,8 @@ func TestBusHello(t *testing.T) {
 			Notify:      assistantwire.NotifyTimings{DoneDelayMS: 60000, LongTurnMS: 60000, BackgroundHoldMS: 7200000},
 			PersonaView: true, HTMLViews: true, // the cards, always on, for a manager from before #5509
 			SecretHandoffGate: true,  // this hub checks who approves a hand-off card (secret_handoff.go)
-			ArchivedApart:     true}} // it takes a machine's archived rows apart from its list (fleet.archived, #6836)
+			ArchivedApart:     true,  // it takes a machine's archived rows apart from its list (fleet.archived, #6836)
+			ApprovalMirrors:   true}} // display-only approval copies are capability-negotiated per client
 	if !jsonEqual(reply, want) {
 		t.Fatalf("hello answer %+v, want %+v", reply, want)
 	}

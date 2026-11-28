@@ -41,12 +41,21 @@ func TestPreparedSettingHandleIsOwnerBoundAndAppliedOnce(t *testing.T) {
 
 func TestPreparedSettingDiscardIsOwnerBound(t *testing.T) {
 	h := &Hub{}
+	discard := func(manager string) {
+		t.Helper()
+		c := &busConn{ident: db.BusIdentity{ID: manager}}
+		params := json.RawMessage(`{"interaction_id":"ix_hub_discard","status":"denied"}`)
+		out, err := busMethods[assistantwire.MethodFleetApprovalDiscard](h, t.Context(), c, params)
+		if raw, marshalErr := json.Marshal(out); err != nil || marshalErr != nil || string(raw) != `{"ok":true}` {
+			t.Fatalf("discard reply = %s, %v, marshal error %v", raw, err, marshalErr)
+		}
+	}
 	if err := h.retainPreparedSetting("manager-a", proto.Interaction{ID: "ix_hub_discard"}, func(context.Context, proto.Resolution) (string, error) {
 		return "unexpected", nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h.dropPreparedSetting("manager-b", "ix_hub_discard")
+	discard("manager-b")
 	if _, err := h.applyPreparedSetting(context.Background(), "manager-a", "ix_hub_discard", proto.Resolution{}); err != nil {
 		t.Fatalf("another manager discarded the handle: %v", err)
 	}
@@ -55,9 +64,25 @@ func TestPreparedSettingDiscardIsOwnerBound(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h.dropPreparedSetting("manager-a", "ix_hub_discard")
+	discard("manager-a")
 	if _, err := h.applyPreparedSetting(context.Background(), "manager-a", "ix_hub_discard", proto.Resolution{}); err == nil {
 		t.Fatal("a discarded handle still applied")
+	}
+}
+
+func TestPreparedSettingBusInvalidParams(t *testing.T) {
+	h := &Hub{}
+	c := &busConn{ident: db.BusIdentity{ID: "manager-a"}}
+	for _, tc := range []struct{ method, params, message string }{
+		{assistantwire.MethodFleetApprovalApply, `[]`, "invalid prepared setting apply: json: cannot unmarshal array into Go value of type assistantwire.FleetApprovalApply"},
+		{assistantwire.MethodFleetApprovalApply, `{}`, "invalid prepared setting apply: %!w(<nil>)"},
+		{assistantwire.MethodFleetApprovalDiscard, `[]`, "invalid prepared setting discard: json: cannot unmarshal array into Go value of type assistantwire.FleetApprovalDiscard"},
+		{assistantwire.MethodFleetApprovalDiscard, `{}`, "invalid prepared setting discard: %!w(<nil>)"},
+	} {
+		out, err := busMethods[tc.method](h, t.Context(), c, json.RawMessage(tc.params))
+		if out != nil || err == nil || err.Error() != tc.message {
+			t.Errorf("%s %s: reply %v, error %v, want %q", tc.method, tc.params, out, err, tc.message)
+		}
 	}
 }
 
@@ -72,7 +97,7 @@ func TestPreparedSettingBusReturnsStructuredStaleAndConsumesHandle(t *testing.T)
 	}
 	allow := true
 	params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: "ix_hub_stale", Resolution: proto.Resolution{Allow: &allow}})
-	raw, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
+	raw, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +108,7 @@ func TestPreparedSettingBusReturnsStructuredStaleAndConsumesHandle(t *testing.T)
 	if applies.Load() != 1 {
 		t.Fatalf("stale apply count = %d", applies.Load())
 	}
-	again, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
+	again, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
 	if err != nil {
 		t.Fatalf("duplicate apply did not get a structured definite-not-applied result: %v", err)
 	}
@@ -127,7 +152,7 @@ func TestPreparedSettingBusDoesNotExecuteForAnotherManager(t *testing.T) {
 	}
 	allow := true
 	params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: "ix_hub_wrong_caller", Resolution: proto.Resolution{Allow: &allow}})
-	if _, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-b"}}, params); err == nil {
+	if _, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-b"}}, params); err == nil {
 		t.Fatal("the bus accepted another manager's apply")
 	}
 	h.prepared.mu.Lock()
@@ -154,7 +179,7 @@ func TestPreparedSettingBusRequiresFreshOwnerAllow(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: "ix_hub_owner", Resolution: resolution})
-			if _, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params); err == nil {
+			if _, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params); err == nil {
 				t.Fatal("a non-owner answer consumed the prepared setting")
 			}
 			if applies.Load() != 0 {
@@ -163,7 +188,7 @@ func TestPreparedSettingBusRequiresFreshOwnerAllow(t *testing.T) {
 		})
 	}
 	params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: "ix_hub_owner", Resolution: proto.Resolution{Allow: &allow}})
-	raw, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
+	raw, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
 	if err != nil || raw.(assistantwire.FleetApprovalApplyResult).Text != "applied" || applies.Load() != 1 {
 		t.Fatalf("fresh owner Allow = %#v, %v, applies=%d", raw, err, applies.Load())
 	}
@@ -198,7 +223,7 @@ func TestPreparedSettingHandleOutlivesPauseBudgetButNotItsGrace(t *testing.T) {
 		}
 		allow := true
 		params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: ix.ID, Resolution: proto.Resolution{Allow: &allow}})
-		raw, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
+		raw, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
 		if err != nil || !raw.(assistantwire.FleetApprovalApplyResult).Stale || applies.Load() != 0 {
 			t.Fatalf("expired handle apply = %#v, %v, applies=%d; want definite not applied", raw, err, applies.Load())
 		}
@@ -247,7 +272,7 @@ func TestPreparedSettingWaitingCardOutlivesWaitingAndPauseBudgets(t *testing.T) 
 		}
 		allow := true
 		params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: ix.ID, Resolution: proto.Resolution{Allow: &allow}})
-		raw, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: assistantwire.AssistantID}}, params)
+		raw, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: assistantwire.AssistantID}}, params)
 		if err != nil || !raw.(assistantwire.FleetApprovalApplyResult).Stale || applies.Load() != 0 {
 			t.Fatalf("expired waiting handle apply = %#v, %v, applies=%d; want definite not applied", raw, err, applies.Load())
 		}
@@ -270,7 +295,7 @@ func TestPreparedSettingRestartLosesExecutableHandle(t *testing.T) {
 	restartedHub := &Hub{}
 	allow := true
 	params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: ix.ID, Resolution: proto.Resolution{Allow: &allow}})
-	raw, err := restartedHub.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
+	raw, err := busMethods[assistantwire.MethodFleetApprovalApply](restartedHub, context.Background(), &busConn{ident: db.BusIdentity{ID: "manager-a"}}, params)
 	if err != nil || !raw.(assistantwire.FleetApprovalApplyResult).Stale || applies.Load() != 0 {
 		t.Fatalf("restart-lost handle apply = %#v, %v, applies=%d; want definite not applied", raw, err, applies.Load())
 	}
@@ -362,7 +387,7 @@ func TestHubSelfSettingRechecksCurrentProposalAfterClarification(t *testing.T) {
 				}
 				allow := true
 				params, _ := json.Marshal(assistantwire.FleetApprovalApply{InteractionID: ix.ID, Resolution: proto.Resolution{Allow: &allow}})
-				raw, err := h.busPreparedSettingApply(context.Background(), &busConn{ident: db.BusIdentity{ID: assistantwire.AssistantID}}, params)
+				raw, err := busMethods[assistantwire.MethodFleetApprovalApply](h, context.Background(), &busConn{ident: db.BusIdentity{ID: assistantwire.AssistantID}}, params)
 				if err != nil {
 					t.Fatal(err)
 				}

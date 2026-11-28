@@ -6,6 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelModel, PanelProvider, PanelState } from "../../lib/model-panel";
+import { t } from "../../i18n";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -42,7 +43,7 @@ const claude: PanelProvider = {
   ],
   unavailable: "Switching from Antigravity CLI to Claude Code needs a new conversation",
 };
-const codex: PanelProvider = { id: "codex", name: "codex", engine: "codex", models: [{ id: "gpt-5.5", name: "GPT 5.5", efforts: ["low", "medium", "high"], defaultEffort: "medium", fast: true }] };
+const codex: PanelProvider = { id: "codex", name: "codex", engine: "codex", models: [{ id: "gpt-5.5", name: "GPT 5.5", efforts: ["low", "medium", "high"], defaultEffort: "medium", speeds: [{ id: "standard" }, { id: "fast" }, { id: "ultrafast" }] }] };
 const state: PanelState = { current: { provider: "agy", model: "gemini-4-neon-xhigh" }, recommended: ["agy"] };
 
 let host: HTMLDivElement;
@@ -64,7 +65,7 @@ afterEach(() => {
   anchor.remove();
 });
 
-async function open(o: { state?: PanelState; onPick?: (c: unknown) => Promise<boolean>; onApplyCurrent?: (p: { effort?: string; fast?: boolean }) => Promise<boolean> } = {}) {
+async function open(o: { state?: PanelState; onPick?: (c: unknown) => Promise<boolean>; onApplyCurrent?: (p: { effort?: string; speed?: string }) => Promise<boolean> } = {}) {
   const onPick = vi.fn(o.onPick ?? (async () => true));
   const onApplyCurrent = o.onApplyCurrent && vi.fn(o.onApplyCurrent);
   const onClose = vi.fn();
@@ -183,9 +184,32 @@ describe("the model panel's columns", () => {
     const { onApplyCurrent } = await open({ state: codexState, onApplyCurrent: async () => true });
     act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-speed="fast"]')!.click());
     await flush();
-    expect(onApplyCurrent).toHaveBeenCalledWith({ fast: true });
+    expect(onApplyCurrent).toHaveBeenCalledWith({ speed: "fast" });
     act(() => root.unmount());
-    expect(stored("recent")).toEqual([{ provider: "codex", model: "gpt-5.5", effort: "medium", fast: true }]);
+    expect(stored("recent")).toEqual([{ provider: "codex", model: "gpt-5.5", effort: "medium", speed: "fast" }]);
+  });
+
+  it("shows all advertised speeds and keeps the acknowledged selection on refusal", async () => {
+    const state: PanelState = { current: { provider: "codex", model: "gpt-5.5", effort: "medium", speed: "ultrafast" }, recommended: ["codex"] };
+    let finish!: (accepted: boolean) => void;
+    const { onApplyCurrent } = await open({ state, onApplyCurrent: () => new Promise((resolve) => { finish = resolve; }) });
+    const choices = [...document.querySelectorAll<HTMLButtonElement>("[data-panel-speed]")];
+    expect(choices.map((choice) => choice.dataset.panelSpeed)).toEqual(["standard", "fast", "ultrafast"]);
+    expect(choices.map((choice) => choice.getAttribute("aria-pressed"))).toEqual(["false", "false", "true"]);
+    expect(choices.map((choice) => choice.querySelectorAll("svg.fill-current path").length)).toEqual([0, 1, 2]);
+    const rowSpeed = document.querySelector("[data-row-speed]");
+    expect(rowSpeed?.getAttribute("aria-label")).toBe(t("ui-modelpanel.speed_ultrafast"));
+    expect(rowSpeed?.querySelector("svg")?.innerHTML).toBe(choices[2].querySelector("svg")?.innerHTML);
+    act(() => choices[0].click());
+    expect(onApplyCurrent).toHaveBeenCalledWith({ speed: "standard" });
+    expect(choices.every((choice) => choice.getAttribute("aria-disabled") === "true")).toBe(true);
+    act(() => choices[1].click());
+    expect(onApplyCurrent).toHaveBeenCalledTimes(1);
+    expect(choices[2].getAttribute("aria-pressed")).toBe("true");
+    await act(async () => finish(false));
+    expect(choices[2].getAttribute("aria-pressed")).toBe("true");
+    expect(choices.every((choice) => !choice.hasAttribute("aria-disabled"))).toBe(true);
+    expect(stored("overrides")).toBeNull();
   });
 
   it("omits redundant provider subtitles on duplicate model names and draws TRAE mark for traex in three-column mode", async () => {
@@ -220,5 +244,70 @@ describe("the model panel's columns", () => {
     expect(side("traex").querySelector('[data-agent-mark="trae"]')).not.toBeNull();
     expect(side("traex").querySelector('[data-agent-mark="generic"]')).toBeNull();
     expect(rows()[0].textContent).toBe("GPT-5.5");
+  });
+
+  it("groups models by series (Orchestrator under Gemini, GPT-OSS under GPT) with Other for unrecognized rows in three-column mode", async () => {
+    const agyMixed: PanelProvider = {
+      id: "agy",
+      name: "agy",
+      engine: "agy",
+      models: [
+        ...["high", "xhigh", "medium", "low"].map((e) => level("gemini-4-neon", "Gemini 4 Neon", e)),
+        ...["high", "medium", "low"].map((e) => level("gemini-3.8-flash", "Gemini 3.8 Flash", e)),
+        ...["medium", "low"].map((e) => level("gemini-3.5-flash", "Gemini 3.5 Flash", e)),
+        { id: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)", efforts: [] },
+        { id: "gemini-pro-orchestrator", name: "Orchestrator (Carbon)", efforts: [] },
+        { id: "gemini-pro-orchestrator-argon", name: "Orchestrator (Argon)", efforts: [] },
+        ...["low", "medium", "high"].map((e) => level("claude-opus-5-5", "Claude Opus 5.5", e)),
+        ...["low", "medium", "high"].map((e) => level("claude-sonnet-5-5", "Claude Sonnet 5.5", e)),
+        { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)", efforts: [] },
+        { id: "custom-alpha", name: "Custom Alpha", efforts: [] },
+      ],
+    };
+    const onPick = vi.fn(async () => true);
+    const onClose = vi.fn();
+    act(() =>
+      root.render(
+        <ModelPanel
+          anchor={anchor}
+          onClose={onClose}
+          providers={[agyMixed, claude, codex]}
+          state={{ current: { provider: "agy", model: "gemini-pro-orchestrator-neon" }, recommended: ["agy"] }}
+          scope="assistant"
+          onPick={onPick}
+        />,
+      ),
+    );
+    await flush();
+
+    const groups = [...document.body.querySelectorAll<HTMLElement>("[data-panel-family]")];
+    expect(groups.map((g) => [g.dataset.panelFamily, g.getAttribute("aria-label")])).toEqual([
+      ["gemini", "Gemini"],
+      ["claude", "Claude"],
+      ["gpt", "GPT"],
+      ["other", "其他"],
+    ]);
+
+    const groupRows = (key: string) =>
+      [...groups.find((g) => g.dataset.panelFamily === key)!.querySelectorAll<HTMLElement>("[data-panel-row]")].map(
+        (r) => r.querySelector(".truncate")?.textContent,
+      );
+    expect(groupRows("gemini")).toEqual([
+      "Gemini 4 Neon",
+      "Gemini 3.8 Flash",
+      "Orchestrator (Neon)",
+      "Orchestrator (Carbon)",
+      "Orchestrator (Argon)",
+    ]);
+    expect(groups.find((g) => g.dataset.panelFamily === "gemini")?.querySelector("[data-panel-fold]")?.textContent).toBe("更早版本 · 1");
+    expect(groupRows("claude")).toEqual(["Claude Opus 5.5", "Claude Sonnet 5.5"]);
+    expect(groupRows("gpt")).toEqual(["GPT-OSS 120B (Medium)"]);
+    expect(groupRows("other")).toEqual(["Custom Alpha"]);
+    expect(
+      groups.find((g) => g.dataset.panelFamily === "gemini")?.querySelector('[data-current="true"]')?.textContent,
+    ).toContain("Orchestrator (Neon)");
+    expect(groups.find((g) => g.dataset.panelFamily === "claude")?.querySelector("[data-panel-fold]")).toBeNull();
+    expect(groups.find((g) => g.dataset.panelFamily === "gpt")?.querySelector("[data-panel-fold]")).toBeNull();
+    expect(groups.find((g) => g.dataset.panelFamily === "other")?.querySelector("[data-panel-fold]")).toBeNull();
   });
 });

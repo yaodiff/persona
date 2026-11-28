@@ -36,9 +36,9 @@ function desktop(island: DesktopIsland, set: (on: boolean) => Promise<DesktopIsl
 }
 
 const render = () => act(async () => root.render(<DesktopIslandSettings />));
-const toggle = () => host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="在 MacBook 刘海显示"]');
+const toggle = () => host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="在 MacBook 刘海区域显示"]');
 
-describe("设置 › 通知 › 在 MacBook 刘海显示", () => {
+describe("设置 › 通知 › 在 MacBook 刘海区域显示", () => {
   it("不在桌面 App 里、桌面 App 太旧或不是 Mac 时不显示", async () => {
     await render();
     expect(host.textContent).toBe("");
@@ -55,7 +55,7 @@ describe("设置 › 通知 › 在 MacBook 刘海显示", () => {
     await render();
     expect(toggle()?.getAttribute("aria-checked")).toBe("false");
     expect(setIslandOn).toHaveBeenLastCalledWith(false);
-    expect(host.textContent).toContain("只在这台 Mac 的 Persona 桌面 App 里生效");
+    expect(host.textContent).toContain("仅在此 Mac 上的 Persona 桌面应用中生效");
     await act(async () => toggle()!.click());
     expect(bridge.setIslandEnabled).toHaveBeenCalledWith(true);
     expect(toggle()?.getAttribute("aria-checked")).toBe("true");
@@ -66,7 +66,7 @@ describe("设置 › 通知 › 在 MacBook 刘海显示", () => {
     desktop({ supported: true, enabled: false }, async () => { throw new Error("示例原因"); });
     await render();
     await act(async () => toggle()!.click());
-    expect(toast).toHaveBeenCalledWith("没改成：示例原因", "error");
+    expect(toast).toHaveBeenCalledWith("未能保存更改：示例原因", "error");
     expect(toggle()?.getAttribute("aria-checked")).toBe("false");
     expect(setIslandOn).not.toHaveBeenCalledWith(true);
   });

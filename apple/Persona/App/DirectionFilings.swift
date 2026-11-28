@@ -160,8 +160,8 @@ import Observation
                      moving: moving, choices: leaders.map { Choice(id: $0.id, name: name($0)) })
     }
 
-    /// Whether `key` is an Agent of an open supervised to-do, or a session under one (its `parent_session_id`s, or a
-    /// running sub-agent's `<parent>@<id>`), as the hub's `taskFollowers.follows` walks it: at most eight levels.
+    /// Whether `key` is an Agent of an open supervised to-do, or a session under one (its `parent_session_id`s, or an
+    /// in-session sub-agent's `<parent>@<id>`), as the hub's `taskFollowers.follows` walks it: at most eight levels.
     nonisolated static func follows(_ key: SessionKey, followers: Set<String>,
                                     parent: (SessionKey) -> String?) -> Bool {
         guard !followers.isEmpty else { return false }

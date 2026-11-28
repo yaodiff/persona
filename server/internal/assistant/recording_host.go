@@ -165,6 +165,7 @@ func (h recordingHost) KBOff(err error) bool                       { return erro
 func (h recordingHost) KBWake()                                    { h.s.kbWake() }
 func (h recordingHost) KBReadOnly(ctx context.Context) bool        { return h.s.kbReadOnly(ctx) }
 func (h recordingHost) KBConnected() bool                          { return h.s.kbConnected() }
+func (h recordingHost) SpeakerTurnsImport() bool                   { return h.s.speakerTurnsImport.Load() }
 
 // Setting and PutSetting read and write the manager's settings rows; without a store none is read or written.
 func (h recordingHost) Setting(ctx context.Context, key string, out any) (bool, error) {
@@ -181,11 +182,14 @@ func (h recordingHost) PutSetting(ctx context.Context, key string, v any) error 
 }
 
 func (h recordingHost) Notify(ctx context.Context, n Notification) error {
-	_, err := h.s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	res, err := h.s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err == nil && n.ID != "" {
+		h.s.rememberNotifyHeld(n.ID, res)
+	}
 	return err
 }
 func (h recordingHost) NoteCard(ctx context.Context, source string, n Notification) {
-	h.s.noteCard(ctx, source, n)
+	h.s.noteCardResult(ctx, source, n, h.s.consumeNotifyHeld(n.ID))
 }
 func (h recordingHost) Answered(err error) bool { return answered(err) }
 

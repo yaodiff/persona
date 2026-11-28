@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -188,6 +189,11 @@ func (n *Node) codexDesktopModes(ctx context.Context, id string, src codexSource
 	model, effort = strings.TrimSpace(model), strings.TrimSpace(effort)
 	if model == "" && effort == "" {
 		return nil
+	}
+	if _, _, err := n.codexOwner(id); err == nil {
+		return refusal("codex_read_only", "这个会话没有终端或启动器控制能力，请在原 app-server 中操作", nil)
+	} else if !errors.Is(err, errCodexNoOwner) {
+		return refusal("codex_read_only", err.Error(), nil)
 	}
 	var pending sessionState
 	if n.state != nil {

@@ -27,10 +27,10 @@
       "waits_on": []
     },
     "persona_cards": {
-      "rule": null,
-      "pinned_by": null,
-      "producer": null,
-      "waits_on": ["D9"]
+      "rule": "One per pending owner card on a Persona conversation or a quiet task's agent, by its asking session; muted, directory-hidden, delegating, supervisor-held and mirrored cards are excluded (D9 and D11).",
+      "pinned_by": "spec/fixtures/persona-cards",
+      "producer": {"file": "server/internal/assistant/fleetcount/fleetcountadapt/view.go", "symbol": "Fleet.View"},
+      "waits_on": []
     }
   },
   "replays": {

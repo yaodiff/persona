@@ -55,7 +55,7 @@ func TestUserCheckKeepsTaskAndAgentOpenUntilPass(t *testing.T) {
 	f.setSessions("box", idleAgent(old))
 	seen := doneSeen{}
 	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, seen)
-	s.closeIdleAgents(ctx, taskCloseRefused{}, idleSeen{{"box", "s1"}: old})
+	s.closeIdleAgents(ctx, taskCloseRefused{}, seen, idleSeen{{"box", "s1"}: old})
 	if got := f.retires(); len(got) != 0 {
 		t.Fatalf("retired an Agent awaiting personal verification: %v", got)
 	}
@@ -83,6 +83,47 @@ func TestUserCheckKeepsTaskAndAgentOpenUntilPass(t *testing.T) {
 	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, seen)
 	if got := f.retires(); len(got) != 1 || got[0] != "s1" {
 		t.Fatalf("Pass did not permit normal completed-task retirement: %v", got)
+	}
+}
+
+func TestUserCheckOwnerPassWhileViewing(t *testing.T) {
+	ctx := t.Context()
+	s, f, todo, _, _ := conclusionServiceOn(t, todoTestDB(t), false)
+	waitsForReview(t, s, f, todo.ID, "The layout is ready to inspect.")
+	f.judge = `{"changed":"The layout is updated","link":"","how":"Inspect the task page"}`
+	setTaskViewer(t, s, "box", "s1", true)
+	reviewTask(t, s, todo.ID, map[string]any{
+		"verdict": "accepted", "user_check": true, "checks": completeReviewChecks(todoNow(s, todo.ID)),
+	})
+	a := askOf(s, todo.ID)
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.Supervision.state(got) != reviewUserCheck || a == nil {
+		t.Fatalf("personal verification did not keep the task open: state=%s, done=%v, ask=%+v", got.Supervision.state(got), got.DoneAt, a)
+	}
+	if result, err := s.acceptTry(ctx, todo.ID, a.MessageID); err != nil || !result.taken {
+		t.Fatalf("owner Pass while viewing: %+v, %v", result, err)
+	}
+	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.DoneBy != db.DoneByReview || len(f.retires()) != 0 {
+		t.Fatalf("owner Pass did not finish the task while keeping its Agent: done=%v, by=%s, retires=%v", got.DoneAt, got.DoneBy, f.retires())
+	}
+}
+
+func TestUserCheckCancellationClosesTask(t *testing.T) {
+	ctx := t.Context()
+	store := todoTestDB(t)
+	s, hub, todo := acceptedForUserCheckOn(t, store)
+	a := askOf(s, todo.ID)
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "cancelled", "note": "No longer needed"})
+	restarted := newServiceOn(t, hub, store)
+	if err := restarted.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := todoNow(restarted, todo.ID)
+	if got.DoneAt == nil || got.DoneBy != db.DoneByCancelled || got.Supervision.state(got) != reviewCancelled || len(hub.retires()) != 0 {
+		t.Fatalf("cancellation did not close the task while keeping its Agent: done=%v, by=%s, state=%s, retires=%v",
+			got.DoneAt, got.DoneBy, got.Supervision.state(got), hub.retires())
+	}
+	if result, err := restarted.acceptTry(ctx, todo.ID, a.MessageID); err != nil || result.taken {
+		t.Fatalf("old Pass was still usable after cancellation: %+v, %v", result, err)
 	}
 }
 
@@ -161,8 +202,13 @@ func TestUserCheckPassHTTPCompletesTheTask(t *testing.T) {
 	view, _ := row["view"].(map[string]any)
 	ask, _ := row["ask"].(map[string]any)
 	at, _ := ask["asked_at"].(string)
-	if view["section"] != assistantwire.TodoListSectionNeedsYou || view["reason"] != assistantwire.TodoReasonVerify || at == "" {
-		t.Fatalf("verification should be actionable under Needs you: %v", row)
+	// #15680 (#15638) keeps personal verification in the calm to-verify layer, not red Needs you; #16002's Pass-round
+	// repair is preserved through the listed ask's asked_at, which the /accept Pass below must complete.
+	if view["section"] == assistantwire.TodoListSectionNeedsYou || view["reason"] == assistantwire.TodoReasonVerify {
+		t.Fatalf("verification must stay out of Needs you under #15680: %v", row)
+	}
+	if at == "" {
+		t.Fatalf("verification keeps its Pass round asked_at for the /accept action: %v", row)
 	}
 	body := `{"asked_at":"` + at + `"}`
 	rec := httptest.NewRecorder()
@@ -245,11 +291,11 @@ type userCheckCloseFailure struct {
 	fail bool
 }
 
-func (d *userCheckCloseFailure) ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error) {
+func (d *userCheckCloseFailure) ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *db.TodoSupervisionRow, guard func() error) (*db.TodoRow, bool, error) {
 	if d.fail {
 		return nil, false, errors.New("completion store unavailable")
 	}
-	return d.DB.ReviewDoneTodo(ctx, id, reason, accepted, at)
+	return d.DB.ReviewTodo(ctx, id, reason, accepted, at, ledger, guard)
 }
 
 func TestUserCheckFailedCompletionLeavesPassRetryable(t *testing.T) {

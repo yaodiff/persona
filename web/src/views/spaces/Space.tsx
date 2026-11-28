@@ -5,12 +5,15 @@
 // keeps its own page (modules/health/Health.tsx).
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
+import { NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickedServiceTier, pickEffort, pickLauncher, pickServiceTier } from "../../lib/assistant-chat";
+import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../../lib/assistant-models";
 import { ago } from "../../lib/format";
 import { noteConversation } from "../../lib/manager-choice";
 import { noteSent } from "../../lib/outbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { spaceMdBody } from "../../lib/space-md";
 import { href, navigate, onLinkClick } from "../../lib/router";
+import { hubHas, useStore } from "../../lib/store";
 import { changeTrack, noteTrack, readSpaceMd, spaceIcon, startSpaceConversation, useTracks, type SpaceMd, type Track } from "../../lib/tracks";
 import type { Session } from "../../lib/types";
 import { Button, Dialog, EASE, IconButton, Loading, Menu, toast, useMenu } from "../../ui/atoms";
@@ -19,6 +22,7 @@ import { Markdown } from "../../ui/Markdown";
 import { ChatView } from "../chat/ChatView";
 import { ReadOnlyChatView } from "../chat/ReadOnlyChatView";
 import { Composer, type Outgoing } from "../chat/Composer";
+import { AssistantModelPill } from "../chat/ModelPill";
 import { conversationTitle } from "../assistant/conversations";
 import { Empty, SectionTitle, Tag } from "../assistant/parts";
 import { spaceEntry } from "./entry";
@@ -135,6 +139,8 @@ function SpaceConversation({ slug, sid, track, readOnly, onToggleSidebar }: { sl
 
 function SpaceHome({ track, readOnly, onToggleSidebar }: { track: Track; readOnly: boolean; onToggleSidebar: () => void }) {
   const slug = track.slug;
+  const assistant = useStore((s) => s.assistant);
+  const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const { list, mid, error, reload } = useSpaceConversations(slug);
   const icon = trackIcon(track);
   const menu = useMenu();
@@ -146,10 +152,21 @@ function SpaceHome({ track, readOnly, onToggleSidebar }: { track: Track; readOnl
   const [starting, setStarting] = useState(false);
   const start = async (out: Outgoing): Promise<boolean> => {
     setStarting(true);
+    const launcher = pickedLauncher(NEW_CONVERSATION);
     try {
-      const r = await startSpaceConversation(slug, { prompt: out.text, images: out.images.length ? out.images : undefined });
+      const r = await startSpaceConversation(slug, {
+        prompt: out.text,
+        images: out.images.length ? out.images : undefined,
+        launcher,
+        model: launcher ? pickedModel(NEW_CONVERSATION) : undefined,
+        effort: pickedEffort(NEW_CONVERSATION),
+        service_tier: startServiceTier ? pickedServiceTier() : undefined,
+      });
       noteConversation(r.session.session_id, undefined);
       noteSent(r.session.machine_id, r.session.session_id, out);
+      if (launcher) pickLauncher(NEW_CONVERSATION, undefined);
+      pickEffort(NEW_CONVERSATION, undefined);
+      pickServiceTier(undefined);
       navigate({ name: "track", slug, sid: r.session.session_id });
       return true;
     } catch (e) {
@@ -178,7 +195,7 @@ function SpaceHome({ track, readOnly, onToggleSidebar }: { track: Track; readOnl
         />
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[760px] px-4 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} both` }}>
+        <div className="mx-auto max-w-[760px] px-4 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} backwards` }}>
           <div className="mb-5 flex flex-col items-center text-center">
             <span className="mb-3 flex size-12 items-center justify-center rounded-full bg-inset text-accent-ink shadow-raised">
               <Icon name={icon} size={22} />
@@ -194,7 +211,16 @@ function SpaceHome({ track, readOnly, onToggleSidebar }: { track: Track; readOnl
             </p>
           ) : (
             <>
-              <Composer draftKey={`track-new:${slug}`} placeholder={t("spaces.ask_placeholder", { name: track.title || slug })} machineId={mid} onSend={start} disabled={starting} autoFocus commands={[]} />
+              <Composer
+                draftKey={`track-new:${slug}`}
+                placeholder={t("spaces.ask_placeholder", { name: track.title || slug })}
+                machineId={mid}
+                onSend={start}
+                disabled={starting}
+                autoFocus
+                commands={[]}
+                trailing={assistant && !starting ? <AssistantModelPill /> : undefined}
+              />
               <p className="mt-2 flex items-start gap-1.5 px-1 text-label leading-relaxed text-ink-3" data-testid="space-privacy">
                 <Icon name="lock" size={12} className="mt-0.5 shrink-0" />
                 <span>{t("spaces.privacy_line")}</span>

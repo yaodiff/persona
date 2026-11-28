@@ -49,7 +49,14 @@ nonisolated enum AppIconBadge {
     }
 
     func start(_ model: AppModel) {
-        start { AppIconBadge.count(model.badges, inboxUnread: InboxStore.shared.unreadCount, paired: model.isPaired) }
+        start {
+            #if os(iOS)
+            let inbox = model.hiddenNavigationPages.contains(.inbox) ? 0 : InboxStore.shared.unreadCount
+            #else
+            let inbox = InboxStore.shared.unreadCount
+            #endif
+            return AppIconBadge.count(model.badges, inboxUnread: inbox, paired: model.isPaired)
+        }
     }
 
     /// Reads the number now and again `wait` after anything it read changes; the system hears only a number that moved.

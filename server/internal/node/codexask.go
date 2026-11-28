@@ -71,20 +71,64 @@ type codexCard struct {
 	pane     string
 	ask      *transcript.CodexAsk
 	approval *screen.CodexApprovalDialog
+	desktop  *codexSource
 }
 
 type codexCards struct {
 	mu              sync.Mutex
-	tails           map[string]*codexTail           // session id → its rollout
-	sent            string                          // the card ids last listed to the hub
-	held            map[string]time.Time            // card id → answered from the phone: not listed again until then
-	heldIn          map[string]string               // card id → the session of a held card
-	dismissed       map[string]dismissedCard        // card id → handed back to the computer from the phone
-	approvals       map[string]bool                 // session id → last screen scan saw a Codex approval dialog
-	outsideAsks     map[string]string               // session id → card id of the active clq_ card last listed to the hub
-	outsideAskCache map[string]outsideAskCacheEntry // session id → stat-cached bounded read-only pending AskUserQuestion
-	pagerAt         map[string]time.Time            // pane → when its transcript pager was last closed to show a dialog
-	joins           map[string]codexJoinState       // session id → joining it on its app-server (codex_daemon.go)
+	tails           map[string]*codexTail              // session id → its rollout
+	sent            string                             // sorted card ids last listed to the hub
+	sentOccurrences string                             // sorted card ids plus occurrence times used for change detection
+	held            map[string]time.Time               // card id → answered from the phone: not listed again until then
+	heldIn          map[string]string                  // card id → the session of a held card
+	dismissed       map[string]dismissedCard           // card id → handed back to the computer from the phone
+	approvals       map[string]bool                    // session id → last screen scan saw a Codex approval dialog
+	created         map[string]codexApprovalOccurrence // approval card id → its first-seen occurrence while open
+	askOccurrences  map[[2]string]codexAskOccurrence   // session, call id → last timestamp-less question occurrence
+	outsideAsks     map[string]string                  // session id → card id of the active clq_ card last listed to the hub
+	outsideAskCache map[string]outsideAskCacheEntry    // session id → stat-cached bounded read-only pending AskUserQuestion
+	pagerAt         map[string]time.Time               // pane → when its transcript pager was last closed to show a dialog
+	joins           map[string]codexJoinState          // session id → joining it on its app-server (codex_daemon.go)
+	input           agyInputs                          // commands waiting for input in agy panes (agyinput.go)
+}
+
+type codexApprovalOccurrence struct {
+	session string
+	at      time.Time
+}
+
+// A timestamp-less rollout question needs process-local lifecycle identity.
+// Keep the last timestamp after closure so an equal or backwards wall clock
+// cannot make a reopened same-ID question reuse the answered occurrence.
+type codexAskOccurrence struct {
+	at   time.Time
+	open bool
+}
+
+// approvalOccurrenceCard keeps one open dialog's identity stable across screen
+// scans. approvalGone / setApproval(false) clear it, so a later dialog with the
+// same node ID is a new occurrence rather than a continuation of this card.
+func (c *codexCards) approvalOccurrenceCard(session string, a codexAgent, title string, d *screen.CodexApprovalDialog) proto.Interaction {
+	ix := approvalCard(session, a, title, d)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.created == nil {
+		c.created = map[string]codexApprovalOccurrence{}
+	}
+	occurrence, ok := c.created[ix.ID]
+	if !ok || occurrence.session != session {
+		occurrence = codexApprovalOccurrence{session: session, at: ix.CreatedAt}
+		c.created[ix.ID] = occurrence
+	}
+	ix.CreatedAt = occurrence.at
+	return ix
+}
+
+func (c *codexCards) approvalOccurrenceMatches(session, id string, at time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	occurrence, ok := c.created[id]
+	return ok && occurrence.session == session && occurrence.at.Equal(at)
 }
 
 // watchCodexCards lists the open Codex questions and approvals to the hub whenever they change.
@@ -108,14 +152,17 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 		cards = append(cards, c.ix)
 	}
 	// The questions of Claude sessions outside Persona's terminals ride along: the hub keeps them as it keeps these
-	// (claudeoutside_ask.go).
+	// (claudeoutside_ask.go). So do the commands waiting for input in agy panes (agyinput.go).
 	cards = append(cards, n.outsideAskCards()...)
+	cards = append(cards, n.commandInputCards(ctx)...)
+	cards = append(cards, n.runtimes.inputCards()...)
 	// Matching blocked folders may resolve a symlink on the filesystem.
 	cards = slices.DeleteFunc(cards, func(ix proto.Interaction) bool { return n.sessionBlocked(ix.SessionID, ix.Cwd) })
 	now := time.Now()
 	n.cx.mu.Lock()
 	var list []proto.Interaction
 	var ids []string
+	var occurrences []string
 	var outsideAsks map[string]string
 	for _, ix := range cards {
 		if d, gone := n.cx.dismissed[ix.ID]; gone {
@@ -128,6 +175,7 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 		}
 		list = append(list, ix)
 		ids = append(ids, ix.ID)
+		occurrences = append(occurrences, ix.ID+"\x00"+ix.CreatedAt.UTC().Format(time.RFC3339Nano))
 		if strings.HasPrefix(ix.ID, outsideAskPrefix) {
 			if outsideAsks == nil {
 				outsideAsks = map[string]string{}
@@ -136,9 +184,11 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 		}
 	}
 	sort.Strings(ids)
-	key := strings.Join(ids, ",")
-	changed := key != n.cx.sent
-	n.cx.sent = key
+	sort.Strings(occurrences)
+	key := strings.Join(occurrences, ",")
+	changed := key != n.cx.sentOccurrences
+	n.cx.sent = strings.Join(ids, ",")
+	n.cx.sentOccurrences = key
 	outsideAskAdded := false
 	for sid := range outsideAsks {
 		if n.cx.outsideAsks[sid] == "" {
@@ -206,9 +256,7 @@ func (n *Node) codexCardsNow(ctx context.Context, only string) []codexCard {
 		a.joined = n.codexJoined(id)
 		agents[id] = a
 	}
-	if only == "" {
-		n.cx.forget(agents)
-	}
+	desktop := n.desktopCodexAskSources(only)
 	var out []codexCard
 	for id, a := range agents {
 		path, title := n.codexPath(id), n.codexTitle(id)
@@ -242,7 +290,7 @@ func (n *Node) codexCardsNow(ctx context.Context, only string) []codexCard {
 			if only == "" {
 				n.cx.setApproval(id, true)
 			}
-			out = append(out, codexCard{ix: approvalCard(id, a, title, d), pane: a.pane, approval: d})
+			out = append(out, codexCard{ix: n.cx.approvalOccurrenceCard(id, a, title, d), pane: a.pane, approval: d})
 		} else if read {
 			if only == "" {
 				n.cx.setApproval(id, false)
@@ -250,8 +298,42 @@ func (n *Node) codexCardsNow(ctx context.Context, only string) []codexCard {
 			n.cx.approvalGone(id)
 		}
 	}
+	for id, src := range desktop {
+		if _, terminal := agents[id]; terminal {
+			continue
+		}
+		a := codexAgent{kind: "codex"}
+		agents[id] = a // Keep the incremental tail while this desktop chat is listed.
+		path := src.path
+		if path == "" {
+			path = n.codexAppHistoryFile(src)
+		}
+		for _, ask := range n.cx.asks(id, path) {
+			if !ask.Async || !ask.At.IsZero() && time.Since(ask.At) > codexAskMaxAge {
+				continue
+			}
+			out = append(out, codexCard{ix: askCard(id, a, threadTitle(src.home, src.thread), ask), ask: &ask, desktop: &src})
+		}
+	}
+	if only == "" {
+		n.cx.forget(agents)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ix.CreatedAt.Before(out[j].ix.CreatedAt) })
 	return out
+}
+
+func (n *Node) desktopCodexAskSources(only string) map[string]codexSource {
+	sources := map[string]codexSource{}
+	if n.codices != nil {
+		n.codices.mu.Lock()
+		defer n.codices.mu.Unlock()
+		for id, src := range n.codices.desktopAsks {
+			if only == "" || id == only {
+				sources[id] = src
+			}
+		}
+	}
+	return sources
 }
 
 type codexAgent struct {
@@ -274,6 +356,16 @@ func (c *codexCards) forget(live map[string]codexAgent) {
 	for id := range c.tails {
 		if _, ok := live[id]; !ok {
 			delete(c.tails, id)
+		}
+	}
+	for id, occurrence := range c.created {
+		if _, ok := live[occurrence.session]; !ok {
+			delete(c.created, id)
+		}
+	}
+	for key := range c.askOccurrences {
+		if _, ok := live[key[0]]; !ok {
+			delete(c.askOccurrences, key)
 		}
 	}
 	for id, until := range c.held {
@@ -303,6 +395,11 @@ type dismissedCard struct {
 func (c *codexCards) approvalGone(session string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for id, occurrence := range c.created {
+		if occurrence.session == session {
+			delete(c.created, id)
+		}
+	}
 	for id, d := range c.dismissed {
 		if d.session == session && strings.HasPrefix(id, "cxa_") {
 			delete(c.dismissed, id)
@@ -362,7 +459,38 @@ func (c *codexCards) asks(id, path string) []transcript.CodexAsk {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.read()
-	return t.asks.Open()
+	open := t.asks.Open()
+	now := time.Now().UTC()
+	seen := map[[2]string]bool{}
+	for i := range open {
+		key := [2]string{id, open[i].CallID}
+		if !open[i].At.IsZero() {
+			delete(c.askOccurrences, key)
+			continue
+		}
+		occurrence, ok := c.askOccurrences[key]
+		if !ok || !occurrence.open {
+			previous := occurrence.at
+			occurrence.at = now
+			if ok && !now.After(previous) {
+				occurrence.at = previous.Add(time.Nanosecond)
+			}
+		}
+		occurrence.open = true
+		if c.askOccurrences == nil {
+			c.askOccurrences = map[[2]string]codexAskOccurrence{}
+		}
+		c.askOccurrences[key] = occurrence
+		open[i].At = occurrence.at
+		seen[key] = true
+	}
+	for key, occurrence := range c.askOccurrences {
+		if key[0] == id && occurrence.open && !seen[key] {
+			occurrence.open = false
+			c.askOccurrences[key] = occurrence
+		}
+	}
+	return open
 }
 
 // A status check may clear the host's blocked state only after it sees that
@@ -401,6 +529,11 @@ func (c *codexCards) setApproval(id string, on bool) {
 	defer c.mu.Unlock()
 	if !on {
 		delete(c.approvals, id)
+		for card, occurrence := range c.created {
+			if occurrence.session == id {
+				delete(c.created, card)
+			}
+		}
 		return
 	}
 	if c.approvals == nil {
@@ -496,7 +629,10 @@ func askCard(session string, a codexAgent, title string, ask transcript.CodexAsk
 		ix.Questions = append(ix.Questions, proto.Question{Question: q.Question, Header: q.Header, Options: options})
 	}
 	if ix.CreatedAt.IsZero() {
-		ix.CreatedAt = time.Now().UTC()
+		// A rollout line without a timestamp still needs one stable, nonzero
+		// occurrence on the wire. Wall-clock now would replace the same open
+		// question on every scan and reject an answer to the displayed card.
+		ix.CreatedAt = time.Unix(0, 0).UTC()
 	}
 	ix.ID = "cxq_" + shortHash(key)
 	return ix
@@ -612,22 +748,61 @@ func (n *Node) codexApprovalOn(ctx context.Context, pane string) (d *screen.Code
 // codexAnswer answers a card from the phone: only into the question or approval it was made from, as it is on screen
 // and in the rollout now. A refusal (rpc error with a code) typed nothing.
 func (n *Node) codexAnswer(ctx context.Context, session, id string, r proto.Resolution) error {
+	return n.codexAnswerAt(ctx, session, id, time.Time{}, r)
+}
+
+// codexAnswerAt additionally pins a newer manager's answer to the occurrence it
+// saw. A zero timestamp is the legacy ID-only contract for older peers.
+func (n *Node) codexAnswerAt(ctx context.Context, session, id string, createdAt time.Time, r proto.Resolution) error {
 	if strings.HasPrefix(id, outsideAskPrefix) {
+		if !createdAt.IsZero() {
+			found := false
+			for _, ix := range n.outsideAskCards() {
+				if ix.ID == id && ix.CreatedAt.Equal(createdAt) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return refusal(screen.PromptChanged, "Codex 已经不在等这个回答了（可能在电脑上答过了，或者这一轮被中断了），这次什么都没输入。", nil)
+			}
+		}
 		return n.outsideAnswer(ctx, session, id, r) // a Claude session's question outside Persona's terminals
+	}
+	if strings.HasPrefix(id, runtimeInputPrefix) {
+		return n.runtimeInputAnswer(ctx, session, id, r)
+	}
+	if strings.HasPrefix(id, proto.CommandInputPrefix) {
+		return n.commandInputAnswer(ctx, session, id, r) // a command waiting for input in an agy pane
 	}
 	if r.Cancel {
 		return fmt.Errorf("question cancellation is unavailable for terminal-only questions")
+	}
+	defer n.typing.lock(session)()
+	var card *codexCard
+	if !createdAt.IsZero() {
+		for _, c := range n.codexCardsNow(ctx, session) {
+			if c.ix.ID == id {
+				if c.ix.CreatedAt.Equal(createdAt) {
+					card = &c
+				}
+				break
+			}
+		}
+		if card == nil {
+			return refusal(screen.PromptChanged, "Codex 已经不在等这个回答了（可能在电脑上答过了，或者这一轮被中断了），这次什么都没输入。", nil)
+		}
 	}
 	if r.Dismiss {
 		n.cx.dismiss(session, id)
 		return nil
 	}
-	defer n.typing.lock(session)()
-	var card *codexCard
-	for _, c := range n.codexCardsNow(ctx, session) {
-		if c.ix.ID == id {
-			card = &c
-			break
+	if card == nil {
+		for _, c := range n.codexCardsNow(ctx, session) {
+			if c.ix.ID == id {
+				card = &c
+				break
+			}
 		}
 	}
 	if card == nil {
@@ -637,6 +812,14 @@ func (n *Node) codexAnswer(ctx context.Context, session, id string, r proto.Reso
 	switch {
 	case card.approval != nil:
 		err = n.codexApprove(ctx, card, r)
+	case card.desktop != nil:
+		n.cx.mu.Lock()
+		held := time.Now().Before(n.cx.held[id])
+		n.cx.mu.Unlock()
+		if held {
+			return refusal("codex_busy", "Codex is already processing this answer.", nil)
+		}
+		err = n.codexReplyDesktop(ctx, session, card, r)
 	case card.ask.Async && n.codexJoined(session):
 		err = n.codexReplyRemote(ctx, session, card, r)
 	case card.ask.Async:
@@ -741,11 +924,60 @@ func (n *Node) codexSubmitted(ctx context.Context, pane string) error {
 	}
 }
 
-// pastedRE is how Codex shows a long paste in its box.
+// pastedRE is how Codex shows a long paste in its box; codexPasted also accepts
+// numbered chips ("#2"), multi-chip pastes, and chips with a visible tail (#2133).
 var pastedRE = lazyre.New(`^\[Pasted Content \d+ chars\]$`)
+
+func codexPasted(draft, text string) bool {
+	return pastedRE.MatchString(draft) || codexFirstPromptShown(draft, text)
+}
+
+// Desktop answers need their own turn. Do not queue them behind a running turn: the question may be answered in the App in the meantime.
+func (n *Node) codexReplyDesktop(ctx context.Context, session string, card *codexCard, r proto.Resolution) error {
+	msg, err := codexReplyText(card, r)
+	if err != nil {
+		return err
+	}
+	src := *card.desktop
+	if !codexDesktopAvailable(src.home) || !codexDesktopChat(src) {
+		return codexDesktopUnavailable(ctx)
+	}
+	t := codexDesktopQueue.thread(src)
+	t.send.Lock()
+	defer t.send.Unlock()
+	working, mark := n.codexDesktopTurnState(src)
+	if len(t.held) != 0 || working || t.recentlyStarted(mark) {
+		return refusal("codex_busy", "Codex is still working. Wait for this turn to finish, then answer again.", nil)
+	}
+	for _, current := range n.codexCardsNow(ctx, session) {
+		if current.ix.ID == card.ix.ID {
+			return t.start(ctx, n, []codexDesktopMessage{{text: msg}}, mark)
+		}
+	}
+	return refusal(screen.PromptChanged, "Codex is no longer waiting for this answer.", nil)
+}
 
 // codexReply answers an async question: the reply envelope Codex's own clients send, as a message.
 func (n *Node) codexReply(ctx context.Context, session string, card *codexCard, r proto.Resolution) error {
+	msg, err := codexReplyText(card, r)
+	if err != nil {
+		return err
+	}
+	if err := n.codexReady(ctx, card.pane, true); err != nil {
+		return err
+	}
+	err = n.codexType(ctx, card.pane, msg, func(draft string) bool {
+		d := strings.Join(strings.Fields(draft), "")
+		return strings.HasSuffix(d, "</send_user_message_question_reply>") || codexPasted(draft, msg)
+	})
+	if err != nil {
+		return err
+	}
+	// Taken: the rollout has the reply (the question closes), or the turn queued it to send after the current step.
+	return n.codexTaken(ctx, session, card, queuedReply)
+}
+
+func codexReplyText(card *codexCard, r proto.Resolution) (string, error) {
 	var replies []transcript.CodexReply
 	for _, q := range card.ask.Questions {
 		if a := strings.TrimSpace(r.Answers[q.Question]); a != "" {
@@ -753,21 +985,9 @@ func (n *Node) codexReply(ctx context.Context, session string, card *codexCard, 
 		}
 	}
 	if len(replies) == 0 {
-		return fmt.Errorf("没有回答任何一道题")
+		return "", fmt.Errorf("没有回答任何一道题")
 	}
-	if err := n.codexReady(ctx, card.pane, true); err != nil {
-		return err
-	}
-	msg := transcript.CodexReplyMessage(replies)
-	err := n.codexType(ctx, card.pane, msg, func(draft string) bool {
-		d := strings.Join(strings.Fields(draft), "")
-		return strings.HasSuffix(d, "</send_user_message_question_reply>") || pastedRE.MatchString(draft)
-	})
-	if err != nil {
-		return err
-	}
-	// Taken: the rollout has the reply (the question closes), or the turn queued it to send after the current step.
-	return n.codexTaken(ctx, session, card, queuedReply)
+	return transcript.CodexReplyMessage(replies), nil
 }
 
 // codexTaken waits for Codex to take an answer: the card's question no longer open in the rollout (or, when shown
@@ -957,6 +1177,9 @@ func (n *Node) codexApprove(ctx context.Context, card *codexCard, r proto.Resolu
 	if opt == nil {
 		return fmt.Errorf("这个审批没有对应的选项")
 	}
+	if !n.cx.approvalOccurrenceMatches(card.ix.SessionID, card.ix.ID, card.ix.CreatedAt) {
+		return refusal(screen.PromptChanged, "电脑上的审批已经变了（可能在电脑上答过了），这次什么都没按。", nil)
+	}
 	s, err := n.codexScreen(ctx, card.pane)
 	if err == nil && s.View == screen.CodexTranscript {
 		_ = n.sendKeys(ctx, card.pane, "q")
@@ -967,6 +1190,9 @@ func (n *Node) codexApprove(ctx context.Context, card *codexCard, r proto.Resolu
 		return err
 	}
 	if s.Approval == nil || s.Approval.Rev != d.Rev {
+		return refusal(screen.PromptChanged, "电脑上的审批已经变了（可能在电脑上答过了），这次什么都没按。", nil)
+	}
+	if !n.cx.approvalOccurrenceMatches(card.ix.SessionID, card.ix.ID, card.ix.CreatedAt) {
 		return refusal(screen.PromptChanged, "电脑上的审批已经变了（可能在电脑上答过了），这次什么都没按。", nil)
 	}
 	if err := n.sendKeys(ctx, card.pane, opt.Key); err != nil {
@@ -991,7 +1217,7 @@ func (n *Node) codexApprove(ctx context.Context, card *codexCard, r proto.Resolu
 	for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); time.Sleep(codexPoll) {
 		if last = n.codexReady(ctx, card.pane, true); last == nil {
 			text := inertControls(strings.TrimSpace(r.Message))
-			return n.codexType(ctx, card.pane, text, func(draft string) bool { return sameText(draft, text) || pastedRE.MatchString(draft) })
+			return n.codexType(ctx, card.pane, text, func(draft string) bool { return sameText(draft, text) || codexPasted(draft, text) })
 		}
 	}
 	return uncertain(fmt.Errorf("已经拒绝并停下了这一轮，但理由没发出去（%v）：在电脑上告诉它", last))

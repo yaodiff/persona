@@ -5,7 +5,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - A herdr workspace label is not task ownership (#4786): directory basenames and user renames make it ambiguous. Record
   `task_id` and the actual `workspace_id` with every task session, select resumes by that ID, and require the same pair
   before `workspace.close`. A label is needed only to create or recreate the task workspace. `worktree.create`'s
-  `open_workspace` defaults to true; only a herdr leader task's checkout sets it false, with its Agent tab opening in
+  `open_workspace` defaults to true; task checkouts on classic herdr and grouped Orca workers can set it false, with the Agent tab opening in
   the shared task workspace instead. Older herdr versions have no checkout-only RPC, so the node uses its existing Git
   fallback for this path. Closing that workspace is not deleting its Git checkout.
 - herdr `pane read --source recent` returns at most about 1000 lines (even with a larger --lines), has no offset or scrolling API, and does not persist them: terminal history can only be read in chunks within those 1000 lines; the transcript holds the complete history.
@@ -84,6 +84,28 @@ A correct worktree creation result and a successful Agent reply do not prove tha
   went into `rev`, and every answer was refused once the phone had opened the terminal (#5265). Claude Code also redraws its dialogs differently between builds (2.1.322 puts a `│` before each row of
   the command, as before the warning). Check a parser change against real captures at several widths (120, 100, 57, 40) and a few seconds apart. Capture them from a throwaway `claude` in a private pty
   with a VT emulator (pyte), with no Persona hooks and outside herdr: no card reaches anyone's phone, and the screen can be resized at will.
+
+## Orca's screen read lifts the input box's text out of the rows (#17042)
+
+Orca 1.4.277's `terminal.read {screen: true}` does not return the screen as drawn: it finds the Agent's input box,
+leaves its prompt row as the bare glyph (`❯`, `›`), drops the rows the text wrapped onto, and returns the box's text
+as a separate `draft`. A plain read of the rows alone takes every box for empty, so an effort change typed `/effort`
+into a user's draft and submitted both together. `orcart.Screen.Text` puts the draft back in its row. The draft has no
+colors: with Claude Code 2.1.331 a typed draft and Claude's grey suggested message come back the same, though Orca's
+own emulator skips dim cells for its internal "typed text" checks; no method on the local socket returns that. Check
+what an engine's read returns against a real Agent on an isolated runtime (its own HOME and profile, a throwaway repo,
+a stand-in Messages API) before trusting a plain-text rule, and capture the empty box, a typed draft and the grey
+suggestion separately.
+
+## Orca's schema is not its behavior: fences, folders and tab names (#17043)
+
+On Orca 1.4.277's local socket, `terminal.split` and `terminal.closeTab` accept `expectedIncarnationId` but do not
+hold it (a wrong one still split and closed the tab), the split's `cwd` is honoured only by the layout-addressed form
+the socket refuses (`host_not_owned`), and on a runtime with no window `terminal.rename` changes the terminals' titles
+and the phone tab model (`session.tabs.list`'s `customTitle`) but not the tab title in `terminal.list`'s layouts. Look
+the terminal up yourself right before a call whose fence the runtime ignores, reach a folder through the new shell's
+`command`, and read a tab's current name where renames land. Check each of these on an isolated runtime: the request
+schema in Orca's bundle says what it accepts, not what it does.
 
 ## A visible Codex composer does not prove takeover readiness
 

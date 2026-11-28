@@ -1,6 +1,6 @@
 // Package herdrcore talks to herdr-core (`hc`), the terminal runtime behind the Herdr desktop app: JSON-RPC 2.0, one
 // message per line on its unix socket. It is a different program from classic herdr (internal/herdr): its own socket,
-// methods (terminal.*), and environment (HC_TERMINAL_ID). See docs/plans/plan-orca-support.md "herdr-core host".
+// methods (terminal.*), and environment (HC_TERMINAL_ID). See docs/integrations/herdr-core.md "herdr-core host".
 //
 // herdr-core being absent (not installed, not running) is normal: calls fail fast with ErrNoSocket and log at most
 // one line per episode.
@@ -22,6 +22,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Client is one herdr-core server, reached at Socket.
@@ -115,34 +117,19 @@ func isDir(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-// configSocket reads the top-level `socket = "…"` of hc's config.toml ("" when there is none). Only that one key is
-// read, so this is a line scan, not a TOML parser: a key inside a [table] does not count.
+// configSocket reads the top-level `socket = "…"` string of hc's config.toml ("" when absent or invalid TOML).
+// Keys inside a [table] do not count.
 func configSocket(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	for line := range strings.SplitSeq(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") {
-			return ""
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(k) != "socket" {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		if i := strings.Index(v, " #"); i >= 0 && !strings.HasPrefix(v, `"`) && !strings.HasPrefix(v, "'") {
-			v = strings.TrimSpace(v[:i])
-		}
-		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
-			if end := strings.IndexByte(v[1:], v[0]); end >= 0 {
-				return v[1 : 1+end]
-			}
-		}
+	var cfg map[string]any
+	if err := toml.Unmarshal(b, &cfg); err != nil {
 		return ""
 	}
-	return ""
+	s, _ := cfg["socket"].(string)
+	return s
 }
 
 // Error is herdr-core's JSON-RPC error; Kind is its stable data.kind ("not_found", "blocked", "unknown_method"…).
@@ -257,34 +244,54 @@ func (c *Client) Call(ctx context.Context, timeout time.Duration, method string,
 }
 
 func (c *Client) callOnce(ctx context.Context, timeout time.Duration, method string, params, out any) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("herdr-core %s: %w", method, err)
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	conn, err := c.dial(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+		}
 		return err
 	}
 	defer conn.Close()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
-	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 	id := c.seq.Add(1)
+	idStr := strconv.FormatInt(id, 10)
 	if err := writeRequest(conn, id, method, params); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+		}
 		return fmt.Errorf("herdr-core %s: %w", method, err)
 	}
 	r := bufio.NewReaderSize(conn, 64<<10)
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, err)
+		}
 		line, err := readLine(r, maxLine)
 		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+			}
 			return fmt.Errorf("herdr-core %s: %w", method, err)
 		}
 		var env response
 		if err := json.Unmarshal(line, &env); err != nil {
 			return fmt.Errorf("herdr-core %s: decode: %v", method, err)
 		}
-		if env.ID == nil || string(env.ID) != strconv.FormatInt(id, 10) {
-			continue // a notification
+		if env.Method != "" {
+			continue // a notification or server-initiated request
+		}
+		rawID := bytes.TrimSpace(env.ID)
+		if env.Error != nil && (len(rawID) == 0 || string(rawID) == "null") {
+			return env.decode(out)
+		}
+		if len(rawID) == 0 || string(rawID) != idStr {
+			continue // an unrelated response
 		}
 		return env.decode(out)
 	}
@@ -308,17 +315,21 @@ type response struct {
 	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			Kind string `json:"kind"`
-		} `json:"data"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	} `json:"error"`
 }
 
 func (r response) decode(out any) error {
 	if r.Error != nil {
-		return &Error{Code: r.Error.Code, Message: r.Error.Message, Kind: r.Error.Data.Kind}
+		var data struct {
+			Kind string `json:"kind"`
+		}
+		if len(r.Error.Data) > 0 {
+			_ = json.Unmarshal(r.Error.Data, &data)
+		}
+		return &Error{Code: r.Error.Code, Message: r.Error.Message, Kind: data.Kind}
 	}
 	if out == nil || len(r.Result) == 0 {
 		return nil

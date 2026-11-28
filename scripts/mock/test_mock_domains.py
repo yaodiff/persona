@@ -369,6 +369,7 @@ MOVED = {
     "extension_scene_mock": ("#12544", ("SCENE_MODE", "_HOME_DRAWS", "_home_scene_component", "_home_scene_downgrade",
                                         "_home_scene_view", "mock_home_scene")),
     "todo_wait_reasons_mock": ("#16168", ("_wr_work_sid", "_wr_todo")),
+    "command_input_mock": ("#14527", ("COMMAND_INPUT", "COMMAND_INPUT_PROMPT", "COMMAND_INPUT_CARD", "MOCK_COMMAND_INPUT")),
 }
 
 

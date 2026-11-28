@@ -292,8 +292,11 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun herdr(machineId: String) = source.herdr(names.rawMachine(machineId))
         override suspend fun startHerdr(machineId: String) = source.startHerdr(names.rawMachine(machineId))
         override suspend fun setEngine(machineId: String, engine: String) = names.machine(source.setEngine(names.rawMachine(machineId), engine))
+        override suspend fun setEngineHosts(machineId: String, hosts: List<String>, default: String) =
+            names.machine(source.setEngineHosts(names.rawMachine(machineId), hosts, default))
         override suspend fun botmux(machineId: String) = source.botmux(names.rawMachine(machineId))
         override suspend fun setBotmux(machineId: String, on: Boolean) = source.setBotmux(names.rawMachine(machineId), on)
+        override suspend fun setOrcaChatStarts(machineId: String, on: Boolean) = source.setOrcaChatStarts(names.rawMachine(machineId), on)
         override suspend fun claudeSettings(machineId: String) = source.claudeSettings(names.rawMachine(machineId))
         override suspend fun setClaudeSetting(machineId: String, key: String, value: JsonElement) =
             source.setClaudeSetting(names.rawMachine(machineId), key, value)
@@ -445,6 +448,7 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
         override suspend fun startConversation() = names.key(source.startConversation())
         override suspend fun startConversation(launcher: String) = names.key(source.startConversation(launcher))
         override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = names.key(source.startConversation(pick))
+        override suspend fun mainConversationOrNull(manager: String) = source.mainConversationOrNull(manager)?.let(names::key)
         // another manager's main conversation (docs/assistant/managers.md step 4), in this group's merged ids
         override suspend fun mainConversationOf(manager: String) = names.key(source.mainConversationOf(manager))
         override suspend fun spaceConversations(space: String) = source.spaceConversations(space).map(names::session)
@@ -499,6 +503,7 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
             result(source.start(request.copy(machineId = names.rawMachine(request.machineId)), operationId))
         override suspend fun operation(operationId: String) = result(source.operation(operationId))
         override suspend fun newAgentModel() = source.newAgentModel()
+        override suspend fun newAgentModel(machineId: String) = source.newAgentModel(names.rawMachine(machineId))
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             source.launcherModels(names.rawMachine(machineId), launcher, refresh)
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =
@@ -515,6 +520,8 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
             source.workspaceCatalog(names.rawMachine(machineId)).let { catalog ->
                 catalog.copy(workspaces = catalog.workspaces.map { it.copy(machineId = names.machineId(it.machineId)) })
             }
+        // Worktree actions name the hub's own machine id; their answers carry none.
+        override val worktrees = source.worktrees?.let { actions -> routedWorktreeManagement { machine -> actions to names.rawMachine(machine) } }
     }
 }
 

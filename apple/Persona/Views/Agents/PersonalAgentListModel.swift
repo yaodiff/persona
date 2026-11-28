@@ -12,11 +12,18 @@ import Observation
 
     private var connection: Connection?
     private var available = false
+    private var sessions: Int?
     private var revision = UUID()
 
     func isAvailable(for api: APIClient?) -> Bool {
         guard let api, connection == Connection(api) else { return false }
         return available
+    }
+
+    /// How many personal agent conversations the entry leads to, for its heading; nil while unknown.
+    func count(for api: APIClient?) -> Int? {
+        guard isAvailable(for: api) else { return nil }
+        return sessions
     }
 
     /// Subscribe before loading so an account/session created during the first request is not missed.
@@ -32,7 +39,7 @@ import Observation
 
     func refresh(_ api: APIClient) async {
         let key = Connection(api)
-        if connection != key { connection = key; available = false }
+        if connection != key { connection = key; available = false; sessions = nil }
         let request = UUID()
         revision = request
         do {
@@ -41,16 +48,23 @@ import Observation
                 $0.enabled && !["missing", "disabled", "no_accounts"].contains($0.setup ?? "")
                     && !($0.accounts ?? []).isEmpty
             }.map(\.source))
-            var found = false
+            var shown = 0
+            var more = false
+            var total: Int?
             if !configured.isEmpty {
                 let page = try await api.personalAgentListPage(SessionListQuery())
-                found = page.sessions.contains { configured.contains($0.source) }
+                shown = page.sessions.filter { configured.contains($0.source) }.count
+                more = page.hasMore == true
+                total = page.total
             }
             guard !Task.isCancelled, connection == key, revision == request else { return }
-            available = found
+            available = shown > 0
+            // A first page with more after it counts what the hub says there is in all.
+            sessions = more ? total.map { max($0, shown) } : shown
         } catch {
             guard !Task.isCancelled, connection == key, revision == request else { return }
             available = false
+            sessions = nil
         }
     }
 }

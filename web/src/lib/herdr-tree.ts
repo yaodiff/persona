@@ -6,7 +6,7 @@
 // A space the host nests under another (Orca's child worktrees, `parent_space_id`) is listed inside its parent, as
 // Orca's sidebar does with "N children"; when the parent has no live agent the child stays at the top (#2073).
 import { splitAgentSessions } from "./agent-groups";
-import { backgroundWaiting, stateOf, tabLabel } from "./format";
+import { backgroundWaiting, activityOf, stateOf, tabLabel } from "./format";
 import { isSpacePinned, type AgentPins } from "./pins";
 import type { Route, SessionView } from "./router";
 import type { AgentState, Machine, Session } from "./types";
@@ -17,7 +17,7 @@ import type { StableRowOrder } from "./side-sessions";
 // docs/protocol/agent-states.md "Unified states": what a folded row shows for everything under it, and which pane a tab opens on.
 const URGENCY: AgentState[] = ["needs_you", "working", "unread", "idle", "unknown", "offline"];
 
-const urgency = (s: Session) => URGENCY.indexOf(stateOf(s));
+const urgency = (s: Session) => URGENCY.indexOf(activityOf(s));
 
 /** The most urgent of `list` (needs you > working > unread > seen); the first in order among equals. */
 export function mostUrgent(list: readonly Session[]): Session | undefined {
@@ -26,7 +26,7 @@ export function mostUrgent(list: readonly Session[]): Session | undefined {
 
 export function summaryState(list: readonly Session[]): AgentState | undefined {
   const s = mostUrgent(list);
-  return s && stateOf(s);
+  return s && activityOf(s);
 }
 
 // herdr counts its panes up in base 36 ("w4R:pW", "w4R:p2E", "w4R:p3A"): the order they were opened in. Herdr App's
@@ -104,7 +104,7 @@ export function tabGroups(sessions: readonly Session[]): TabGroup[] {
   return [...byTab].map(([key, panes]) => {
     panes.sort(paneOrder);
     const lead = mostUrgent(panes)!;
-    return { key, sessions: panes, launcher: launcherOf(panes), lead, state: stateOf(lead) };
+    return { key, sessions: panes, launcher: launcherOf(panes), lead, state: activityOf(lead) };
   });
 }
 
@@ -135,10 +135,10 @@ export function homeTaskGroups(sessions: readonly Session[], interactions: reado
   const asked = new Set(interactions.map(homeKey));
   const carded = (s: Session) => stateOf(s) === "needs_you" && asked.has(`${s.machine_id}/${s.session_id}`);
   const out: Record<HomeBucket, TabGroup[]> = { needs: [], working: [], waiting: [], unread: [] };
-  for (const g of tabGroups(sessions.filter((s) => !s.assistant && stateOf(s) !== "offline"))) {
+  for (const g of tabGroups(sessions.filter((s) => !s.assistant && activityOf(s) !== "offline"))) {
     const eligible = g.sessions.filter((s) => !carded(s));
     const state = summaryState(eligible);
-    const inState = eligible.filter((s) => stateOf(s) === state);
+    const inState = eligible.filter((s) => activityOf(s) === state);
     const busy = state === "working" ? inState.filter((s) => !backgroundWaiting(s)) : inState;
     const bucket: HomeBucket | undefined = state === "needs_you" ? "needs" : state === "working" ? (busy.length ? "working" : "waiting") : state === "unread" ? state : undefined;
     if (!bucket) continue;
@@ -156,7 +156,7 @@ export function homeTaskGroups(sessions: readonly Session[], interactions: reado
  *  and whether there is nothing to do (no card waiting either). */
 export function homeOverview(sessions: readonly Session[], interactions: readonly CardOf[]) {
   const groups = homeTaskGroups(sessions, interactions);
-  const unread = sessions.filter((s) => !s.assistant && stateOf(s) === "unread");
+  const unread = sessions.filter((s) => !s.assistant && activityOf(s) === "unread");
   const markAllAt: "section" | "summary" | undefined = !unread.length ? undefined : groups.unread.length ? "section" : "summary";
   const quiet = !interactions.length && !groups.needs.length && !groups.working.length && !groups.waiting.length && !groups.unread.length;
   return { groups, unread, markAllAt, quiet };
@@ -192,7 +192,7 @@ export function resolveTab(all: Session[], r: { mid: string; space: string; slot
   const tab = mine.filter((s) => s.space_id === r.space && s.slot_id === r.slot).sort(paneOrder);
   const asked = r.sid ? mine.find((s) => s.session_id === r.sid) : undefined;
   if (asked && tab.includes(asked)) return asked;
-  return asked ?? mostUrgent(tab.filter((s) => stateOf(s) !== "offline")) ?? tab[0];
+  return asked ?? mostUrgent(tab.filter((s) => activityOf(s) !== "offline")) ?? tab[0];
 }
 
 /** The conversation a `/t/…` page shows: the tab's pane, or — only while the session list is not in yet — the session
@@ -264,6 +264,8 @@ export interface MachineTreeOptions {
   pins?: AgentPins;
   /** Leave out machines with nothing under them (a quick filter is on). */
   hideEmpty?: boolean;
+  /** Keep a machine even when it has no agent sessions (e.g. it has active shell tabs). */
+  keepMachine?: (machineId: string) => boolean;
 }
 
 /** The live agents (`sessions` may hold any: assistants, offline ones and those of machines that are away are left
@@ -275,7 +277,7 @@ export function buildMachineTree(machines: Machine[], sessions: Session[], opts:
   const out: HerdrMachine[] = [];
   for (const m of machines) {
     const mine = byMachine.get(m.id) ?? [];
-    if (opts.hideEmpty && !mine.length) continue;
+    if (opts.hideEmpty && !mine.length && !opts.keepMachine?.(m.id)) continue;
     const spaces = groupBy(mine.filter((s) => s.space_id), (s) => `${m.id}/${s.space_kind ?? ""}:${s.space_id}`);
     const built = [...spaces].map(([key, list]) => buildSpace(key, m.id, list, opts.pins));
     const index = (sp: HerdrSpace) => sp.sessions[0]!.space_index ?? Number.MAX_SAFE_INTEGER;
@@ -364,7 +366,7 @@ function buildSpace(key: string, machineId: string, list: Session[], pins?: Agen
     // numbers, by the tab's id
     const place = panes[0]!.slot_index ?? slotId;
     const foldKey = `tree:${machineId}/${name}/${place}`;
-    return { key: `${key}/${slotId}`, spaceId: first.space_id!, slotId, label, foldKey, sessions: panes, launcher: launcherOf(panes), lead, state: stateOf(lead) };
+    return { key: `${key}/${slotId}`, spaceId: first.space_id!, slotId, label, foldKey, sessions: panes, launcher: launcherOf(panes), lead, state: activityOf(lead) };
   });
   const slotIndex = (t: HerdrTab) => t.sessions[0]!.slot_index ?? Number.MAX_SAFE_INTEGER;
   tabs.sort((a, b) => slotIndex(a) - slotIndex(b) || a.slotId.localeCompare(b.slotId));

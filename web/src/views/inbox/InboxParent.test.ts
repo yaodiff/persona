@@ -34,7 +34,7 @@ describe("线索的父子关系请求", () => {
     expect(init?.method).toBe("PUT");
     expect(JSON.stringify(init?.json)).toBe("null");
     expect(init?.headers).toEqual({ "X-Persona-Manager": "m-1" });
-    expect(toast).toHaveBeenCalledWith("已标为不是同一件事", "ok");
+    expect(toast).toHaveBeenCalledWith("已标记为不同事项", "ok");
   });
 
   it("links this item with the bare parent object and names the chosen title", async () => {
@@ -44,7 +44,7 @@ describe("线索的父子关系请求", () => {
     expect(init?.method).toBe("PUT");
     expect(JSON.stringify(init?.json)).toBe('{"kind":"inbox","id":"parent"}');
     expect(init?.headers).toEqual({ "X-Persona-Manager": "m-1" });
-    expect(toast).toHaveBeenCalledWith("已连到「发布准备」", "ok");
+    expect(toast).toHaveBeenCalledWith("已关联到「发布准备」", "ok");
   });
 
   it("notifies a visible Trail after a change from either entry point", async () => {
@@ -66,7 +66,7 @@ describe("线索的父子关系请求", () => {
     calls.fail = error;
 
     await expect(linkInboxParent({ id: "child" }, item("parent", "发布准备"))).resolves.toBe(false);
-    expect(toast).toHaveBeenCalledExactlyOnceWith("这个关联不成立，请选择其他内容。", "error");
+    expect(toast).toHaveBeenCalledExactlyOnceWith("无法建立此关联，请选择其他条目。", "error");
   });
 
   it.each([400, 404])("keeps the existing error text for HTTP %i", async (status) => {

@@ -202,7 +202,7 @@ describe("本地优先启动", () => {
     const id = launchAgent({ ...input, launcher: "codex", text: "" });
     await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "failed" });
-    expect(getState().launches[id].error).toContain("需要第一条消息");
+    expect(getState().launches[id].error).toContain("需要输入首条消息");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
@@ -215,13 +215,14 @@ describe("本地优先启动", () => {
 
     const codexInline = vi.fn().mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
     vi.stubGlobal("fetch", codexInline);
-    launchAgent({ ...input, launcher: "codex", agentType: "codex", inlinePrompt: true, model: "gpt-5.5-mini", effort: "high" });
+    launchAgent({ ...input, launcher: "codex", agentType: "codex", inlinePrompt: true, model: "gpt-5.5-mini", effort: "high", serviceTier: "ultrafast" });
     await advanceDelivery(0);
     expect(JSON.parse(codexInline.mock.calls[0][1].body)).toMatchObject({
       launcher: "codex",
       agent_type: "codex",
       model: "gpt-5.5-mini",
       effort: "high",
+      service_tier: "ultrafast",
       prompt: input.text,
     });
 
@@ -232,6 +233,7 @@ describe("本地优先启动", () => {
     const unsetBody = JSON.parse(codexUnset.mock.calls[0][1].body);
     expect(unsetBody).toMatchObject({ launcher: "codex", agent_type: "codex", model: "gpt-5.5-mini", prompt: input.text });
     expect(unsetBody).not.toHaveProperty("effort");
+    expect(unsetBody).not.toHaveProperty("service_tier");
 
     const codexRetry = vi.fn().mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409)).mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
     vi.stubGlobal("fetch", codexRetry);
@@ -345,7 +347,7 @@ describe("本地优先启动", () => {
       const failed = getState().launches[id];
       expect(failed.phase).toBe("failed");
       expect(failed.ultracode).toBeUndefined();
-      expect(failed.error).toBe("没能带 ultracode 开始：这台电脑的 Claude Code 太旧，不能开 ultracode。重试会不带 ultracode");
+      expect(failed.error).toBe("未能以 ultracode 模式启动：这台电脑的 Claude Code 太旧，不能开 ultracode。重试时将关闭 ultracode 启动");
       await deliverLaunch(id);
       await advanceDelivery(0);
       expect(JSON.parse(fetcher.mock.calls[1][1].body)).not.toHaveProperty("ultracode");
@@ -365,7 +367,7 @@ describe("本地优先启动", () => {
     const id = launchAgent({ ...input, attachments: [pickAttachment(new File(["image"], "figure.png", { type: "image/png" }))] });
     await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "failed", uncertain: false });
-    expect(getState().launches[id].error).toContain("第一条消息不能带附件");
+    expect(getState().launches[id].error).toContain("首条消息不支持携带附件");
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

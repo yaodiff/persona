@@ -8,9 +8,8 @@ import (
 )
 
 // closeAfterExit finishes an explicit Close whose Agent exited before lookup.
-// Its caller holds the session's recovery and typing locks. Only Herdr's marked
-// retained shells are handled here; other engines keep their existing behavior.
-func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState) error {
+// Its caller holds the session's recovery and typing locks.
+func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState, beforeClose func() error) error {
 	pane := st.Pane
 	if pane == "" {
 		if p, ok := n.keptPane(id); ok {
@@ -19,6 +18,18 @@ func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState) e
 	}
 	if pane == "" {
 		return nil // Preserve idempotent Close for older state with no terminal identity.
+	}
+	if host.ParsePane(pane).Kind == host.Orca {
+		h, ref, err := n.paneHost(pane)
+		if err != nil {
+			return err
+		}
+		o, ok := h.(*orcaHost)
+		if !ok {
+			return unsupported(h)
+		}
+		_, err = n.closeStoppedOrca(ctx, o, id, ref.String(), st, beforeClose)
+		return err
 	}
 	if host.ParsePane(pane).Kind != host.Herdr {
 		return nil
@@ -35,9 +46,7 @@ func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState) e
 	if err != nil {
 		return err
 	}
-	busy := func() error {
-		return refusal("agent_busy", "the stopped terminal changed or is in use; check it before closing", nil)
-	}
+	busy := terminalChangedRefusal
 	owned := func() (host.Agent, bool, error) {
 		// Host.Snapshot can reuse a disconnected named session's cached layout.
 		// Read the selected server directly, including when proving absence.
@@ -98,5 +107,10 @@ func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState) e
 	}
 	// Snapshot checks and close are separate calls, not an atomic engine claim.
 	// Close just this pane; Herdr removes its parent tab only if it becomes empty.
+	if beforeClose != nil {
+		if err := beforeClose(); err != nil {
+			return err
+		}
+	}
 	return target.c.PaneClose(ctx, target.id)
 }

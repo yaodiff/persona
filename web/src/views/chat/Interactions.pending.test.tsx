@@ -86,4 +86,27 @@ describe("an answer on its way", () => {
     await act(async () => sent.finish(Promise.reject(new Error("Synthetic refusal"))));
     await flush();
   });
+
+  it("blocks QuestionCard global digit shortcuts across a remount while an offline answer is pending", async () => {
+    const question = {
+      id: "q_pending", machine_id: "m", session_id: "s", kind: "question", tool_name: "AskUserQuestion",
+      questions: [{ question: "Which?", multi_select: false, options: [{ label: "One" }, { label: "Two" }] }],
+    } as Interaction;
+    Object.assign(getState(), { interactions: [question], answered: {} });
+    act(() => root.render(<InteractionCard ix={question} />));
+    act(() => host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")[0]!.click());
+    expect(sent.calls).toEqual([{ answers: { "Which?": "One" } }]);
+    // Leave and reopen the chat: QuestionCard remounts with busy=false while fieldset stays disabled.
+    act(() => root.render(null));
+    act(() => root.render(<InteractionCard ix={question} />));
+    expect(host.querySelector("fieldset[disabled]")).toBeTruthy();
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")[1]!.getAttribute("aria-pressed")).toBe("false");
+    expect(sent.calls).toEqual([{ answers: { "Which?": "One" } }]);
+    await act(async () => sent.finish(Promise.reject(new Error("Synthetic refusal"))));
+    await flush();
+  });
 });

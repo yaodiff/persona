@@ -37,6 +37,7 @@ const DECIDED: Record<string, ByDesign> = {
   run_waits_on_agent: "run_waits",
   run_waits_on_external: "run_waits",
   transient_retry_stays_background: "run_waits",
+  stopped_unfinished_closeout_needs_followup: "stopped_unfinished",
   failed_start_supervised: "supervisor_holds",
   agent_asks_held_by_supervisor: "supervisor_holds",
   steps_with_superseded_child: "steps",

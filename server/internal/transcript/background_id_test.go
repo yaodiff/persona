@@ -50,3 +50,25 @@ func TestMovedToBackgroundOnlyAtALineStart(t *testing.T) {
 		}
 	}
 }
+
+// Only a foreground command Claude Code's timeout moved is marked: the node judges that kind stalled sooner (#16418).
+// One started with run_in_background or backgrounded by hand is the agent's or the user's choice, and is not.
+func TestMovedFromForegroundMarksOnlyTheTimeoutMove(t *testing.T) {
+	ts := time.Unix(0, 0)
+	moved := &Meta{}
+	ParseLine(1, []byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-11-26T08:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"cmp a.json | head -2"}}]}}`), moved)
+	moved.backgroundStarted("tu1", "Command did not complete within its 120s timeout and was moved to the background (ID: b1). Output is being written to: /tmp/tasks/b1.output", false, ts)
+	if len(moved.Background) != 1 || !moved.Background[0].MovedFromForeground {
+		t.Fatalf("timeout move: %+v", moved.Background)
+	}
+	manual := &Meta{}
+	manual.backgroundStarted("tu2", "Command was manually backgrounded by user with ID: b2. Output is being written to: /tmp/tasks/b2.output", false, ts)
+	launched := &Meta{}
+	launched.trackBackground("tu3", "Bash", []byte(`{"command":"sleep 600","run_in_background":true}`), ts)
+	launched.backgroundStarted("tu3", "Command running in background with ID: b3. Output is being written to: /tmp/tasks/b3.output", false, ts)
+	for name, m := range map[string]*Meta{"by hand": manual, "run_in_background": launched} {
+		if len(m.Background) != 1 || m.Background[0].MovedFromForeground {
+			t.Errorf("%s: %+v", name, m.Background)
+		}
+	}
+}

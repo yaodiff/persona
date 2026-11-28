@@ -1,17 +1,17 @@
 {
   "start_work_session": "新建工作会话",
-  "suggestion_meetings": "今天我有哪些会？帮我准备一下",
-  "suggestion_agents": "看看各台电脑上的 Agent 都在干什么",
+  "suggestion_meetings": "今天我有哪些会议？帮我准备一下",
+  "suggestion_agents": "查看各台电脑上的 Agent 当前都在做什么",
   "suggestion_lark": "总结一下飞书里需要我回复的消息",
-  "suggestion_projects": "我最近在做哪些项目？进展如何",
+  "suggestion_projects": "我最近在做哪些项目，进展如何？",
   "profile": "资料",
   "sidebar": "侧边栏",
-  "empty_title": "有什么要我做的？",
-  "empty_body": "能看你的日程、飞书、邮件、知识库，也能到各台电脑上动手。",
-  "ask_placeholder": "今天想让 {name} 帮你做点什么呢~",
-  "empty_body_setup": "还差一步就能开始，下面告诉你缺什么。",
-  "needs_calendar": "会用到手机日历",
-  "load_failed": "没读到主对话：{error}",
+  "empty_title": "有什么我可以帮你的？",
+  "empty_body": "我可以查阅你的日历、飞书、邮件和知识库，也能在你的各台电脑上为你处理工作。",
+  "ask_placeholder": "今天需要 {name} 帮你处理什么？",
+  "empty_body_setup": "距离开始还差一步，请按以下提示完成配置。",
+  "needs_calendar": "需使用手机日历",
+  "load_failed": "无法加载主对话：{error}",
   "retry": "重试",
-  "still_starting": "还在启动 {launcher}…"
+  "still_starting": "仍在启动 {launcher}…"
 }

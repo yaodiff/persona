@@ -81,7 +81,7 @@ describe("the panel's ultracode row", () => {
     await open(s);
     const row = document.body.querySelector('[data-testid="ultracode-row"]')!;
     expect(row.textContent).toContain("ultracode");
-    expect(row.textContent).toContain("每个任务都编排多 Agent workflow · 很费额度 · 只对本会话");
+    expect(row.textContent).toContain("每个任务都将以多 Agent 工作流运行 · 消耗较多额度 · 仅对当前会话生效");
     expect(theSwitch()!.getAttribute("aria-checked")).toBe("false");
     await act(async () => theSwitch()!.click());
     await flush();
@@ -141,7 +141,7 @@ describe("the switch row", () => {
 
   it("a change queued elsewhere says a change waits, not tied to where the switch stands", () => {
     render(<UltracodeSwitchRow session={{ ...base, status: "working", state: "working", ultracode: false, ultracode_pending: true }} />);
-    expect(host.querySelector("[data-ultracode-line]")!.textContent).toBe("有一次切换在排队，这一轮结束后生效");
+    expect(host.querySelector("[data-ultracode-line]")!.textContent).toBe("已有切换请求正在等待，将于本轮结束后生效");
     expect(theSwitch()!.getAttribute("aria-checked")).toBe("false");
     expect(theSwitch()!.disabled).toBe(false);
   });
@@ -152,7 +152,7 @@ describe("the switch row", () => {
     render(<UltracodeSwitchRow session={base} />);
     await act(async () => theSwitch()!.click());
     await flush();
-    expect(host.querySelector('[role="alert"]')!.textContent).toBe("ultracode 没有切换成：这台机器上的 personad 太旧，还不支持 ultracode，需要更新 node");
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe("切换 ultracode 失败：这台机器上的 personad 太旧，还不支持 ultracode，需要更新 node");
     expect(theSwitch()!.getAttribute("aria-checked")).toBe("false");
     // the node updated meanwhile: the next click goes to the hub
     expect(theSwitch()!.disabled).toBe(false);
@@ -169,7 +169,7 @@ describe("the switch row", () => {
     render(<UltracodeSwitchRow session={base} />);
     await act(async () => theSwitch()!.click());
     await flush();
-    expect(host.querySelector('[role="alert"]')!.textContent).toBe("ultracode 没有切换成：未能确认 ultracode 状态，请在终端里确认");
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe("切换 ultracode 失败：未能确认 ultracode 状态，请在终端里确认");
     expect(theSwitch()!.getAttribute("aria-checked")).toBe("false");
     expect(theSwitch()!.disabled).toBe(false);
   });
@@ -182,7 +182,7 @@ describe("the switch row", () => {
     await flush();
     const quota = host.querySelector("[data-ultracode-quota]")!;
     expect(quota.textContent).toContain("Claude 额度：5 小时 86% · 每周 41%");
-    expect(quota.textContent).toContain("额度快用完了");
+    expect(quota.textContent).toContain("额度即将耗尽");
     // under a reason it can't be turned on for, only the numbers: one orange line, the one that blocks it
     render(<UltracodeSwitchRow session={{ ...base, ultracode_note: "请升级到 Claude Code 2.1.284 或更新版本，旧版不支持独立的 ultracode 开关" }} />);
     await flush();
@@ -204,9 +204,9 @@ describe("after a resume turned it off", () => {
     upsertSession(lost);
     render(<UltracodeLostNote session={lost} />);
     const note = host.querySelector('[data-testid="ultracode-lost"]')!;
-    expect(note.textContent).toContain("恢复后 ultracode 已关");
+    expect(note.textContent).toContain("恢复会话后 ultracode 已关闭");
     // a narrow screen may cut it: the whole of it on hover
-    expect(note.querySelector('[title="恢复后 ultracode 已关"]')).not.toBeNull();
+    expect(note.querySelector('[title="恢复会话后 ultracode 已关闭"]')).not.toBeNull();
     const reopen = host.querySelector<HTMLButtonElement>('[data-testid="ultracode-reopen"]')!;
     expect(reopen.className).toContain("whitespace-nowrap");
     await act(async () => reopen.click());
@@ -217,7 +217,7 @@ describe("after a resume turned it off", () => {
   it("× dismisses it: {ultracode_dismiss_lost: true}", async () => {
     upsertSession(lost);
     render(<UltracodeLostNote session={lost} />);
-    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="关掉这条提示"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="关闭提示"]')!.click());
     await flush();
     expect(modes().map((c) => c.body)).toEqual([{ ultracode_dismiss_lost: true }]);
     expect(getState().sessions.mac?.[0]?.ultracode_lost_at).toBeUndefined();
@@ -285,7 +285,7 @@ describe("the workflow mark", () => {
     hub(["ultracode"]);
     const on = renderToStaticMarkup(<AgentModelPill session={{ ...base, ultracode: true }} />);
     expect(marks(on)).toBe(1);
-    expect(on).toContain('aria-label="ultracode 开"');
+    expect(on).toContain('aria-label="ultracode 已开启"');
     expect(marks(renderToStaticMarkup(<AgentModelPill session={{ ...base, ultracode: false }} />))).toBe(0);
     expect(marks(renderToStaticMarkup(<AgentModelPill session={base} />))).toBe(0);
   });
@@ -294,7 +294,7 @@ describe("the workflow mark", () => {
     const codex = { ...base, agent: "codex", source_kind: "codex_app_server", capabilities: { send: true }, model: "gpt-5.5", effort: "ultra", efforts: ["low", "medium", "high", "ultra"] } as Session;
     const html = renderToStaticMarkup(<AgentModelPill session={codex} />);
     expect(marks(html)).toBe(1);
-    expect(html).toContain("很费额度");
+    expect(html).toContain("消耗较多额度");
     expect(marks(renderToStaticMarkup(<AgentModelPill session={{ ...codex, effort: "high" }} />))).toBe(0);
   });
 

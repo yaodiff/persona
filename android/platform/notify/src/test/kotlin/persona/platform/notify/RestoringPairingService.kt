@@ -27,6 +27,7 @@ internal class RestoringPairingService {
     var resumeRestore: CompletableDeferred<Unit>? = null
     var restoreCalls = 0
         private set
+    var failure: RuntimeException? = null
 
     val service: PairingService = Proxy.newProxyInstance(
         PairingService::class.java.classLoader,
@@ -36,6 +37,7 @@ internal class RestoringPairingService {
             "isPaired" -> paired
             "restore" -> {
                 restoreCalls++
+                failure?.let { throw it }
                 restoreStarted.complete(Unit)
                 val nested = resumeRestore
                 val wait = if (nested != null && Throwable().stackTrace.any {

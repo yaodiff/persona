@@ -21,14 +21,14 @@ function StoppedTerminalControls({ mid, sid, onTerminal }: StoppedCodexTerminal)
   const resume = useResume(mid, sid);
   return (
     <>
-      <Button tone="quiet" icon="terminal" onClick={onTerminal}>{t("chat-chatview.terminal")}</Button>
+      <Button tone="quiet" icon="terminal" onClick={onTerminal}>{t("lib-terminals.terminal")}</Button>
       <Button
         tone="secondary"
         icon="play"
         busy={resume.phase === "resuming"}
         onClick={() => void resumeInTerminal(mid, sid, onTerminal)}
       >
-        {t("chat-chatview.resume")}
+        {t("session-terminalpanel.resume")}
       </Button>
     </>
   );
@@ -37,7 +37,7 @@ function StoppedTerminalControls({ mid, sid, onTerminal }: StoppedCodexTerminal)
 function StoppedResumeError({ mid, sid }: Pick<StoppedCodexTerminal, "mid" | "sid">) {
   const resume = useResume(mid, sid);
   if (resume.phase !== "failed") return null;
-  return <p role="alert" className="w-full break-words text-red">{t("chat-chatview.resume_failed", { error: resume.error })}</p>;
+  return <p role="alert" className="w-full break-words text-red">{t("session-terminalpanel.resume_failed", { error: resume.error })}</p>;
 }
 
 export function CodexReadOnlyLine({
@@ -60,7 +60,7 @@ export function CodexReadOnlyLine({
   onContinueConsumed?: () => void;
   onPendingChange?: (pending: boolean) => void;
 }) {
-  const reason = visible ? (stopped ? t("chat-chatview.stopped_line") : sourceSubtitle(session) || t("chat-chatview.view_only")) : "";
+  const reason = visible ? (stopped ? session.read_only_reason || t("chat-chatview.stopped_line") : sourceSubtitle(session) || t("chat-chatview.view_only")) : "";
   // Keep the same DOM wrapper and child slot when `visible` flips false so an active TakeoverAction dialog
   // (portaled to document.body) never unmounts across SSE updates that remove capabilities.takeover.
   return (

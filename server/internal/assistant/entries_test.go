@@ -2,12 +2,16 @@ package assistant
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/sdk/go/wire"
@@ -272,6 +276,106 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	code, out = get("example-reader")
 	if code != 200 || len(out.Entries) != 0 {
 		t.Fatalf("revoked owner trust is still visible: %d %+v", code, out)
+	}
+}
+
+func TestEntriesExtensionCategoryFilteringPaginationAndUnknowns(t *testing.T) {
+	database := todoTestDB(t)
+	e := newTodoEnv(t, database)
+	ctx := context.Background()
+	h := &entriesAccessHub{fakeHub: e.f, allowed: true, personal: true}
+	e.s.hub = h
+	e.s.entriesDial = func(context.Context, any) ([]byte, error) {
+		return []byte(`{"ok":true,"machine_id":"a-different-computer"}`), nil
+	}
+	appendRule := func(id, space string, cats []string, personal bool) {
+		t.Helper()
+		item := proto.AssistantEntry{ID: id, Type: "rule", Text: "Example entry " + id, OriginSpace: space, Category: cats, Scope: proto.AssistantEntryScope{Executor: "assistant", Personal: personal}, By: "agent", Trust: "agent", Status: "active"}
+		if _, err := database.AppendAssistantEntry(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Interleave hidden sensitive entries before, between, and after readable entries.
+	appendRule("e1-hidden-health", "health", nil, true)
+	appendRule("e2-hidden-nonpersonal-fin", "", []string{categoryFinance}, false)
+	appendRule("e3-gen-1", "", nil, true)
+	appendRule("e4-hidden-unknown-cat", "", []string{"future_secret"}, false)
+	appendRule("e5-gen-2", "", nil, false)
+	appendRule("e6-hidden-fin", "", []string{categoryFinance}, true)
+	appendRule("e7-gen-3", "", nil, true)
+	appendRule("e8-hidden-tail", "health", []string{categoryHealth}, true)
+
+	rpcCtx := assistantwire.WithEntriesReader(ctx, "example-reader")
+	list := func(limit int, after string) proto.AssistantEntriesResult {
+		t.Helper()
+		raw, _ := json.Marshal(proto.AssistantEntriesParams{Limit: limit, After: after})
+		val, handled, err := e.s.conversationsRequest(rpcCtx, assistantwire.MethodAssistantEntriesList, raw)
+		if err != nil || !handled {
+			t.Fatalf("list(%d, %q): %v", limit, after, err)
+		}
+		return val.(proto.AssistantEntriesResult)
+	}
+
+	// Page 1: skips e1/e2/e4, returns e3 and e5, HasMore=true because e7 exists.
+	p1 := list(2, "")
+	if !slices.Equal(entryIDList(p1.Entries), []string{"e3-gen-1", "e5-gen-2"}) || !p1.HasMore {
+		t.Fatalf("page 1: ids=%v has_more=%v", entryIDList(p1.Entries), p1.HasMore)
+	}
+	// Page 2: skips e6 and trailing e8, returns e7 with HasMore=false.
+	p2 := list(2, p1.After)
+	if !slices.Equal(entryIDList(p2.Entries), []string{"e7-gen-3"}) || p2.HasMore {
+		t.Fatalf("page 2: ids=%v has_more=%v", entryIDList(p2.Entries), p2.HasMore)
+	}
+	// Page 3: empty, retains p2.After without leaking hidden e8's id in the cursor.
+	p3 := list(2, p2.After)
+	if len(p3.Entries) != 0 || p3.HasMore || p3.After != p2.After {
+		t.Fatalf("page 3: %+v (want after=%q)", p3, p2.After)
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(p3.After)
+	if err != nil || !strings.Contains(string(decoded), `"e7-gen-3"`) || strings.Contains(string(decoded), "e8-hidden-tail") {
+		t.Fatalf("cursor decode: %q %v", string(decoded), err)
+	}
+
+	// Multi-batch scan: >51 hidden entries followed by a visible entry still returns the visible entry in one request.
+	for i := range 55 {
+		appendRule(fmt.Sprintf("e-hidden-pad-%02d", i), "health", nil, true)
+	}
+	appendRule("e9-gen-after-pad", "", nil, true)
+	p4 := list(2, p2.After)
+	if !slices.Equal(entryIDList(p4.Entries), []string{"e9-gen-after-pad"}) || p4.HasMore {
+		t.Fatalf("multi-batch scan: ids=%v has_more=%v", entryIDList(p4.Entries), p4.HasMore)
+	}
+
+	// Granting all known categories still hides unknown category e4-hidden-unknown-cat, while opening non-personal finance e2.
+	if err := database.SetExtensionTrust(ctx, "example-reader", assistantwire.ExtensionTrustThirdParty, infoCategories, "user"); err != nil {
+		t.Fatal(err)
+	}
+	allKnown := list(100, "")
+	if slices.Contains(entryIDList(allKnown.Entries), "e4-hidden-unknown-cat") {
+		t.Fatalf("unknown category leaked to third party: %v", entryIDList(allKnown.Entries))
+	}
+	for _, want := range []string{"e1-hidden-health", "e2-hidden-nonpersonal-fin", "e3-gen-1", "e5-gen-2", "e6-hidden-fin", "e7-gen-3", "e8-hidden-tail", "e9-gen-after-pad"} {
+		if !slices.Contains(entryIDList(allKnown.Entries), want) {
+			t.Fatalf("all known categories missing %s: %v", want, entryIDList(allKnown.Entries))
+		}
+	}
+
+	// Owner extension sees the unknown-category entry too.
+	if err := database.SetExtensionTrust(ctx, "example-reader", assistantwire.ExtensionTrustOwner, nil, "user"); err != nil {
+		t.Fatal(err)
+	}
+	ownerAll := list(100, "")
+	if len(ownerAll.Entries) != 8+55+1 || !slices.Contains(entryIDList(ownerAll.Entries), "e4-hidden-unknown-cat") {
+		t.Fatalf("owner extension should see all 64 entries, got %d", len(ownerAll.Entries))
+	}
+
+	// Unnamed RPC read (no WithEntriesReader) is treated as a third party with no category grants.
+	var unnamed proto.AssistantEntriesResult
+	if err := askConversations(t, e.s, assistantwire.MethodAssistantEntriesList, `{"limit":100}`, &unnamed); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(entryIDList(unnamed.Entries), []string{"e5-gen-2"}) {
+		t.Fatalf("unnamed RPC read: got %v", entryIDList(unnamed.Entries))
 	}
 }
 

@@ -15,6 +15,7 @@ export struct AssistantMessage {
   @Require @Param feed: AssistantFeedModel;
   @Require @Param message: ChatMessage;
   @Param active: boolean = false;
+  @Param streaming: boolean = false;
   @Event onLink: (address: string) => void = () => {};
   @Event onOpenResource: (row: ResourceRow) => void = () => {};
   @Local parts: AssistantMessagePart[] = [];
@@ -43,10 +44,10 @@ export struct AssistantMessage {
   }
   build() {
     Column({ space: Tokens.gap }) {
-      ForEach(this.parts, (part: AssistantMessagePart) => {
+      ForEach(this.parts, (part: AssistantMessagePart, index: number) => {
         if (part.cardKey) AssistantViewCard({ model: this.model, feed: this.feed, item: this.item, cardKey: part.cardKey,
           active: this.active && this.model.connected, onLink: (address: string) => this.onLink(address), onOpenResource: (address: string) => this.openResource(address) })
-        else if (part.text) MarkdownText({ text: part.text, chatReply: true, onLink: (address: string) => this.onLink(address) })
+        else if (part.text) MarkdownText({ text: part.text, chatReply: true, streaming: this.streaming && index === this.parts.length - 1, onLink: (address: string) => this.onLink(address) })
       }, (part: AssistantMessagePart) => part.id)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }

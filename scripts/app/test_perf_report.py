@@ -453,6 +453,27 @@ class CollectionTests(unittest.TestCase):
             self.assertEqual(reporter.main([str(self.root)]), 2)
         self.assertEqual(path.read_text(), "original")
 
+    def test_invalid_comparison_does_not_publish_report(self):
+        baseline = self.root / "baseline"
+        baseline.mkdir()
+        for payload in ([], {"tests": []}, {"tests": {TEST: {"probe": None}}}):
+            with self.subTest(payload=payload):
+                (baseline / "report.json").write_text(json.dumps(payload))
+                code, out = self.run_main(arguments=("--compare", str(baseline)))
+                self.assertEqual(code, 2)
+                self.assertFalse((out / "report.json").exists())
+
+    def test_comparison_accepts_legacy_and_wrapped_test_maps(self):
+        baseline = self.root / "baseline"
+        baseline.mkdir()
+        tests = {TEST: {"probe": {"fps": 60}}}
+        for payload in (tests, {"tests": tests}):
+            with self.subTest(payload=payload):
+                (baseline / "report.json").write_text(json.dumps(payload))
+                code, out = self.run_main(arguments=("--compare", str(baseline)))
+                self.assertEqual(code, 0)
+                self.assertTrue((out / "report.json").is_file())
+
 
 class LaunchReportTests(unittest.TestCase):
     def setUp(self):

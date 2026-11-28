@@ -67,7 +67,7 @@ describe("syncStateText", () => {
   it("says an offline machine shows its last list, or that there is none", () => {
     const s = syncStateText({ machine: "m1", state: "offline", synced_at: before }, now);
     expect(s.label).toBe("离线");
-    expect(s.detail).toMatch(/^显示上次同步的结果（.*5.*）$/);
+    expect(s.detail).toMatch(/^当前显示上次同步的列表（.*5.*）$/);
     expect(syncStateText({ machine: "m1", state: "offline" }, now).detail).toBe("从未同步");
   });
 
@@ -96,6 +96,6 @@ describe("loadLaunchers", () => {
     );
     const err = await loadLaunchers(20).catch((e) => e);
     expect(err).toBeInstanceOf(LaunchersTimeout);
-    expect(err.message).toContain("没有回应");
+    expect(err.message).toContain("未响应");
   });
 });

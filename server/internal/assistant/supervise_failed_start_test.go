@@ -96,6 +96,10 @@ func TestTaskReviewClosesAFailedStart(t *testing.T) {
 				if before.StartError == "" || before.DoneAt == nil || before.DoneBy != "" {
 					t.Fatalf("failed-start fixture = %+v", before)
 				}
+				p, i, err := s.currentPlanAssignment(t.Context(), before)
+				if err != nil || s.planWithSpace(t.Context(), p).Tasks[i].Error == "" {
+					t.Fatalf("open failure projection: plan=%+v error=%v", p, err)
+				}
 				tr := triageTodo(listedTodo{Todo: before}, noSessions, time.Now(), time.Time{}, time.UTC, false)
 				if tr.Section != triageWaiting || tr.Rule != ruleFailedStart {
 					t.Fatalf("unreviewed failed start is not actionable: %+v", tr)
@@ -118,6 +122,7 @@ func TestTaskReviewClosesAFailedStart(t *testing.T) {
 				postsBefore := len(f.appParams(AppFeishu, FeishuPost))
 				textsBefore := len(f.appParams(AppFeishu, FeishuText))
 				pushesBefore := len(f.pushed())
+				planEvents := strings.Count(f.eventTypes(), "task_plan")
 
 				args := map[string]any{"verdict": tc.verdict, "note": "review the failed start"}
 				if tc.verdict == reviewAccepted {
@@ -130,6 +135,15 @@ func TestTaskReviewClosesAFailedStart(t *testing.T) {
 				got := todoNow(s, todo.ID)
 				if got.StartError != "" || got.DoneBy != tc.doneBy || got.DoneAt == nil {
 					t.Fatalf("reviewed failed start = %+v, want start_error empty and done_by %q", got, tc.doneBy)
+				}
+				if wire := s.planWithSpace(t.Context(), p).Tasks[i]; wire.Error != "" || wire.ErrorCode != "" || wire.WorkspaceError != nil || wire.RetryWith != nil {
+					t.Fatalf("closed task still advertises the previous failure: %+v", wire)
+				}
+				if strings.Count(f.eventTypes(), "task_plan") <= planEvents {
+					t.Fatal("connected clients were not told to replace the stale plan")
+				}
+				if p.Tasks[i].Error == "" {
+					t.Fatal("client projection erased the historical failed attempt")
 				}
 				if database, ok := st.(*db.DB); ok {
 					stored, err := database.GetTodo(context.Background(), todo.ID)

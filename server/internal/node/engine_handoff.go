@@ -95,7 +95,7 @@ func (n *Node) agyTranscriptFilePath(conv string) string {
 	if !uuidRe.MatchString(conv) {
 		return ""
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootFor(conv)
 	for _, rel := range []string{agyTranscriptPath, agyFullTranscriptPath} {
 		p := filepath.Join(dir, "brain", conv, rel)
 		if fileExists(p) {
@@ -111,7 +111,7 @@ func (n *Node) agyHandoffItems(conv string, after, until time.Time) ([]proto.Ite
 	if conv == "" {
 		return nil, nil
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootFor(conv)
 	root, err := agyBrain(dir, conv)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

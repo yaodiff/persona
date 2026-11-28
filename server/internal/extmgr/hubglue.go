@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -21,11 +22,11 @@ func (h *Manager) adminNow() time.Time {
 	return time.Now()
 }
 
-// The send_messages states (the hub's send.go): a send claimed, done, or cut off without knowing.
+// The sent_messages states used by inbox replies.
 const (
-	sendDelivered = "delivered"
-	sendUnknown   = "unknown"
-	sendSending   = "sending"
+	sendDelivered = db.SendStateDelivered
+	sendUnknown   = db.SendStateUnknown
+	sendSending   = db.SendStateSending
 )
 
 // screenPort is macOS's Screen Sharing (VNC).

@@ -55,3 +55,30 @@ export function shownUndelivered(row: Pick<Session, "undelivered"> | undefined, 
 
 /** The owner's bubble a kept message draws as: the same while its chunk loads as once it is in (ChatView). */
 export const keptBubble = (m: UndeliveredMessage): UserMessage => ({ id: `undelivered:${m.id}`, client_msg_id: m.id, ...parseUserText(m.text), images: [] });
+
+/** What a logical conversation's undelivered input amounts to (#17431): the one awaiting its receipt, how many wait,
+ *  and the expired ones the owner has to act on. Only inputs with a `reason`; kept and held messages say it alone. */
+export interface DeliverySummary {
+  head?: UndeliveredMessage;
+  waiting: number;
+  expired: UndeliveredMessage[];
+}
+
+export function deliverySummary(list: readonly UndeliveredMessage[] | undefined): DeliverySummary {
+  const out: DeliverySummary = { waiting: 0, expired: [] };
+  for (const m of list ?? []) {
+    if (!m.reason) continue;
+    if (m.reason === "receipt_expired") out.expired.push(m);
+    else {
+      out.waiting++;
+      if (m.reason === "awaiting_receipt" && !out.head) out.head = m;
+    }
+  }
+  return out;
+}
+
+/** Whole seconds left until `deadline` (0 once past; undefined without one). */
+export function secondsLeft(deadline: string | undefined, now: number): number | undefined {
+  const at = deadline ? Date.parse(deadline) : NaN;
+  return Number.isNaN(at) ? undefined : Math.max(0, Math.ceil((at - now) / 1000));
+}

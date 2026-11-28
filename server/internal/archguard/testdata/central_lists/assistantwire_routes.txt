@@ -86,6 +86,7 @@
 "GET /api/v1/recordings/{id}/photos"
 "GET /api/v1/recordings/{id}/photos/{n}"
 "GET /api/v1/sessions/archived"
+"GET /api/v1/task-plans"
 "GET /api/v1/task-plans/{id}"
 "GET /api/v1/task-trust"
 "GET /api/v1/todos"

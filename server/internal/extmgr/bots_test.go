@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -29,10 +30,17 @@ import (
 // botStore keeps settings, sends and interactions in memory.
 type botStore struct {
 	Store
-	mu    sync.Mutex
-	vals  map[string][]byte
-	sends map[string]string
-	audit []auditRow // plugin_audit (bots_audit_test.go)
+	mu     sync.Mutex
+	vals   map[string][]byte
+	sends  map[string]string
+	audit  []auditRow // plugin_audit (bots_audit_test.go)
+	tracks []db.Track
+}
+
+func (s *botStore) Tracks(context.Context) ([]db.Track, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]db.Track(nil), s.tracks...), nil
 }
 
 func newBotStore() *botStore {
@@ -301,6 +309,7 @@ func (f *fakeOpenAPI) count(want string) int {
 
 type botWorld struct {
 	h   *Manager
+	st  *botStore
 	api *fakeOpenAPI
 	a   *fakeAssistant
 	mux http.Handler
@@ -324,7 +333,7 @@ func newBotWorld(t *testing.T) *botWorld {
 	h.startBots(ctx)
 	mux := http.NewServeMux()
 	h.botRoutes(mux)
-	w := &botWorld{h: h, api: api, a: a, mux: mux, ctx: ctx}
+	w := &botWorld{h: h, st: st, api: api, a: a, mux: mux, ctx: ctx}
 	if code, out := w.do(t, "PUT", "/api/v1/bots/feishu",
 		fmt.Sprintf(`{"enabled":true,"app_id":"cli_test","app_secret":"s3cret","domain":%q,"features":{"main":true,"cards":true}}`, api.srv.URL)); code != 200 {
 		t.Fatalf("enable: %d %v", code, out)

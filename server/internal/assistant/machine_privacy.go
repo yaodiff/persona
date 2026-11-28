@@ -35,14 +35,22 @@ func (s *Service) sameMachine(a, b string) bool {
 	return a == b
 }
 
-// A new runtime can request tools before it has a session ID or appears in the node's list.
-// Only manager-initiated starts grant that bootstrap on an explicitly selected personal machine.
+// A new runtime can request tools or context before it has a session ID or appears in the node's list.
+// Only manager-initiated starts grant that bootstrap on an explicitly selected personal machine, and
+// each in-flight start also records its target space so an older node's first assistant.context call
+// never leaks the main chat's snapshot into a space conversation (#17557).
 type assistantStarts struct {
-	mu       sync.Mutex
-	machines map[string]int
+	mu        sync.Mutex
+	machines  map[string]int
+	spaces    map[string]map[string]int
+	bySession map[[2]string]map[string]int
 }
 
 func (s *Service) beginAssistantStart(machine string) func() {
+	return s.beginAssistantStartSpace(machine, "", "")
+}
+
+func (s *Service) beginAssistantStartSpace(machine, space, sessionID string) func() {
 	if s.devs != nil {
 		machine = s.devs.Canonical(machine)
 	}
@@ -52,15 +60,90 @@ func (s *Service) beginAssistantStart(machine string) func() {
 		b.machines = map[string]int{}
 	}
 	b.machines[machine]++
-	b.mu.Unlock()
-	return func() {
-		b.mu.Lock()
-		b.machines[machine]--
-		if b.machines[machine] == 0 {
-			delete(b.machines, machine)
-		}
-		b.mu.Unlock()
+	if b.spaces == nil {
+		b.spaces = map[string]map[string]int{}
 	}
+	if b.spaces[machine] == nil {
+		b.spaces[machine] = map[string]int{}
+	}
+	b.spaces[machine][space]++
+	var sk [2]string
+	if sessionID != "" {
+		sk = [2]string{machine, sessionID}
+		if b.bySession == nil {
+			b.bySession = map[[2]string]map[string]int{}
+		}
+		if b.bySession[sk] == nil {
+			b.bySession[sk] = map[string]int{}
+		}
+		b.bySession[sk][space]++
+	}
+	b.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			b.mu.Lock()
+			b.machines[machine]--
+			if b.machines[machine] == 0 {
+				delete(b.machines, machine)
+			}
+			if m := b.spaces[machine]; m != nil {
+				m[space]--
+				if m[space] == 0 {
+					delete(m, space)
+				}
+				if len(m) == 0 {
+					delete(b.spaces, machine)
+				}
+			}
+			if sessionID != "" {
+				if m := b.bySession[sk]; m != nil {
+					m[space]--
+					if m[space] == 0 {
+						delete(m, space)
+					}
+					if len(m) == 0 {
+						delete(b.bySession, sk)
+					}
+				}
+			}
+			b.mu.Unlock()
+		})
+	}
+}
+
+// startingSpace reports the target space of an in-flight start on machine (and sessionID when pre-assigned).
+// known is true when all matching in-flight starts agree on one space ("" for main space); ambiguous is true when
+// concurrent starts on machine span different spaces so an older node without cwd must not receive the main snapshot.
+func (s *Service) startingSpace(machine, sessionID string) (space string, known, ambiguous bool) {
+	if machine == "" {
+		return "", false, false
+	}
+	if s.devs != nil {
+		machine = s.devs.Canonical(machine)
+	}
+	b := &s.startingAssistants
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if sessionID != "" {
+		if m := b.bySession[[2]string{machine, sessionID}]; len(m) == 1 {
+			for sp := range m {
+				return sp, true, false
+			}
+		} else if len(m) > 1 {
+			return "", false, true
+		}
+	}
+	m := b.spaces[machine]
+	if len(m) == 0 {
+		return "", false, false
+	}
+	if len(m) == 1 {
+		for sp := range m {
+			return sp, true, false
+		}
+	}
+	return "", false, true
 }
 
 // assistantCaller checks the connection's machine before considering the session. The node's

@@ -5,14 +5,14 @@
   "open_file": "打开文件",
   "review_git": "使用 Git 评审",
   "scope_label": "变更范围",
-  "files_label": "编辑过的文件",
+  "files_label": "已编辑的文件",
   "new_changes_one": "{count} 项新变更",
   "new_changes_other": "{count} 项新变更",
   "loading_history": "正在加载较早的变更…",
-  "loading_fold": "正在加载此文件的编辑…",
+  "loading_fold": "正在加载此文件的编辑内容…",
   "fold_failed": "编辑内容未能完整加载。",
   "retry": "重试",
-  "empty": "此范围还没有编辑",
+  "empty": "当前范围内暂无编辑记录。",
   "resize_label": "调整已编辑文件列表宽度",
   "resize_title": "拖动或使用方向键调整宽度；双击或按回车键重置"
 }

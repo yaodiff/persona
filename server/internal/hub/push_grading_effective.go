@@ -256,7 +256,7 @@ func evaluatePushGradingDecision(
 
 	baseLevel := inputLevel
 	effectiveLevel := inputLevel
-	if policy.kind == assistantwire.NotifyPush {
+	if policy.kind == assistantwire.NotifyPush && policy.asked {
 		explicit := policy.level
 		if policy.derivedLevel {
 			explicit = ""

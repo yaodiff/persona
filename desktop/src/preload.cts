@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DesktopBridge, DesktopIslandState, DesktopNotification, DesktopPresence } from "../../spec/desktop-bridge";
+import type { DesktopBridge, DesktopIslandState, DesktopNotification, DesktopPresence, DesktopSurfaceStyle, DesktopThemeSource, DesktopWindowChrome } from "../../spec/desktop-bridge";
 
 // Fixed, self-contained CommonJS capabilities; no arbitrary IPC, tokens, socket messages or Node access.
 // The annotation makes every version-1 capability, including its signature, a compile-time requirement.
@@ -37,6 +37,14 @@ const api = Object.freeze({
   setIslandState(state: DesktopIslandState) { ipcRenderer.send("desktop:island-state", state); },
   setDevDiagnostics(on: boolean) { return ipcRenderer.invoke("desktop:dev-diagnostics-set", on); },
   readDevDiagnostics() { return ipcRenderer.invoke("desktop:dev-diagnostics-read"); },
+  windowChrome(): DesktopWindowChrome { return ipcRenderer.sendSync("desktop:window-chrome"); },
+  onWindowChromeChange(callback: (chrome: DesktopWindowChrome) => void): () => void {
+    const listener = (_event: Electron.IpcRendererEvent, chrome: DesktopWindowChrome) => callback(chrome);
+    ipcRenderer.on("desktop:window-chrome-changed", listener);
+    return () => { ipcRenderer.removeListener("desktop:window-chrome-changed", listener); };
+  },
+  setSurfaceStyle(style: DesktopSurfaceStyle) { ipcRenderer.send("desktop:surface-style", style); },
+  setThemeSource(theme: DesktopThemeSource) { ipcRenderer.send("desktop:theme-source", theme); },
 } satisfies DesktopBridge);
 
 contextBridge.exposeInMainWorld("personaDesktop", api);

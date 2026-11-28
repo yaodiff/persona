@@ -17,6 +17,10 @@ from node_artifacts import prepare_nodes
 from pinned_node_release import validate_target, validate_candidate
 from node_relay_retry import request, transient
 
+# How long to read the relayed node.update.commit. The node answers it only after the upload's first-run self-checks,
+# so the Hub's relay holds it for nodeupdate.CommitWait() + 10 s (node_update_relay.go, 4 min 50 s). Reading for less
+# takes a slow answer for a lost one, and a failed check then ends as `no target handshake` (#12670).
+COMMIT_WAIT = 300
 
 def relay(root, target, action, params=None, timeout=50):
     cfg = json.loads((root / 'hub.json').read_text())
@@ -95,7 +99,7 @@ def install(root, target, binary, manifest, timeout):
         if remaining <= 0:
             raise TimeoutError('Node deadline exhausted before commit')
         try:
-            accepted = relay(root, target, 'commit', {'id': transaction}, timeout=min(50, remaining))
+            accepted = relay(root, target, 'commit', {'id': transaction}, timeout=min(COMMIT_WAIT, remaining))
         except (OSError, TimeoutError) as error:
             if not transient(error):
                 raise

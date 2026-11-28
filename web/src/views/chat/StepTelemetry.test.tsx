@@ -54,7 +54,7 @@ async function waitForTelemetry(container: ParentNode = host): Promise<HTMLEleme
 }
 
 describe("L3 per-step attribution on expanded step cards (#13054)", () => {
-  it("keeps collapsed ActionRow uncluttered and reveals token, duration, and TTFT badges on expand", async () => {
+  it("keeps collapsed ActionRow uncluttered and reveals a metadata line on expand", async () => {
     const use: Item = {
       id: "t1#0",
       seq: 1,
@@ -96,9 +96,9 @@ describe("L3 per-step attribution on expanded step cards (#13054)", () => {
     expect(bar.querySelector("[data-step-tokens]")?.getAttribute("title")).toContain("Cache read 8.4k");
     expect(bar.querySelector("[data-step-duration]")?.textContent).toContain("2.45 s");
     expect(bar.querySelector("[data-step-ttft]")?.textContent).toContain("TTFT 280 ms");
+    expect(bar.textContent).toBe("10.0k tok·2.45 s·TTFT 280 ms");
     expect(bar.querySelector("svg")).toBeNull();
     expect(bar.innerHTML).not.toContain("rounded-chip");
-    expect(bar.textContent).toContain("10.0k tok·2.45 s·TTFT 280 ms");
   });
 
   it("shows sub-second elapsed duration badge on expanded ActionRow and omits badges when telemetry is absent", async () => {

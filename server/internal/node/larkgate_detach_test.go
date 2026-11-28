@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -64,5 +65,91 @@ func TestLarkGatePendingResultEndsTheToolCallWithoutExecuting(t *testing.T) {
 	}
 	if got := r.api.requests(); len(got) != 0 {
 		t.Fatalf("the pending command reached the gated API: %+v", got)
+	}
+}
+
+func TestLarkEditDetachedRetryUsesOriginalApprovalGrant(t *testing.T) {
+	const original = "original"
+	const edited = "edited after detach"
+	const body = `{"text":"original"}`
+	answers := 0
+	originalID := ""
+	r := newLarkEditRig(t, func(ix proto.Interaction) proto.Resolution {
+		answers++
+		if answers == 1 {
+			originalID = ix.ID
+			return proto.Resolution{Dismiss: true, Pending: true, ApprovalID: ix.ID,
+				Message: "Nothing was executed. End this turn now."}
+		}
+		return proto.Resolution{Allow: boolp(true), EditedText: edited, ApprovalID: originalID}
+	})
+	cwd := t.TempDir()
+	base := r.processIn(cwd, testThread)
+	command := `ex POST /conversations/F1/messages '{"text":"original"}'`
+
+	first := runLarkEditHookForToolUse(t, r, cwd, command, "toolu_lark_detached_original", nil)
+	if first["permissionDecision"] != "deny" || first["updatedInput"] != nil {
+		t.Fatalf("detached original = %#v, want a short non-execution result", first)
+	}
+	originalCard := r.hub.lastCreated(t)
+	if !originalCard.Detachable || originalCard.EditableText != original {
+		t.Fatalf("detached original is not the editable approval: %#v", originalCard)
+	}
+
+	retry := runLarkEditHookForToolUse(t, r, cwd, command, "toolu_lark_detached_retry", nil)
+	retryCard := r.hub.lastCreated(t)
+	if retryCard.ID == originalCard.ID {
+		t.Fatalf("retry reused interaction %q; the fixture requires a fresh interaction", retryCard.ID)
+	}
+	if got := r.cards(); got != 2 {
+		t.Fatalf("detached retry created %d cards, want the original and one fresh retry", got)
+	}
+	if retry["permissionDecision"] != "allow" {
+		t.Fatalf("edited retry with original ApprovalID %q and fresh interaction %q = %#v, want allow", originalCard.ID, retryCard.ID, retry)
+	}
+	updated, _ := retry["updatedInput"].(map[string]any)
+	updatedCommand, _ := updated["command"].(string)
+	v := classifyLark(updatedCommand, r.n.larkCfg.Gates, cwd, r.n.larkCLIRisk(r.n.larkCfg))
+	if len(v.calls) != 1 || v.other || v.unparsed || v.unknown || v.unsure || v.deny != "" {
+		t.Fatalf("edited retry is not the same standalone call: %q\n%+v", updatedCommand, v)
+	}
+	call := v.calls[0]
+	_, text, ok := editableTextFields(call.Body)
+	if !ok || text != edited {
+		t.Fatalf("edited retry body = %q, text %q, parsed %v", call.Body, text, ok)
+	}
+
+	url := base + "/api/v1/conversations/F1/messages"
+	if code, response := send(t, http.MethodPost, url, body); code != http.StatusForbidden {
+		t.Errorf("original body after the detached edited Allow = %d %s, want its original grant retired", code, response)
+	}
+	tampered := strings.Replace(call.Body, edited, "tampered", 1)
+	if code, response := send(t, http.MethodPost, url, tampered); code != http.StatusForbidden {
+		t.Errorf("different text after the detached edited Allow = %d %s, want 403", code, response)
+	}
+	if got := r.api.requests(); len(got) != 0 {
+		t.Fatalf("an unapproved detached retry reached the API: %+v", got)
+	}
+	if code, response := send(t, http.MethodPost, url, call.Body); code != http.StatusOK {
+		t.Fatalf("the exact edited retry = %d %s, want 200", code, response)
+	}
+	if code, _ := send(t, http.MethodPost, url, call.Body); code != http.StatusForbidden {
+		t.Errorf("the exact edited retry repeated = %d, want 403", code)
+	}
+	got := r.api.requests()
+	if len(got) != 1 || got[0].Body != call.Body {
+		t.Fatalf("upstream requests = %+v, want exactly the edited body once", got)
+	}
+	waitFor(t, "the detached edited sent-as-user report", func() bool {
+		r.hub.mu.Lock()
+		defer r.hub.mu.Unlock()
+		return len(r.hub.larkSent) == 1
+	})
+	r.hub.mu.Lock()
+	report := r.hub.larkSent[0]
+	r.hub.mu.Unlock()
+	if report.Text != edited || report.LetThrough.InteractionID != originalCard.ID ||
+		report.LetThrough.EditedFrom != original || report.LetThrough.Kind != proto.LarkThroughCard {
+		t.Fatalf("detached edited sent report = %#v; original approval %q, retry %q", report, originalCard.ID, retryCard.ID)
 	}
 }

@@ -44,7 +44,7 @@ func (h *Manager) NodeProgramHubCall(ctx context.Context, machineID string, raw 
 	if !ps.nodeRunsOn(ctx, pl, m) {
 		return denied("the extension is not switched on for this computer")
 	}
-	params := p.Params
+	params := json.RawMessage(p.Params)
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}

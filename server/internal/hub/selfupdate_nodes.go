@@ -41,35 +41,48 @@ func (u *updater) nodesEnabledLocked() bool {
 
 // stageNodes never fetches or recreates the node package directory unless fleet
 // updates are explicitly enabled. Hub-only releases can contain just one platform.
-func (u *updater) stageNodes(ctx context.Context, m *update.Manifest, staged, bin string) (string, error) {
-	return u.stageNodesFrom(ctx, m, staged, bin, "", false)
-}
-
-func (u *updater) stageNodesFrom(ctx context.Context, m *update.Manifest, staged, bin, localSource string, development bool) (string, error) {
+func (u *updater) stageNodesFrom(ctx context.Context, m *update.Manifest, staged, bin, localSource string, development bool, programs map[string]string) (string, error) {
 	if !u.nodesEnabled() && !development {
 		return "", nil
 	}
 	nodes := filepath.Join(staged, "nodes")
+	if err := os.MkdirAll(nodes, 0o755); err != nil {
+		return "", err
+	}
 	own := runtime.GOOS + "-" + runtime.GOARCH
-	for _, plat := range nodePlatforms(m) {
-		u.set("downloading", plat, "")
-		if plat == own {
-			// This platform's node binary is the hub's own binary: the same file, so copy the one already here
-			// rather than fetching it twice (a machine on the hub's platform added later needs it too).
-			err := os.MkdirAll(nodes, 0o755)
-			if err == nil {
-				err = copyInto(bin, filepath.Join(nodes, "personad-"+plat))
-				if err == nil {
-					err = copyInto(bin, filepath.Join(nodes, compat.DaemonBinary+"-"+plat))
+	for _, pkg := range []struct {
+		program string
+		files   map[string]update.File
+		own     string
+	}{
+		{"personad", m.Files, bin},
+		{"persona-node", m.Nodes["persona-node"], ""},
+		{"persona-manager", m.Programs["persona-manager"], programs["persona-manager"]},
+		{"persona-link", m.Links, ""},
+	} {
+		for _, plat := range sortedKeys(pkg.files) {
+			name := update.PackageName(pkg.program, plat)
+			if filepath.Base(name) != name || strings.ContainsAny(plat, `/\`) {
+				return "", fmt.Errorf("invalid platform %q", plat)
+			}
+			u.set("downloading", name, "")
+			dest := filepath.Join(nodes, name)
+			if plat == own && pkg.own != "" {
+				// Reuse the Hub and Manager binaries already verified on this platform.
+				if err := update.InstallPrepared(dest, pkg.own); err != nil {
+					return "", err
+				}
+				continue
+			}
+			src, err := u.download(ctx, m, pkg.files[plat], nodes, localSource)
+			if err != nil {
+				return "", err
+			}
+			if src != dest {
+				if err := os.Rename(src, dest); err != nil {
+					return "", err
 				}
 			}
-			if err != nil {
-				return "", fmt.Errorf("the node binary for the hub's own platform: %w", err)
-			}
-			continue
-		}
-		if _, err := u.download(ctx, m, m.Files[plat], nodes, localSource); err != nil {
-			return "", err
 		}
 	}
 	return nodes, nil
@@ -106,6 +119,18 @@ func setAsideOldNodes(dir string) ([]string, error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			first = errors.Join(first, err)
 			continue
+		}
+		if tail, legacy := strings.CutPrefix(name, compat.DaemonBinary+"-"); legacy {
+			f, err := os.Open(path)
+			if err != nil {
+				first = errors.Join(first, err)
+				continue
+			}
+			owned := update.AliasMatchesPackage(f, "personad-"+tail)
+			f.Close()
+			if !owned {
+				continue
+			}
 		}
 		if err := os.Rename(path, path+".prev"); err != nil {
 			first = errors.Join(first, err)

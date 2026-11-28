@@ -132,6 +132,9 @@ class HttpChatComposerService internal constructor(
                     } else null
                     val state = when {
                         failure.delivered == "yes" -> DeliveryState.Sent
+                        failure.code == "node_unreachable" && failure.delivered == "none" -> DeliveryState.Refused
+                        failure.code == "assistant_offline" && (failure.delivered == null || failure.delivered == "none") -> DeliveryState.WaitingForNetwork
+                        failure.delivered == "none" && failure.retryable -> DeliveryState.WaitingForNetwork
                         failure.delivered == "none" -> DeliveryState.Refused
                         else -> DeliveryState.Unknown
                     }
@@ -178,6 +181,7 @@ class HttpChatComposerService internal constructor(
             is MessageTransportResult.HubError -> when {
                 result.delivered == "yes" -> ComposerDelivery(DeliveryState.Sent)
                 result.code in setOf("input_draft", "dialog_open") -> ComposerDelivery(DeliveryState.Refused, refusal)
+                result.delivered == "none" || (result.code == "assistant_offline" && result.delivered == null) -> ComposerDelivery(DeliveryState.Refused)
                 else -> ComposerDelivery(DeliveryState.Unknown)
             }
             else -> ComposerDelivery(DeliveryState.Unknown)

@@ -1,12 +1,12 @@
 {
-  "no_screen_yet": "还没有拿到终端",
-  "updated_seconds_other": "上次更新 {count} 秒前",
-  "updated_minutes_other": "上次更新 {count} 分钟前",
-  "updated_at": "上次更新 {time}",
-  "waiting": "等待电脑回应…",
+  "no_screen_yet": "暂未连接到终端",
+  "updated_seconds_other": "{count} 秒前更新",
+  "updated_minutes_other": "{count} 分钟前更新",
+  "updated_at": "更新于 {time}",
+  "waiting": "正在等待电脑响应…",
   "retry_in_other": "{count} 秒后重试",
   "retrying": "正在重试…",
-  "offline": "{name} 不在线",
-  "not_answering": "{name} 没有回应",
-  "not_answered_yet": "这台电脑还没有回应"
+  "offline": "{name} 当前离线",
+  "not_answering": "{name} 无响应",
+  "not_answered_yet": "这台电脑尚未响应"
 }

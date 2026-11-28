@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 )
 
@@ -225,9 +226,15 @@ func TestOrcaWorktreeRefusesABranchInUse(t *testing.T) {
 	w := orcaWorktreeNode(t)
 	runPullGit(t, w.repo, "worktree", "add", "--", filepath.Join(w.home, "busy"), "spare")
 	for _, b := range []string{"dev", "spare"} {
-		if _, err := w.create(t, b); err == nil || !strings.Contains(err.Error(), "已经在") {
+		if _, err := w.create(t, b); err == nil || !strings.Contains(err.Error(), "已在") {
 			t.Errorf("branch %s in use: err = %v", b, err)
 		}
+	}
+	// in the request's language (the hub sends it, #17057)
+	_, err := request(t, w.n, "worktree.create", map[string]any{"workspace_id": w.src, "branch": "spare",
+		"path": filepath.Join(w.dir, "spare"), "locale": "en"})
+	if err == nil || !strings.Contains(err.Error(), "Branch spare is already checked out at") {
+		t.Errorf("branch in use, in English: err = %v", err)
 	}
 	if n := w.o.Count("worktree.create"); n != 0 {
 		t.Errorf("Orca was asked %d times", n)
@@ -272,9 +279,133 @@ func TestOrcaWorktreeReportsARenamedBranch(t *testing.T) {
 	mkdir(t, filepath.Join(w.dir, "feat-z"))
 	_, err := request(t, w.n, "worktree.create", map[string]any{"workspace_id": w.src, "branch": "feat-z",
 		"path": filepath.Join(w.home, "orca", "workspaces", "proj", "feat-z")})
-	if err == nil || !strings.Contains(err.Error(), "feat-z-2") {
-		t.Errorf("err = %v, want it to name the branch Orca made", err)
+	if err == nil || !strings.Contains(err.Error(), "feat-z-2") || !strings.Contains(err.Error(), "可能刚被别处检出") ||
+		strings.Contains(err.Error(), "目录级工作区") {
+		t.Errorf("err = %v, want it to name the branch Orca made and why it may have", err)
 	}
+}
+
+// directoryWorkspace has the fake answer worktree.create as Orca does when the repository's checkout at path is itself
+// open as an Orca worktree (#13363): ok, with a directory-level workspace in that checkout (id
+// "<repo id>::<path>::workspace:<uuid>", no branch, no head) and no git worktree add.
+func (w *orcaWorktreeFixture) directoryWorkspace(path string) {
+	w.o.Handle("worktree.create", func(map[string]any) any {
+		return map[string]any{"worktree": map[string]any{"id": "repo1::" + path + "::workspace:eec1dd91-0000-4000-8000-000000000001",
+			"path": path, "branch": "", "head": "", "isMainWorktree": false}}
+	})
+}
+
+// wantDirectoryWorkspace: err says Orca made a directory-level workspace in the checkout at path, with no worktree
+// and no branch, and that the task can start without one; not a branch or a folder taken.
+func wantDirectoryWorkspace(t *testing.T, err error, path string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("a directory-level workspace was taken for a new worktree")
+	}
+	msg := err.Error()
+	for _, want := range []string{"目录级工作区", "没有新建 Git 工作树", path, `workspace "none"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("err = %q, want %q in it", msg, want)
+		}
+	}
+	for _, wrong := range []string{"可能刚被别处检出", "目录被占", "did not report"} {
+		if strings.Contains(msg, wrong) {
+			t.Errorf("err = %q blames %q", msg, wrong)
+		}
+	}
+}
+
+// On a checkout that is open as an Orca worktree, Orca answers a named branch's create with a directory-level
+// workspace in that checkout: the error says so (in the request's language), the branch is not made, and nothing
+// falls back to running in the checkout.
+func TestOrcaWorktreeReportsADirectoryWorkspace(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	w.directoryWorkspace(w.repo)
+	res, err := w.create(t, "task/todo_1")
+	wantDirectoryWorkspace(t, err, w.repo)
+	if str(res["workspace_id"]) != "" || str(res["path"]) != "" {
+		t.Errorf("create = %v, want no workspace", res)
+	}
+	if _, err := git(t.Context(), w.repo, "show-ref", "--verify", "--quiet", "refs/heads/task/todo_1"); err == nil {
+		t.Error("the branch was made")
+	}
+	_, err = request(t, w.n, "worktree.create", map[string]any{"workspace_id": w.src, "branch": "task/todo_2",
+		"path": filepath.Join(w.dir, "task-todo_2"), "locale": "en"})
+	if err == nil || !strings.Contains(err.Error(), "directory-level workspace in the existing checkout "+w.repo) {
+		t.Errorf("in English: err = %v", err)
+	}
+}
+
+// An automatic create gets the same answer and the same error, not "Orca did not report its generated branch".
+func TestOrcaAutomaticWorktreeReportsADirectoryWorkspace(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	w.directoryWorkspace(w.repo)
+	_, err := request(t, w.n, "worktree.create", map[string]any{"workspace_id": w.src, "auto_name": true})
+	wantDirectoryWorkspace(t, err, w.repo)
+}
+
+// The id alone tells: from a linked worktree of the repository, Orca's directory-level workspace is in the main
+// checkout, which is not the source's path.
+func TestOrcaWorktreeDirectoryWorkspaceByItsID(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	child := filepath.Join(w.dir, "other")
+	runPullGit(t, w.repo, "worktree", "add", "-b", "other", "--", child)
+	w.o.SetWorktrees(orcarttest.Worktree(w.src, w.repo, "refs/heads/dev"), orcarttest.Worktree("repo1::"+child, child, "refs/heads/other"))
+	w.directoryWorkspace(w.repo)
+	_, err := request(t, w.n, "worktree.create", map[string]any{"workspace_id": "repo1::" + child, "branch": "feat-e",
+		"path": filepath.Join(w.dir, "feat-e")})
+	wantDirectoryWorkspace(t, err, w.repo)
+}
+
+// A real worktree whose path holds "::workspace:" in an earlier folder is still a real worktree: its id is
+// "<repo id>::<path>", with no "::workspace:<uuid>" after the path Orca returned, and it is the task's (#13391 review).
+func TestOrcaWorktreeWithWorkspaceInItsPathIsARealWorktree(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	w.dir = mkdir(t, filepath.Join(w.home, "a::workspace:b", "proj"))
+	res, err := w.create(t, "feat-q")
+	if err != nil {
+		t.Fatalf("a real worktree was refused: %v", err)
+	}
+	dest := filepath.Join(w.dir, "feat-q")
+	if res["workspace_id"] != "repo1::"+dest || res["path"] != dest || res["branch"] != "feat-q" {
+		t.Errorf("create = %v", res)
+	}
+}
+
+// Only Orca's own shape counts: "::workspace:" after the returned path but without a UUID after it is no
+// directory-level workspace, and neither is a workspace marker after some other path.
+func TestOrcaDirectoryWorkspaceIDShape(t *testing.T) {
+	const id = "eec1dd91-0000-4000-8000-000000000001"
+	for _, c := range []struct {
+		id, path string
+		want     bool
+	}{
+		{"repo1::/r/proj::workspace:" + id, "/r/proj", true},
+		{"repo1::/r/a::workspace:b/proj", "/r/a::workspace:b/proj", false},
+		{"repo1::/r/proj::workspace:not-a-uuid", "/r/proj", false},
+		{"repo1::/r/other::workspace:" + id, "/r/proj", false},
+		{"::/r/proj::workspace:" + id, "/r/proj", false},
+	} {
+		if got := orcaDirectoryWorkspace(&orcart.CreatedWorktree{ID: c.id, Path: c.path}, "/src"); got != c.want {
+			t.Errorf("orcaDirectoryWorkspace(%q, %q) = %v, want %v", c.id, c.path, got, c.want)
+		}
+	}
+}
+
+// The path alone tells too: the source's own checkout back, spelled through a link (a home that is a link has two
+// spellings, #13363), is no new worktree whatever the id and branch say; an automatic create would otherwise hand
+// the source checkout out as the task's own.
+func TestOrcaWorktreeDirectoryWorkspaceByItsPath(t *testing.T) {
+	w := orcaWorktreeNode(t)
+	link := filepath.Join(w.home, "linked-proj")
+	if err := os.Symlink(w.repo, link); err != nil {
+		t.Fatal(err)
+	}
+	w.o.Handle("worktree.create", func(map[string]any) any {
+		return map[string]any{"worktree": map[string]any{"id": "repo1::" + link, "path": link, "branch": "refs/heads/dev"}}
+	})
+	_, err := request(t, w.n, "worktree.create", map[string]any{"workspace_id": w.src, "auto_name": true})
+	wantDirectoryWorkspace(t, err, link)
 }
 
 // A detached workspace's new branch starts at its commit, as with herdr, not at Orca's base ref.

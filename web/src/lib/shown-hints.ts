@@ -9,18 +9,18 @@ import { documentPage } from "./visible-poll";
 
 type Page = { visible: () => boolean; subscribe: (fn: () => void) => () => void };
 
-/** `fn` for each `event` while `page` is shown; for the ones that came while it was hidden, one call when it is shown
- * again. Returns the unsubscribe. */
-export function onShownHint(event: string, fn: () => void, page: Page = documentPage): () => void {
+/** `fn` for each `event` while `page` is shown (`replayed` false); for the ones that came while it was hidden, one call
+ *  when it is shown again (`replayed` true). Returns the unsubscribe. */
+export function onShownHint(event: string, fn: (replayed: boolean) => void, page: Page = documentPage): () => void {
   let missed = false;
   const off = onHubEvent(event, () => {
-    if (page.visible()) fn();
+    if (page.visible()) fn(false);
     else missed = true;
   });
   const offPage = page.subscribe(() => {
     if (!missed || !page.visible()) return;
     missed = false;
-    fn();
+    fn(true);
   });
   return () => { missed = false; off(); offPage(); };
 }

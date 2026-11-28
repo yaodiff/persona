@@ -40,3 +40,35 @@ it("reports a failed first device-code request and allows retry", async () => {
     host.remove();
   }
 });
+
+it("hides device-code open button for unsafe or single-slash URLs and opens safe https URLs", async () => {
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    for (const bad of ["javascript:alert(1)", "https:/admin", "https://@evil.example/login", "https://good.example\\@evil.example/login"]) {
+      login.mockResolvedValueOnce({ step: "device", kind: "device_code", user_code: "SAFE-1111", url: bad });
+      await act(async () => root.render(<SignInSteps c={{ id: "github", name: "GitHub", status: "not_signed_in" }} reload={async () => {}} />));
+      const start = host.querySelector("button")!;
+      await act(async () => start.click());
+      expect(host.textContent).toContain("SAFE-1111");
+      expect([...host.querySelectorAll("button")].some((b) => b.textContent?.includes("GitHub"))).toBe(false);
+      await act(async () => root.render(null));
+    }
+    expect(openSpy).not.toHaveBeenCalled();
+
+    login.mockResolvedValueOnce({ step: "device", kind: "device_code", user_code: "GOOD-2222", url: "https://github.com/login/device" });
+    await act(async () => root.render(<SignInSteps c={{ id: "github", name: "GitHub", status: "not_signed_in" }} reload={async () => {}} />));
+    const start = host.querySelector("button")!;
+    await act(async () => start.click());
+    const openBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("GitHub"))!;
+    expect(openBtn).toBeTruthy();
+    await act(async () => openBtn.click());
+    expect(openSpy).toHaveBeenCalledWith("https://github.com/login/device", "_blank", "noopener,noreferrer");
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+    openSpy.mockRestore();
+  }
+});

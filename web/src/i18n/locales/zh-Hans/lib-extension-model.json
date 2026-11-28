@@ -1,7 +1,7 @@
 {
-  "not_installed": "还没安装",
-  "enable_first": "先启用",
-  "needs_version": "要 {version}，现在是 {installed}",
+  "not_installed": "未安装",
+  "enable_first": "请先启用",
+  "needs_version": "需要 {version}，当前为 {installed}",
   "newer_version": "更新版本",
   "older_version": "旧版本",
   "satisfied": "已满足",

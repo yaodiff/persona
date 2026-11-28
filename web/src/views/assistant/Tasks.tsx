@@ -7,7 +7,7 @@ import { conversationPage } from "../../lib/conversation-page";
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
 import { agentRowKey, agentRowLabel, agentRowMark, agentRowTone, todoChipLabel, todoChipState } from "../../lib/task-row-status";
-import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
+import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
 import { directUserInteraction, directUserWaiting, directWaitingCount, takeDirectWaitingRequest } from "../../lib/direct-waiting";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
@@ -38,17 +38,18 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
-import { acceptedAtRest, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, personalVerificationAsk, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { acceptedAtRest, awaitsReview, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, personalVerificationAsk, stoppedReason, taskNow, todoStatus, todoSupervisorLabel, TODO_STATUS_INFO, updateTodo, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { hasActiveAgentWork } from "../../lib/todo-triage";
+import { errorText } from "../../lib/api";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { LiveCard } from "../../ui/AssistantCard";
 import type { AssistantView } from "../../lib/extension-wire";
-import { getState, hubHas, taskSessionLookup, useStore, type State } from "../../lib/store";
-import type { AgentState, Interaction, Machine, Session } from "../../lib/types";
-import { Button, Collapse, cx, IconButton, Loading, Menu, toast, useNow } from "../../ui/atoms";
+import { getState, hubHas, putTodo, refreshTodos, taskSessionLookup, useStore, type State } from "../../lib/store";
+import type { AgentState, Interaction, Item, Machine, Session } from "../../lib/types";
+import { Button, Collapse, cx, Loading, Menu, toast, useNow } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon, type IconName } from "../../ui/icons";
 
@@ -68,14 +69,13 @@ const NeedsYouPart = lazy(() => import("./TaskDecision"));
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
-import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
+import { feedWake, HandoffCard, HandoffCards, itemPlan, planTaskTodo, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
 import { acceptanceStands, latestReview, parkedLine, progressLine, reviewState } from "../../lib/supervision";
+import { isLegacyCodexRouteNotice } from "../../lib/compatibility";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { sameManager, useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
 import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
-import { cardLine } from "../chat/dock";
-import { interactionKicker } from "../../lib/row-line";
 import { sessionTitle, stateOf } from "../../lib/format";
 import { formatDate, formatList, t } from "../../i18n";
 import { interactionAsk } from "../../lib/inbox";
@@ -84,19 +84,21 @@ import { lazyPage } from "../../lib/lazy-page";
 const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEditDialog));
 // "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
 const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
+export const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRows));
 const TaskWaitInfo = lazyPage(() => import("./TaskWaitInfo").then((m) => m.TaskWaitInfo));
-const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRows));
 // the Finished tray's rows, seeing one and its empty line come with its first opening, in the Parked rows' chunk (#10922)
-const FinishedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.FinishedTaskRows));
-import { conversationTitle } from "./conversations";
+export const FinishedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.FinishedTaskRows));
 import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
 import type { TaskWorkspace } from "../../lib/feed";
 import { machineStartBlocked, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
+import { useStoreRows } from "../../lib/store-rows";
+import { decisionCards, decisionKey, type DecisionCard } from "../../lib/decision-pager";
+import { useDecisionPager } from "./decision-dock";
 import { requestHome, requestHomeMachine } from "../../lib/child-sessions";
 import { stateName, waitSummary, type WaitReason } from "../../lib/state-labels";
-import { statusWord, waitOf } from "../../lib/todo-wait-reason";
+import { statusWord, todoLook, waitOf } from "../../lib/todo-wait-reason";
 import { EDITABLE } from "../../lib/shortcuts";
 
 // ── what a task is now ──
@@ -120,35 +122,16 @@ export function useTaskLookup() {
 function taskNowIn(s: State, todo: Todo, plans: Record<string, TaskPlan>): TaskNow {
   const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   const status = statusOf(todo, lookup, plans);
-  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup), active: hasActiveAgentWork(todo, lookup) };
+  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup), active: hasActiveAgentWork(todo, lookup), supervisorLabel: todoSupervisorLabel(todo, status, lookup) };
 }
 
 /** A task's status, lead agent and, while it waits, what it waits on (#11090, lib/todo-wait-reason.ts waitOf). */
-type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason; active: boolean };
+type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason; active: boolean; supervisorLabel?: string };
 
 /** A task's status and lead agent (undefined without the task). */
 export function useTaskNow(todo: Todo | undefined): TaskNow | undefined {
   const plans = useFeed((s) => s.plans);
   return useStore((s) => (todo ? taskNowIn(s, todo, plans) : undefined));
-}
-
-/** Two rows with the same fields, each the same value or object. */
-function sameRow(a: object, b: object): boolean {
-  const ka = Object.keys(a), kb = Object.keys(b);
-  return ka.length === kb.length && ka.every((k) => Object.is((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
-}
-
-/** useStore for a list of rows a selector builds: useStore compares one level down only, and rows made anew always
- *  differ, so the last list stands while every row has the same fields as before. */
-function useStoreRows<T extends object>(select: (s: State) => T[]): T[] {
-  const last = useRef<T[] | null>(null);
-  return useStore((s) => {
-    const rows = select(s);
-    const prev = last.current;
-    if (prev && prev.length === rows.length && rows.every((r, i) => sameRow(r, prev[i]))) return prev;
-    last.current = rows;
-    return rows;
-  });
 }
 
 export function useTodo(id: string | undefined): Todo | undefined {
@@ -219,12 +202,15 @@ export function progressOf(lead: Session | undefined) {
   return now && { text: now.kind === "words" ? plainMarkdown(now.text) : now.text, for: now.kind === "step" ? since(now.since) : undefined };
 }
 
-/** The card a task's agents wait on: its lead agent's first, else any of its other active agents'. */
+/** The user card a task's agents wait on: its lead agent's first, else any of its other active agents'. */
 export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: Session): Interaction | undefined {
-  // a card of a child session one of its agents started is that agent's (#5120)
-  const mine = (ix: Interaction) => (todo.agents ?? []).some((a) => !a.released_at && a.machine_id === requestHomeMachine(ix) && a.session_id === requestHome(ix));
-  return (lead && (interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)
-    ?? interactions.find((ix) => requestHomeMachine(ix) === lead.machine_id && requestHome(ix) === lead.session_id))) ?? interactions.find(mine);
+  // A card of a folded child belongs to its parent too (#5120).
+  const direct = (ix: Interaction, mid: string, sid: string) => ix.machine_id === mid && ix.session_id === sid;
+  const folded = (ix: Interaction, mid: string, sid: string) => requestHomeMachine(ix) === mid && requestHome(ix) === sid;
+  const owned = interactions.filter((ix) => !ix.delegating && !ix.mirror_of);
+  return (lead && (owned.find((ix) => direct(ix, lead.machine_id, lead.session_id))
+    ?? owned.find((ix) => folded(ix, lead.machine_id, lead.session_id)))) ??
+    owned.find((ix) => todo.agents?.some((a) => !a.released_at && (direct(ix, a.machine_id, a.session_id) || folded(ix, a.machine_id, a.session_id))));
 }
 
 /** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Waiting for your approval: swift test", "Plan awaiting approval", the words
@@ -476,12 +462,6 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
 
 // ── the hub's lines ──
 
-/** The plan a `plan` item carries in its body (the hub writes it there with the item), when it is one of this item's. */
-function itemPlan(item: FeedItem): TaskPlan | undefined {
-  const p = item.body?.plan as TaskPlan | undefined;
-  return p && typeof p === "object" && p.id === item.ref && Array.isArray(p.tasks) ? p : undefined;
-}
-
 // Memoized: the chat re-renders on every streamed item and session push, while an item keeps its identity until its body
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
@@ -504,7 +484,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     if (item.kind === "plan") {
       const shown = plan ?? itemPlan(item);
       if (!shown) return null;
-      return shown.state === "started" ? <PlanHandoffs plan={shown} since={item.at} /> : <PlanCard plan={shown} />;
+      return shown.state === "started" ? <PlanHandoffs plan={shown} since={item.at} groupKey={item.id} /> : <PlanCard plan={shown} />;
     }
     if (item.kind === "task") return planned ? null : <TaskHandoffs item={item} />;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
@@ -783,7 +763,7 @@ export const DOCK_CAPSULE = "inline-flex h-8 shrink-0 items-center whitespace-no
 const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, waiting: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
-function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>, manager?: string): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
+function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>, manager?: string): { t: Todo; st: TodoStatus; ask?: string; limit?: string; supervisorLabel?: string }[] {
   const interactions = manager ? s.interactions.filter((ix) => sameManager(ix.manager, manager)) : s.interactions;
   const lookup = answeredLookup(taskSessionLookup(s), interactions, s.answered);
   return s.todos
@@ -797,23 +777,25 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
       return {
         t: todo,
         st,
+        supervisorLabel: todoSupervisorLabel(todo, st, lookup),
         ask: st === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined,
         limit: todo.wait != null ? waitSummary(todo.wait) : st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
       };
     });
 }
 
-type AssistantTray = "needs" | "running" | "parked" | "review" | "finished";
-/** Each entry's mark: Needs you waits on the user, In progress is work under way; Persona reviewing is neutral, since
- *  nothing in it is the user's (#8678); Finished is the green of a finished row's check (#10922). */
-const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running: "bg-accent", parked: "bg-ink-3", review: "bg-ink-3", finished: "bg-green" };
+export type AssistantTray = "needs" | "verify" | "running" | "parked" | "review" | "finished";
+/** Each entry's mark: Needs you waits on the user, In progress is work under way; To verify (`user_check`) is calm
+ *  orange apart from red Needs you; Persona reviewing is neutral, since nothing in it is the user's (#8678); Finished
+ *  is the green of a finished row's check (#10922). */
+const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", verify: "bg-orange", running: "bg-accent", parked: "bg-ink-3", review: "bg-ink-3", finished: "bg-green" };
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
 /** A started plan's tasks in the conversation (#3700, #5096): a hand-off card for each Agent they started (one per task
  *  while its Agent is starting, or says why it did not start), in plan order; live to-do titles over the plan's. `since`:
  *  the plan line's time, so each card keeps the Agents this plan started (#11854). */
-function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
+function PlanHandoffs({ plan, since, groupKey }: { plan: TaskPlan; since?: string; groupKey?: string }) {
   const plans = useFeed((s) => s.plans);
   const handoffs = useStoreRows((s) =>
     plan.tasks.flatMap((task, i) => {
@@ -823,22 +805,7 @@ function PlanHandoffs({ plan, since }: { plan: TaskPlan; since?: string }) {
       return taskHandoffs(id ? s.todos.find((x) => x.id === id) : undefined, { key: `${plan.id}/${i}`, title: task.title, error: task.error, todoId: id, superseded }, task.continues ? "continuation" : "created", plans, s.todosLoaded, since);
     }),
   );
-  return <HandoffCards handoffs={handoffs} />;
-}
-
-/** The to-do plan task i ran on: its todo_id, or, once a later plan continued that to-do and cleared it (#11854), the
- *  one it continued or reused, else the one only this task can have made (the to-do keeps the plan it came from). A
- *  task that failed to start keeps none: its card says why. */
-function planTaskTodo(plan: TaskPlan, i: number, todos: Todo[]): string | undefined {
-  const task = plan.tasks[i];
-  if (!task) return undefined;
-  if (task.todo_id) return task.todo_id;
-  if (task.error || plan.state !== "started") return undefined;
-  if (task.continues || task.reuse_todo) return task.continues || task.reuse_todo;
-  const bare = plan.tasks.filter((x) => !x.todo_id && !x.error && !x.continues && !x.reuse_todo);
-  const held = new Set(plan.tasks.map((x) => x.todo_id || x.continues || x.reuse_todo).filter(Boolean));
-  const made = todos.filter((x) => x.plan_id === plan.id && !held.has(x.id));
-  return bare.length === 1 && made.length === 1 ? made[0]!.id : undefined;
+  return <HandoffCards handoffs={handoffs} groupKey={groupKey ?? plan.id} />;
 }
 
 /** A task the conversation dispatched on its own (agent_start), or one made of an Agent already running
@@ -847,12 +814,12 @@ function TaskHandoffs({ item }: { item: FeedItem }) {
   const plans = useFeed((s) => s.plans);
   const wake = feedWake(field(item, "wake"));
   const handoffs = useStoreRows((s) => (item.ref ? taskHandoffs(s.todos.find((x) => x.id === item.ref), { key: item.id, title: "", todoId: item.ref }, wake, plans, s.todosLoaded, item.at, TASK_LINE_SLACK_MS) : []));
-  return <HandoffCards handoffs={handoffs} />;
+  return <HandoffCards handoffs={handoffs} groupKey={item.id} />;
 }
 
 /** One slot, one row: live task/session state wins over historical feed metadata. `fresh`: a Finished row the owner has
  *  not opened since it finished (#10922), drawn as new with Just finished's mark and word, as the To-dos page names it. */
-export function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorReview, fresh = false, onOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; supervisorReview?: boolean; fresh?: boolean; onOpen?: () => void }) {
+export function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorReview, inFinished, fresh = false, onOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; supervisorReview?: boolean; inFinished?: boolean; fresh?: boolean; onOpen?: () => void }) {
   const todo = useTodo(card.todo_id);
   const task = useTaskNow(todo);
   const plans = useFeed((s) => s.plans);
@@ -868,7 +835,8 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const clock = useNow(30_000, state === "usage_limit"); // the limit's grace running out
   const blocked = ["needs_you", "interrupted", "usage_limit", "failed"].includes(state) || (!finished && todo?.supervision?.progress?.kind === "blocked");
   const meter = taskMeter(todo, task?.lead);
-  const report = feed.find((it) => it.id === card.report_id);
+  const rawReport = feed.find((it) => it.id === card.report_id && it.kind === "report");
+  const report = rawReport && !(field(rawReport, "kind") === "progress" && isLegacyCodexRouteNotice(field(rawReport, "text"))) ? rawReport : undefined;
   const receipt = feed.find((it) => it.id === card.receipt_id);
   const pr = todo?.pr_url ?? (receipt && field(receipt, "pr"));
   const prNumber = pr ? /\/(\d+)\/?$/.exec(pr)?.[1] : undefined;
@@ -901,9 +869,29 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
   // a usage limit says what stopped it and when it goes on (the status word on the right says only that it did)
   const limit = todo?.wait == null && state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
-  const detail = finished || state === "cancelled"
-    ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+  const review = latestReview(todo?.supervision);
+  const progress = todo?.supervision?.progress;
+  const progressText = progressLine(todo?.supervision);
+  const resultReady = finished || inFinished || reviewing || (!liveWork && todo && task && awaitsReview(todo, task.status));
+  const explicitConclusion = resultReady
+    ? (review?.verdict === "accepted" && review.note?.trim())
+      || todo?.done_reason?.trim()
+      || (progress?.kind === "done" && progressText)
+      || (report && field(report, "kind") === "done" && field(report, "text")?.trim())
+      || (receipt && field(receipt, "state") === "done" && field(receipt, "summary")?.trim())
+      || undefined
+    : undefined;
+  const lastReply = resultReady ? plainMarkdown(task?.lead?.last_text?.trim() ?? "") || undefined : undefined;
+  const progressAt = progress?.at ? Date.parse(progress.at) : NaN;
+  const replyAt = task?.lead?.updated_at ? Date.parse(task.lead.updated_at) : NaN;
+  const progressNewerThanReply = Boolean(progressText) && Number.isFinite(progressAt) && Number.isFinite(replyAt) && progressAt > replyAt;
+  const reportBeatsReply = Boolean(progressText) && (progress?.kind === "question" || progress?.kind === "blocked" || progressNewerThanReply);
+  const conclusion = explicitConclusion || (!reportBeatsReply ? lastReply : undefined);
+  const finishedDetail = explicitConclusion || lastReply;
+  const todoFinished = Boolean((inFinished || finished) && (!todo || todo.done_at || accepted));
+  const detail = state === "cancelled" ? review?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
+    : todoFinished ? finishedDetail
+    : conclusion ?? limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressText ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   const row = (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => {
       onOpen?.();
@@ -924,7 +912,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
       {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
           something, ✓ once finished, ⓘ for a usage limit (#5569) */}
       <span data-task-status={isNew ? "just_finished" : rowIsFinished ? "done" : reviewing ? "review" : agentKey} data-task-wait={!isNew && agentKey === "waiting" ? task?.wait ?? "unknown" : undefined} className={cx("max-w-[40%] shrink-0 truncate text-right text-xs", isNew ? "text-green" : rowIsFinished || reviewing ? "text-ink-2" : agentRowTone(agentKey, task?.wait))}>
-        {isNew ? stateName("just_finished") : rowIsFinished ? (accepted ? t("assistant-tasks.review_accepted") : TODO_STATUS_INFO.done.label) : reviewing ? t("assistant-tasks.review_supervisor") : agentRowLabel(agentKey, task?.wait)}
+        {isNew ? stateName("just_finished") : rowIsFinished ? (accepted ? t("assistant-tasks.review_accepted") : TODO_STATUS_INFO.done.label) : reviewing ? t("assistant-tasks.review_supervisor") : task?.supervisorLabel ?? (agentKey === "not_started" && todo ? todoLook(todo, "not_started", task?.wait).label : agentRowLabel(agentKey, task?.wait))}
       </span>
       <span className="flex w-4 shrink-0 justify-center">
         {finished ? <Icon name="check" className="text-green" /> : state === "usage_limit" ? <Icon name="info" className="text-orange" /> : <Icon name="chevronRight" className="text-ink-3" />}
@@ -957,115 +945,14 @@ export function waitsLabel(todo: Todo, status: TodoStatus, wait?: WaitReason): s
   return TODO_STATUS_INFO[status] ? statusWord(status, wait) : t("assistant-tasks.review_needs_user");
 }
 
-/** One row of Needs you (lib/assistant-entries): a task or an Agent with the cards it asks, a plan to start, a task to
- *  decide on or review, a message to send. */
 /** A decision or review the task waits on, as the row has it (a decision with options, or a review only the user can settle). */
-function isDecision(todo: Todo): boolean {
+export function isDecision(todo: Todo): boolean {
   return openAsk(todo)?.outcome === "decide" || todo.supervision?.state === "needs_user";
 }
 
-/** What a Needs you row says folded (#5569): its mark, the title and, under it, what it waits for, with the kind at the
- *  end. None for the rows that are one line already (an Agent with no question, a task that only waits, a failed start). */
-function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: string } | undefined {
-  if (item.kind === "plan") {
-    const first = item.plan.tasks[0]?.title ?? t("assistant-tasks.plan_single");
-    return { title: item.plan.tasks.length > 1 ? t("assistant-tasks.needs_more", { title: first, count: item.plan.tasks.length - 1 }) : first, kicker: t("assistant-tasks.plan_waiting") };
-  }
-  if (item.kind === "message") return { title: [field(item.item, "sender"), field(item.item, "chat")].filter(Boolean).join(" · ") || t("assistant-tasks.task_fallback"), line: field(item.item, "text"), kicker: stateName("needs_you") };
-  if (item.kind === "agent") return item.asks.length ? { title: sessionTitle(item.session), line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) } : undefined;
-  if (item.asks.length) return { title: item.todo.title, line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) };
-  if (reviewState(item.todo) === "user_check" && !personalVerificationAsk(item.todo)) return undefined;
-  const ask = openAsk(item.todo);
-  // a decision held for the briefing says so folded too (#5803): why it did not ring
-  if (isDecision(item.todo) || ask) return { title: item.todo.title, line: ask?.verdict, kicker: ask?.for_briefing === true ? t("todos.ask_held") : stateName("needs_you") };
-  return undefined;
-}
-
-/** What a Needs you row's open state is kept under: its key and the round it asks, so the same task or Agent asking
- *  again comes back folded while a row that only blinks out (hidden for a moment, then restored) keeps its state. */
-function openKey(item: NeedsYouItem): string {
-  if (item.kind === "task") return `${item.key}@${item.todo.supervision?.reviews?.at(-1)?.at || item.todo.decision_review?.review_at || openAsk(item.todo)?.asked_at || item.asks.map((ix) => ix.id).join(",")}`;
-  if (item.kind === "agent") return `${item.key}@${item.asks.map((ix) => ix.id).join(",")}`;
-  return item.key;
-}
-
-/** A Needs you row. Open the folded line to answer in place; its expanded title opens the asking Agent (or the task
- *  for a task-level decision), while the chevron folds it again. */
-function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boolean; onToggle: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const opened = useRef(open);
-  useEffect(() => {
-    const row = ref.current;
-    const first = open && !opened.current;
-    opened.current = open;
-    if (!first || !row) return;
-    // A card taller than the list shows its top: "nearest" would leave its question and buttons below the fold.
-    const reveal = () => {
-      const list = row.closest("[data-tray-list]");
-      row.scrollIntoView?.({ block: list && row.offsetHeight > list.clientHeight ? "start" : "nearest" });
-    };
-    reveal();
-    // The card's body loads after the row opens (a lazy chunk): align again as the row grows, for a moment, so the
-    // finished card is what ends up in view and not the placeholder.
-    if (typeof ResizeObserver === "undefined") return;
-    const growing = new ResizeObserver(reveal);
-    growing.observe(row);
-    const stop = window.setTimeout(() => growing.disconnect(), 1000);
-    return () => { window.clearTimeout(stop); growing.disconnect(); };
-  }, [open]);
-  const folded = foldedRow(item);
-  // Whether the To-dos page counts this to-do as open (#3331): no attribute on rows that are no to-do. The chip badge
-  // is summed from this same flag, so the trays and the header tell one number.
-  const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
-  if (!folded) return <NeedsYouBody item={item} />;
-  const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
-    : item.kind === "task" ? () => {
-      const ask = item.asks[0];
-      if (ask && reviewState(item.todo) !== "user_check") openAgent(ask.machine_id, ask.session_id);
-      else openTask(item.todo.id);
-    } : undefined;
-  const label = <>
-    <StatusMark state="needs_you" />
-    <span className="min-w-0 flex-1">
-      <span className="block truncate font-semibold">{folded.title}</span>
-      {!open && folded.line && folded.line !== folded.kicker && <span className="block truncate text-xs text-ink-2">{folded.line}</span>}
-    </span>
-  </>;
-  const chevron = <Icon name="chevronRight" size={14} className="shrink-0 text-ink-3 transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />;
-  const head = open && openTitle ? (
-    <div className="flex min-w-0 items-center rounded-control px-3 py-2 text-sm">
-      <button type="button" data-needs-title onClick={openTitle} className="flex min-w-0 flex-1 items-center gap-2 text-left hover:underline">
-        {label}
-      </button>
-      <button type="button" aria-expanded={open} aria-label={t("assistant-tasks.summary_collapse")} onClick={onToggle} className="touch-hit ml-2 flex size-6 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover">
-        {chevron}
-      </button>
-    </div>
-  ) : (
-    <button
-      type="button"
-      data-needs-row={open ? undefined : item.key}
-      {...countsOpenAttr}
-      aria-expanded={open}
-      onClick={onToggle}
-      className={cx("flex w-full min-w-0 items-center gap-2 rounded-control px-3 py-2 text-left text-sm hover:bg-hover", open ? "" : "bg-field")}
-    >
-      {label}
-      {!open && <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-attention">{folded.kicker}</span>}
-      {chevron}
-    </button>
-  );
-  if (!open) return head;
-  return (
-    <div ref={ref} data-needs-row={item.key} data-needs-open {...countsOpenAttr} className="flex scroll-m-2 flex-col gap-1">
-      {head}
-      <NeedsYouBody item={item} nested />
-    </div>
-  );
-}
 
 /** An additional way to the task or Agent page at the end of an opened Needs you row. */
-function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
+export function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
   return (
     <div className="flex justify-end px-1 pt-1">
       <button type="button" data-needs-open-entry onClick={onOpen} title={t("assistant-brief.open_row", { title })} className="inline-flex min-h-8 items-center text-xs font-semibold text-accent hover:underline [@media(pointer:coarse)]:min-h-10">
@@ -1075,8 +962,41 @@ function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
   );
 }
 
-/** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
-export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
+/** One-click Pass row for a `user_check` task whose ask payload is absent (e.g. recovered or legacy ledger). */
+function VerifyPassRow({ todo, rowKey, countsOpenAttr }: { todo: Todo; rowKey?: string; countsOpenAttr: { "data-counts-open"?: string } }) {
+  const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
+  const note = todo.supervision?.reviews?.at(-1)?.note;
+  const pass = () => {
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    updateTodo(todo.id, { done: true }).then(
+      (updated) => {
+        putTodo({ ...updated, ask: updated.ask });
+        void refreshTodos();
+        toast(t("assistant-brief.accepted"), "ok");
+      },
+      (e) => {
+        submitting.current = false;
+        setBusy(false);
+        toast(t("assistant-brief.accept_failed", { error: errorText(e) }), "error");
+      },
+    );
+  };
+  return (
+    <div data-needs-row={rowKey} data-verify-pass-row={todo.id} {...countsOpenAttr} className="flex flex-wrap items-center gap-2 rounded-control bg-field px-3 py-2.5 text-sm">
+      {note && <div className="w-full text-sm leading-relaxed text-ink-2 [overflow-wrap:anywhere]">{note}</div>}
+      <Button onClick={() => openTask(todo.id)}>{t("assistant-brief.open")}</Button>
+      <Button tone="primary" busy={busy} disabled={busy} onClick={pass}>{t("assistant-tasks.verify_pass")}</Button>
+    </div>
+  );
+}
+
+/** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key.
+ *  `calmVerify`: rendered from the calm To verify tray (#15680), so a verification with no Pass round yet offers the
+ *  one-click Pass fallback instead of the urgent Needs-you tray's open-task line (#16002). */
+export function NeedsYouBody({ item, nested = false, calmVerify = false, onOpenChat }: { item: NeedsYouItem; nested?: boolean; calmVerify?: boolean; onOpenChat?: () => void }) {
   const rowKey = nested ? undefined : item.key;
   if (item.kind === "plan") return <div><PlanCard plan={item.plan} /><OpenEntry title={t("assistant-tasks.needs_group_another")} onOpen={() => navigate(conversationPage(item.plan.conversation, undefined, item.plan.manager))} /></div>;
   if (item.kind === "message") return <MessageCard item={item.item} />;
@@ -1096,9 +1016,46 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
       <StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span>
     </button>;
   }
+  const { todo, status } = item;
+  const verifying = reviewState(todo) === "user_check";
+  const listedAsk = openAsk(todo);
+  // #16002's open Pass round carries no outcome yet; #15680's acceptance round is the outcome:"done" ask. Both render
+  // the same Accept/Pass row, while an unrelated ask must not stand in for the verification round.
+  const ask = verifying
+    ? (personalVerificationAsk(todo) ?? (listedAsk?.outcome === "done" ? listedAsk : undefined))
+    : listedAsk;
+  // The urgent Needs-you tray keeps #16002's one-line link to a verification whose Pass round has not arrived. The
+  // calm To verify tray falls through to VerifyPassRow's one-click Pass instead.
+  if (verifying && !ask && !calmVerify) return (
+    <button type="button" data-needs-row={rowKey} {...taskOpenAttr} onClick={() => openTask(todo.id)} className="flex min-w-0 items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm hover:bg-hover">
+      <StatusMark state="needs_you" />
+      <span className="min-w-0 flex-1 truncate">{todo.title}</span>
+      <span className="shrink-0 text-xs text-ink-2">{t("assistant-tasks.review_user_check")}</span>
+    </button>
+  );
+  // Both structured decisions and older review-only decisions have the same deferral controls.
+  if (isDecision(todo))
+    return (
+      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
+        <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} onOpenChat={onOpenChat} />
+      </Suspense>
+    );
+  if (ask)
+    return (
+      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
+        <NeedsYouPart key={todo.id + ask.asked_at} rowKey={rowKey} hideTitle={nested} accept={todo} ask={ask} countsOpenAttr={taskOpenAttr} />
+      </Suspense>
+    );
+  if (reviewState(todo) === "user_check") return <VerifyPassRow todo={todo} rowKey={rowKey} countsOpenAttr={taskOpenAttr} />;
+  if (status === "failed")
+    return (
+      <Suspense fallback={<div data-needs-row={item.key} {...taskOpenAttr} className="truncate rounded-control bg-danger-wash px-3 py-2 text-sm">{todo.title}</div>}>
+        <NeedsYouPart rowKey={item.key} failed={todo} countsOpenAttr={taskOpenAttr} />
+      </Suspense>
+    );
   return (
     <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className={cx("truncate rounded-control px-3 py-2 text-sm", item.status === "failed" ? "bg-danger-wash" : "bg-field")}>{item.todo.title}</div>}>
-      <NeedsYouPart task={item.todo} status={item.status} rowKey={rowKey} hideTitle={nested} countsOpenAttr={taskOpenAttr} />
+      <NeedsYouPart task={item.todo} status={item.status} rowKey={rowKey} hideTitle={nested} countsOpenAttr={taskOpenAttr} onOpenChat={onOpenChat} />
     </Suspense>
   );
 }
@@ -1106,40 +1063,20 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
 /** The buttons under a Needs you task row's words (Continue; Retry and Remove), lined up with them. */
 export const ROW_ACTIONS = "flex items-center gap-4 pl-6 text-[12.5px]";
 
-/** An Agent that belongs to no task, working: one row of In progress that opens its page. */
-function RunningAgentRow({ session, activity }: { session: Session; activity?: BackgroundWork }) {
-  const detail = backgroundWorkLine(activity) ?? session.activity?.trim();
-  return (
-    <button type="button" data-running-agent={`${session.machine_id}/${session.session_id}`} onClick={() => openAgent(session.machine_id, session.session_id)} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover">
-      <span className="flex w-4 shrink-0 justify-center"><StatusMark state="working" /></span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">{sessionTitle(session)}</div>
-        {detail && <Suspense fallback={null}><TaskActivityDetail activity={activity} detail={detail} /></Suspense>}
-      </div>
-      <span className="max-w-[40%] shrink-0 truncate text-right text-xs text-ink-2">{stateName("working")}</span>
-      <span className="flex w-4 shrink-0 justify-center"><Icon name="chevronRight" className="text-ink-3" /></span>
-    </button>
-  );
-}
-
 /** The conversation's upward trays (#3387): Needs you, everything waiting on the user, and In progress, everything
  *  running that does not; each thing in one of them only (lib/assistant-entries). What finished in the last 24 hours is
  *  under Finished (#10922), everything finished on the board (All). */
 const NO_ASKS: Interaction[] = [];
+const NO_DECISIONS: readonly DecisionCard[] = [];
+const LazyDecisionPager = lazyPage(() => import("./DecisionPager").then((module) => module.DecisionPager));
+const LazyDecisionEntry = lazyPage(() => import("./DecisionPager").then((module) => module.DecisionEntry));
+const LazyAssistantTray = lazyPage(() => import("./AssistantTrayContents").then((module) => module.AssistantTrayContents));
 
-/** One of the conversation's own cards in Needs you (#4883): the card itself is in the chat above the composer, as on
- *  iOS (ActionTrayContent's asks); its row says what it waits for and closes the tray onto it. */
-function OwnAskRow({ ix, onOpen }: { ix: Interaction; onOpen: () => void }) {
-  return (
-    <button type="button" data-own-ask={ix.id} onClick={onOpen} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm">
-      <StatusMark state="needs_you" />
-      <span className="min-w-0 flex-1 truncate">{cardLine(ix)}</span>
-      <span className="shrink-0 whitespace-nowrap text-xs text-ink-2">{interactionKicker(ix)}</span>
-    </button>
-  );
-}
-
-export const AssistantActionBar = memo(function AssistantActionBar({ conversation, ownAsks = NO_ASKS }: { conversation: string; ownAsks?: Interaction[] }) {
+export const AssistantActionBar = memo(function AssistantActionBar({ conversation, ownAsks = NO_ASKS, turnAsks = NO_ASKS,
+  taskDecisions = NO_DECISIONS, turnItems, focusDecision, inCall = false, openDecisionSource = () => {}, sourceOpen = false }: {
+  conversation: string; ownAsks?: Interaction[]; turnAsks?: readonly Interaction[]; taskDecisions?: readonly DecisionCard[]; focusDecision?: string; inCall?: boolean;
+  turnItems?: readonly Item[]; openDecisionSource?: (card: DecisionCard, target?: string) => void; sourceOpen?: boolean;
+}) {
   const [tray, setTrayNow] = useState<AssistantTray | null>(null);
   // the open tray filling the chat column (#4656), for going through many cards; closing or switching trays undoes it
   const [expanded, setExpanded] = useState(false);
@@ -1161,6 +1098,26 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const [board, setBoard] = useState(false);
   const [showShelved, setShowShelved] = useState(false);
   const trayId = useId();
+  const decisionId = useId();
+  const cards = useMemo(() => decisionCards(turnAsks, taskDecisions), [turnAsks, taskDecisions]);
+  const pager = useDecisionPager(cards);
+  const focusedDecision = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!focusDecision) focusedDecision.current = undefined;
+    else if (focusedDecision.current !== focusDecision && pager.reveal(focusDecision)) {
+      focusedDecision.current = focusDecision;
+      setTrayNow(null);
+    }
+  }, [focusDecision, pager]);
+  const showPager = !sourceOpen && pager.count > 0 && (inCall || !tray && !pager.collapsed);
+  const decisionPanel = showPager && (
+    <Suspense fallback={<div className="flex h-11 shrink-0 items-center justify-center"><Loading /></div>}>
+      <LazyDecisionPager pager={pager} id={decisionId} items={turnItems} openSource={(card, target) => {
+        if (card.taskTitle === undefined && !inCall) pager.collapse();
+        openDecisionSource(card, target);
+      }} inCall={inCall} />
+    </Suspense>
+  );
   const manager = useShownManager();
   const plans = useFeed((s) => s.plans);
   const feed = useFeed((s) => s.feeds[conversation] ?? EMPTY_FEED);
@@ -1187,19 +1144,10 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const directWaiting = main === conversation;
   const waiting = useMemo(() => directWaiting ? directUserWaiting(entries.needsYou, deferred) : entries.needsYou, [directWaiting, entries.needsYou, deferred]);
   const countedOwnAsks = useMemo(() => directWaiting ? ownAsks.filter(directUserInteraction) : ownAsks, [directWaiting, ownAsks]);
-  const isAsking = (item: NeedsYouItem) => (item.kind === "task" || item.kind === "agent") && item.asks.length > 0;
-  // While background rounds fold, rows other conversations supervise are grouped under them (#4314); with the
-  // switch off, or every row this conversation's, the tray is as it was.
-  const foldBackground = useStore((s) => s.assistant?.main_background_folded) !== false;
-  const conversations = useStore((s) => s.assistant?.conversations);
-  const groups = foldBackground ? needsYouBySupervisor(waiting, conversation, directWaiting) : [{ supervisor: conversation, items: waiting }];
-  const own = groups[0].items;
-  const asking = own.filter(isAsking);
-  const rest = own.filter((item) => !asking.includes(item));
-  const supervisorTitle = (id: string) => {
-    const row = conversations?.find((c) => c.session_id === id);
-    return row ? conversationTitle(row) : t("assistant-tasks.needs_group_another");
-  };
+  const stackedAsks = useMemo(() => {
+    const paged = new Set(cards.map(({ interaction }) => decisionKey(interaction)));
+    return countedOwnAsks.filter((ix) => !paged.has(decisionKey(ix)));
+  }, [cards, countedOwnAsks]);
   // The badge and the rows it opens share directUserWaiting: current direct questions, owner-only decisions,
   // explicit acceptance, and escalated or hub-projected task cards. Unstarted/failed work, unescalated Agent
   // permissions/terminal dialogs, delegating cards and generic retries stay out.
@@ -1207,7 +1155,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const badgeOf = (items: { kind: string; countsOpen?: boolean }[]) =>
     items.reduce((n, item) => n + (item.kind === "task" ? (item.countsOpen ? 1 : 0) : 1), 0);
   // Finished counts its rows (#10922): finished work, never open work, so no To-dos count to agree with
-  const counts: Record<AssistantTray, number> = { needs: directWaiting ? directWaitingCount(waiting, ownAsks) : countedOwnAsks.length + badgeOf(waiting), running: badgeOf(entries.running), parked: badgeOf(entries.parked), review: badgeOf(entries.review), finished: entries.finished.length };
+  const counts: Record<AssistantTray, number> = { needs: directWaiting ? directWaitingCount(waiting, ownAsks) : countedOwnAsks.length + badgeOf(waiting), verify: entries.verify.length, running: badgeOf(entries.running), parked: badgeOf(entries.parked), review: badgeOf(entries.review), finished: entries.finished.length };
   // the card is in the chat already: close the tray onto it and bring it into view. A folded stack shows only its first
   // card, so use its existing expander before looking for another one (#10347).
   const scrollOwn = (id: string, keepBar = false) => {
@@ -1222,6 +1170,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   };
   const openOwn = (id: string, keepBar = false) => {
     setTray(null);
+    if (pager.reveal(id)) return;
     requestAnimationFrame(() => {
       if (scrollOwn(id, keepBar)) return;
       const dock = bar.current?.closest("[data-chat-dock]");
@@ -1238,9 +1187,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     });
   };
   const openNextOwn = () => {
-    if (!countedOwnAsks.length) return;
-    const previous = countedOwnAsks.findIndex((ix) => ix.id === lastOwn.current);
-    const next = countedOwnAsks[(previous + 1) % countedOwnAsks.length];
+    if (!stackedAsks.length) return;
+    const previous = stackedAsks.findIndex((ix) => ix.id === lastOwn.current);
+    const next = stackedAsks[(previous + 1) % stackedAsks.length];
     lastOwn.current = next.id;
     openOwn(next.id, true);
   };
@@ -1264,18 +1213,19 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       window.removeEventListener("persona:task-start", needs);
     };
   }, [conversation]);
-  const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), parked: t("todos.section_parked"), review: t("assistant-tasks.tray_review"), finished: t("assistant-tasks.tray_finished") };
-  // Parked is a peer, not folded inside In progress; keep an emptied tray reachable until it closes. Finished comes last,
-  // as what just finished comes after the unfinished work on the To-dos page (#10922).
-  const entryKeys: AssistantTray[] = ["needs", "running", ...(entries.parked.length > 0 || tray === "parked" ? ["parked" as const] : []), ...(entries.review.length > 0 || tray === "review" ? ["review" as const] : []), ...(entries.finished.length > 0 || tray === "finished" ? ["finished" as const] : [])];
+  const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), verify: t("assistant-tasks.tray_verify"), running: t("assistant-tasks.tray_running"), parked: t("todos.section_parked"), review: t("assistant-tasks.tray_review"), finished: t("assistant-tasks.tray_finished") };
+  // Parked is a peer, not folded inside In progress; keep an emptied tray reachable until it closes. To verify
+  // (`user_check`) sits beside In progress as a calm non-attention entry while present. Finished comes last, as what
+  // just finished comes after the unfinished work on the To-dos page (#10922).
+  const entryKeys: AssistantTray[] = ["needs", "running", ...(entries.verify.length > 0 || tray === "verify" ? ["verify" as const] : []), ...(entries.parked.length > 0 || tray === "parked" ? ["parked" as const] : []), ...(entries.review.length > 0 || tray === "review" ? ["review" as const] : []), ...(entries.finished.length > 0 || tray === "finished" ? ["finished" as const] : [])];
   const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
   // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
   // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
   // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
   // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
   const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
-    if (document.querySelector("[role=dialog],[role=menu]")) return;
+    if (e.key !== "Escape" || !tray || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || !e.currentTarget.contains(e.target as Node)) return;
+    if ([...document.querySelectorAll("[role=dialog],[role=menu],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
     const target = e.target instanceof HTMLElement ? e.target : null;
     if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
     e.preventDefault();
@@ -1284,64 +1234,36 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     setTray(null);
     entry?.focus();
   };
+  if (inCall) return decisionPanel;
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer;
     // closed it is the capsules alone, which never give way to the cards over them (#10347, #11794)
-    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", !tray ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
+    <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", !tray && !showPager ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
+      {decisionPanel}
       {tray && (
-        // its height follows what is visible (styles.css: an open tray lets the dock take most of it); the header stays
-        // and the list scrolls under it, so a plan card's Start (sticky to the list's bottom) is never under the header
-        <section id={trayId} aria-label={labels[tray]} data-expanded={expanded || undefined} className="assistant-action-tray flex min-h-0 flex-col overflow-hidden rounded-card bg-surface shadow-card">
-          <div className="flex shrink-0 items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon={expanded ? "collapse" : "expand"} label={t(expanded ? "assistant-tasks.tray_restore" : "assistant-tasks.tray_expand")} onClick={() => setExpanded((v) => !v)} /><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
-          <div data-tray-list className="min-h-0 grow overflow-y-auto overscroll-contain">
-          {tray === "running" && <div className="divide-y divide-line">
-            {entries.running.map((item) => item.kind === "task" ? <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} countsOpen={item.countsOpen} /> : <RunningAgentRow key={item.key} session={item.session} activity={item.activity} />)}
-            {!entries.running.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_progress")}</p>}
-            {entries.shelved.length > 0 && (
-              <button type="button" data-progress-shelved aria-expanded={showShelved} onClick={() => setShowShelved((v) => !v)} title={t("assistant-tasks.tray_shelved_hint")} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-hover">
-                <Icon name={showShelved ? "chevron" : "chevronRight"} size={12} className="shrink-0" />
-                <span className="whitespace-nowrap">{t("assistant-tasks.tray_shelved", { count: entries.shelved.length })}</span>
-              </button>
-            )}
-            {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} countsOpen={item.countsOpen} />)}
-          </div>}
-          {/* how a task ended, instead of a card in the chat (#8237): what finished in the last 24 hours, newest first, seen
-              or not; one nobody opened yet says Just finished (#10922) */}
-          {tray === "finished" && <div data-tray-finished className="divide-y divide-line">
-            <Suspense fallback={<Loading />}><FinishedTasks items={entries.finished} conversation={conversation} /></Suspense>
-          </div>}
-          {tray === "review" && <div className="divide-y divide-line">
-            {entries.review.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} countsOpen={item.countsOpen} supervisorReview />)}
-            {!entries.review.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_review")}</p>}
-          </div>}
-          {tray === "parked" && <div className="divide-y divide-line">
-            <Suspense fallback={<Loading />}><ParkedTasks items={entries.parked} /></Suspense>
-            {!entries.parked.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_parked")}</p>}
-          </div>}
-          {tray === "needs" && <div className="flex flex-col gap-2 p-2">
-            {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
-            {countedOwnAsks.map((ix) => <OwnAskRow key={ix.id} ix={ix} onOpen={() => openOwn(ix.id)} />)}
-            {rest.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
-            {groups.slice(1).map((group) => (
-              <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={supervisorTitle(group.supervisor)} className="flex flex-col gap-2">
-                <h3 className="truncate px-1 pt-1 text-xs text-ink-2">{supervisorTitle(group.supervisor)}</h3>
-                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
-              </section>
-            ))}
-            {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}
-          </div>}
-          </div>
-        </section>
+        <Suspense fallback={<Loading />}>
+          <LazyAssistantTray tray={tray} id={trayId} label={labels[tray]} expanded={expanded}
+            toggleExpanded={() => setExpanded((value) => !value)} openBoard={() => setBoard(true)} close={() => setTray(null)}
+            conversation={conversation} entries={entries} waiting={waiting} directWaiting={directWaiting}
+            needsCount={counts.needs} ownAsks={countedOwnAsks} openRows={openRows} toggleRow={toggleRow}
+            openOwn={openOwn} showShelved={showShelved} toggleShelved={() => setShowShelved((value) => !value)} />
+        </Suspense>
       )}
       {/* The entries are the dock's old "All" / task capsules (DOCK_CAPSULE), content-wide at the leading edge; the
           open tray is the selected capsule. The scroller pads by the focus ring's width and takes it back, as the
           dock's did, so a large font scrolls sideways instead of clipping the ring. */}
       <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
-        {countedOwnAsks.length > 0 && (
+        {pager.count > 0 && <Suspense fallback={null}>
+          <LazyDecisionEntry pager={pager} expanded={showPager} controls={decisionId} capsule={DOCK_CAPSULE} onToggle={() => {
+            if (showPager) pager.collapse();
+            else { setTray(null); pager.open(); }
+          }} />
+        </Suspense>}
+        {stackedAsks.length > 0 && (
           <button type="button" data-next-own-ask onClick={openNextOwn} className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink hover:bg-hover")}>
             <span className="whitespace-nowrap">{t("assistant-tasks.next_unanswered")}</span>
-            <span className="tabular-nums text-ink-2">{countedOwnAsks.length}</span>
+            <span className="tabular-nums text-ink-2">{stackedAsks.length}</span>
           </button>
         )}
         {entryKeys.map((key) => {
@@ -1357,7 +1279,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
               aria-expanded={open}
               aria-controls={open ? trayId : undefined}
               onClick={() => setTray(open ? null : key)}
-              className={cx(DOCK_CAPSULE, "gap-2 font-medium", open ? "bg-ink text-surface" : quiet ? "bg-field text-ink-3 hover:bg-hover" : key === "review" || key === "parked" || key === "finished" ? "bg-field text-ink-2 hover:bg-hover" : "bg-field text-ink hover:bg-hover")}
+              className={cx(DOCK_CAPSULE, "gap-2 font-medium", open ? "bg-ink text-surface" : quiet ? "bg-field text-ink-3 hover:bg-hover" : key === "verify" || key === "review" || key === "parked" || key === "finished" ? "bg-field text-ink-2 hover:bg-hover" : "bg-field text-ink hover:bg-hover")}
             >
               <span aria-hidden className={cx("size-2 shrink-0 rounded-full", quiet ? "bg-ink-3" : TRAY_DOT[key])} />
               <span>{labels[key]}</span>
@@ -1408,7 +1330,7 @@ export const TaskDock = memo(function TaskDock({ conversation }: { conversation:
         // The scroller pads by the focus ring's width and takes it back, so the ring is not clipped and the row
         // stays a pill high.
         <div className="scrollbar-none -my-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-1">
-          {going.map(({ t: todo, st, ask, limit }) => {
+          {going.map(({ t: todo, st, ask, limit, supervisorLabel }) => {
             // a waiting task says what it waits on when hovered or read out (#3463)
             const label = ask ? t("assistant-tasks.dock_task_asks", { title: todo.title, ask }) : limit ? `${todo.title} · ${limit}` : undefined;
             return (
@@ -1428,6 +1350,7 @@ export const TaskDock = memo(function TaskDock({ conversation }: { conversation:
               <TaskMark status={st} size={8} />
               <span className="truncate">{todo.title}</span>
               {st === "needs_you" && <span className="shrink-0">{stateName("needs_you")}</span>}
+              {supervisorLabel && <span className="shrink-0">{supervisorLabel}</span>}
               {st === "interrupted" && <span className="shrink-0">{stateName("interrupted")}</span>}
               {st === "usage_limit" && <span className="shrink-0">{t("lib-usage-limit.short")}</span>}
             </button>

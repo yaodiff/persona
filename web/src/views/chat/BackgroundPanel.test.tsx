@@ -102,7 +102,7 @@ describe("the list", () => {
     put({});
     draw();
     expect(q("header")!.textContent).toContain("后台任务");
-    expect(q("[data-background-empty]")!.textContent).toBe("这个会话还没有后台任务");
+    expect(q("[data-background-empty]")!.textContent).toBe("当前会话暂无后台任务。");
     expect(q("[data-background-list]")).toBeNull();
   });
 
@@ -309,7 +309,7 @@ describe("a background task", () => {
     act(() => q('[data-background-section="completed"] [data-bg-task="b3"] [data-bg-row-button]')!.click()); await flush();
     expect(q('[data-bg-command-detail="b3"] [role="status"]')!.textContent).toBe("已完成");
     expect(q("[data-command-runtime]")!.textContent).toBe("1m");
-    expect(q("[data-command-output]")!.textContent).toBe("没有输出。");
+    expect(q("[data-command-output]")!.textContent).toBe("无输出。");
     expect(q("[data-bg-open-file]")).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
     // A command's detail is as before: it reads its output and offers it as a file.

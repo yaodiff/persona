@@ -29,9 +29,9 @@ import java.time.Instant
  * app's ShortcutText), pure so tests pin it.
  */
 object ShortcutText {
-    /** The one that has been waiting longest (docs/apple/intents.md "Selection rules"). */
+    /** The authoritative request that has been waiting longest (docs/apple/intents.md "Selection rules"). */
     fun pending(interactions: List<Interaction>): Interaction? =
-        interactions.minByOrNull { parseTime(it.createdAt) ?: Instant.MAX }
+        interactions.filterNot { it.isDisplayMirror }.minByOrNull { parseTime(it.createdAt) ?: Instant.MAX }
 
     /**
      * What saying yes sends, or null when the request needs the app (a question, a terminal dialog). The launcher entry

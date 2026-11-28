@@ -1,32 +1,57 @@
-// Model families in the model panel: which family and version a model ID names, how a provider's list is ordered and
-// folded, and what never folds away (the model that runs, favorites, recent setups, a search).
+// Model series & families in the model panel: which series and folding line a model ID names, how a provider's
+// list is ordered and folded, and what never folds away (the model that runs, favorites, recent setups, a search).
 import { describe, expect, it } from "vitest";
 import { compareVersions, familyBlocks, modelFamily, type FamilyOptions } from "./model-families";
 import { panelSections, type PanelModel, type PanelProvider, type PanelRow, type SectionsInput } from "./model-panel";
 
 describe("modelFamily", () => {
-  it("reads Claude's tier and version from the concrete ID, an alias through what it resolves to", () => {
-    expect(modelFamily({ id: "claude-opus-4-8" })).toMatchObject({ key: "claude:opus", label: "Claude Opus", version: [4, 8], rank: 1 });
-    expect(modelFamily({ id: "opus", resolved: "claude-opus-5-5" })).toMatchObject({ key: "claude:opus", version: [5, 5] });
-    expect(modelFamily({ id: "claude-fable-5" })).toMatchObject({ key: "claude:fable", version: [5], rank: 0 });
-    expect(modelFamily({ id: "claude-haiku-4-5-20251001" })).toMatchObject({ key: "claude:haiku", version: [4, 5], rank: 3 });
-    expect(modelFamily({ id: "claude-fable-5-2[1m]" })).toMatchObject({ key: "claude:fable", version: [5, 2] });
-    expect(modelFamily({ id: "anthropic/claude-sonnet-4-6" })).toMatchObject({ key: "claude:sonnet", version: [4, 6] });
-    expect(modelFamily({ id: "claude-3-5-sonnet-20241022" })).toMatchObject({ key: "claude:sonnet", version: [3, 5] });
+  it("reads Claude's series, tier rank, and version from the concrete ID or resolved target", () => {
+    expect(modelFamily({ id: "claude-opus-4-8" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [4, 8], rank: 1 });
+    expect(modelFamily({ id: "opus", resolved: "claude-opus-5-5" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [5, 5] });
+    expect(modelFamily({ id: "claude-fable-5" })).toMatchObject({ key: "claude:fable", series: "claude", version: [5], rank: 0 });
+    expect(modelFamily({ id: "claude-haiku-4-5-20251001" })).toMatchObject({ key: "claude:haiku", series: "claude", version: [4, 5], rank: 3 });
+    expect(modelFamily({ id: "claude-fable-5-2[1m]" })).toMatchObject({ key: "claude:fable", series: "claude", version: [5, 2] });
+    expect(modelFamily({ id: "anthropic/claude-sonnet-4-6" })).toMatchObject({ key: "claude:sonnet", series: "claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-3-5-sonnet-20241022" })).toMatchObject({ key: "claude:sonnet", series: "claude", version: [3, 5] });
   });
 
-  it("makes a GPT line of each variant and a Gemini tier of each name, without thinking levels or release channels", () => {
-    expect(modelFamily({ id: "gpt-6.1-sol" })).toMatchObject({ key: "gpt:sol", label: "GPT Sol", version: [6, 1] });
-    expect(modelFamily({ id: "gpt-5.5" })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 5] });
-    expect(modelFamily({ id: "gpt-5.5-codex-mini" })).toMatchObject({ key: "gpt:codex-mini", label: "GPT Codex Mini" });
-    expect(modelFamily({ id: "gemini-3.8-flash-medium" })).toMatchObject({ key: "gemini:flash", label: "Gemini Flash", version: [3, 8] });
-    expect(modelFamily({ id: "gemini-3-pro-preview" })).toMatchObject({ key: "gemini:pro", version: [3] });
-    expect(modelFamily({ id: "gemini-3.8-flash-lite" })).toMatchObject({ key: "gemini:flash-lite", label: "Gemini Flash Lite" });
-    expect(modelFamily({ id: "google/gemini-4-argon" })).toMatchObject({ key: "gemini:argon", label: "Gemini Argon", version: [4] });
+  it("assigns GPT and Gemini models to GPT and Gemini series while tracking internal folding line keys", () => {
+    expect(modelFamily({ id: "gpt-6.1-sol" })).toMatchObject({ key: "gpt:sol", series: "gpt", label: "GPT", version: [6, 1] });
+    expect(modelFamily({ id: "gpt-5.5" })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-5.5-codex-mini" })).toMatchObject({ key: "gpt:codex-mini", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-4o" })).toMatchObject({ key: "gpt:4o", series: "gpt", label: "GPT", version: [], unversioned: true });
+    expect(modelFamily({ id: "gemini-3.8-flash-medium" })).toMatchObject({ key: "gemini:flash", series: "gemini", label: "Gemini", version: [3, 8] });
+    expect(modelFamily({ id: "gemini-3-pro-preview" })).toMatchObject({ key: "gemini:pro", series: "gemini", label: "Gemini", version: [3] });
+    expect(modelFamily({ id: "gemini-3.8-flash-lite" })).toMatchObject({ key: "gemini:flash-lite", series: "gemini", label: "Gemini" });
+    expect(modelFamily({ id: "google/gemini-4-argon" })).toMatchObject({ key: "gemini:argon", series: "gemini", label: "Gemini", version: [4] });
+  });
+
+  it("classifies DeepSeek, GLM, MiniMax, Seed, Qwen, Kimi, and Grok by series", () => {
+    expect(modelFamily({ id: "deepseek-v4" })).toMatchObject({ key: "deepseek:v", series: "deepseek", label: "DeepSeek", version: [4] });
+    expect(modelFamily({ id: "deepseek-ai/deepseek-v3-0324" })).toMatchObject({ key: "deepseek:v", series: "deepseek", label: "DeepSeek", version: [3] });
+    expect(modelFamily({ id: "deepseek-r1-0528" })).toMatchObject({ key: "deepseek:r", series: "deepseek", label: "DeepSeek", version: [1] });
+    expect(modelFamily({ id: "deepseek-chat" })).toMatchObject({ key: "deepseek:other", series: "deepseek", label: "DeepSeek", unversioned: true });
+
+    expect(modelFamily({ id: "glm-5.3" })).toMatchObject({ key: "glm:", series: "glm", label: "GLM", version: [5, 3] });
+    expect(modelFamily({ id: "zhipu/glm-4.5-air:high" })).toMatchObject({ key: "glm:air", series: "glm", label: "GLM", version: [4, 5] });
+
+    expect(modelFamily({ id: "minimax-m2.5-highspeed" })).toMatchObject({ key: "minimax:m-highspeed", series: "minimax", label: "MiniMax", version: [2, 5] });
+    expect(modelFamily({ id: "minimax-01" })).toMatchObject({ key: "minimax:other", series: "minimax", label: "MiniMax", unversioned: true });
+
+    expect(modelFamily({ id: "doubao-seed-1.6-thinking" })).toMatchObject({ key: "seed:", series: "seed", label: "Seed", version: [1, 6] });
+    expect(modelFamily({ id: "doubao-seed-1-6-250615" })).toMatchObject({ key: "seed:", series: "seed", label: "Seed", version: [1, 6] });
+    expect(modelFamily({ id: "seed-coder" })).toMatchObject({ key: "seed:other", series: "seed", label: "Seed", unversioned: true });
+
+    expect(modelFamily({ id: "qwen-4-coder" })).toMatchObject({ key: "qwen:coder", series: "qwen", label: "Qwen", version: [4] });
+    expect(modelFamily({ id: "qwen3-max" })).toMatchObject({ key: "qwen:max", series: "qwen", label: "Qwen", version: [3] });
+    expect(modelFamily({ id: "qwen-max" })).toMatchObject({ key: "qwen:other", series: "qwen", label: "Qwen", unversioned: true });
+
+    expect(modelFamily({ id: "kimi-k2.5-thinking" })).toMatchObject({ key: "kimi:k", series: "kimi", label: "Kimi", version: [2, 5] });
+    expect(modelFamily({ id: "grok-4-fast" })).toMatchObject({ key: "grok:fast", series: "grok", label: "Grok", version: [4] });
   });
 
   it("names no family for what it can't read plainly", () => {
-    for (const id of ["default", "opus", "glm-5.3", "deepseek-v4", "gpt-4o", "o3", "grok-4", "vendor/model-x", "默认", "gemini-3.8"]) expect(modelFamily({ id })).toBeUndefined();
+    for (const id of ["default", "opus", "o3", "vendor/model-x", "默认", "gemini-3.8", "custom-alpha"]) expect(modelFamily({ id })).toBeUndefined();
   });
 
   it("orders versions newest first, a missing minor counting as 0", () => {
@@ -65,7 +90,7 @@ const gateway: PanelProvider = {
   engine: "claude",
   models: [
     { id: "default", name: "Default (recommended)", resolved: "claude-opus-5-5", efforts: [] },
-    ...["gemini-3.8-flash", "glm-5.3", "gpt-6-sol", "gemini-3.5-flash", "claude-opus-4-8", "gemini-3.8-pro", "gpt-6.1-sol", "opus", "deepseek-v4"].map((id) => ({ id, name: id, efforts: [], ...(id === "opus" ? { resolved: "claude-opus-5-5" } : {}) })),
+    ...["gemini-3.8-flash", "glm-5.3", "gpt-6-sol", "gemini-3.5-flash", "claude-opus-4-8", "gemini-3.8-pro", "gpt-6.1-sol", "opus", "deepseek-v4", "unknown-edge-model"].map((id) => ({ id, name: id, efforts: [], ...(id === "opus" ? { resolved: "claude-opus-5-5" } : {}) })),
     { id: "vendor/model-x", name: "vendor/model-x", efforts: [], custom: true },
   ],
 };
@@ -77,57 +102,94 @@ const draw = (p: PanelProvider, over: Partial<FamilyOptions> = {}) =>
   familyBlocks(rowsOf(p), opts(over))?.map((b) => `${b.family?.label ?? "-"}: ${b.rows.map((r) => `${r.model.id}${r.latest ? "^" : ""}`).join(", ")}${b.older ? ` (+${b.older}${b.open ? " open" : ""})` : ""}`);
 
 describe("familyBlocks", () => {
-  it("Claude: the default entry first, then Fable, Opus, Sonnet, Haiku, each its newest version with the older folded", () => {
+  it("Claude: default headerless first, then one Claude series block ordered Fable -> Opus -> Sonnet -> Haiku with older versions combined", () => {
     expect(draw(max)).toEqual([
       "-: default",
-      "Claude Fable: fable^ (+2)",
-      "Claude Opus: opus^ (+4)",
-      "Claude Sonnet: sonnet^ (+2)",
-      "Claude Haiku: haiku^ (+1)",
+      "Claude: fable^, opus^, sonnet^, haiku^ (+9)",
     ]);
   });
 
-  it("unfolded, a family lists every version, newest first", () => {
-    expect(draw(max, { open: new Set(["s\nclaude-max\nclaude:opus"]) })?.[2]).toBe("Claude Opus: opus^, claude-opus-5, claude-opus-4-8, claude-opus-4-7, claude-opus-4-6 (+4 open)");
+  it("unfolded, the Claude series reveals older versions grouped under their own tier", () => {
+    expect(draw(max, { open: new Set(["s\nclaude-max\nclaude"]) })?.[1]).toBe(
+      "Claude: fable^, claude-fable-5-1, claude-fable-5, opus^, claude-opus-5, claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, sonnet^, claude-sonnet-5, claude-sonnet-4-6, haiku^, claude-haiku-4-5-20251001 (+9 open)",
+    );
   });
 
-  it("GPT: one family per line in the order the list first names it, newest first", () => {
-    expect(draw(codex)).toEqual(["GPT Sol: gpt-6.1-sol^ (+2)", "GPT Astra: gpt-6-astra", "GPT Terra: gpt-6.1-terra^ (+1)", "GPT Luna: gpt-6-luna^ (+1)"]);
+  it("GPT: keeps newest of each GPT line visible in one GPT series header and combines older versions", () => {
+    expect(draw(codex)).toEqual(["GPT: gpt-6.1-sol^, gpt-6-astra, gpt-6.1-terra^, gpt-6-luna^ (+4)"]);
   });
 
-  it("a gateway's mixed list: vendors in first-mention order, Claude's tiers by capability, unknown models and typed IDs last as listed", () => {
+  it("a gateway's mixed list: series in first-mention order, per-line folding inside each series, unknown/custom last as Other", () => {
     expect(draw(gateway)).toEqual([
       "-: default",
-      "Gemini Flash: gemini-3.8-flash^ (+1)",
-      "Gemini Pro: gemini-3.8-pro",
-      "GPT Sol: gpt-6.1-sol^ (+1)",
-      "Claude Opus: opus^ (+1)",
-      "-: glm-5.3, deepseek-v4, vendor/model-x",
+      "Gemini: gemini-3.8-flash^, gemini-3.8-pro (+1)",
+      "GLM: glm-5.3",
+      "GPT: gpt-6.1-sol^ (+1)",
+      "Claude: opus^ (+1)",
+      "DeepSeek: deepseek-v4",
+      "-: unknown-edge-model, vendor/model-x",
+    ]);
+    const blocks = familyBlocks(rowsOf(gateway), opts())!;
+    expect(blocks[0].other).toBeUndefined();
+    expect(blocks.slice(1, -1).every((b) => b.other === undefined)).toBe(true);
+    expect(blocks.at(-1)?.other).toBe(true);
+  });
+
+  it("an older version in use stays out of the fold, in tier & version order, and reduces the combined fold count", () => {
+    const used = new Set(["claude-opus-4-7", "claude-haiku-4-5-20251001"]);
+    const out = draw(max, { keep: (r) => used.has(r.model.id) });
+    expect(out).toEqual([
+      "-: default",
+      "Claude: fable^, opus^, claude-opus-4-7, sonnet^, haiku^, claude-haiku-4-5-20251001 (+7)",
     ]);
   });
 
-  it("an older version in use stays out of the fold, in version order, and is not counted in it", () => {
-    const used = new Set(["claude-opus-4-7", "claude-haiku-4-5-20251001"]);
-    const out = draw(max, { keep: (r) => used.has(r.model.id) });
-    expect(out?.[2]).toBe("Claude Opus: opus^, claude-opus-4-7 (+3)");
-    expect(out?.[4]).toBe("Claude Haiku: haiku^, claude-haiku-4-5-20251001");
-  });
-
-  it("not folding (a search), every row shows, families still together", () => {
-    expect(draw(max, { fold: false })?.[1]).toBe("Claude Fable: fable^, claude-fable-5-1, claude-fable-5");
+  it("not folding (a search), every row shows grouped under its series", () => {
+    expect(draw(max, { fold: false })?.[1]).toBe(
+      "Claude: fable^, claude-fable-5-1, claude-fable-5, opus^, claude-opus-5, claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, sonnet^, claude-sonnet-5, claude-sonnet-4-6, haiku^, claude-haiku-4-5-20251001",
+    );
   });
 
   it("keeps every row of the newest version (its 1M-context one too) and marks none latest when nothing is older", () => {
     const p: PanelProvider = { ...max, models: [{ id: "claude-opus-5-5", name: "Opus 5.5", efforts: [] }, { id: "claude-opus-5-5[1m]", name: "Opus 5.5 (1M)", efforts: [] }, { id: "claude-opus-5", name: "Opus 5", efforts: [] }] };
-    expect(draw(p)).toEqual(["Claude Opus: claude-opus-5-5^, claude-opus-5-5[1m]^ (+1)"]);
+    expect(draw(p)).toEqual(["Claude: claude-opus-5-5^, claude-opus-5-5[1m]^ (+1)"]);
     // two aliases of one model come from the hub as one row, the other spelling among its aliases (#10365)
     const same: PanelProvider = { ...max, models: [{ id: "opus", name: "Sonnet 5.5", resolved: "claude-sonnet-5-5", aliases: ["sonnet"], efforts: [] }, { id: "claude-sonnet-5", name: "Sonnet 5", efforts: [] }] };
-    expect(draw(same)).toEqual(["Claude Sonnet: opus^ (+1)"]);
+    expect(draw(same)).toEqual(["Claude: opus^ (+1)"]);
   });
 
-  it("no family with two rows: no blocks, the list stays as given", () => {
+  it("keeps single-series lists without older versions flat and ungrouped", () => {
     const aliases: PanelProvider = { ...max, models: claudeMax.slice(0, 5) };
     expect(draw(aliases)).toBeUndefined();
+    const flatGpt: PanelProvider = {
+      ...codex,
+      models: [
+        { id: "gpt-6.1-sol", name: "GPT 6.1 Sol", efforts: [] },
+        { id: "gpt-6-astra", name: "GPT 6 Astra", efforts: [] },
+        { id: "gpt-oss-120b", name: "GPT-OSS 120B", efforts: [] },
+      ],
+    };
+    expect(draw(flatGpt)).toBeUndefined();
+  });
+
+  it("activates series headers when two or more series exist even with zero older versions", () => {
+    const multiFlat: PanelProvider = {
+      id: "agy-flat",
+      name: "agy",
+      engine: "agy",
+      models: [
+        { id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)", efforts: [] },
+        { id: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)", efforts: [] },
+        { id: "claude-opus-5-5-low", name: "Claude Opus 5.5 (Low)", efforts: [] },
+        { id: "claude-sonnet-5-5-low", name: "Claude Sonnet 5.5 (Low)", efforts: [] },
+        { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)", efforts: [] },
+      ],
+    };
+    expect(draw(multiFlat)).toEqual([
+      "Gemini: gemini-4-neon-high, gemini-pro-orchestrator-neon",
+      "Claude: claude-opus-5-5-low, claude-sonnet-5-5-low",
+      "GPT: gpt-oss-120b-medium",
+    ]);
   });
 });
 
@@ -145,7 +207,7 @@ const section = (o: Partial<SectionsInput>, key: string) => panelSections(input(
 const ids = (o: Partial<SectionsInput>, key: string) => section(o, key)?.rows.map((r) => r.model.id);
 
 describe("families in the panel's sections", () => {
-  it("a provider group shows the newest of each family; its rows are the blocks' rows; no Show all for folded rows", () => {
+  it("a provider group shows the newest of each line inside its series; its rows are the blocks' rows; no Show all for folded rows", () => {
     const s = section({}, "provider:claude-max");
     expect(s?.rows.map((r) => r.model.id)).toEqual(["default", "fable", "opus", "sonnet", "haiku"]);
     expect(s?.blocks?.flatMap((b) => b.rows)).toEqual(s?.rows);
@@ -171,22 +233,21 @@ describe("families in the panel's sections", () => {
     expect(ids({ query: "5.6" }, "provider:codex")).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
   });
 
-  it("unfolding opens one family of one group", () => {
-    const rows = ids({ openFamilies: new Set(["provider:claude-max\nclaude-max\nclaude:haiku"]) }, "provider:claude-max");
-    expect(rows?.slice(-2)).toEqual(["haiku", "claude-haiku-4-5-20251001"]);
-    expect(rows).not.toContain("claude-opus-4-8");
+  it("unfolding opens the series for that group", () => {
+    const rows = ids({ view: { kind: "provider", provider: "claude-max" }, openFamilies: new Set(["provider:claude-max\nclaude-max\nclaude"]) }, "provider:claude-max");
+    expect(rows).toContain("claude-haiku-4-5-20251001");
+    expect(rows).toContain("claude-opus-4-8");
+    expect(ids({ view: { kind: "provider", provider: "claude-max" } }, "provider:claude-max")).not.toContain("claude-opus-4-8");
   });
 
-  it("Recommended: the model that runs first, then its provider's families", () => {
+  it("Recommended: the model that runs first, then its provider's series", () => {
     const s = section({ state: { current: { provider: "claude-max", model: "claude-opus-5" }, recommended: ["claude-max"] } }, "recommended");
-    expect(s?.blocks?.map((b) => b.family?.label ?? b.key)).toEqual(["recommended\nnow", "recommended\nlead", "Claude Fable", "Claude Opus", "Claude Sonnet", "Claude Haiku"]);
+    expect(s?.blocks?.map((b) => b.family?.label ?? b.key)).toEqual(["recommended\nnow", "recommended\nlead", "Claude"]);
     expect(s?.rows.map((r) => r.model.id)).toEqual(["claude-opus-5", "default", "fable", "opus", "sonnet", "haiku"]);
   });
 });
 
-// A gateway provider's list as the hub folds it (#10365): Claude Code listed opus, fable, sonnet and haiku there, all
-// "Opus 5.5" for the one model every tier names, and the gateway's other route of it read "Opus 5.5" too (captured
-// 2026-11-18); the hub sends the concrete model's row with the aliases, and the route's row says its route.
+// A gateway provider's list as the hub folds it (#10365)
 const gatewayApi: PanelProvider = {
   id: "gateway-api",
   name: "Gateway API",
@@ -200,11 +261,11 @@ const gatewayApi: PanelProvider = {
 
 describe("a gateway's folded list", () => {
   it("one Opus 5.5 row, the route's own beside it, Default apart; Latest once an older version is listed", () => {
-    expect(draw(gatewayApi)).toEqual(["-: default", "Claude Opus: claude-opus-5-5, kiro/claude-opus-5-5"]);
+    expect(draw(gatewayApi)).toEqual(["-: default", "Claude: claude-opus-5-5, kiro/claude-opus-5-5"]);
     const names = familyBlocks(rowsOf(gatewayApi), opts())!.flatMap((b) => b.rows).map((r) => r.model.name);
     expect(names.filter((n) => n === "Opus 5.5")).toHaveLength(1);
     const older: PanelProvider = { ...gatewayApi, models: [...gatewayApi.models!, { id: "claude-opus-5", name: "Opus 5", efforts: [] }] };
-    expect(draw(older)).toEqual(["-: default", "Claude Opus: claude-opus-5-5^, kiro/claude-opus-5-5^ (+1)"]);
+    expect(draw(older)).toEqual(["-: default", "Claude: claude-opus-5-5^, kiro/claude-opus-5-5^ (+1)"]);
   });
 
   it("a setup saved with an alias is that row's: it runs, never folds, and a search for the alias finds it without a typed row", () => {
@@ -218,7 +279,7 @@ describe("a gateway's folded list", () => {
 });
 
 describe("the newest version under a search", () => {
-  it("is the family's newest in the whole list, not among the rows that answer", () => {
+  it("is each line's newest in the whole list, not among the rows that answer", () => {
     const s = panelSections(input({ query: "opus" })).find((x) => x.key === "provider:claude-max");
     expect(s?.rows.filter((r) => r.latest).map((r) => r.model.id)).toEqual(["opus"]);
     const older = panelSections(input({ query: "opus 4" })).find((x) => x.key === "provider:claude-max");
@@ -227,71 +288,70 @@ describe("the newest version under a search", () => {
 });
 
 describe("Antigravity thinking/effort variants and cross-engine qualifiers", () => {
-  it("groups Claude thinking and effort variants under their Claude tier while rejecting unknown or double suffixes", () => {
-    expect(modelFamily({ id: "claude-opus-5-5-high" })).toMatchObject({ key: "claude:opus", label: "Claude Opus", version: [5, 5], rank: 1 });
-    expect(modelFamily({ id: "claude-opus-4-6-medium" })).toMatchObject({ key: "claude:opus", label: "Claude Opus", version: [4, 6] });
-    expect(modelFamily({ id: "claude-opus-4-6-xhigh" })).toMatchObject({ key: "claude:opus", version: [4, 6] });
-    expect(modelFamily({ id: "claude-opus-4-6-max" })).toMatchObject({ key: "claude:opus", version: [4, 6] });
-    expect(modelFamily({ id: "claude-sonnet-4-6-thinking" })).toMatchObject({ key: "claude:sonnet", label: "Claude Sonnet", version: [4, 6], rank: 2 });
-    expect(modelFamily({ id: "claude-opus-4-6-thinking-high" })).toMatchObject({ key: "claude:opus", version: [4, 6] });
-    expect(modelFamily({ id: "claude-opus-4-6-high-thinking" })).toMatchObject({ key: "claude:opus", version: [4, 6] });
-    expect(modelFamily({ id: "claude-fable-5-2-thinking-xhigh" })).toMatchObject({ key: "claude:fable", version: [5, 2], rank: 0 });
-    expect(modelFamily({ id: "claude-3-7-sonnet-20250219-thinking" })).toMatchObject({ key: "claude:sonnet", version: [3, 7] });
-    expect(modelFamily({ id: "claude-3-7-sonnet-20250219-high" })).toMatchObject({ key: "claude:sonnet", version: [3, 7] });
-    expect(modelFamily({ id: "claude-opus-4-6-thinking-20260101" })).toMatchObject({ key: "claude:opus", version: [4, 6] });
-    expect(modelFamily({ id: "claude-opus-4-20250514-thinking" })).toMatchObject({ key: "claude:opus", version: [4] });
-    expect(modelFamily({ id: "claude-sonnet-4.6-thinking-high" })).toMatchObject({ key: "claude:sonnet", version: [4, 6] });
-    expect(modelFamily({ id: "anthropic/claude-opus-5-5-high[1m]" })).toMatchObject({ key: "claude:opus", version: [5, 5] });
+  it("groups Claude thinking and effort variants under Claude series with internal tier lines while rejecting invalid suffixes", () => {
+    expect(modelFamily({ id: "claude-opus-5-5-high" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [5, 5], rank: 1 });
+    expect(modelFamily({ id: "claude-opus-4-6-medium" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-opus-4-6-xhigh" })).toMatchObject({ key: "claude:opus", series: "claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-opus-4-6-max" })).toMatchObject({ key: "claude:opus", series: "claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-sonnet-4-6-thinking" })).toMatchObject({ key: "claude:sonnet", series: "claude", label: "Claude", version: [4, 6], rank: 2 });
+    expect(modelFamily({ id: "claude-opus-4-6-thinking-high" })).toMatchObject({ key: "claude:opus", series: "claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-opus-4-6-high-thinking" })).toMatchObject({ key: "claude:opus", series: "claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-fable-5-2-thinking-xhigh" })).toMatchObject({ key: "claude:fable", series: "claude", version: [5, 2], rank: 0 });
+    expect(modelFamily({ id: "claude-3-7-sonnet-20250219-thinking" })).toMatchObject({ key: "claude:sonnet", series: "claude", version: [3, 7] });
+    expect(modelFamily({ id: "claude-3-7-sonnet-20250219-high" })).toMatchObject({ key: "claude:sonnet", series: "claude", version: [3, 7] });
+    expect(modelFamily({ id: "claude-opus-4-6-thinking-20260101" })).toMatchObject({ key: "claude:opus", series: "claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-opus-4-20250514-thinking" })).toMatchObject({ key: "claude:opus", series: "claude", version: [4] });
+    expect(modelFamily({ id: "claude-sonnet-4.6-thinking-high" })).toMatchObject({ key: "claude:sonnet", series: "claude", version: [4, 6] });
+    expect(modelFamily({ id: "anthropic/claude-opus-5-5-high[1m]" })).toMatchObject({ key: "claude:opus", series: "claude", version: [5, 5] });
     for (const bad of ["claude-opus-4-6-custom", "claude-opus-4-6-high-low", "claude-opus-4-6-20251001-20251002"]) {
       expect(modelFamily({ id: bad })).toBeUndefined();
     }
   });
 
   it("strips Gemini max, ultra, and thinking qualifiers without dropping standalone Ultra tiers", () => {
-    expect(modelFamily({ id: "gemini-4-hydrogen-max" })).toMatchObject({ key: "gemini:hydrogen", label: "Gemini Hydrogen", version: [4] });
-    expect(modelFamily({ id: "gemini-4-neon-ultra" })).toMatchObject({ key: "gemini:neon", label: "Gemini Neon", version: [4] });
-    expect(modelFamily({ id: "gemini-3.8-pro-max-preview" })).toMatchObject({ key: "gemini:pro", label: "Gemini Pro", version: [3, 8] });
-    expect(modelFamily({ id: "gemini-2.0-flash-thinking-exp" })).toMatchObject({ key: "gemini:flash", label: "Gemini Flash", version: [2, 0] });
-    expect(modelFamily({ id: "gemini-2.0-flash-thinking-exp-01-21" })).toMatchObject({ key: "gemini:flash", label: "Gemini Flash", version: [2, 0] });
-    expect(modelFamily({ id: "gemini-1.0-ultra" })).toMatchObject({ key: "gemini:ultra", label: "Gemini Ultra", version: [1, 0] });
-    expect(modelFamily({ id: "gemini-4-ultra-high" })).toMatchObject({ key: "gemini:ultra", label: "Gemini Ultra", version: [4] });
-    expect(modelFamily({ id: "gemini-4-ultra-max" })).toMatchObject({ key: "gemini:ultra", label: "Gemini Ultra", version: [4] });
+    expect(modelFamily({ id: "gemini-4-hydrogen-max" })).toMatchObject({ key: "gemini:hydrogen", series: "gemini", label: "Gemini", version: [4] });
+    expect(modelFamily({ id: "gemini-4-neon-ultra" })).toMatchObject({ key: "gemini:neon", series: "gemini", label: "Gemini", version: [4] });
+    expect(modelFamily({ id: "gemini-3.8-pro-max-preview" })).toMatchObject({ key: "gemini:pro", series: "gemini", label: "Gemini", version: [3, 8] });
+    expect(modelFamily({ id: "gemini-2.0-flash-thinking-exp" })).toMatchObject({ key: "gemini:flash", series: "gemini", label: "Gemini", version: [2, 0] });
+    expect(modelFamily({ id: "gemini-2.0-flash-thinking-exp-01-21" })).toMatchObject({ key: "gemini:flash", series: "gemini", label: "Gemini", version: [2, 0] });
+    expect(modelFamily({ id: "gemini-1.0-ultra" })).toMatchObject({ key: "gemini:ultra", series: "gemini", label: "Gemini", version: [1, 0] });
+    expect(modelFamily({ id: "gemini-4-ultra-high" })).toMatchObject({ key: "gemini:ultra", series: "gemini", label: "Gemini", version: [4] });
+    expect(modelFamily({ id: "gemini-4-ultra-max" })).toMatchObject({ key: "gemini:ultra", series: "gemini", label: "Gemini", version: [4] });
     expect(modelFamily({ id: "gemini-3.8-high" })).toBeUndefined();
     expect(modelFamily({ id: "gemini-3.8-thinking" })).toBeUndefined();
   });
 
-  it("strips GPT effort suffixes and pre-suffix date stamps without breaking real GPT tiers", () => {
+  it("strips GPT effort suffixes and pre-suffix date stamps without breaking real GPT lines", () => {
     for (const effort of ["minimal", "low", "medium", "high", "xhigh"]) {
-      expect(modelFamily({ id: `gpt-5.4-${effort}` })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 4] });
+      expect(modelFamily({ id: `gpt-5.4-${effort}` })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 4] });
     }
-    expect(modelFamily({ id: "gpt-5.4-2025-04-14-high" })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 4] });
-    expect(modelFamily({ id: "gpt-5.4-20250414-high" })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 4] });
-    expect(modelFamily({ id: "gpt-5.4-codex-2025-04-14-high" })).toMatchObject({ key: "gpt:codex", label: "GPT Codex", version: [5, 4] });
-    expect(modelFamily({ id: "gpt-5.5-codex-high" })).toMatchObject({ key: "gpt:codex", label: "GPT Codex", version: [5, 5] });
-    expect(modelFamily({ id: "gpt-5.5-codex-mini-low" })).toMatchObject({ key: "gpt:codex-mini", label: "GPT Codex Mini", version: [5, 5] });
-    expect(modelFamily({ id: "gpt-6.1-sol-xhigh" })).toMatchObject({ key: "gpt:sol", label: "GPT Sol", version: [6, 1] });
-    expect(modelFamily({ id: "gpt-5.1-codex-max" })).toMatchObject({ key: "gpt:codex-max", label: "GPT Codex Max", version: [5, 1] });
-    expect(modelFamily({ id: "gpt-5.1-codex-max-high" })).toMatchObject({ key: "gpt:codex-max", label: "GPT Codex Max", version: [5, 1] });
-    expect(modelFamily({ id: "gpt-5.5-ultra" })).toMatchObject({ key: "gpt:ultra", label: "GPT Ultra", version: [5, 5] });
-    expect(modelFamily({ id: "gpt-5.5-ultra-high" })).toMatchObject({ key: "gpt:ultra", label: "GPT Ultra", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-5.4-2025-04-14-high" })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 4] });
+    expect(modelFamily({ id: "gpt-5.4-20250414-high" })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 4] });
+    expect(modelFamily({ id: "gpt-5.4-codex-2025-04-14-high" })).toMatchObject({ key: "gpt:codex", series: "gpt", label: "GPT", version: [5, 4] });
+    expect(modelFamily({ id: "gpt-5.5-codex-high" })).toMatchObject({ key: "gpt:codex", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-5.5-codex-mini-low" })).toMatchObject({ key: "gpt:codex-mini", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-6.1-sol-xhigh" })).toMatchObject({ key: "gpt:sol", series: "gpt", label: "GPT", version: [6, 1] });
+    expect(modelFamily({ id: "gpt-5.1-codex-max" })).toMatchObject({ key: "gpt:codex-max", series: "gpt", label: "GPT", version: [5, 1] });
+    expect(modelFamily({ id: "gpt-5.1-codex-max-high" })).toMatchObject({ key: "gpt:codex-max", series: "gpt", label: "GPT", version: [5, 1] });
+    expect(modelFamily({ id: "gpt-5.5-ultra" })).toMatchObject({ key: "gpt:ultra", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-5.5-ultra-high" })).toMatchObject({ key: "gpt:ultra", series: "gpt", label: "GPT", version: [5, 5] });
     expect(modelFamily({ id: "gpt-5.5-high-low" })).toBeUndefined();
-    // Folded multi-level variants resolve from variants.base even when resolved carries an effort suffix; whitespace falls back cleanly
-    expect(modelFamily({ id: "gpt-5.5-max", resolved: "openai/gpt-5.5-max", variants: { base: "gpt-5.5" } })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 5] });
-    expect(modelFamily({ id: "gpt-5.5-high", resolved: "   " })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-5.5-max", resolved: "openai/gpt-5.5-max", variants: { base: "gpt-5.5" } })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-5.5-high", resolved: "   " })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 5] });
   });
 
   it("handles colon-separated effort/thinking suffixes and rejects unknown or double colon suffixes", () => {
-    expect(modelFamily({ id: "google-antigravity/gemini-4-argon:high" })).toMatchObject({ key: "gemini:argon", label: "Gemini Argon", version: [4] });
-    expect(modelFamily({ id: "google-antigravity/claude-opus-4-6-thinking:high" })).toMatchObject({ key: "claude:opus", label: "Claude Opus", version: [4, 6] });
-    expect(modelFamily({ id: "claude-3-7-sonnet-20250219-thinking:high" })).toMatchObject({ key: "claude:sonnet", label: "Claude Sonnet", version: [3, 7] });
-    expect(modelFamily({ id: "claude-opus-4-6-thinking:high[1m]" })).toMatchObject({ key: "claude:opus", label: "Claude Opus", version: [4, 6] });
-    expect(modelFamily({ id: "anthropic/claude-opus-4-6:high[1m]" })).toMatchObject({ key: "claude:opus", label: "Claude Opus", version: [4, 6] });
-    expect(modelFamily({ id: "anthropic/claude-sonnet-4-6:thinking" })).toMatchObject({ key: "claude:sonnet", label: "Claude Sonnet", version: [4, 6] });
-    expect(modelFamily({ id: "claude-opus-4-6-20260101:high" })).toMatchObject({ key: "claude:opus", label: "Claude Opus", version: [4, 6] });
-    expect(modelFamily({ id: "openai/gpt-5.5:xhigh" })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 5] });
-    expect(modelFamily({ id: "openai/gpt-5.5:max" })).toMatchObject({ key: "gpt:", label: "GPT", version: [5, 5] });
-    expect(modelFamily({ id: "gpt-5.1-codex-max:high" })).toMatchObject({ key: "gpt:codex-max", label: "GPT Codex Max", version: [5, 1] });
-    expect(modelFamily({ id: "gemini-4-ultra:high" })).toMatchObject({ key: "gemini:ultra", label: "Gemini Ultra", version: [4] });
+    expect(modelFamily({ id: "google-antigravity/gemini-4-argon:high" })).toMatchObject({ key: "gemini:argon", series: "gemini", label: "Gemini", version: [4] });
+    expect(modelFamily({ id: "google-antigravity/claude-opus-4-6-thinking:high" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-3-7-sonnet-20250219-thinking:high" })).toMatchObject({ key: "claude:sonnet", series: "claude", label: "Claude", version: [3, 7] });
+    expect(modelFamily({ id: "claude-opus-4-6-thinking:high[1m]" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [4, 6] });
+    expect(modelFamily({ id: "anthropic/claude-opus-4-6:high[1m]" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [4, 6] });
+    expect(modelFamily({ id: "anthropic/claude-sonnet-4-6:thinking" })).toMatchObject({ key: "claude:sonnet", series: "claude", label: "Claude", version: [4, 6] });
+    expect(modelFamily({ id: "claude-opus-4-6-20260101:high" })).toMatchObject({ key: "claude:opus", series: "claude", label: "Claude", version: [4, 6] });
+    expect(modelFamily({ id: "openai/gpt-5.5:xhigh" })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "openai/gpt-5.5:max" })).toMatchObject({ key: "gpt:", series: "gpt", label: "GPT", version: [5, 5] });
+    expect(modelFamily({ id: "gpt-5.1-codex-max:high" })).toMatchObject({ key: "gpt:codex-max", series: "gpt", label: "GPT", version: [5, 1] });
+    expect(modelFamily({ id: "gemini-4-ultra:high" })).toMatchObject({ key: "gemini:ultra", series: "gemini", label: "Gemini", version: [4] });
     for (const bad of [
       "openai/gpt-5.5:custom",
       "openai/gpt-5.5:0",
@@ -311,7 +371,7 @@ describe("Antigravity thinking/effort variants and cross-engine qualifiers", () 
     }
   });
 
-  it("groups and folds Antigravity catalogs cleanly in panelSections, keeping folded listed and search consistent", () => {
+  it("folds each internal line separately inside the shared GPT and Gemini series in panelSections", () => {
     const level = (base: string, name: string, effort: string, efforts: string[]): PanelModel => ({
       id: `${base}-${effort}`,
       name: `${name} (${effort})`,
@@ -346,19 +406,17 @@ describe("Antigravity thinking/effort variants and cross-engine qualifiers", () 
         .find((s) => s.key === "provider:agy")
         ?.blocks?.map((b) => `${b.family?.label ?? "-"}: ${b.rows.map((r) => `${r.model.id}${r.latest ? "^" : ""}`).join(", ")}${b.older ? ` (+${b.older})` : ""}`);
 
-    // Folded gpt-5.5-codex-low/max stays in GPT Codex and never pollutes GPT Codex Max with a ghost empty block
+    // Folded gpt-5.5-codex-low/max stays latest in its own line while sharing the single GPT header with GPT 5.1 Codex Max
     expect(renderBlocks()).toEqual([
-      "Claude Opus: claude-opus-5-5-low^ (+1)",
-      "Gemini Hydrogen: gemini-4-hydrogen-max^ (+1)",
-      "GPT Codex: gpt-5.5-codex-low^ (+1)",
-      "GPT Codex Max: gpt-5.1-codex-max^ (+1)",
+      "Claude: claude-opus-5-5-low^ (+1)",
+      "Gemini: gemini-4-hydrogen-max^ (+1)",
+      "GPT: gpt-5.5-codex-low^, gpt-5.1-codex-max^ (+2)",
     ]);
 
-    // Single-level search match ("max") still classifies gpt-5.5-codex-max under GPT Codex, not GPT Codex Max
+    // Single-level search match ("max") classifies gpt-5.5-codex-max inside GPT without hiding gpt-5.0-codex-max
     expect(renderBlocks("max", "claude-opus-5-5-low")).toEqual([
-      "Gemini Hydrogen: gemini-4-hydrogen-max^",
-      "GPT Codex: gpt-5.5-codex-max^",
-      "GPT Codex Max: gpt-5.1-codex-max^, gpt-5.0-codex-max",
+      "Gemini: gemini-4-hydrogen-max^",
+      "GPT: gpt-5.5-codex-max^, gpt-5.1-codex-max^, gpt-5.0-codex-max",
     ]);
 
     // Search ("low") knows about newer max/ultra-only folded version in full catalog, so gpt-5.5 is not falsely marked Latest
@@ -384,5 +442,156 @@ describe("Antigravity thinking/effort variants and cross-engine qualifiers", () 
     expect(lowSearch?.blocks?.map((b) => `${b.family?.label ?? "-"}: ${b.rows.map((r) => `${r.model.id}${r.latest ? "^" : ""}`).join(", ")}`)).toEqual([
       "GPT: gpt-5.5-low, gpt-5.4-low",
     ]);
+  });
+
+  it("classifies Orchestrator under Gemini and GPT-OSS under GPT while rejecting malformed suffixes", () => {
+    for (const id of [
+      "gemini-pro-orchestrator-neon",
+      "gemini-pro-orchestrator",
+      "gemini-pro-orchestrator-argon",
+      "gemini-orchestrator-neon",
+      "google-antigravity/gemini-pro-orchestrator-neon:high",
+      "gemini-pro-orchestrator-neon[1m]",
+    ]) {
+      expect(modelFamily({ id })).toEqual({
+        key: "gemini:orchestrator",
+        series: "gemini",
+        label: "Gemini",
+        vendor: "gemini",
+        version: [],
+        unversioned: true,
+      });
+    }
+    for (const bad of [
+      "gemini-pro-orchestrator:custom",
+      "gemini-pro-orchestrator:high:low",
+      "gemini-pro-orchestrator-neon-high:low",
+      "gemini-pro-orchestrator-neon-high-low",
+    ]) {
+      expect(modelFamily({ id: bad })).toBeUndefined();
+    }
+
+    for (const model of [
+      { id: "gpt-oss-120b-medium" },
+      { id: "openai/gpt-oss-120b-medium" },
+      { id: "gpt-oss-120b" },
+      { id: "gpt-oss-20b" },
+      { id: "openai/gpt-oss-120b:high" },
+      { id: "gpt-oss-120b-20250805-medium" },
+      { id: "gpt-oss-120b-high", variants: { base: "gpt-oss-120b" } },
+    ]) {
+      expect(modelFamily(model)).toEqual({
+        key: "gpt:oss",
+        series: "gpt",
+        label: "GPT",
+        vendor: "gpt",
+        version: [],
+        unversioned: true,
+      });
+    }
+    for (const bad of ["gpt-oss-120b-high-low", "gpt-oss-120b-high:low", "gpt-oss-120b:custom"]) {
+      expect(modelFamily({ id: bad })).toBeUndefined();
+    }
+  });
+
+  it("groups multi-series Antigravity catalogs under Gemini, Claude, GPT, DeepSeek, and Other", () => {
+    const agyCatalog: PanelProvider = {
+      id: "agy-series",
+      name: "agy",
+      engine: "agy",
+      models: [
+        { id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)", efforts: ["low", "high"], defaultEffort: "high" },
+        { id: "gemini-4-neon-low", name: "Gemini 4 Neon (Low)", efforts: ["low", "high"], defaultEffort: "low" },
+        { id: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)", efforts: [] },
+        { id: "gemini-pro-orchestrator", name: "Orchestrator (Carbon)", efforts: [] },
+        { id: "gemini-pro-orchestrator-argon", name: "Orchestrator (Argon)", efforts: [] },
+        { id: "gemini-3.8-flash-high", name: "Gemini 3.8 Flash (High)", efforts: ["low", "high"], defaultEffort: "high" },
+        { id: "gemini-3.5-flash-low", name: "Gemini 3.5 Flash (Low)", efforts: ["low"], defaultEffort: "low" },
+        { id: "claude-opus-5-5-low", name: "Claude Opus 5.5 (Low)", efforts: ["low", "high"], defaultEffort: "low" },
+        { id: "claude-sonnet-5-5-low", name: "Claude Sonnet 5.5 (Low)", efforts: ["low", "high"], defaultEffort: "low" },
+        { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)", efforts: ["medium"], defaultEffort: "medium" },
+        { id: "gpt-oss-20b", name: "GPT-OSS 20B", efforts: [] },
+        { id: "deepseek-v4", name: "DeepSeek V4", efforts: [] },
+        { id: "acme-custom-1", name: "Acme Custom 1", efforts: [] },
+      ],
+    };
+    const section = panelSections({
+      providers: [agyCatalog],
+      state: { current: null, recommended: [] },
+      view: { kind: "provider", provider: "agy-series" },
+      query: "",
+      favorites: [],
+      recent: [],
+      overrides: {},
+    }).find((s) => s.key === "provider:agy-series");
+    expect(
+      section?.blocks?.map((b) => ({
+        key: b.family?.key ?? (b.other ? "other" : "lead"),
+        label: b.family?.label ?? (b.other ? "OTHER" : "-"),
+        other: b.other,
+        older: b.older,
+        rows: b.rows.map((r) => `${r.model.id}${r.latest ? "^" : ""}`),
+      })),
+    ).toEqual([
+      {
+        key: "gemini",
+        label: "Gemini",
+        other: undefined,
+        older: 1,
+        rows: ["gemini-4-neon-high", "gemini-pro-orchestrator-neon", "gemini-pro-orchestrator", "gemini-pro-orchestrator-argon", "gemini-3.8-flash-high^"],
+      },
+      {
+        key: "claude",
+        label: "Claude",
+        other: undefined,
+        older: 0,
+        rows: ["claude-opus-5-5-low", "claude-sonnet-5-5-low"],
+      },
+      {
+        key: "gpt",
+        label: "GPT",
+        other: undefined,
+        older: 0,
+        rows: ["gpt-oss-120b-medium", "gpt-oss-20b"],
+      },
+      {
+        key: "deepseek",
+        label: "DeepSeek",
+        other: undefined,
+        older: 0,
+        rows: ["deepseek-v4"],
+      },
+      {
+        key: "other",
+        label: "OTHER",
+        other: true,
+        older: 0,
+        rows: ["acme-custom-1"],
+      },
+    ]);
+
+    // All-view truncation keeps `other: true` on a surviving trailing block
+    const truncated = panelSections({
+      providers: [
+        {
+          id: "mix",
+          name: "mix",
+          engine: "claude",
+          models: [
+            { id: "claude-opus-5-5", name: "Opus 5.5", efforts: [] },
+            { id: "claude-opus-5", name: "Opus 5", efforts: [] },
+            { id: "acme-custom-1", name: "Acme Custom 1", efforts: [] },
+          ],
+        },
+        { id: "second", name: "second", engine: "codex", models: [{ id: "gpt-5.5", name: "GPT 5.5", efforts: [] }] },
+      ],
+      state: { current: null, recommended: [] },
+      view: { kind: "all" },
+      query: "",
+      favorites: [],
+      recent: [],
+      overrides: {},
+    }).find((s) => s.key === "provider:mix");
+    expect(truncated?.blocks?.at(-1)?.other).toBe(true);
   });
 });

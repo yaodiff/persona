@@ -35,22 +35,30 @@ afterEach(() => {
 });
 
 describe("a stopped Agent's read-only line", () => {
+  it("explains that closing its to-do stopped it without losing Terminal or Resume", () => {
+    const reason = "Stopped because its to-do was closed.";
+    act(() => root.render(<StoppedAgentLine mid="m1" sid="s1" onTerminal={onTerminal} reason={reason} />));
+    expect(el.textContent).toContain(reason);
+    expect(button(t("lib-terminals.terminal"))).toBeDefined();
+    expect(button(t("chat-closed.resume"))).toBeDefined();
+  });
+
   it("says it has stopped and opens its terminal", () => {
     expect(el.textContent).toContain(t("chat-chatview.stopped_line"));
-    act(() => button(t("chat-chatview.terminal")).click());
+    act(() => button(t("lib-terminals.terminal")).click());
     expect(onTerminal).toHaveBeenCalledTimes(1);
   });
 
   it("resumes it from the terminal: no message, progress while it goes, the error in words when refused", async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ error: "computer offline", code: "node_unreachable", delivered: "none" }), { status: 503 }));
     vi.stubGlobal("fetch", fetch);
-    act(() => button(t("chat-chatview.resume")).click());
+    act(() => button(t("chat-closed.resume")).click());
     expect(onTerminal).toHaveBeenCalledTimes(1);
-    expect(button(t("chat-chatview.resume")).getAttribute("aria-busy")).toBe("true");
+    expect(button(t("chat-closed.resume")).getAttribute("aria-busy")).toBe("true");
     await flush();
     const [url, init] = (fetch.mock.calls as unknown as [string, RequestInit][])[0];
     expect(url).toBe("/api/v1/sessions");
     expect(JSON.parse(String(init.body))).toEqual({ machine_id: "m1", resume_session_id: "s1" });
-    expect(el.querySelector('[role="alert"]')!.textContent).toBe(t("chat-chatview.resume_failed", { error: t("lib-api.computer_offline") }));
+    expect(el.querySelector('[role="alert"]')!.textContent).toBe(t("chat-closed.resume_failed", { error: t("lib-api.computer_offline") }));
   });
 });

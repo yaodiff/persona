@@ -36,7 +36,7 @@ describe("Agents page with no computer", () => {
     Object.assign(getState(), { loaded: true, machines: [] });
     act(() => root.render(<AgentsList route={{ name: "agent-list" }} onNewAgent={() => {}} />));
     const empty = host.querySelector('[data-testid="no-computers"]');
-    expect(empty?.textContent).toContain("还没有电脑");
+    expect(empty?.textContent).toContain("尚未添加电脑");
     expect([...empty!.querySelectorAll("button")].map((b) => b.textContent?.trim())).toContain("添加电脑");
   });
 

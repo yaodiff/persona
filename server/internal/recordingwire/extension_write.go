@@ -26,11 +26,11 @@ const (
 
 // RecordingWrite is kb.put_recording's params.
 type RecordingWrite struct {
-	ID        ID         `json:"id"` // a UUID
-	Title     string     `json:"title,omitempty"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	Language  string     `json:"language,omitempty"` // an i18n code (zh-Hans, en, ja)
+	ID        ID        `json:"id"` // a UUID
+	Title     string    `json:"title,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
+	Language  string    `json:"language,omitempty"` // an i18n code (zh-Hans, en, ja)
 	// Minutes are written as minutes.json and minutes.md: a recording with minutes is kept past recording_days, its
 	// minutes until minutes_days (forever by default).
 	Minutes *RecordingWriteMinutes `json:"minutes,omitempty"`
@@ -58,8 +58,8 @@ type RecordingWriteMinutes struct {
 
 // RecordingWriteMeeting names a calendar item or an imported meeting of the knowledge base.
 type RecordingWriteMeeting struct {
-	Kind string `json:"kind"` // "events" or "meetings"
-	ID   ItemID `json:"id"`
+	Kind CalendarKind `json:"kind"` // "events" or "meetings"
+	ID   ItemID       `json:"id"`
 }
 
 // RecordingWriteResult is kb.put_recording's result.

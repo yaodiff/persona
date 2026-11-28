@@ -4,8 +4,9 @@
 import { t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { extensionSignatureLabel } from "../../lib/extension-market";
 import { previewBlocked } from "../../lib/extension-model";
-import { bytes } from "../../lib/format";
+import { bytes, safeWebURL } from "../../lib/format";
 import { Button, Collapse, cx, Dialog, toast, useNow } from "../../ui/atoms";
 import { Switch } from "../../views/settings/SettingsParts";
 import { AdminError, errorText, getExtensions, getMetricsOverview, installExtension, previewExtension, rollbackExtension, setExtensionEnabled, uninstallExtension, upgradeExtension, uploadExtension } from "../api";
@@ -154,6 +155,7 @@ function ExtensionRow({
     }
   };
   const contributes = Object.entries(p.contributes ?? {});
+  const sig = extensionSignatureLabel(p.market_signature);
   return (
     <div className="px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -167,6 +169,11 @@ function ExtensionRow({
               {p.version && <span className="font-mono text-[11.5px] text-ink-3">{p.version}</span>}
               {p.attached?.version && <Tag tone="red">{t("admin-logic.ext_program_version", { version: p.attached.version })}</Tag>}
               <Tag tone={p.source === "installed" ? "accent" : "gray"}>{extensionSourceLabel(p.source)}</Tag>
+              {sig && (
+                <Tag tone={sig.tone} title={p.market_signature?.key_id ? t("admin-pages-extensions.signature_key", { key: p.market_signature.key_id }) : undefined}>
+                  {sig.text}
+                </Tag>
+              )}
             </span>
             <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
               <Dot tone={st.tone} pulse={p.status === "starting"} />
@@ -233,13 +240,16 @@ function ExtensionRow({
             {p.previous_version && <Meta label={t("admin-pages-extensions.previous_version")} mono>{p.previous_version}</Meta>}
             {p.origin && <Meta label={t("admin-pages-extensions.installed_from")} mono>{p.origin}</Meta>}
             {p.publisher && <Meta label={t("admin-pages-extensions.publisher")}>{p.publisher}</Meta>}
-            {p.homepage && (
-              <Meta label={t("admin-pages-extensions.homepage")}>
-                <a href={p.homepage} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">
-                  {p.homepage}
-                </a>
-              </Meta>
-            )}
+            {(() => {
+              const homepage = safeWebURL(p.homepage, true);
+              return homepage ? (
+                <Meta label={t("admin-pages-extensions.homepage")}>
+                  <a href={homepage} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">
+                    {homepage}
+                  </a>
+                </Meta>
+              ) : null;
+            })()}
             {p.read_only && <Meta label={t("admin-pages-extensions.changes")}>{t("admin-pages-extensions.changes_hub_json")}</Meta>}
           </dl>
           {p.warnings?.map((w) => (

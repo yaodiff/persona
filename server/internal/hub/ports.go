@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -237,6 +238,12 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 	h.bridgeStream(w, r, mux, id, dial.Link && res.Link == 1)
 }
 
+type portDialCaller func(context.Context, string, any, any) error
+
+func (call portDialCaller) Call(ctx context.Context, method string, params, out any) error {
+	return call(ctx, method, params, out)
+}
+
 // dialPortStream dials an already registered stream and starts pumping a TCP endpoint if supplied.
 // A WebSocket caller supplies nil and starts its own pump after upgrading.
 func (m *Machine) dialPortStream(ctx context.Context, mux *streams.Mux, dial devicewire.PortDial, tcp streams.HalfCloseConn) (devicewire.PortDialReply, error) {
@@ -244,8 +251,8 @@ func (m *Machine) dialPortStream(ctx context.Context, mux *streams.Mux, dial dev
 	if tcp != nil {
 		dial.StreamVersion = devicewire.PortStreamHalfCloseV1
 	}
-	var res devicewire.PortDialReply
-	if err := m.call(ctx, devicewire.MethodPortDial, dial, &res); err != nil {
+	res, err := buswire.Call(ctx, portDialCaller(m.call), devicewire.PortDialMethod, dial)
+	if err != nil {
 		if tcp != nil {
 			_ = tcp.Close()
 		}

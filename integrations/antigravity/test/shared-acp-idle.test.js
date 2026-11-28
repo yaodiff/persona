@@ -119,4 +119,13 @@ test('session context_window persists across shared worker idle retirement', asy
   await node.peer.call('session.modes', { session_id: session.session_id, model: entries[2].modelId })
   await until('resumed worker reports updated model window', () => row()?.context_window === 131072)
   assert.equal(calls().filter((entry) => entry.method === 'initialize').length, 2)
+
+  await delay(450)
+  await node.peer.call('session.send', { session_id: session.session_id, text: 'Continue after retirement' })
+  await until('prompt runs after the second worker is retired', () => calls().some((entry) => entry.method === 'session/prompt'))
+  const requests = calls().slice(calls().findLastIndex((entry) => entry.method === 'initialize'))
+  assert.equal(calls().filter((entry) => entry.method === 'initialize').length, 3)
+  const setModel = requests.findIndex((entry) => entry.method === 'session/set_model' && entry.params.modelId === entries[2].modelId)
+  assert.ok(setModel > requests.findIndex((entry) => entry.method === 'session/resume'))
+  assert.ok(setModel < requests.findIndex((entry) => entry.method === 'session/prompt'))
 })

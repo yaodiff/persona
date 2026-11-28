@@ -1,0 +1,5 @@
+{
+  "title": "收件箱",
+  "done_other": "{count} 条已处理",
+  "open_item": "在收件箱中打开：{title}"
+}

@@ -48,7 +48,7 @@ describe("answeredTally and tallyDetail", () => {
   it("says all allowed", () => {
     const tally = answeredTally([perm("a", true), perm("b", true)]);
     expect(tally).toEqual({ count: 2, allowed: 2, denied: 0, handedBack: 0 });
-    expect(tallyDetail(tally)).toBe("都允许");
+    expect(tallyDetail(tally)).toBe("全部允许");
   });
   it("splits allowed and denied", () => {
     const tally = answeredTally([perm("a", true), perm("b", true), perm("c", false)]);

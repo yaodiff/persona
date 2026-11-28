@@ -150,6 +150,37 @@ func TestOmpNewAgentModelLeavesOtherStartsAndResumesAlone(t *testing.T) {
 	}
 }
 
+func TestOmpNewAgentModelOnOrca(t *testing.T) {
+	const bound = "provider/settings-model"
+	const typed = "provider/typed-model"
+	for _, tc := range []struct{ name, launcher, model, want string }{
+		{"model settings", "", "", bound},
+		{"launcher default", "omp", "", ""},
+		{"manual model", "omp", typed, typed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHub().withMachine()
+			f.sessions["box"] = nil
+			f.devices = []Device{{ID: "box", Online: true, Reachable: true, Engine: proto.EngineOrca}}
+			f.launcherList = []proto.Launcher{{Name: "omp", Agent: "omp", Source: "path"}}
+			f.ownModels = true
+			s := newServiceOn(t, f, &memStore{})
+			setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.omp", Model: bound, Effort: "high"})
+			p, err := s.AgentStartParams(t.Context(), AgentStartParams{MachineID: "box", Params: map[string]any{
+				"launcher": tc.launcher, "model": tc.model,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			model, sent := p["model"]
+			if p["launcher"] != "omp" || (tc.want == "" && sent) || (tc.want != "" && model != tc.want) {
+				t.Fatalf("launcher=%v model=%v (present=%t), want omp and %q", p["launcher"], model, sent, tc.want)
+			}
+			noModesStart(t, p)
+		})
+	}
+}
+
 func TestOmpNewAgentModelKeepsExplicitEffortForNodeRefusal(t *testing.T) {
 	s, _ := noModesService(t, "omp")
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.omp", Model: "settings-model", Effort: "high"})
@@ -168,6 +199,7 @@ func TestOmpNewAgentModelCatalogRelaysTheNodesHostCapability(t *testing.T) {
 		supported, legacy            bool
 	}{
 		{name: "herdr", launcher: "omp", host: "herdr", supported: true},
+		{name: "orca", launcher: "omp", host: "orca", supported: true},
 		{name: "old node", launcher: "omp", host: "herdr", legacy: true},
 		{name: "other host", launcher: "omp", host: "tern", locked: "requires herdr"},
 		{name: "fixed model", launcher: "omp", host: "herdr", locked: "launcher fixes the model"},

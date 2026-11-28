@@ -2,6 +2,7 @@ package persona.core.hub
 
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.contracts.generated.ExtensionHubCapability
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -54,6 +55,7 @@ class HubChatTransport internal constructor(
     // A cut-off request may already have reached the hub: later user retries keep its event ID until a receipt wins.
     private val ownerApprovalAttemptsLock = Any()
     private val ownerApprovalAttempts = mutableMapOf<String, String>()
+    private fun ownerApprovalAttemptKey(interaction: Interaction) = interaction.id + "\u0000" + (interaction.createdAt ?: "")
 
     override suspend fun machines() = get<MachinesResponse>(api("machines")).machines
     override suspend fun sessions() = get<SessionsResponse>(api("sessions")).sessions
@@ -143,7 +145,7 @@ class HubChatTransport internal constructor(
                 }
             }
         }.build()
-        return get(url.encodedPath + "?" + url.encodedQuery)
+        return get(url.encodedPath + "?" + url.encodedQuery, ToolViewsHeader)
     }
 
     override suspend fun modeChanges(session: SessionKey): List<ModeChange> {
@@ -174,15 +176,23 @@ class HubChatTransport internal constructor(
         resolveOutcome(id, resolution, handoffCard = false)
 
     override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
-        resolveOutcome(id, resolution, handoffCard, secretRunEnv = false)
+        resolveOutcome(id, resolution, handoffCard, secretRunEnv = false, createdAt = null)
 
-    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean): ResolveOutcome {
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution, handoffCard, secretRunEnv, createdAt = null)
+
+    override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+        resolveOutcome(interaction.id, resolution, handoffCard,
+            secretRunEnv = interaction.secretRun?.delivery == "env", createdAt = interaction.createdAt)
+
+    private suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean, createdAt: String?): ResolveOutcome {
         val path = api("interactions", id, "resolve")
         val body = JsonCodec.encodeToString(resolution)
         val headers = ProtocolCompatibility.operationHeaders(newOpId()) +
-            if (handoffCard && resolution.allow == true) {
+            (if (handoffCard && resolution.allow == true) {
                 mapOf("X-Persona-Features" to if (secretRunEnv) "secret_run_env" else "secret_handoff")
-            } else emptyMap()
+            } else emptyMap()) +
+            (if (createdAt != null) mapOf("X-Persona-Interaction-Created-At" to createdAt) else emptyMap())
         val deadline = clockMillis() + resolveRetryMillis
         while (true) {
             try {
@@ -206,15 +216,17 @@ class HubChatTransport internal constructor(
     /** Exact text and exact target, with no composer, quote, via, image, launcher or model fields. */
     override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) {
         require(interaction.ownerApprovalPhrase == phrase) { "The proposal did not advertise this exact reply" }
+        val attemptKey = ownerApprovalAttemptKey(interaction)
         val eventID = synchronized(ownerApprovalAttemptsLock) {
-            ownerApprovalAttempts.getOrPut(interaction.id) { newOpId() }
+            ownerApprovalAttempts.getOrPut(attemptKey) { newOpId() }
         }
         val path = api("sessions", interaction.machineId, interaction.sessionId, "messages")
-        val body = JsonObject(mapOf(
-            "text" to JsonPrimitive(phrase),
-            "client_msg_id" to JsonPrimitive(eventID),
-            "approval_reply_to" to JsonPrimitive(interaction.id),
-        )).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val body = JsonObject(buildMap {
+            put("text", JsonPrimitive(phrase))
+            put("client_msg_id", JsonPrimitive(eventID))
+            put("approval_reply_to", JsonPrimitive(interaction.id))
+            interaction.createdAt?.let { put("approval_reply_created_at", JsonPrimitive(it)) }
+        }).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val headers = ProtocolCompatibility.operationHeaders(eventID)
         val deadline = clockMillis() + resolveRetryMillis
         while (true) {
@@ -223,7 +235,7 @@ class HubChatTransport internal constructor(
                 val root = text?.let { runCatching { JsonCodec.parseToJsonElement(it) as? JsonObject }.getOrNull() }
                 val approved = (root?.get("approval_reply") as? JsonPrimitive)?.booleanOrNull == true
                 if (approved && field(text, "interaction_id") == interaction.id) {
-                    synchronized(ownerApprovalAttemptsLock) { ownerApprovalAttempts.remove(interaction.id) }
+                    synchronized(ownerApprovalAttemptsLock) { ownerApprovalAttempts.remove(attemptKey) }
                     return
                 }
                 throw HubFailure(HubError.Protocol, "The hub did not confirm this exact owner reply", retryable = false)
@@ -251,9 +263,10 @@ class HubChatTransport internal constructor(
             .use { it.body!!.bytes() }
 
     override suspend fun fullItem(session: SessionKey, itemId: String): Item =
-        get(api("sessions", session.machineId, session.sessionId, "items", itemId, "full"))
+        get(api("sessions", session.machineId, session.sessionId, "items", itemId, "full"), ToolViewsHeader)
 
     companion object {
+        private val ToolViewsHeader = mapOf("X-Persona-Features" to ExtensionHubCapability.TOOL_VIEWS)
         private val MODE_CHANGE_KINDS = setOf("set", "restart_done", "restart_failed", "restart_dropped")
         const val OP_ID_HEADER = "X-Persona-Op-Id"
         const val RESOLVE_RETRY_MILLIS = 60_000L
@@ -288,7 +301,7 @@ class HubChatTransport internal constructor(
         }
     }
 
-    private suspend inline fun <reified T> get(path: String): T = request(path, "GET", null).use {
+    private suspend inline fun <reified T> get(path: String, headers: Map<String, String> = emptyMap()): T = send(path, "GET", null, headers).use {
         try { JsonCodec.decodeFromString<T>(it.body!!.string()) }
         catch (error: Exception) { throw HubFailure(HubError.Protocol, retryable = false, cause = error) }
     }

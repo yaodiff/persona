@@ -48,6 +48,7 @@ class FakeAudio implements VoiceAudio {
   muted = false;
   rate = 0;
   played: number[] = [];
+  replies: boolean[] = [];
   clears = 0;
   cues: string[] = [];
   cancelsEcho: boolean | undefined = true;
@@ -70,6 +71,9 @@ class FakeAudio implements VoiceAudio {
   }
   play(pcm: ArrayBuffer) {
     this.played.push(pcm.byteLength);
+  }
+  reply(open: boolean) {
+    this.replies.push(open);
   }
   clear() {
     this.clears++;
@@ -196,6 +200,24 @@ describe("a voice call", () => {
     expect(audio.played).toEqual([960, 960]);
     last().frame({ type: "clear" });
     expect(audio.clears).toBe(1);
+  });
+
+  it("forwards protocol-2 reply boundaries to audio, ignores unknown states, and clears mid-reply", async () => {
+    const { audio, last } = await connected();
+    last().frame({ type: "reply", state: "start" });
+    last().pcm(960);
+    last().frame({ type: "reply", state: "pause" });
+    last().frame({ type: "reply", state: "end" });
+    expect(audio.replies).toEqual([true, false]);
+    expect(audio.played).toEqual([960]);
+
+    // Interrupted mid-reply: server sends clear before reply{end}.
+    last().frame({ type: "reply", state: "start" });
+    last().pcm(960);
+    last().frame({ type: "clear" });
+    last().frame({ type: "reply", state: "end" });
+    expect(audio.clears).toBe(1);
+    expect(audio.replies).toEqual([true, false, true, false]);
   });
 
   it("is speaking while the voice plays, and the orb interrupts it", async () => {

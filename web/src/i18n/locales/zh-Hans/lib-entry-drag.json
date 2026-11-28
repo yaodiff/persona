@@ -1,5 +1,5 @@
 {
   "drive_first": "接管终端后才能粘贴文件",
-  "other_computer_terminal": "这个文件在另一台电脑上，不能拖进这个终端",
-  "other_computer_session": "这个文件在另一台电脑上，不能引用到这个会话"
+  "other_computer_terminal": "该文件位于另一台电脑上，无法拖入此终端。",
+  "other_computer_session": "该文件位于另一台电脑上，无法在此会话中引用。"
 }

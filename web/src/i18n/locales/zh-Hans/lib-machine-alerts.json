@@ -2,15 +2,16 @@
   "offline": "离线",
   "deploy_failed": "更新失败",
   "memory": "内存占用",
-  "disk": "磁盘快满",
+  "disk": "磁盘空间不足",
   "cpu": "CPU 繁忙",
   "load": "负载偏高",
   "launcher": "启动器异常",
   "mismatch": "版本不一致",
   "updating": "正在更新",
+  "waiting_restart": "待空闲重启",
   "with_value": "{name} · {value}",
   "per_core": "每核 {value}",
-  "load_definition": "负载 = 正在运行和排队等 CPU 的线程数（1 分钟平均；Linux 上也算等磁盘的线程），不是占用率；每核超过 1 表示有线程在等；Mac 上后台优先级的任务可能只用部分核心，所以 CPU 不高时也会排队。",
+  "load_definition": "负载指过去 1 分钟内正在运行及等待 CPU 的平均线程数（Linux 也会计入等待磁盘的线程），并非 CPU 占用率。每核超过 1 表示已有线程在排队等待。在 Mac 上，后台优先级的任务可能只使用部分核心，因此 CPU 占用不高时也可能出现排队。",
   "severity_critical": "严重",
   "severity_warning": "注意",
   "severity_info": "提示",
@@ -18,5 +19,5 @@
   "gap_days_other": "{count} 天",
   "gap_hours_other": "{count} 小时",
   "gap_minutes_other": "{count} 分钟",
-  "offline_check": "离线 · 排查"
+  "offline_check": "离线 · 排查建议"
 }

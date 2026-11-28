@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -882,6 +883,36 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 	}
 	if r, ok := s.launcherHealth(ctx, "l4", "work"); ok {
 		t.Fatalf("recorded: %+v", r)
+	}
+}
+
+func TestLauncherHealthAfterStartError(t *testing.T) {
+	for _, tc := range []struct {
+		name, code, message string
+		state               string
+		checks              int
+	}{
+		{"Paseo missing directory", "bad_request", "没有这个目录：~/missing", healthOK, 0},
+		{"invalid start parameters", "bad_request", "invalid start parameters", healthOK, 0},
+		{"Go node missing directory", "", "directory /home/me/missing does not exist", healthOK, 0},
+		{"Paseo provider failed", "start_failed", "Provider unavailable", healthFailing, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := launcherHealthHubOn(t, newStorelessService)
+			synctest.Test(t, func(t *testing.T) {
+				ctx := context.Background()
+				before := s.recordHealth(ctx, "l4", "work", healthResult{ok: true, source: healthSourceCheck})
+				s.StartEnded(ctx, StartEnded{MachineID: "l4", Launcher: "work", Code: tc.code, Error: tc.message})
+				synctest.Wait()
+				after := healthState(s, "l4", "work")
+				if after.State != tc.state || tc.state == healthOK && after.rev != before.rev {
+					t.Fatalf("health after %q: %+v, want state %q (before: %+v)", tc.message, after, tc.state, before)
+				}
+				if got := checkedNow(f); len(got) != tc.checks {
+					t.Fatalf("checks = %v, want %d", got, tc.checks)
+				}
+			})
+		})
 	}
 }
 

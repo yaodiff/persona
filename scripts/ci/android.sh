@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Portable Android verification; no persona_config.py, signing keys, hub or emulator.
+# Portable Android verification; no persona_config.py, signing keys, existing hub or emulator.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -9,6 +9,7 @@ usage() {
     '       scripts/ci/android.sh --help' \
     'Requires Bash, Python 3, timeout (or gtimeout), JAVA_HOME pointing to JDK 21,' \
     'and ANDROID_HOME (or ANDROID_SDK_ROOT) pointing to an installed Android SDK.' \
+    'Lane 0 also needs Go and Docker for the disposable real-hub client check.' \
     'Swift builds the source-pinned Refract CLI for the explicit About Version regeneration check in lane 0.' \
     'The check fetches that exact public commit, verifies its deterministic source archive and never skips.' \
     'Also requires rustup and NDK 29.0.14206865: core:rustcore tests build the host JNI library;' \
@@ -23,6 +24,7 @@ usage() {
     '(-Ppersona.modules=: app unit tests and lint); test-1' \
     'runs core, feature shard 1, platform and app tests. Together the two lanes run every' \
     'included module once using its all-variant test lifecycle task (release unit tests included).' \
+    'Lane 0 also runs the production Android hub client against disposable core-only and full hubs.' \
     '--profile writes Gradle timing reports to android/build/reports/profile/.' \
     'No instrumentation/device tests or release signing.' \
     'ANDROID_CI_TIMEOUT_SECONDS: timeout per check (default 3600; kill grace 30s).' \
@@ -154,10 +156,16 @@ if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
   run_check 'token checker tests' python3 -B test_android_token_baseline.py
   run_check 'motion checker tests' python3 -B test_android_motion_baseline.py
   run_check 'slot order checker tests' python3 -B test_android_slot_order.py
+  run_check 'Compose budget checker tests' python3 -B test_android_compose_budget.py
+  run_check 'nested Throwable name checker tests' python3 -B test_android_nested_throwables.py
   run_check 'translation resources and literal baseline' python3 -B android_i18n_check.py
   run_check 'design token baseline' python3 -B android_token_baseline.py
   run_check 'motion literal baseline' python3 -B android_motion_baseline.py
   run_check 'design-system slot order' python3 -B android_slot_order.py
+  # Source-side guards for the release shrink check (#17580): Compose functions that grow toward the ART limit, and
+  # nested exceptions whose outer class has no -keepnames rule.
+  run_check 'Compose size budget' python3 -B android_compose_budget.py
+  run_check 'nested Throwable name rules' python3 -B android_nested_throwables.py
   run_check 'generated design tokens' python3 -B "$ROOT/scripts/assets/gen_tokens.py" --check \
     --kotlin "$ROOT/android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
   run_check 'icon meanings' python3 -B "$ROOT/scripts/assets/gen_icon_meanings.py" --check
@@ -206,6 +214,11 @@ if [[ $LANE == full || $LANE == "$CORE_ALONE_LANE" ]]; then
     -PpersonaBuildCommit="$BUILD_COMMIT" \
     -Ppersona.modules= \
     ${PROFILE[@]+"${PROFILE[@]}"} :app:testDebugUnitTest :app:lintDebug
+
+  # Real hub integration (#16786): the default app build pairs and reads the live hello on both editions. Its own
+  # temporary homes, loopback ports and uniquely named disposable Postgres containers; no existing hub is read.
+  run_check 'Android client on core-only and full hubs' python3 -B "$ROOT/scripts/ci/android-core-only-hub.py" \
+    --android-dir "$ROOT/android" --evidence "$ROOT/android/build/reports/core-only-hub/evidence.json"
 fi
 
 if [[ ${#FAILED[@]} -ne 0 ]]; then

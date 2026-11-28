@@ -69,23 +69,35 @@ and removes its own container and temporary home; the commands below are the sam
 > owner removed the mistakenly installed extension. Never rely on `unset`, and never read or use the real home for the
 > test. Run every CLI command with a clean environment and an explicit `PERSONA_HOME`.
 
-Set these to **new sandbox paths**, never to an existing hub's paths. The function prints the resolved home and listen
-address before each CLI call; `extension list` alone does not print them today.
+Saying it is not enough on its own: a write made between the check and the request would still land wherever the
+environment points. So every write is also **bound by the CLI itself**. `personad extension` prints the resolved home
+and hub before a write and takes `--expect-home <absolute path>` and `--expect-hub <host:port>`: when either differs it
+stops before any preview, request or write, with nothing changed (#16302). Reads (`list`, `show`) take no flags.
+
+Set these to **new sandbox paths**, never to an existing hub's paths. `TEST_HUB` is the test hub's `listen` address,
+printed by the first `sand extension list` below.
 
 ```sh
 TEST_HOME=/absolute/path/to/a/new/test/home
+TEST_HUB=127.0.0.1:18661                       # the test hub's listen, from the first line printed below
 PERSONAD=/absolute/path/to/the/core-only/bin/personad
-sand() {
+sand() {   # every command: print the home the CLI will read, then run it
   env -i HOME="$TEST_HOME" PERSONA_HOME="$TEST_HOME/.persona" PATH="$PATH" \
     python3 -c 'import json, os; p=os.environ["PERSONA_HOME"]; print("PERSONA_HOME="+p+" hub="+json.load(open(p+"/hub.json"))["listen"])' &&
   env -i HOME="$TEST_HOME" PERSONA_HOME="$TEST_HOME/.persona" PATH="$PATH" "$PERSONAD" "$@"
+}
+sandw() {  # a hub write: the CLI refuses any home or hub but this sandbox's, before any preview or request
+  env -i HOME="$TEST_HOME" PERSONA_HOME="$TEST_HOME/.persona" PATH="$PATH" "$PERSONAD" "$@" \
+    --expect-home "$TEST_HOME/.persona" --expect-hub "$TEST_HUB"
 }
 sand extension list
 ```
 
 The first command is read-only. Continue only if its first line names the test home and the test hub's `listen` address;
-otherwise stop. Before **every** write below (`install`, `disable`, `enable`, `uninstall`), run `sand extension list`
-again and make that same check. `scripts/ci/core-sample.py` performs the equivalent check and refuses a mismatch.
+otherwise stop, and set `TEST_HUB` to that address. Before **every** write below (`install`, `disable`, `enable`,
+`uninstall`), run `sand extension list` again and make that same check, **and** use `sandw` so the write itself is bound
+to the same target. `scripts/ci/core-sample.py` does both, and one of its steps deliberately passes a wrong
+`--expect-home` to show the refusal.
 
 1. **Start from the template or the sample.** A new extension of your own:
 
@@ -125,11 +137,22 @@ again and make that same check. `scripts/ci/core-sample.py` performs the equival
    ```sh
    sand extension pack                      # builds each platform of the manifest, writes dist/<id>-<version>.tar.gz
    sand extension list                      # read-only: verify the printed sandbox home and hub first
-   sand extension install "$PWD/dist/quicknotes-0.1.0.tar.gz" --yes
+   sandw extension install "$PWD/dist/quicknotes-0.1.0.tar.gz" --yes   # bound to $TEST_HOME/.persona and $TEST_HUB
    ```
 
    Give `install` an absolute path: the hub opens the file, not the command. Without `--yes` it shows what the
    extension may do and asks. The Admin UI's **Extensions** page installs the same package.
+
+   Try the guard once with a wrong home: it must exit non-zero, name both homes, and change nothing, so a following
+   `sand extension list` is exactly what it was before the attempt. (`sandw` cannot show this: it appends its own
+   flags, and the CLI refuses a flag given twice, so write the call out.)
+
+   ```sh
+   env -i HOME="$TEST_HOME" PERSONA_HOME="$TEST_HOME/.persona" PATH="$PATH" "$PERSONAD" \
+     extension install "$PWD/dist/quicknotes-0.1.0.tar.gz" --yes \
+     --expect-home /not/this/sandbox --expect-hub "$TEST_HUB"    # refused: "PERSONA_HOME is …, not the expected …"
+   sand extension list                                           # unchanged: nothing was installed
+   ```
 
 6. **See it work.** With `<hub>` the test hub's address and `<token>` a credential of that test hub:
 
@@ -147,10 +170,10 @@ again and make that same check. `scripts/ci/core-sample.py` performs the equival
 
    ```sh
    sand extension list                      # verify the target before the write
-   sand extension disable quicknotes        # flag gone, entry gone, the route 404; notes.json untouched
+   sandw extension disable quicknotes       # flag gone, entry gone, the route 404; notes.json untouched
    sand extension show quicknotes           # "data_dir": where the stored value is
    sand extension list                      # verify the target again
-   sand extension enable quicknotes         # the same notes are back
+   sandw extension enable quicknotes        # the same notes are back
    ```
 
    The apps' **Settings › Extensions** has the same switch. It takes effect at once: no hub or manager restart.
@@ -160,10 +183,10 @@ again and make that same check. `scripts/ci/core-sample.py` performs the equival
 
    ```sh
    sand extension list                      # verify the target before the write
-   sand extension uninstall quicknotes      # entry and route gone; notes.json deleted
+   sandw extension uninstall quicknotes     # entry and route gone; notes.json deleted
    ```
 
-   Use `sand extension uninstall quicknotes --keep-data` instead only when you intentionally want the data directory
+   Use `sandw extension uninstall quicknotes --keep-data` instead only when you intentionally want the data directory
    left on disk. In either case the flag, entry and route are gone and Core remains usable.
 
 ## Switched off: what goes, what stays
@@ -199,8 +222,9 @@ and searchable without you.
 - `go test ./...` in the extension: `TestConformance` (the protocol and every page's View), the route, the stored
   file, the closed sets and the three languages.
 - `python3 scripts/ci/core-sample.py`: builds the core-only programs, starts a hub in a temporary home on a disposable
-  Postgres container and runs steps 4 to 8 with `sdk/examples/quicknotes`: absent, installed, off, on again and
-  uninstalled. It checks the sandbox target before every hub write. One PASS / FAIL / TIMEOUT line.
+  Postgres container and runs steps 4 to 8 with `sdk/examples/quicknotes`: absent, a refused wrong `--expect-home`,
+  installed, off, on again and uninstalled. Every hub write carries `--expect-home` and `--expect-hub` for the sandbox,
+  and the refusal step shows the CLI stops a mismatched write before it reaches the hub. One PASS / FAIL / TIMEOUT line.
   `scripts/ci/server.sh build` runs it ('Core-only sample extension'), with the sample's own tests
   ('Sample extension tests').
 
@@ -219,6 +243,3 @@ Each of these needs a Core change today; none is worked around by the sample (#1
    socket and the Go SDK then stops. Serve HTTP only when `ext.Env().Socket` is set, as the sample does.
 6. **The bounded `storage.*` store from Go**: only the TypeScript SDK has its client; a Go extension keeps a file in
    its data directory.
-7. **A CLI target guard**: `extension list` and the install preview do not print the resolved home and hub address, so
-   the safe wrapper above is necessary. #16302 proposes target reporting and optional exact-target flags; implementing
-   it is a separate Core change, not part of this sample.

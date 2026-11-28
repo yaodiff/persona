@@ -23,8 +23,8 @@ private func record(day: String = "2027-01-15", zone: String = "Asia/Shanghai", 
 }
 
 /// All-day recording's retention on the phone (docs/assistant/day-recap.md「Retention and privacy」): the day's audio at
-/// the earliest of 3 days after its final recap, 7 days after its day and `recording_days` after it, whatever reached
-/// the hub; the whole day once it began more than `recording_days` ago.
+/// the earliest of 3 days after its final recap, 7 days after its day and `audio_days` after it, whatever reached
+/// the hub; the whole day once it began more than `audio_days` ago, unless audio is forever.
 @MainActor struct RecordingDayKeeperTests {
     @Test func audioGoesAtTheEarliestOfTheThreeDeadlines() throws {
         // The day ends at midnight in Shanghai: 2027-01-15T16:00:00Z.
@@ -33,47 +33,51 @@ private func record(day: String = "2027-01-15", zone: String = "Asia/Shanghai", 
         let chunks = [chunk(0, at: 0, state: .transcribed), chunk(1, at: 10, state: .skipped), chunk(2, at: 20, state: .failed),
                       chunk(3, at: 30, state: .waiting), chunk(4, at: 40, state: .transcribed, hasAudio: false)]
         let held = record(chunks: chunks, finals: [recap])
-        #expect(RecordingDayRetention.audioDue(held, now: recap.addingTimeInterval(3 * day - 1), recordingDays: nil).isEmpty)
+        #expect(RecordingDayRetention.audioDue(held, now: recap.addingTimeInterval(3 * day - 1), audioDays: nil).isEmpty)
         // Every chunk still holding audio goes, transcribed or not: an untranscribed one's time stays a gap.
-        #expect(RecordingDayRetention.audioDue(held, now: recap.addingTimeInterval(3 * day), recordingDays: nil) == [0, 1, 2, 3])
-        #expect(RecordingDayRetention.nextDeadline(held, now: recap, recordingDays: nil) == recap.addingTimeInterval(3 * day))
+        #expect(RecordingDayRetention.audioDue(held, now: recap.addingTimeInterval(3 * day), audioDays: nil) == [0, 1, 2, 3])
+        #expect(RecordingDayRetention.nextDeadline(held, now: recap, audioDays: nil) == recap.addingTimeInterval(3 * day))
 
         // No hub ever wrote a final recap (an older hub, no flag): 7 days after the day, whether or not anything went up.
         let alone = record(chunks: [chunk(0, at: 0, state: .transcribed)])
-        #expect(RecordingDayRetention.audioDue(alone, now: end.addingTimeInterval(7 * day - 1), recordingDays: nil).isEmpty)
-        #expect(RecordingDayRetention.audioDue(alone, now: end.addingTimeInterval(7 * day), recordingDays: nil) == [0])
+        #expect(RecordingDayRetention.audioDue(alone, now: end.addingTimeInterval(7 * day - 1), audioDays: nil).isEmpty)
+        #expect(RecordingDayRetention.audioDue(alone, now: end.addingTimeInterval(7 * day), audioDays: nil) == [0])
         // A hub keeping transcripts 2 days: the audio goes with them.
-        #expect(RecordingDayRetention.audioDue(alone, now: end.addingTimeInterval(2 * day), recordingDays: 2) == [0])
-        #expect(RecordingDayRetention.nextDeadline(alone, now: end, recordingDays: 2) == end.addingTimeInterval(2 * day))
+        #expect(RecordingDayRetention.audioDue(alone, now: end.addingTimeInterval(2 * day), audioDays: 2) == [0])
+        #expect(RecordingDayRetention.nextDeadline(alone, now: end, audioDays: 2) == end.addingTimeInterval(2 * day))
+        // Forever still keeps the audio's 7-day maximum, not zero.
+        #expect(RecordingDayRetention.audioDue(alone, now: end.addingTimeInterval(7 * day), audioDays: 0) == [0])
+        #expect(RecordingDayRetention.nextDeadline(alone, now: end, audioDays: 0) == end.addingTimeInterval(7 * day))
 
         // Several parts: the clock starts once every part has its first final recap, from the latest.
         let later = recap.addingTimeInterval(day)
         let parts = record(chunks: [chunk(0, at: 0, state: .transcribed)], finals: [recap, later])
-        #expect(RecordingDayRetention.audioDue(parts, now: recap.addingTimeInterval(3 * day), recordingDays: nil).isEmpty)
-        #expect(RecordingDayRetention.audioDue(parts, now: later.addingTimeInterval(3 * day), recordingDays: nil) == [0])
+        #expect(RecordingDayRetention.audioDue(parts, now: recap.addingTimeInterval(3 * day), audioDays: nil).isEmpty)
+        #expect(RecordingDayRetention.audioDue(parts, now: later.addingTimeInterval(3 * day), audioDays: nil) == [0])
         let unfinished = record(chunks: [chunk(0, at: 0, state: .transcribed)], finals: [recap, nil])
-        #expect(RecordingDayRetention.nextDeadline(unfinished, now: recap, recordingDays: nil) == end.addingTimeInterval(7 * day))
+        #expect(RecordingDayRetention.nextDeadline(unfinished, now: recap, audioDays: nil) == end.addingTimeInterval(7 * day))
 
         // Nothing to wake for once no audio is left.
         let gone = record(chunks: [chunk(0, at: 0, state: .transcribed, hasAudio: false)], finals: [recap])
-        #expect(RecordingDayRetention.nextDeadline(gone, now: recap, recordingDays: nil) == nil)
+        #expect(RecordingDayRetention.nextDeadline(gone, now: recap, audioDays: nil) == nil)
     }
 
     @Test func theDaysCountFromTheDatesOwnMidnightOnDSTDays() throws {
         // America/New_York: 2026-03-08 has 23 hours, 2026-11-01 has 25.
         let spring = record(day: "2026-03-08", zone: "America/New_York", chunks: [chunk(0, at: 0, state: .waiting)])
         let springEnd = try date("2026-03-09T04:00:00Z")
-        #expect(RecordingDayRetention.nextDeadline(spring, now: springEnd, recordingDays: nil) == springEnd.addingTimeInterval(7 * day))
+        #expect(RecordingDayRetention.nextDeadline(spring, now: springEnd, audioDays: nil) == springEnd.addingTimeInterval(7 * day))
         let fall = record(day: "2026-11-01", zone: "America/New_York", chunks: [chunk(0, at: 0, state: .waiting)])
         let fallEnd = try date("2026-11-02T05:00:00Z")
-        #expect(RecordingDayRetention.nextDeadline(fall, now: fallEnd, recordingDays: nil) == fallEnd.addingTimeInterval(7 * day))
-        #expect(RecordingDayRetention.audioDue(fall, now: fallEnd.addingTimeInterval(7 * day - 1), recordingDays: nil).isEmpty)
-        #expect(RecordingDayRetention.audioDue(fall, now: fallEnd.addingTimeInterval(7 * day), recordingDays: nil) == [0])
+        #expect(RecordingDayRetention.nextDeadline(fall, now: fallEnd, audioDays: nil) == fallEnd.addingTimeInterval(7 * day))
+        #expect(RecordingDayRetention.audioDue(fall, now: fallEnd.addingTimeInterval(7 * day - 1), audioDays: nil).isEmpty)
+        #expect(RecordingDayRetention.audioDue(fall, now: fallEnd.addingTimeInterval(7 * day), audioDays: nil) == [0])
     }
 
-    @Test func theTranscriptFollowsRecordingDaysFromTheRecordingsStart() {
+    @Test func theLocalDayFollowsAudioDaysFromTheRecordingsStart() {
         #expect(!RecordingDayRetention.isExpired(start: anchor, now: anchor.addingTimeInterval(14 * day), days: 14))
         #expect(RecordingDayRetention.isExpired(start: anchor, now: anchor.addingTimeInterval(14 * day + 1), days: 14))
+        #expect(!RecordingDayRetention.isExpired(start: anchor, now: anchor.addingTimeInterval(500 * day), days: 0))
     }
 
     @Test func theKeeperDeletesDueAudioAndPurgesDaysPastRecordingDays() async throws {
@@ -108,7 +112,7 @@ private func record(day: String = "2027-01-15", zone: String = "Asia/Shanghai", 
         }
         var forgotten: [UUID] = []
         var window: Int? = nil
-        let keeper = RecordingDayKeeper(store: store, library: library, days: { window }, now: { anchor },
+        let keeper = RecordingDayKeeper(store: store, library: library, audioDays: { window }, now: { anchor },
                                         forget: { forgotten.append($0); store.didRemove($0) })
         func audio(_ id: UUID, _ seq: Int) -> Bool { FileManager.default.fileExists(atPath: store.audioURL(id, seq: seq).path) }
 
@@ -120,6 +124,10 @@ private func record(day: String = "2027-01-15", zone: String = "Asia/Shanghai", 
         #expect(await store.record(recent)?.chunks[0]?.state == .transcribed, "the text stays")
         #expect(!audio(old, 0) && !audio(old, 1), "past 7 days after its day")
         #expect(audio(fresh, 0) && audio(fresh, 1))
+
+        window = 0
+        await keeper.run(force: true)
+        #expect(library.entry(old) != nil && forgotten.isEmpty, "forever never purges a day for its age")
 
         window = 14
         await keeper.run(force: true)
@@ -149,7 +157,7 @@ private func record(day: String = "2027-01-15", zone: String = "Asia/Shanghai", 
         let header = RecordingDayHeader(recording: id, recordingStartedAt: start, tz: "Asia/Shanghai", day: "2027-01-11", seq: 0,
                                         startedAt: start, duration: 10, level: -30)
         _ = try store.store(header: header, audio: Data([1, 2, 3]))
-        let keeper = RecordingDayKeeper(store: store, library: library, days: { nil }, now: { anchor }, forget: { _ in },
+        let keeper = RecordingDayKeeper(store: store, library: library, audioDays: { nil }, now: { anchor }, forget: { _ in },
                                         debounce: .zero)
         func audio() -> Bool { FileManager.default.fileExists(atPath: store.audioURL(id, seq: 0).path) }
         await keeper.run()

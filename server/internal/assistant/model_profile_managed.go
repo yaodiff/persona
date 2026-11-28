@@ -118,9 +118,12 @@ func (s *Service) prepareModelProfileProposal(ctx context.Context, id string, ca
 	}
 	s.models.mu.Lock()
 	defer s.models.mu.Unlock()
-	ps, _, err := s.modelProfilesLocked(ctx)
+	ps, err := s.modelProfilesLocked(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if len(ps.Profiles) == 0 {
+		return nil, errModelProfileEmpty
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == id })
 	if i < 0 {
@@ -244,9 +247,7 @@ func (s *Service) modelProfileOwnChange(p *modelProfileProposal, lang i18n.Lang)
 }
 
 func modelProfileSaveImageEqual(a, b ModelProfile) bool {
-	// UpdatedAt is save metadata, not a decision-relevant value. In particular,
-	// independently regenerated built-in templates have different timestamps
-	// until the first approved save persists the catalog.
+	// A planned batch edit and its approved save get their own timestamps.
 	a.UpdatedAt = b.UpdatedAt
 	return reflect.DeepEqual(a, b)
 }
@@ -422,6 +423,9 @@ func (s *Service) getModelProfileBindings(ctx context.Context) (string, error) {
 	view, err := s.modelProfilesView(ctx)
 	if err != nil {
 		return "", err
+	}
+	if len(view.Profiles) == 0 {
+		return "", errModelProfileEmpty
 	}
 	type bindings struct {
 		ID        string                    `json:"id"`

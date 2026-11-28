@@ -111,7 +111,7 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 					return ""
 				}
 				matches++
-			} else if reported == conversation {
+			} else if n.agyPaneClaimsLocked(raw, conversation) {
 				return ""
 			}
 		}
@@ -125,12 +125,19 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) bool {
 	for _, agents := range n.hostAgents {
 		for _, raw := range agents {
-			if raw.PaneID != pane && n.agyReportedLocked(raw) == conversation {
+			if raw.PaneID != pane && n.agyPaneClaimsLocked(raw, conversation) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// A disagreement invalidates the reporting pane's own identity. Both reports still count against other panes so
+// neither conversation is exposed while ownership is contested.
+func (n *Node) agyPaneClaimsLocked(a host.Agent, conversation string) bool {
+	return a.Agent == agyAgent && (reportedAgyConversation(a) == conversation ||
+		n.agyReports[a.PaneID].conversation == conversation)
 }
 
 // isAgySubagentHead reports whether a conversation's opening step indicates a built-in
@@ -451,7 +458,7 @@ func (n *Node) agyConversation(id, pane string) string {
 		}
 		n.mu.Unlock()
 
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(raw)
 		var next agyPaneBinding
 		var result string
 		var keepBound bool
@@ -548,7 +555,7 @@ func sameAgyFile(a, b os.FileInfo) bool {
 }
 
 func agyStepsHistory(conversation string) agyHistory {
-	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v1:lazy-media:checkpoints:wakes:file-links:full-text:tool-headers"}
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v2:lazy-media:checkpoints:wakes:file-links:full-text:tool-headers"}
 }
 
 // agyRead projects the compact export when present, filling in verified text
@@ -781,15 +788,26 @@ func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) an
 	if p.ThroughSeq > 0 {
 		from, to := agyIndex(items, p.FromSeq), agyAfter(items, p.ThroughSeq)
 		items = items[min(from, to):to]
+		more := false
 		if len(items) > 1000 {
 			end := agyAfter(items, items[999].Seq)
-			light := agyLightItems(items[:end])
-			tv.attachWithUses(id, light, false, uses)
-			return map[string]any{"items": light, "more": end < len(items)}
+			more = end < len(items)
+			items = items[:end]
 		}
 		light := agyLightItems(items)
 		tv.attachWithUses(id, light, false, uses)
-		return map[string]any{"items": light, "more": false}
+		spanFrom := max(0, p.FromSeq-1)
+		spanTo := min(h.seq, p.ThroughSeq)
+		if more && len(items) > 0 {
+			spanTo = items[len(items)-1].Seq
+		} else if len(items) > 0 {
+			spanTo = max(spanTo, items[len(items)-1].Seq)
+		}
+		if spanTo < spanFrom {
+			spanFrom = spanTo
+		}
+		span := transcript.Span{History: h.token, From: spanFrom, To: spanTo}
+		return withSpan(map[string]any{"items": light, "more": more}, span, true)
 	}
 	if p.AfterSeq != nil {
 		page, span, more := h.after(*p.AfterSeq)
@@ -837,6 +855,49 @@ func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) an
 	return withSpan(map[string]any{"items": nonNil(items), "has_more": start > 0}, span, false)
 }
 
+// agyEchoBase returns the current agy pane transcript sequence before a send is typed so echo matching only claims
+// USER_INPUT records written after this send.
+func (n *Node) agyEchoBase(id, pane string) echoAfter {
+	conversation := n.agyConversation(id, pane)
+	if conversation == "" {
+		return echoAfter{in: echoInTranscript}
+	}
+	mu := n.pushLock(id)
+	mu.Lock()
+	defer mu.Unlock()
+	if n.agyConversation(id, pane) != conversation {
+		return echoAfter{in: echoInTranscript}
+	}
+	dir := n.agyRootFor(conversation)
+	root, err := agyBrain(dir, conversation)
+	if err != nil {
+		return echoAfter{in: echoInTranscript}
+	}
+	defer root.Close()
+	h, _, err := n.agyRead(root, filepath.Join(dir, conversation), conversation, nil)
+	if err != nil {
+		return echoAfter{in: echoInTranscript}
+	}
+	return echoAfter{seq: h.seq, in: echoInTranscript, history: h.token}
+}
+
+// agyEchoItems matches expected sends against a real agy pane transcript (never placeholder agyNotice items) and
+// tags matched lines with their client_msg_id and message source.
+func (n *Node) agyEchoItems(id string, items []proto.Item) []proto.Item {
+	if !n.echoes.known(id) || len(items) == 0 {
+		return items
+	}
+	if from, ok := n.echoes.waitingFrom(id, echoInTranscript); ok {
+		start := agyAfter(items, from)
+		if start < len(items) {
+			for _, r := range n.echoes.match(id, echoInTranscript, items[start:]) {
+				n.notifyEcho(r)
+			}
+		}
+	}
+	return n.echoes.tag(id, echoInTranscript, items)
+}
+
 func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw json.RawMessage) (any, error, bool) {
 	switch method {
 	case "session.unwatch":
@@ -864,7 +925,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	conversation := n.agyConversation(id, pane)
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()
@@ -872,6 +933,9 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("read Antigravity transcript: %w", err), true
+		}
+		if err == nil && n.agyConversation(id, pane) == conversation {
+			h.items = n.agyEchoItems(id, h.items)
 		}
 		if method == "session.image" {
 			media, found := h.media[p.ItemID]
@@ -934,6 +998,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		if st.Model != "" {
 			info["model"] = st.Model
 		}
+		if st.AppMode != "" {
+			info["permission_mode"] = st.AppMode
+		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
 		if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
@@ -944,15 +1011,15 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			if runtimeRow.Model != "" {
 				info["model"] = runtimeRow.Model
 			}
-			if runtimeRow.PermissionMode != "" {
+			if _, hasMode := info["permission_mode"]; !hasMode && runtimeRow.PermissionMode != "" {
 				info["permission_mode"] = runtimeRow.PermissionMode
 			}
 			if runtimeRow.Effort != "" {
 				info["effort"] = runtimeRow.Effort
 			}
-			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokensValue() > 0 {
 				info["context_tokens"] = int(runtimeRow.ContextTokens)
-				info["output_tokens"] = runtimeRow.OutputTokens
+				info["output_tokens"] = int(runtimeRow.OutputTokensValue())
 				delete(info, "usage_unknown")
 			}
 			n.resolveAgyContext(&runtimeRow, conversation)
@@ -969,11 +1036,28 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 				delete(info, "usage_unknown")
 			}
 			row := proto.Session{SessionID: id, Model: u.model}
-			n.setAgyTranscriptContext(&row, u)
+			n.setAgyTranscriptContext(&row, u.agyTranscriptUsage)
 			breakdown = row.ContextBreakdown()
 		}
 		if breakdown != nil {
 			info["context_breakdown"] = breakdown
+		}
+	}
+	if cur, _ := info["model"].(string); cur != "" {
+		if shown := n.shownModel(id, cur); shown != "" {
+			info["model"] = shown
+		}
+	} else if shown := n.shownModel(id, ""); shown != "" {
+		info["model"] = shown
+	}
+	n.mu.Lock()
+	if m, ok := n.modes[id]; ok && m.Effort != "" && time.Since(m.EffortAt) <= pendingModelTTL {
+		info["effort"] = m.Effort
+	}
+	n.mu.Unlock()
+	if cur, _ := info["model"].(string); info["effort"] == nil && cur != "" {
+		if e := agyModelEffort(cur); e != "" {
+			info["effort"] = e
 		}
 	}
 	return info
@@ -1011,7 +1095,7 @@ func (n *Node) pollAgyPane(w *watch) {
 	var info *agyPaneFiles
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()
@@ -1027,6 +1111,7 @@ func (n *Node) pollAgyPane(w *watch) {
 		if h.token == "" || n.agyConversation(w.id, a.pane) != conversation {
 			return
 		}
+		h.items = n.agyEchoItems(w.id, h.items)
 	}
 	since := a.since
 	reset := a.history != "" && a.history != h.token || since > h.seq

@@ -124,7 +124,7 @@ func TestDefaultReviewsEveryTask(t *testing.T) {
 // The judge is asked for the checks only while spot-checking is on, and its answer is matched to the ledger's criteria.
 func TestJudgeAsksForChecksOnlyWhenSampling(t *testing.T) {
 	in := taskDoneInput{Owner: "Alex", Title: "Fix the login retry", Criteria: []string{"PR merged", "deployed"},
-		Replies: []prompts.TaskDoneReply{doneReply("Deployed and verified.")}}
+		Replies: []taskDoneReply{doneReply("Deployed and verified.")}}
 	m := &cannedJSON{answer: `{"verdict":"done","reason":"ok","delivery":"live","checks":[{"criterion":"x","checkable":true,"met":true,"evidence":"e"}]}`}
 	c, err := judgeTaskDoneWith(context.Background(), m, in)
 	if err != nil {
@@ -232,7 +232,7 @@ func TestMisalignedChecksDoNotPass(t *testing.T) {
 // Live counts only on the judge's own word: the agent's delivery line alone does not let it close.
 func TestAutoCheckLiveIsTheJudgesOwn(t *testing.T) {
 	in := taskDoneInput{Title: "t", Criteria: []string{"PR merged"}, Checks: true,
-		Replies: []prompts.TaskDoneReply{doneReply("done\n交付：已上线并实测；卡点：无；谁来解：无")}}
+		Replies: []taskDoneReply{doneReply("done\n交付：已上线并实测；卡点：无；谁来解：无")}}
 	m := &cannedJSON{answer: `{"verdict":"done","reason":"ok","checks":[{"criterion":"PR merged","checkable":true,"met":true,"evidence":"e"}]}`}
 	c, err := judgeTaskDoneWith(context.Background(), m, in)
 	if err != nil {

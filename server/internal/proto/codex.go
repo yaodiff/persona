@@ -44,6 +44,8 @@ type SessionCapabilities struct {
 	// Absent/false keeps the conservative non-capable runtime routing and refusal behavior (#10338, #11121).
 	SupervisionPolicy bool `json:"supervision_policy,omitempty"`
 	Fork              bool `json:"fork,omitempty"`
+	// AnswerQuestions permits asynchronous question replies without granting permission approvals.
+	AnswerQuestions bool `json:"answer_questions,omitempty"`
 	// Close is independent of terminal access. Absent on older nodes, where clients retain terminal-only closing.
 	Close *bool `json:"close,omitempty"`
 	// Rename permits session.rename's title without a terminal (a runtime's session, #6294). Absent on older nodes,
@@ -62,7 +64,7 @@ type SessionCapabilities struct {
 	// Absent preserves older clients' Claude terminal behavior.
 	Rewind     *bool `json:"rewind,omitempty"`
 	RewindCode *bool `json:"rewind_code,omitempty"`
-	// Takeover is advertised only for a local, read-only Codex CLI thread.
+	// Takeover is advertised for eligible local, read-only Codex CLI and idle unowned Codex App threads.
 	Takeover *CodexTakeover `json:"takeover,omitempty"`
 }
 
@@ -70,6 +72,7 @@ type CodexTakeover struct {
 	Running   bool   `json:"running"`
 	CanResume bool   `json:"can_resume"`
 	Reason    string `json:"reason,omitempty"`
+	AppOwned  bool   `json:"app_owned,omitempty"`
 }
 
 // CanModes is a Modes value.

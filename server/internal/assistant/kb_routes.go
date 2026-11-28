@@ -65,6 +65,10 @@ func (s *Service) kbRoutes() {
 		if list == nil {
 			list = []kb.Entry{}
 		}
+		if kind == kb.KindProject { // each with the parent it shows under and its milestones (#12927)
+			apierr.WriteJSON(w, map[string]any{"items": projectItems(e, list), "tags": kb.KindTags(all, 30)})
+			return
+		}
 		apierr.WriteJSON(w, map[string]any{"items": list, "tags": kb.KindTags(all, 30)})
 	})
 	// One archived Moments post (a project's related Moments): what the crawler kept, text and comments as Markdown.
@@ -105,6 +109,12 @@ func (s *Service) kbRoutes() {
 			}
 			out["matches"] = m
 		}
+		// A project's place in the project tree: parent, the way down to it, children, milestones (#12927).
+		if d.Kind == kb.KindProject {
+			if t, ok := e.ProjectTreeOf(d.ID); ok {
+				out["tree"] = t
+			}
+		}
 		// A project's Agents: the live sessions working in its code directories.
 		if d.Kind == kb.KindProject {
 			if p, ok := e.Store.Project(d.ID); ok && len(p.Dirs) > 0 {
@@ -124,6 +134,14 @@ func (s *Service) kbRoutes() {
 					}
 				}
 				out["agents"] = agents
+			}
+		}
+		// A chat's Inbox items (kb_inbox.go), for the user's own apps: none, nothing said.
+		if d.Kind == kb.KindChat && fullRole(r) {
+			if c, ok := e.Store.Chat(d.ID); ok {
+				if items := s.kbChatInbox(r.Context(), c, d.Recent, e.Store.ChatZone(c.ID)); len(items) > 0 {
+					out["inbox"] = items
+				}
 			}
 		}
 		apierr.WriteJSON(w, out)
@@ -177,7 +195,16 @@ func (s *Service) kbRoutes() {
 			return
 		}
 		ignored := kb.UserUnsupported(r.PathValue("kind"), u) // not applied: said, not dropped silently
+		var undo *kb.UserUpdate
+		if r.PathValue("kind") == kb.KindProject {
+			undo = e.TreeUndo(r.PathValue("id"), u)
+		}
 		id, err := e.ApplyUser(r.PathValue("kind"), r.PathValue("id"), u)
+		var treeErr *kb.TreeError
+		if errors.As(err, &treeErr) {
+			apierr.WriteCode(w, http.StatusBadRequest, treeErr.Code, i18n.Err("assistant-kb_routes."+treeErr.Code))
+			return
+		}
 		if errors.Is(err, kb.ErrNotFound) {
 			apierr.Write(w, http.StatusNotFound, err)
 			return
@@ -191,6 +218,14 @@ func (s *Service) kbRoutes() {
 		out := map[string]any{"id": id}
 		if len(ignored) > 0 {
 			out["ignored"] = ignored
+		}
+		if undo != nil { // what puts the parent or milestones back (the app's Undo)
+			out["undo"] = undo
+		}
+		if r.PathValue("kind") == kb.KindProject && (u.Parent != nil || u.Milestones != nil || u.Milestone != nil) {
+			if t, ok := e.ProjectTreeOf(id); ok {
+				out["tree"] = t
+			}
 		}
 		apierr.WriteJSON(w, out)
 	})
@@ -272,4 +307,21 @@ func (s *Service) kbRoutes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"hits": hits})
 	})
+}
+
+// kbProjectItem is a project row of GET /api/v1/kb/projects: the entry, the parent it shows under (a merged parent
+// followed to the project kept; none at the top level) and its milestones.
+type kbProjectItem struct {
+	kb.Entry
+	Parent     string         `json:"parent,omitempty"`
+	Milestones []kb.Milestone `json:"milestones,omitempty"`
+}
+
+func projectItems(e *kb.Engine, list []kb.Entry) []kbProjectItem {
+	parents, milestones := e.ProjectTreeIndex()
+	out := make([]kbProjectItem, 0, len(list))
+	for _, x := range list {
+		out = append(out, kbProjectItem{Entry: x, Parent: parents[x.ID], Milestones: milestones[x.ID]})
+	}
+	return out
 }

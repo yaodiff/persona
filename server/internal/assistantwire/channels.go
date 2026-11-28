@@ -43,7 +43,9 @@ const (
 	// EventSessionItems and EventSessionDelta: SessionItems / SessionDelta, one way: a conversation the assistant
 	// follows (DeviceSessionFollow) has new items, or is writing text.
 	EventSessionItems = "session.items"
-	EventSessionDelta = "session.delta"
+	// EventInlineViewPage carries candidate cards from a transcript page the hub read for an app (SessionItems).
+	EventInlineViewPage = "session.inline_view_page"
+	EventSessionDelta   = "session.delta"
 	// EventFeishuOwner: FeishuOwner, one way: the Feishu bot was paired with its owner, or unpaired.
 	EventFeishuOwner = "feishu.owner"
 	// EventFeishuRecalled: FeishuRecalled, one way: the owner recalled a message in the bot's private chat.
@@ -98,6 +100,9 @@ const (
 	// A feishu.text with handoff set is a proxy reply (bots_handoff.go) and skips the usual path: handoff is the
 	// hub's id, confirmed says the owner approved the draft, and the text goes under the handoff's anchor or,
 	// with none, into its chat. The chat does not become one the bot may send into.
+	// A feishu.text with guest set is a guest's one reply (bots_guest.go) and skips the usual path too: guest is the
+	// hub's id, and the text goes under the trigger that started it, in its thread when it has one, or not at all. The
+	// chat does not become one the bot may send into.
 	FeishuText = "feishu.text"
 	// FeishuUpdateCard: {message_id, card} → {}.
 	FeishuUpdateCard = "feishu.update_card"
@@ -119,6 +124,8 @@ const (
 	FeishuRecall = "feishu.recall"
 	// FeishuCotCreate: {reply_to?, chat_id?, in_thread?} → {cot_id, message_id}: an agent message (the open
 	// platform's message_cot, a collapsible process) under the message replied to, in its topic when in_thread is set.
+	// With guest set it is the guest turn's one agent message, under its trigger (bots_guest.go); a second one, or one
+	// for a turn that has ended, is refused.
 	FeishuCotCreate = "feishu.cot_create"
 	// FeishuCotAppend: {cot_id, message_id, events: [botcard.CotEvent]} → {}.
 	FeishuCotAppend = "feishu.cot_append"
@@ -146,6 +153,14 @@ const (
 	FeishuTest = "feishu.test"
 	// FeishuHandoffEnd: {handoff, outcome} → {}: a handoff is over without a post (declined, expired, no_reply, failed).
 	FeishuHandoffEnd = "feishu.handoff_end"
+	// MethodFeishuGuest: FeishuGuestTurn → {}: a non-owner's @bot the policy let through, accepted (not its run).
+	// An assistant that does not know it answers "unknown method", so an older one never treats the payload as one of
+	// the owner's messages.
+	MethodFeishuGuest = "feishu.guest"
+	// FeishuGuestEnd: {guest, outcome} → {}: a guest turn is over without a post (failed, no_reply, expired).
+	FeishuGuestEnd = "feishu.guest_end"
+	// CodeGuestBusy: the conversation still answers its last question.
+	CodeGuestBusy = "guest_busy"
 
 	// AppChannels is the plugins' channel programs, and the list of every channel as the transport has it.
 	AppChannels = "channels"
@@ -238,6 +253,9 @@ type FeishuHandoffID string
 
 // FeishuChatID is a Lark open-platform chat id (oc_…).
 type FeishuChatID string
+
+// FeishuThreadID is a Lark open-platform thread id (omt_…) or root message id (om_…).
+type FeishuThreadID string
 
 // FeishuHandoffState is the state of a handoff the hub answers with; it only ever answers once one is accepted.
 type FeishuHandoffState string
@@ -356,9 +374,18 @@ type FeishuFeatures struct {
 	AnswerNewCard bool `json:"answer_new_card"`
 	// TopicCot: a topic run also shows its thinking and tools in a native agent message beside the progress card.
 	TopicCot bool `json:"topic_cot"`
+	// DMCot: a private-chat run also shows its thinking and tools in a native agent message beside the progress card
+	// (#16847). Off by default.
+	DMCot bool `json:"dm_cot"`
+	// CotAnswer: a run whose agent message is allowed (dm_cot, topic_cot) gets its answer inside that message and no
+	// progress or answer card; cards take over when the message cannot carry it (#16847). Off by default.
+	CotAnswer bool `json:"cot_answer"`
 	// ReadGroup: "@bot /read <task>" from the owner in a group reads the group before the task (#11803,
 	// FeishuFromRead).
 	ReadGroup bool `json:"read_group"`
+	// ReadGroupDirect: a /read's answer goes straight into the group under the owner's message. Off: it goes to the
+	// owner's private chat first, and into the group only when the owner presses its button (#14437).
+	ReadGroupDirect bool `json:"read_group_direct"`
 }
 
 // FeishuStatus is feishu.status's answer.
@@ -380,6 +407,10 @@ type FeishuStatus struct {
 	// HomeChat is the home topic group (#6146): the opted-in group the owner marked with "/topics home", else the first
 	// one opted in; "" while none is. It is one of Chats. Where a request from a group that is not opted in opens its topic.
 	HomeChat string `json:"home_chat,omitempty"`
+	// TopicTodoModes holds the non-default to-do policies of opted-in groups, keyed by chat ID.
+	TopicTodoModes map[string]TopicTodoMode `json:"topic_todo_modes,omitempty"`
+	// TopicSpaces maps opted-in topic group chat IDs to their bound domain space slug.
+	TopicSpaces map[string]string `json:"topic_spaces,omitempty"`
 	// NudgeAfter is the bot's setting nudge_after (#6084): minutes a card waits unanswered before the one nudge under it,
 	// 0 off. nil (a status from before the setting) is NudgeAfterDefault.
 	NudgeAfter *int `json:"nudge_after,omitempty"`
@@ -387,6 +418,25 @@ type FeishuStatus struct {
 	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`
 	// SourceReportFullReply is the owner's opt-in to posting the task's final answer in its source group.
 	SourceReportFullReply bool `json:"source_report_full_reply,omitempty"`
+}
+
+type TopicTodoMode string
+
+const (
+	TopicAnswerOnly  TopicTodoMode = "answer_only"
+	TopicMainDecides TopicTodoMode = "main_decides"
+	TopicAlwaysTodo  TopicTodoMode = "always_todo"
+)
+
+func (m TopicTodoMode) Valid() bool {
+	return m == TopicAnswerOnly || m == TopicMainDecides || m == TopicAlwaysTodo
+}
+
+func (m TopicTodoMode) Effective() TopicTodoMode {
+	if !m.Valid() {
+		return TopicAnswerOnly
+	}
+	return m
 }
 
 // NudgeAfterDefault is nudge_after when never set: minutes a card of the Lark bot waits before it is nudged.

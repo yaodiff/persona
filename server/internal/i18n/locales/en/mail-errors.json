@@ -1,5 +1,19 @@
 {
   "account_unknown": "The mail account \"{account}\" isn't connected to this assistant any more.",
   "search_incomplete": "Couldn't load mail from every account. Check the accounts and try again.",
-  "unreachable": "Couldn't reach this mailbox, even after reconnecting once. Try again later."
+  "unreachable": "Couldn't reach this mailbox, even after reconnecting once. Try again later.",
+  "move_invalid": "Choose a message with its mailbox and UID validity, and provide one destination.",
+  "move_same_mailbox": "Choose a different mailbox for this message.",
+  "move_mailbox_missing": "Couldn't find one of the mailboxes for this move.",
+  "move_message_missing": "Couldn't find the message in the source mailbox. Refresh the mailbox and select it again.",
+  "move_validity_changed": "The mail server reassigned the message IDs in this mailbox. Refresh the mailbox and select the message again.",
+  "move_gmail_archive": "Gmail's Archive action is unavailable. You can choose another destination.",
+  "move_unsupported": "This mail server doesn't support moving a single message safely.",
+  "move_failed": "Couldn't move the message. Check the mailboxes and try again.",
+  "move_timeout": "The mail server took too long to respond before the move started. Try again.",
+  "move_partial": "The message was copied to the destination, but removal from the source could not be confirmed. Refresh both mailboxes and check where it is before trying again.",
+  "move_unknown": "The mail server did not confirm whether the move was applied. Refresh both mailboxes and check where the message is before trying again.",
+  "move_approval_required": "The move requires your approval.",
+  "move_no_subject": "No subject",
+  "move_summary": "Move an email in {account} from {source} to {target}\nSubject: {subject}"
 }

@@ -42,6 +42,31 @@ func TestComputerTextLanguages(t *testing.T) {
 	}
 }
 
+func TestBrowserUnsupportedOSLanguages(t *testing.T) {
+	const original = "当前 macOS 12.7.4 低于 ego lite 要求的 13.0，无法运行"
+	raw := &proto.Browser{Note: original, Job: &proto.ComputerJob{Kind: "install", State: "failed", Error: original}}
+	for _, tc := range []struct {
+		lang Lang
+		want string
+	}{
+		{En, "macOS 12.7.4 is below ego lite's minimum requirement (13.0)"},
+		{ZhHans, original},
+		{Ja, "macOS 12.7.4 は ego lite の必要バージョン（13.0）未満のため起動できません"},
+		{"", original},
+	} {
+		if got := ComputerText(tc.lang, original); got != tc.want {
+			t.Errorf("%s: ComputerText = %q, want %q", tc.lang, got, tc.want)
+		}
+		got := BrowserStatus(tc.lang, raw)
+		if got.Note != tc.want || got.Job.Error != tc.want {
+			t.Errorf("%s: status note = %q, job error = %q, want %q", tc.lang, got.Note, got.Job.Error, tc.want)
+		}
+	}
+	if raw.Note != original || raw.Job.Error != original {
+		t.Fatal("localized shared browser state")
+	}
+}
+
 func TestComputerStatusCopiesAcrossLanguages(t *testing.T) {
 	job := &proto.ComputerJob{Kind: "install", State: "failed", Step: "下载安装器", Error: "安装器失败（exit status 1）：original detail"}
 	computer := &proto.Computer{Note: "这台 Mac 上没有装 Cua Driver", Job: job}

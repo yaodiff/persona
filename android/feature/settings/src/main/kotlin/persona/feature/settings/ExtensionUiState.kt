@@ -34,6 +34,16 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.ast.findChildOfType
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import org.intellij.markdown.flavours.gfm.GFMTokenTypes
+import org.intellij.markdown.html.entities.EntityConverter
+import org.intellij.markdown.parser.LinkMap
+import org.intellij.markdown.parser.MarkdownParser
 
 // An extension's declarative UI (docs/extensions/extensions.md "Declarative UI"): drawing a view, its fields' values, its buttons. The
 // renderer is in ExtensionViewContent.kt; the pages that hold one are in ExtensionUiScreen.kt.
@@ -47,8 +57,17 @@ internal object ExtensionViewText {
         else -> Tone.Neutral
     }
 
-    /** Links and `open_url` are https only (the hub checks it too). */
-    fun isHttps(url: String?): Boolean = url != null && url.startsWith("https://") && url.length > "https://".length
+    /** Links and `open_url` are https only (the hub checks it too): valid host, no userinfo, no control/whitespace. */
+    fun isHttps(url: String?): Boolean {
+        val raw = url ?: return false
+        if (raw.isEmpty() || raw.any { it.isISOControl() || it.isWhitespace() || Character.getType(it) == Character.FORMAT.toInt() }) return false
+        if (!raw.startsWith("https://", ignoreCase = true)) return false
+        val auth = raw.substring(8).substringBefore('/').substringBefore('?').substringBefore('#')
+        if (auth.isEmpty() || '@' in auth || '\\' in auth || '&' in auth || ';' in auth || auth.endsWith(':')) return false
+        val parsed = raw.toHttpUrlOrNull() ?: return false
+        return parsed.isHttps && parsed.host.isNotEmpty() && parsed.host != "." &&
+            parsed.username.isEmpty() && parsed.password.isEmpty()
+    }
 
     /**
      * The inbox item an inbox item's page asks to see at its source (`open_url: persona://inbox/<id>/source`, the one
@@ -62,6 +81,23 @@ internal object ExtensionViewText {
         return runCatching { java.net.URLDecoder.decode(segments[0].replace("+", "%2B"), "UTF-8") }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * The extension whose settings an extension page asks to open (`persona://settings/extensions/<id>`, the id escaped
+     * as one segment). Only the page's own extension is accepted; it opens Settings › Extensions › that extension.
+     */
+    fun settings(extension: String, url: String?): String? {
+        val rawUrl = url ?: return null
+        val uri = runCatching { java.net.URI(rawUrl) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in persona.core.contracts.ProtocolCompatibility.appSchemes ||
+            uri.rawAuthority?.lowercase() != "settings" || uri.rawUserInfo != null ||
+            uri.rawQuery != null || uri.rawFragment != null || '#' in rawUrl
+        ) return null
+        val parts = uri.rawPath?.removePrefix("/")?.split("/") ?: return null
+        if (parts.size != 2 || parts[0] != "extensions") return null
+        val id = runCatching { java.net.URLDecoder.decode(parts[1].replace("+", "%2B"), "UTF-8") }.getOrNull() ?: return null
+        return id.takeIf { it.isNotBlank() && it == extension }
+    }
+
     /** The most of a Set Up with … text taken (#5278): the pages name a source, they never carry its content. */
     const val ASK_MOST = 8000
 
@@ -70,9 +106,10 @@ internal object ExtensionViewText {
      * assistant's main conversation. Null for any other link, an empty text, or more than [ASK_MOST] characters.
      */
     fun askText(url: String?): String? {
-        val uri = runCatching { java.net.URI(url ?: return null) }.getOrNull() ?: return null
+        val rawUrl = url ?: return null
+        val uri = runCatching { java.net.URI(rawUrl) }.getOrNull() ?: return null
         if (uri.scheme?.lowercase() !in persona.core.contracts.ProtocolCompatibility.appSchemes) return null
-        if (uri.host?.lowercase() != "ask") return null
+        if (uri.rawAuthority?.lowercase() != "ask" || uri.rawUserInfo != null || uri.rawFragment != null || '#' in rawUrl) return null
         val path = uri.rawPath.orEmpty()
         if (path.isNotEmpty() && path != "/") return null
         val raw = uri.rawQuery ?: return null
@@ -81,12 +118,45 @@ internal object ExtensionViewText {
             if (name == "text") part.substringAfter('=', "") else null
         } ?: return null
         val text = decodeQuery(encoded) ?: return null
-        if (text.trim().isEmpty() || text.length > ASK_MOST) return null
+        if (text.isBlank() || text.length > ASK_MOST) return null
         return text
     }
 
     /** [askText] when [extension] is the subscription pages; every other page refuses the link. */
     fun askFrom(extension: String, url: String?): String? = if (extension == SUBSCRIPTIONS_UI) askText(url) else null
+
+    /**
+     * The text of one of this extension's quick prompts (`persona://compose?prompt=<id>&text=…`, an older name's scheme
+     * too). The hub has already checked that the id and text match one of the extension's enabled quick prompts; this
+     * reads the same strict link shape and returns null for every other link.
+     */
+    fun composeText(url: String?): String? {
+        val raw = url ?: return null
+        val uri = runCatching { java.net.URI(raw) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in persona.core.contracts.ProtocolCompatibility.appSchemes ||
+            uri.rawAuthority?.lowercase() != "compose" || uri.userInfo != null ||
+            uri.rawPath?.let { it.isNotEmpty() && it != "/" } == true ||
+            uri.rawQuery == null || uri.rawFragment != null || '#' in raw
+        ) return null
+        val fields = linkedMapOf<String, String>()
+        for (part in uri.rawQuery.split('&')) {
+            val name = decodeCompose(part.substringBefore('=')) ?: return null
+            if (name !in setOf("prompt", "text") || name in fields) return null
+            fields[name] = decodeCompose(part.substringAfter('=', "")) ?: return null
+        }
+        val prompt = fields["prompt"] ?: return null
+        val text = fields["text"] ?: return null
+        if (prompt.isEmpty() || prompt.codePointCount(0, prompt.length) > COMPOSE_PROMPT_MOST || prompt.any(Char::isWhitespace)) return null
+        if (text.isBlank() || text.codePointCount(0, text.length) > COMPOSE_TEXT_MOST) return null
+        return text
+    }
+
+    /** [composeText] for an extension page: the hub has tied the quick prompt to this extension already. */
+    fun composeFrom(extension: String, url: String?): String? =
+        if (extension.isNotBlank()) composeText(url) else null
+
+    private const val COMPOSE_PROMPT_MOST = 64
+    private const val COMPOSE_TEXT_MOST = 8_000
 
     /** A space conversation's machine and session, never a general app link. */
     fun spaceConversation(url: String?): Pair<String, String>? {
@@ -98,12 +168,18 @@ internal object ExtensionViewText {
         return parts[0] to parts[2]
     }
 
-    /** Which `open_url` a button may bring back: https, and on the subscription pages also Set Up with …. */
-    fun opens(extension: String, url: String?): Boolean = isHttps(url) || askFrom(extension, url) != null || extension == "space-conversations" && spaceConversation(url) != null
+    /** Which `open_url` a button may bring back: https, this page's own settings, and the reserved pages' links. */
+    fun opens(extension: String, url: String?): Boolean =
+        isHttps(url) || settings(extension, url) != null || askFrom(extension, url) != null || composeFrom(extension, url) != null ||
+            extension == "space-conversations" && spaceConversation(url) != null
 
     /** A query component, with `+` kept (the pages percent-encode; they do not use form encoding). */
     private fun decodeQuery(raw: String): String? =
         runCatching { java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") }.getOrNull()
+
+    /** A compose query uses ordinary form encoding, where `+` is a space, as the hub's `url.Query()` reads it. */
+    private fun decodeCompose(raw: String): String? =
+        runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrNull()
 
     /** A field's value before the user touches it: the extension's, never for a secret; a switch is off; no choices `[]`. */
     fun initial(item: ExtensionViewItem): String = when (item.kind) {
@@ -258,6 +334,10 @@ internal object ExtensionViewText {
         "grid", "carousel" -> item.tiles.orEmpty().any { it.title.isNotBlank() }
         // UI version 10 (#9727): the shared layout needs at least one node.
         "graph" -> !item.nodes.isNullOrEmpty()
+        // UI version 11 (#12544): the description also labels the poster or text fallback.
+        "scene" -> !item.alt.isNullOrBlank()
+        // UI version 12: a map needs a viewport, markers, routes, or a text fallback.
+        "map" -> item.viewport != null || !item.markers.isNullOrEmpty() || !item.routes.isNullOrEmpty() || !item.alt.isNullOrBlank()
         else -> false
     }
 
@@ -291,9 +371,457 @@ internal object ExtensionViewText {
      * quotes and https links. Pictures become their words, other links their words; HTML is drawn as the text it is
      * (the renderer has no HTML).
      */
-    fun safeMarkdown(text: String): String = text.take(20_000)
-        .replace(Regex("!\\[([^\\]]*)]\\([^)]*\\)"), "$1")
-        .replace(Regex("\\[([^\\]]*)]\\((?!https://)[^)]*\\)"), "$1")
+    fun safeMarkdown(text: String): String = SafeMarkdown.sanitize(text.take(20_000), ::isHttps)
+
+    /**
+     * AST-based sanitizer using the exact `org.intellij.markdown` GFM parser that `Markdown(...)` renders with:
+     * preserves code blocks/spans, strips all images (inline and reference), keeps only links/autolinks/definitions
+     * whose entity- and escape-decoded destination passes [allowedUrl], and converges to a fixed point so stripped
+     * output can never recombine into new link or image syntax.
+     */
+    private object SafeMarkdown {
+        private const val MAX_PASSES = 8
+        private val flavour = GFMFlavourDescriptor()
+
+        fun sanitize(input: String, allowedUrl: (String?) -> Boolean): String {
+            if (input.isEmpty()) return input
+            var current = input
+            repeat(MAX_PASSES) {
+                val next = sanitizePass(current, allowedUrl)
+                if (next == current) return current
+                current = next
+            }
+            // Fail-closed fallback if pathological nesting did not converge within MAX_PASSES.
+            return if (hasUnsafeNode(current, allowedUrl)) escapeMarkdownLinks(current) else current
+        }
+
+        private fun sanitizePass(s: String, allowedUrl: (String?) -> Boolean): String {
+            val tree = MarkdownParser(flavour).buildMarkdownTreeFromString(s)
+            val linkMap = LinkMap.buildLinkMap(tree, s)
+            val out = StringBuilder(s.length)
+            var changed = false
+            var lastEnd = 0
+
+            fun appendGap(until: Int) {
+                if (until > lastEnd) out.append(s, lastEnd, until)
+                lastEnd = until
+            }
+
+            /** Inside an already-kept safe link's text, strip all nested images/links and neutralize autolinks. */
+            fun visitInsideSafeLink(node: ASTNode) {
+                when (node.type) {
+                    MarkdownElementTypes.CODE_SPAN -> return
+                    MarkdownElementTypes.IMAGE,
+                    MarkdownElementTypes.INLINE_LINK,
+                    MarkdownElementTypes.FULL_REFERENCE_LINK,
+                    MarkdownElementTypes.SHORT_REFERENCE_LINK -> {
+                        val inner = if (node.type == MarkdownElementTypes.IMAGE) {
+                            node.children.firstOrNull {
+                                it.type == MarkdownElementTypes.INLINE_LINK ||
+                                    it.type == MarkdownElementTypes.FULL_REFERENCE_LINK ||
+                                    it.type == MarkdownElementTypes.SHORT_REFERENCE_LINK
+                            }
+                        } else node
+                        val isUnresolvedRef = (node.type == MarkdownElementTypes.FULL_REFERENCE_LINK ||
+                            node.type == MarkdownElementTypes.SHORT_REFERENCE_LINK) &&
+                            lookupRef(
+                                node.findChildOfType(MarkdownElementTypes.LINK_LABEL),
+                                node.findChildOfType(MarkdownElementTypes.LINK_TEXT),
+                                s,
+                                linkMap,
+                            ) == null
+                        if (isUnresolvedRef) {
+                            for (child in node.children) visitInsideSafeLink(child)
+                            return
+                        }
+                        appendGap(node.startOffset)
+                        inner?.let(::labelNodeOf)?.let { appendStrippedLabel(out, it, s, linkMap) }
+                        lastEnd = node.endOffset
+                        changed = true
+                        return
+                    }
+                    MarkdownElementTypes.AUTOLINK -> {
+                        appendGap(node.startOffset)
+                        val inside = if (node.endOffset - node.startOffset >= 2) {
+                            s.substring(node.startOffset + 1, node.endOffset - 1)
+                        } else ""
+                        out.append(neutralizeUrl(inside))
+                        lastEnd = node.endOffset
+                        changed = true
+                        return
+                    }
+                    GFMTokenTypes.GFM_AUTOLINK,
+                    MarkdownTokenTypes.EMAIL_AUTOLINK -> {
+                        appendGap(node.startOffset)
+                        out.append(neutralizeUrl(s.substring(node.startOffset, node.endOffset)))
+                        lastEnd = node.endOffset
+                        changed = true
+                        return
+                    }
+                }
+                for (child in node.children) visitInsideSafeLink(child)
+            }
+
+            fun visit(node: ASTNode) {
+                when (node.type) {
+                    MarkdownElementTypes.CODE_FENCE,
+                    MarkdownElementTypes.CODE_BLOCK,
+                    MarkdownElementTypes.CODE_SPAN -> return
+
+                    MarkdownElementTypes.IMAGE -> {
+                        appendGap(node.startOffset)
+                        val inner = node.children.firstOrNull {
+                            it.type == MarkdownElementTypes.INLINE_LINK ||
+                                it.type == MarkdownElementTypes.FULL_REFERENCE_LINK ||
+                                it.type == MarkdownElementTypes.SHORT_REFERENCE_LINK
+                        }
+                        val labelNode = inner?.let(::labelNodeOf)
+                        if (labelNode != null) appendStrippedLabel(out, labelNode, s, linkMap)
+                        lastEnd = node.endOffset
+                        changed = true
+                        return
+                    }
+
+                    MarkdownElementTypes.LINK_DEFINITION -> {
+                        if (!isSafeDefinition(node, s, allowedUrl)) {
+                            appendGap(node.startOffset)
+                            var end = node.endOffset
+                            // Drop trailing newline when this unsafe definition occupies a standalone line.
+                            val atLineStart = node.startOffset == 0 || s[node.startOffset - 1] == '\n'
+                            if (atLineStart) {
+                                if (end < s.length && s[end] == '\r') end++
+                                if (end < s.length && s[end] == '\n') end++
+                            }
+                            lastEnd = end
+                            changed = true
+                        }
+                        return
+                    }
+
+                    MarkdownElementTypes.INLINE_LINK -> {
+                        val destNode = inlineLinkDestinationNode(node)
+                        val safe = destNode != null && isSafeDestination(s.substring(destNode.startOffset, destNode.endOffset), allowedUrl)
+                        val textNode = node.findChildOfType(MarkdownElementTypes.LINK_TEXT)
+                        if (safe) {
+                            appendGap(node.startOffset)
+                            if (escapeTrailingUnescapedBang(out)) changed = true
+                            if (textNode != null) {
+                                // Emit '[', sanitize inside link text, then keep ']' + '(dest)'.
+                                out.append(s, node.startOffset, textNode.startOffset + 1)
+                                lastEnd = textNode.startOffset + 1
+                                for (child in textNode.children) {
+                                    if (child.startOffset >= textNode.startOffset + 1 && child.endOffset <= textNode.endOffset - 1) {
+                                        visitInsideSafeLink(child)
+                                    }
+                                }
+                                appendGap(node.endOffset)
+                            } else {
+                                appendGap(node.endOffset)
+                            }
+                        } else {
+                            appendGap(node.startOffset)
+                            if (textNode != null) appendStrippedLabel(out, textNode, s, linkMap)
+                            lastEnd = node.endOffset
+                            changed = true
+                        }
+                        return
+                    }
+
+                    MarkdownElementTypes.FULL_REFERENCE_LINK -> {
+                        val textNode = node.findChildOfType(MarkdownElementTypes.LINK_TEXT)
+                        val labelNode = node.findChildOfType(MarkdownElementTypes.LINK_LABEL)
+                        val lookup = lookupRef(labelNode, textNode, s, linkMap)
+                        if (lookup == null) {
+                            // Unresolved `[a][b]` is plain text in CommonMark; still visit children for nested images/links.
+                            for (child in node.children) visit(child)
+                            return
+                        }
+                        if (isSafeDefinition(lookup.node, s, allowedUrl)) {
+                            appendGap(node.startOffset)
+                            if (escapeTrailingUnescapedBang(out)) changed = true
+                            if (textNode != null) {
+                                out.append(s, node.startOffset, textNode.startOffset + 1)
+                                lastEnd = textNode.startOffset + 1
+                                for (child in textNode.children) {
+                                    if (child.startOffset >= textNode.startOffset + 1 && child.endOffset <= textNode.endOffset - 1) {
+                                        visitInsideSafeLink(child)
+                                    }
+                                }
+                                appendGap(node.endOffset)
+                            } else {
+                                appendGap(node.endOffset)
+                            }
+                        } else {
+                            appendGap(node.startOffset)
+                            if (textNode != null) appendStrippedLabel(out, textNode, s, linkMap)
+                            lastEnd = node.endOffset
+                            changed = true
+                        }
+                        return
+                    }
+
+                    MarkdownElementTypes.SHORT_REFERENCE_LINK -> {
+                        val labelNode = node.findChildOfType(MarkdownElementTypes.LINK_LABEL)
+                        val lookup = labelNode?.let { linkMap.getLinkInfo(s.substring(it.startOffset, it.endOffset)) }
+                        if (lookup == null) {
+                            for (child in node.children) visit(child)
+                            return
+                        }
+                        if (isSafeDefinition(lookup.node, s, allowedUrl)) {
+                            appendGap(node.startOffset)
+                            if (escapeTrailingUnescapedBang(out)) changed = true
+                            out.append(s, node.startOffset, labelNode.startOffset + 1)
+                            lastEnd = labelNode.startOffset + 1
+                            for (child in labelNode.children) {
+                                if (child.startOffset >= labelNode.startOffset + 1 && child.endOffset <= labelNode.endOffset - 1) {
+                                    visitInsideSafeLink(child)
+                                }
+                            }
+                            appendGap(node.endOffset)
+                        } else {
+                            appendGap(node.startOffset)
+                            appendStrippedLabel(out, labelNode, s, linkMap)
+                            lastEnd = node.endOffset
+                            changed = true
+                        }
+                        return
+                    }
+
+                    MarkdownElementTypes.AUTOLINK -> {
+                        val inside = if (node.endOffset - node.startOffset >= 2) {
+                            s.substring(node.startOffset + 1, node.endOffset - 1)
+                        } else ""
+                        val isEmail = node.findChildOfType(MarkdownTokenTypes.EMAIL_AUTOLINK) != null
+                        if (isEmail || !allowedUrl(inside)) {
+                            appendGap(node.startOffset)
+                            out.append(neutralizeUrl(inside))
+                            lastEnd = node.endOffset
+                            changed = true
+                        }
+                        return
+                    }
+
+                    GFMTokenTypes.GFM_AUTOLINK,
+                    MarkdownTokenTypes.EMAIL_AUTOLINK -> {
+                        val raw = s.substring(node.startOffset, node.endOffset)
+                        if (node.type == MarkdownTokenTypes.EMAIL_AUTOLINK || !allowedUrl(raw)) {
+                            appendGap(node.startOffset)
+                            out.append(neutralizeUrl(raw))
+                            lastEnd = node.endOffset
+                            changed = true
+                        }
+                        return
+                    }
+                }
+                for (child in node.children) visit(child)
+            }
+
+            visit(tree)
+            if (!changed) return s
+            appendGap(s.length)
+            return out.toString()
+        }
+
+        private fun hasUnsafeNode(s: String, allowedUrl: (String?) -> Boolean): Boolean {
+            val tree = MarkdownParser(flavour).buildMarkdownTreeFromString(s)
+            val linkMap = LinkMap.buildLinkMap(tree, s)
+            fun check(node: ASTNode): Boolean {
+                when (node.type) {
+                    MarkdownElementTypes.CODE_FENCE,
+                    MarkdownElementTypes.CODE_BLOCK,
+                    MarkdownElementTypes.CODE_SPAN -> return false
+                    MarkdownElementTypes.IMAGE -> return true
+                    MarkdownElementTypes.LINK_DEFINITION -> return !isSafeDefinition(node, s, allowedUrl)
+                    MarkdownElementTypes.INLINE_LINK -> {
+                        val destNode = inlineLinkDestinationNode(node)
+                        if (destNode == null || !isSafeDestination(s.substring(destNode.startOffset, destNode.endOffset), allowedUrl)) return true
+                    }
+                    MarkdownElementTypes.FULL_REFERENCE_LINK -> {
+                        val info = lookupRef(
+                            node.findChildOfType(MarkdownElementTypes.LINK_LABEL),
+                            node.findChildOfType(MarkdownElementTypes.LINK_TEXT),
+                            s,
+                            linkMap,
+                        )
+                        if (info != null && !isSafeDefinition(info.node, s, allowedUrl)) return true
+                    }
+                    MarkdownElementTypes.SHORT_REFERENCE_LINK -> {
+                        val label = node.findChildOfType(MarkdownElementTypes.LINK_LABEL)
+                        val info = label?.let { linkMap.getLinkInfo(s.substring(it.startOffset, it.endOffset)) }
+                        if (info != null && !isSafeDefinition(info.node, s, allowedUrl)) return true
+                    }
+                    MarkdownElementTypes.AUTOLINK -> {
+                        val inside = if (node.endOffset - node.startOffset >= 2) s.substring(node.startOffset + 1, node.endOffset - 1) else ""
+                        if (node.findChildOfType(MarkdownTokenTypes.EMAIL_AUTOLINK) != null || !allowedUrl(inside)) return true
+                    }
+                    GFMTokenTypes.GFM_AUTOLINK,
+                    MarkdownTokenTypes.EMAIL_AUTOLINK -> {
+                        if (node.type == MarkdownTokenTypes.EMAIL_AUTOLINK || !allowedUrl(s.substring(node.startOffset, node.endOffset))) return true
+                    }
+                }
+                return node.children.any(::check)
+            }
+            return check(tree)
+        }
+
+        private fun lookupRef(labelNode: ASTNode?, textNode: ASTNode?, s: String, linkMap: LinkMap): LinkMap.LinkInfo? {
+            val rawLabel = labelNode?.let { s.substring(it.startOffset, it.endOffset) }
+            val key = if (rawLabel != null && rawLabel != "[]") rawLabel else textNode?.let { s.substring(it.startOffset, it.endOffset) }
+            return key?.let(linkMap::getLinkInfo)
+        }
+
+        private fun labelNodeOf(node: ASTNode): ASTNode? =
+            node.findChildOfType(MarkdownElementTypes.LINK_TEXT) ?: node.findChildOfType(MarkdownElementTypes.LINK_LABEL)
+
+        /**
+         * In `org.intellij.markdown`, `[t](<url>)` emits the destination as an `AUTOLINK` child (and if followed by a
+         * title, emits a trailing `LINK_DESTINATION` for the title), whereas `[t](url)` emits `LINK_DESTINATION`.
+         * Taking the first direct `LINK_DESTINATION` or `AUTOLINK` child always selects the actual destination.
+         */
+        private fun inlineLinkDestinationNode(node: ASTNode): ASTNode? =
+            node.children.firstOrNull {
+                it.type == MarkdownElementTypes.LINK_DESTINATION || it.type == MarkdownElementTypes.AUTOLINK
+            }
+
+        private fun isSafeDefinition(defNode: ASTNode, s: String, allowedUrl: (String?) -> Boolean): Boolean {
+            val destNode = defNode.findChildOfType(MarkdownElementTypes.LINK_DESTINATION) ?: return false
+            return isSafeDestination(s.substring(destNode.startOffset, destNode.endOffset), allowedUrl)
+        }
+
+        /**
+         * Validates a CommonMark destination against both raw-authority tricks (entity/escape smuggling like `&sol;@` or `\/@`)
+         * and the entity- + backslash-decoded URL so neither entity-decoding nor non-decoding renderers can be tricked.
+         */
+        private fun isSafeDestination(raw: String, allowedUrl: (String?) -> Boolean): Boolean {
+            val trimmed = raw.trim()
+            val unwrapped = if (trimmed.length >= 2 && trimmed.startsWith('<') && trimmed.endsWith('>')) {
+                trimmed.substring(1, trimmed.length - 1)
+            } else {
+                trimmed
+            }
+            if (!unwrapped.startsWith("https://", ignoreCase = true)) return false
+            val rawAuth = unwrapped.substring(8).substringBefore('/').substringBefore('?').substringBefore('#')
+            if ('\\' in rawAuth || '@' in rawAuth || '&' in rawAuth || ';' in rawAuth) return false
+            val decoded = EntityConverter.replaceEntities(unwrapped, processEntities = true, processEscapes = true)
+            val unescaped = EntityConverter.replaceEntities(unwrapped, processEntities = false, processEscapes = true)
+            return allowedUrl(decoded) && allowedUrl(unescaped)
+        }
+
+        /** Emits the label/alt inside `[...]` as plain text, escaping brackets and neutralizing nested images/links/autolinks. */
+        private fun appendStrippedLabel(out: StringBuilder, bracketed: ASTNode, s: String, linkMap: LinkMap) {
+            val innerStart = bracketed.startOffset + 1
+            val innerEnd = bracketed.endOffset - 1
+            if (innerEnd <= innerStart) return
+            fun emit(node: ASTNode) {
+                when (node.type) {
+                    MarkdownElementTypes.CODE_SPAN -> {
+                        out.append(s, node.startOffset, node.endOffset)
+                        return
+                    }
+                    MarkdownElementTypes.IMAGE -> {
+                        val inner = node.children.firstOrNull {
+                            it.type == MarkdownElementTypes.INLINE_LINK ||
+                                it.type == MarkdownElementTypes.FULL_REFERENCE_LINK ||
+                                it.type == MarkdownElementTypes.SHORT_REFERENCE_LINK
+                        }
+                        inner?.let(::labelNodeOf)?.let { appendStrippedLabel(out, it, s, linkMap) }
+                        return
+                    }
+                    MarkdownElementTypes.INLINE_LINK -> {
+                        labelNodeOf(node)?.let { appendStrippedLabel(out, it, s, linkMap) }
+                        return
+                    }
+                    MarkdownElementTypes.FULL_REFERENCE_LINK,
+                    MarkdownElementTypes.SHORT_REFERENCE_LINK -> {
+                        val resolved = lookupRef(
+                            node.findChildOfType(MarkdownElementTypes.LINK_LABEL),
+                            node.findChildOfType(MarkdownElementTypes.LINK_TEXT),
+                            s,
+                            linkMap,
+                        )
+                        if (resolved != null) {
+                            labelNodeOf(node)?.let { appendStrippedLabel(out, it, s, linkMap) }
+                            return
+                        }
+                    }
+                    MarkdownElementTypes.AUTOLINK -> {
+                        val inside = if (node.endOffset - node.startOffset >= 2) s.substring(node.startOffset + 1, node.endOffset - 1) else ""
+                        out.append(neutralizeUrl(inside))
+                        return
+                    }
+                    GFMTokenTypes.GFM_AUTOLINK,
+                    MarkdownTokenTypes.EMAIL_AUTOLINK -> {
+                        out.append(neutralizeUrl(s.substring(node.startOffset, node.endOffset)))
+                        return
+                    }
+                }
+                if (node.children.isEmpty()) {
+                    var i = node.startOffset
+                    while (i < node.endOffset) {
+                        val c = s[i]
+                        if (c == '[' || c == ']') {
+                            if (trailingBackslashCount(out) % 2 == 0) out.append('\\')
+                            out.append(c)
+                        } else {
+                            out.append(c)
+                        }
+                        i++
+                    }
+                } else {
+                    for (child in node.children) {
+                        if (child.startOffset >= innerStart && child.endOffset <= innerEnd) emit(child)
+                    }
+                }
+            }
+            for (child in bracketed.children) {
+                if (child.startOffset >= innerStart && child.endOffset <= innerEnd) emit(child)
+            }
+        }
+
+        private fun trailingBackslashCount(out: StringBuilder): Int {
+            var backslashes = 0
+            var k = out.length - 1
+            while (k >= 0 && out[k] == '\\') { backslashes++; k-- }
+            return backslashes
+        }
+
+        private fun escapeTrailingUnescapedBang(out: StringBuilder): Boolean {
+            val len = out.length
+            if (len == 0 || out[len - 1] != '!') return false
+            var backslashes = 0
+            var k = len - 2
+            while (k >= 0 && out[k] == '\\') { backslashes++; k-- }
+            if (backslashes % 2 == 0) {
+                out.insert(len - 1, '\\')
+                return true
+            }
+            return false
+        }
+
+        /** Breaks CommonMark `<scheme:...>` and GFM bare URL/www/email autolinks while preserving visible characters. */
+        private fun neutralizeUrl(raw: String): String {
+            val sb = StringBuilder(raw.length + 4)
+            var i = 0
+            while (i < raw.length) {
+                val c = raw[i]
+                val escape = c == ':' || c == '@' ||
+                    (i >= 3 && c == '.' && raw.regionMatches(i - 3, "www", 0, 3, ignoreCase = true))
+                if (escape && trailingBackslashCount(sb) % 2 == 0) sb.append('\\')
+                sb.append(c)
+                i++
+            }
+            return sb.toString()
+        }
+
+        private fun escapeMarkdownLinks(s: String): String {
+            val sb = StringBuilder(s.length + 16)
+            for (c in s) {
+                if (c in "\\[]!<>:@.()`~") sb.append('\\')
+                sb.append(c)
+            }
+            return sb.toString()
+        }
+    }
 
     /** Lazy-list keys for a section's items: the extension's [ExtensionViewItem.key] when it gives one (and unique). */
     fun itemKeys(items: List<ExtensionViewItem>): List<String?> {

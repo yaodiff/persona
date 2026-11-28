@@ -17,6 +17,17 @@ struct FleetStateTests {
         #expect(s.items.first?.key?.session == "s")
     }
 
+    @Test func decodesTheExactInteractionOccurrence() throws {
+        let occurrence = "2026-01-02T03:04:05.000000001Z"
+        let item = try JSONDecoder().decode(FleetState.Item.self, from: Data(
+            #"{"id":"m/s","kind":"permission","interaction":"ix","interactionCreatedAt":"2026-01-02T03:04:05.000000001Z"}"#.utf8))
+        #expect(item.interactionCreatedAt == occurrence)
+        #expect(try JSONDecoder().decode(FleetState.Item.self, from: JSONEncoder().encode(item)).interactionCreatedAt == occurrence)
+        let legacy = try JSONDecoder().decode(FleetState.Item.self, from: Data(
+            #"{"id":"m/s","kind":"permission","interaction":"ix"}"#.utf8))
+        #expect(legacy.interactionCreatedAt == nil)
+    }
+
     /// A newer hub must never kill the activity: unknown phases / kinds and missing fields decode to something.
     @Test func lenientDecoding() throws {
         let s = try JSONDecoder().decode(FleetState.self, from: Data(#"{"phase":"later","items":[{"id":"a/b","kind":"teleport"}]}"#.utf8))
@@ -258,12 +269,15 @@ struct FleetStateTests {
     /// #12982: without names on the Lock Screen a request has no Allow / Deny (as the hub's forDevice): nobody can tell
     /// who asks or what approving does. With names the buttons stay.
     @Test func noButtonsWithoutDetails() {
-        let ask = FleetState.Item(id: "m/s", title: "Infra lead", kind: .permission, detail: "Mark the to-do done", interaction: "ix_1")
+        let ask = FleetState.Item(id: "m/s", title: "Infra lead", kind: .permission, detail: "Mark the to-do done",
+                                  interaction: "ix_1", interactionCreatedAt: "2026-01-02T03:04:05.000000001Z")
         let s = FleetState(phase: .needsYou, needsYou: 1, items: [ask])
         let hidden = s.tailored(island: IslandPrefs(), details: false)
         #expect(hidden.firstActionable == nil)
+        #expect(hidden.items.first?.interactionCreatedAt == nil)
         #expect(hidden.needsYou == 1 && hidden.items.count == 1)
         #expect(FleetLink.lockScreen(hidden, stale: false) == FleetLink.url(ask)) // a tap opens the request in the app
         #expect(s.tailored(island: IslandPrefs(), details: true).firstActionable?.interaction == "ix_1")
+        #expect(s.tailored(island: IslandPrefs(), details: true).firstActionable?.interactionCreatedAt == ask.interactionCreatedAt)
     }
 }

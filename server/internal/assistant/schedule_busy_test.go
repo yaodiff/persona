@@ -22,7 +22,7 @@ func TestSessionBusyWhileItWaitsForTheUser(t *testing.T) {
 	defer cancel()
 	go func() {
 		_, _ = s.waitInteraction(wctx, proto.Interaction{ID: "ix_card", MachineID: "mac", SessionID: "card",
-			Kind: proto.IxPermission, Summary: "Bash: rm -rf build", ExpiresAt: now.Add(time.Minute)})
+			Kind: proto.IxPermission, OutwardWrite: true, Summary: "Bash: rm -rf build", ExpiresAt: now.Add(time.Minute)})
 	}()
 	waitFor(t, "the approval card", func() bool { _, ok := s.pendingIx("ix_card"); return ok })
 	ctx := context.Background()

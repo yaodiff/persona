@@ -622,9 +622,10 @@ type plistNode struct {
 // plistJob is what a launchd property list runs: args[0] is the program and the rest its arguments, and disabled says
 // launchd leaves the job unloaded.
 type plistJob struct {
-	label    string
-	args     []string
-	disabled bool
+	label     string
+	args      []string
+	disabled  bool
+	stateRoot string
 }
 
 // launchdJob reads an XML property list's job. launchd runs Program when there is one, with ProgramArguments as its
@@ -652,6 +653,18 @@ func launchdJob(b []byte) (job plistJob, ok bool) {
 			}
 		case "Disabled":
 			job.disabled = v.XMLName.Local == "true"
+		case "EnvironmentVariables":
+			current, legacy := compat.EnvNames("PERSONA_HOME")
+			for i := 0; i+1 < len(v.Nodes); i += 2 {
+				switch v.Nodes[i].Text {
+				case current:
+					job.stateRoot = v.Nodes[i+1].Text
+				case legacy:
+					if job.stateRoot == "" {
+						job.stateRoot = v.Nodes[i+1].Text
+					}
+				}
+			}
 		}
 	}
 	if program != "" {

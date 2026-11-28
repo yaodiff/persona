@@ -1,0 +1,6 @@
+<resources>
+    <string name="agents_seen_rows_notice">確認済みのエージェントは、下に引いてリストを更新するまで元の位置に残ります。</string>
+    <plurals name="agents_clear_seen">
+        <item quantity="other">確認済みを外す（%d）</item>
+    </plurals>
+</resources>

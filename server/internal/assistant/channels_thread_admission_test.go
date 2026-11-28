@@ -105,6 +105,50 @@ func TestChannelReceiveConcurrentFirstThreadMessages(t *testing.T) {
 	}
 }
 
+func TestChannelReceiveDualTopicKeepsOrderAcrossToggle(t *testing.T) {
+	s, f, h := admissionChannelService(t, true, nil)
+	var release sync.Once
+	defer release.Do(func() { close(h.release) })
+	receive := func(id, thread string) {
+		t.Helper()
+		m := channel.Message{ID: id, Text: "topic request", Thread: thread,
+			ChatID: "oc_group", ChatKind: channel.ChatKindTopic, TopicID: "omt_topic"}
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ChannelReceive(context.Background(), ChannelReceive{Channel: "examplechat", Message: raw}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	receive("first", "oc_group:omt_topic")
+	select {
+	case <-h.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first request never started")
+	}
+	setIntegrationsV2ViaHTTP(t, s, true, false)
+	// The second message bridges the keys before a structured-only message follows it.
+	receive("second", "oc_group:omt_topic")
+	receive("third", "")
+	select {
+	case <-h.second:
+	case <-time.After(200 * time.Millisecond):
+	}
+	release.Do(func() { close(h.release) })
+	waitAdmissionDrained(t, s)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h.starts.Load() != 1 || len(f.sentOnce) != 2 {
+		t.Fatalf("topic across toggle: starts=%d continuations=%d, want 1 and 2", h.starts.Load(), len(f.sentOnce))
+	}
+	for _, send := range f.sentOnce {
+		if send["session_id"] != "s1" {
+			t.Fatalf("continuation sent to %v, want s1", send["session_id"])
+		}
+	}
+}
+
 func receiveAdmissionMessage(t *testing.T, s *Service, id, text, thread string) {
 	t.Helper()
 	raw, err := json.Marshal(map[string]string{"id": id, "text": text, "thread": thread, "forward": "synthetic preceding context", "quote": "synthetic quoted message"})
@@ -118,7 +162,7 @@ func receiveAdmissionMessage(t *testing.T, s *Service, id, text, thread string) 
 
 func waitAdmissionDrained(t *testing.T, s *Service) {
 	t.Helper()
-	waitUntil(t, func() bool { s.chans.mu.Lock(); defer s.chans.mu.Unlock(); return len(s.chans.receiving) == 0 })
+	waitUntil(t, func() bool { s.chans.mu.Lock(); defer s.chans.mu.Unlock(); return len(s.chans.bindings.pending) == 0 })
 }
 
 func TestChannelOrdinaryReceiptsReserveTheSameOrderedRoute(t *testing.T) {
@@ -129,11 +173,11 @@ func TestChannelOrdinaryReceiptsReserveTheSameOrderedRoute(t *testing.T) {
 		t.Fatalf("first ordinary receipt: %v %v", first, err)
 	}
 	second, err := s.admitChannelMessage(ctx, "examplechat", channel.Message{ID: "second", Thread: " "})
-	if err != nil || second == nil || first.done == nil || second.prev != first.done {
+	if err != nil || second == nil || first.reservation.done == nil || second.reservation.slots[0].prev != first.reservation.done {
 		t.Fatalf("the second ordinary receipt did not follow the first: %v %v", second, err)
 	}
 	topic, err := s.admitChannelMessage(ctx, "examplechat", channel.Message{ID: "topic", Thread: "independent"})
-	if err != nil || topic == nil || topic.prev != nil {
+	if err != nil || topic == nil || topic.reservation.slots[0].prev != nil {
 		t.Fatalf("an independent topic waited on the ordinary route: %v %v", topic, err)
 	}
 }
@@ -287,11 +331,11 @@ func TestChannelReceiveSameThreadKeyInOtherChannelDoesNotWait(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("another channel waited for the blocked channel")
 	}
-	waitUntil(t, func() bool { return s.channelThreadOf(context.Background(), "otherchat", "same-key") != nil })
+	waitUntil(t, func() bool { return boundThreadFor(s, "otherchat", "same-key") != "" })
 	release.Do(func() { close(h.release) })
 	waitAdmissionDrained(t, s)
-	other := s.channelThreadOf(context.Background(), "otherchat", "same-key")
-	if other == nil || other.SessionID == boundThread(s, "same-key") {
+	other := boundThreadFor(s, "otherchat", "same-key")
+	if other == "" || other == boundThread(s, "same-key") {
 		t.Fatal("channels with equal thread keys share a conversation")
 	}
 }
@@ -308,7 +352,7 @@ func (st *admissionClaimStore) PutSetting(ctx context.Context, key string, value
 	if state, ok := value.(channelsState); ok && key == channelsStateKey && slices.Contains(state.Seen["examplechat"], "first") {
 		st.once.Do(func() {
 			// saveChannelStateLocked holds the book lock: the durable claim must already have its queue position.
-			st.observed <- len(st.s.chans.receiving) == 1
+			st.observed <- len(st.s.chans.bindings.pending) == 1
 			<-st.release
 		})
 	}
@@ -372,7 +416,7 @@ func TestChannelReceiveFailedClaimCanBeRedelivered(t *testing.T) {
 		t.Fatal("failed durable claim was acknowledged")
 	}
 	s.chans.mu.Lock()
-	reserved := len(s.chans.receiving)
+	reserved := len(s.chans.bindings.pending)
 	seen := slices.Contains(s.chans.st.Seen["examplechat"], "retryable")
 	s.chans.mu.Unlock()
 	if reserved != 0 || seen || f.sent() != 0 {
@@ -399,9 +443,11 @@ func TestChannelReceiveOldStartCannotBindNewGeneration(t *testing.T) {
 			if !threads {
 				s.chans.mu.Lock()
 				s.loadChannelsLocked(context.Background())
-				s.channelPrefLocked("examplechat").Target = &channel.Target{Kind: channel.TargetNew}
-				s.saveChannelsLocked()
+				err := s.saveChannelsLocked("examplechat", channelPrefs{Target: &channel.Target{Kind: channel.TargetNew}})
 				s.chans.mu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			var release sync.Once
 			defer release.Do(func() { close(h.release) })

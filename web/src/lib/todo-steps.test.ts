@@ -59,7 +59,7 @@ describe("a to-do's steps on its status line (#11858)", () => {
   });
 
   it.each([
-    { lang: "zh-Hans", count: "步骤 3/9", done: "9/9 步已完成", next: "下一步还没安排" },
+    { lang: "zh-Hans", count: "步骤 3/9", done: "9/9 步已完成", next: "下一步尚未安排" },
     { lang: "ja", count: "ステップ 3/9", done: "9/9 ステップ完了", next: "次のステップはまだ決まっていません" },
     { lang: "en", count: "Steps 3/9", done: "9/9 steps done", next: "Next step not arranged yet" },
   ] as const)("words it as iOS does in $lang", async ({ lang, count, done, next }) => {

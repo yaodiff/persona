@@ -22,6 +22,8 @@ import (
 )
 
 type Hub struct {
+	// projectReview: wakes the owner-input relay (project_review.go).
+	projectReview projectReviewRelay
 	passwordLogin passwordLoginState
 	browserLogin  browserLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
@@ -169,7 +171,8 @@ type Hub struct {
 	// reported is what the manager told of the nodes' interactions and the fleet (fleet_link.go).
 	reported fleetCache
 
-	ports portOpens // ports the user opened in the app (ports.go)
+	ports         portOpens          // ports the user opened in the app (ports.go)
+	previewOrigin previewOriginState // isolated wildcard-subdomain preview proxy (preview_origin.go)
 	// assistant: what the assistant (internal/assistant, its own process on the bus) last reported (assistant_link.go).
 	assistant assistantState
 	owners    ownerCache    // the default manager, kept a moment (ownership.go)
@@ -349,8 +352,10 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	}
 	h.push = newPusher(cfg.dir, h.store, h.logf)
 	h.push.quiesce = &h.quiesce
+	h.push.revoked = h.isDeviceRevoked
 	h.push.web = newWebPusher(h.store, h.logf) // browsers' subscriptions and the VAPID key, in the hub's settings (#7459)
 	h.push.web.quiesce = &h.quiesce
+	h.push.web.revoked = h.isDeviceRevoked
 	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
 	h.push.desktopOpen = h.desktopOpen
@@ -360,6 +365,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.push.attention = h.attentionMode
 	h.push.privateOnly = cfg.Security.PrivateNetworkOnly          // own APNs key only, sealed (push.go relayed, push_send.go)
 	h.push.devicesChanged = func() { go h.fleetClientsChanged() } // a phone that takes MCP forms by push (fleet_link.go)
+	go h.projectReviewOwnerLoop(ctx)
 	go h.push.maintenanceLoop(ctx)
 	// The machines are the manager's to connect (devices_link.go); until it reports them they show as before a
 	// restart (what it handed over), before the assistant's process starts and takes that hand-over.

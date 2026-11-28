@@ -1,8 +1,9 @@
+import { useState } from "react";
 import { formatNumber, t } from "../../i18n";
 import { bytes, duration } from "../../lib/format";
 import type { HubDevelopmentProgress, HubUpdateStatus } from "../../lib/hub-update";
 import { updateStateTitle, updateWorking } from "../../lib/hub-update-settings";
-import { Button, cx, Spinner } from "../../ui/atoms";
+import { Button, cx, Dialog, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Pill } from "./SettingsParts";
 
@@ -11,8 +12,8 @@ type Stage = DevelopmentPhase | "downloading" | "waiting_idle" | "restarting";
 type NodeState = "done" | "active" | "pending";
 
 const RELEASE_STAGES: readonly Stage[] = ["downloading", "waiting_idle", "restarting"];
-const BUILD_STAGES: readonly Stage[] = ["building", "backing_up", "waiting_idle", "restarting"];
-const RESTORE_STAGES: readonly Stage[] = ["backing_up", "applying_backup", "waiting_idle", "restarting"];
+const BUILD_STAGES: readonly Stage[] = ["building", "waiting_idle", "backing_up", "restarting"];
+const RESTORE_STAGES: readonly Stage[] = ["applying_backup", "waiting_idle", "backing_up", "restarting"];
 const stageLabels: Record<Stage, string> = {
   building: "settings-hubsettings.pipeline_build",
   backing_up: "settings-hubsettings.pipeline_backup",
@@ -41,6 +42,12 @@ function activeProgress(s: HubUpdateStatus): HubDevelopmentProgress | undefined 
   return p && p.phase === s.state && Object.hasOwn(phaseSteps, p.phase) ? p : undefined;
 }
 
+// The standalone check precedes the build. Preflight within a snapshot
+// has the full backup step count and shares its deferred cancellation.
+function isEarlyPreflight(p?: HubDevelopmentProgress): boolean {
+  return p?.phase === "backing_up" && p.step === "preflight" && p.step_total === 1;
+}
+
 function phaseElapsedMs(p?: HubDevelopmentProgress): number | undefined {
   const seconds = p?.elapsed_seconds;
   return seconds !== undefined && Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
@@ -48,13 +55,14 @@ function phaseElapsedMs(p?: HubDevelopmentProgress): number | undefined {
 
 export function observeHubUpdate(previous: PipelineRun | undefined, s: HubUpdateStatus, now: number): PipelineRun | undefined {
   if (!updateWorking(s)) return undefined;
+  if (s.state === "resolving") return s.can_cancel ? { restoringBackup: false } : undefined;
   const backupId = s.latest?.backup_id || previous?.backupId;
   const restoringBackup = Boolean(backupId || s.state === "applying_backup" || previous?.restoringBackup);
   // The wire drops the candidate across a restart. On a fresh connection during confirmation, the running build is the target.
   const runningTarget = s.source === "web-dev" ? s.development?.current_commit?.slice(0, 12) || s.version : s.version;
   const target = s.latest?.commit?.slice(0, 12) || s.latest?.version || previous?.target || (s.state === "confirming" ? runningTarget : undefined);
   const phaseElapsed = phaseElapsedMs(activeProgress(s));
-  const firstPhase = s.state === "building" || s.state === "applying_backup";
+  const firstPhase = isEarlyPreflight(activeProgress(s)) || s.state === "building" || s.state === "applying_backup";
   // Only the first phase supplies a starting point for measuring the whole run.
   const startedAt = previous?.startedAt ?? (firstPhase && phaseElapsed !== undefined ? now - phaseElapsed : undefined);
   return { restoringBackup, backupId, target, startedAt, elapsedMs: startedAt === undefined ? undefined : now - startedAt };
@@ -64,20 +72,19 @@ function macroStages(s: HubUpdateStatus, restoringBackup: boolean) {
   const development = s.source === "web-dev" || s.state === "building" || s.state === "backing_up";
   const stages = restoringBackup ? RESTORE_STAGES : development ? BUILD_STAGES : RELEASE_STAGES;
   const first = restoringBackup ? "applying_backup" : development ? "building" : "downloading";
+  let active: Stage | undefined = first;
   switch (s.state) {
+    case "resolving": active = undefined; break;
     case "installing":
     case "restarting":
-    case "confirming":
-      return { stages, active: "restarting", done: stages.slice(0, -1) };
+    case "confirming": active = "restarting"; break;
     case "backing_up":
-      return { stages, active: s.state, done: [first, "waiting_idle"] };
-    case "waiting_idle":
-      // The Hub takes its backup after the idle wait. The strip keeps the same positions throughout the run.
-      return { stages, active: s.state, done: [first] };
-    default:
-      // Development downloads stage the artifacts of Build or Prepare backup.
-      return { stages, active: first, done: [] };
+      active = isEarlyPreflight(activeProgress(s)) ? undefined : s.state;
+      break;
+    case "waiting_idle": active = s.state; break;
   }
+  const done = active ? stages.slice(0, stages.indexOf(active)) : [];
+  return { stages, active, done };
 }
 
 function Marker({ state, spinning }: { state: NodeState; spinning?: boolean }) {
@@ -127,11 +134,23 @@ function stepLabel(step: string): string {
   return localized === key ? step.replaceAll("_", " ").trim() || t("settings-hubsettings.pipeline_unknown_step") : localized;
 }
 
+function backupSteps(p: HubDevelopmentProgress, builtinQuiesce?: boolean): string[] {
+  if (isEarlyPreflight(p)) return ["preflight"];
+  const base = phaseSteps.backing_up;
+  // Six steps can be an older hub with external hooks or a newer hub
+  // with the built-in pause. Match the reported step as well as the total.
+  const layouts = [true, false].flatMap(preflight => [builtinQuiesce !== false, builtinQuiesce === false].map(builtin => [
+    ...(preflight ? ["preflight"] : []), ...base.slice(0, -1),
+    ...(builtin ? [] : ["resume_writers"]), "verify_snapshot",
+  ]));
+  const match = layouts.find(steps => steps.length === p.step_total && steps[p.step_index - 1] === p.step);
+  if (match && (builtinQuiesce !== false || match.includes("resume_writers"))) return match;
+  // Incomplete telemetry from older hubs still shows the configured resume hook.
+  return [...base.slice(0, -1), ...(builtinQuiesce === false || p.step === "resume_writers" ? ["resume_writers"] : []), "verify_snapshot"];
+}
+
 function PhaseSteps({ p, builtinQuiesce }: { p: HubDevelopmentProgress; builtinQuiesce?: boolean }) {
-  const steps = [...phaseSteps[p.phase]];
-  if (p.phase === "backing_up" && (p.step_total >= 6 || p.step === "resume_writers" || builtinQuiesce === false)) {
-    steps.splice(steps.indexOf("verify_snapshot"), 0, "resume_writers");
-  }
+  const steps = p.steps?.length ? [...p.steps] : p.phase === "backing_up" ? backupSteps(p, builtinQuiesce) : [...phaseSteps[p.phase]];
   let active = steps.indexOf(p.step);
   if (active < 0) {
     // Keep all known steps and give a new step its own node so its telemetry remains visible.
@@ -191,9 +210,33 @@ function ActiveStep({ p, label }: { p: HubDevelopmentProgress; label: string }) 
   );
 }
 
-export function HubUpdatePipeline({ s, run, onNow }: { s: HubUpdateStatus; run: PipelineRun; onNow: () => void }) {
+function CancelUpdate({ cancelling, onCancel }: { cancelling: boolean; onCancel: () => Promise<void> }) {
+  const [confirm, setConfirm] = useState(false);
+  const [sending, setSending] = useState(false);
+  const label = t("settings-hubsettings.cancel_update");
+  async function submit() {
+    setConfirm(false);
+    setSending(true);
+    try { await onCancel(); }
+    finally { setSending(false); }
+  }
+  return <div className="flex justify-end">
+    <Button tone="quiet" className="pointer-coarse:min-h-11" busy={sending} disabled={sending || cancelling} onClick={() => setConfirm(true)}>{label}</Button>
+    <Dialog open={confirm && !cancelling} title={label} onClose={() => setConfirm(false)} footer={<>
+      <Button tone="quiet" onClick={() => setConfirm(false)}>{t("settings-hubsettings.keep_updating")}</Button>
+      <Button tone="danger" onClick={() => void submit()}>{label}</Button>
+    </>}>
+      <p className="text-meta text-ink-2">{t("settings-hubsettings.cancel_confirm")}</p>
+    </Dialog>
+  </div>;
+}
+
+export function HubUpdatePipeline({ s, run, onNow, onCancel }: {
+  s: HubUpdateStatus; run: PipelineRun; onNow: () => void; onCancel: () => Promise<void>;
+}) {
   const progress = activeProgress(s);
-  const title = updateStateTitle(s);
+  const title = s.cancelling ? t(s.state === "backing_up" && !isEarlyPreflight(progress) ? "settings-hubsettings.stop_after_backup" : "settings-hubsettings.cancelling")
+    : s.state === "resolving" ? t("settings-hubsettings.resolving_latest") : updateStateTitle(s);
   const phaseElapsed = phaseElapsedMs(progress);
   const elapsed = run.elapsedMs !== undefined ? t("settings-hubsettings.progress_elapsed", { time: duration(run.elapsedMs) }) :
     phaseElapsed !== undefined ? t("settings-hubsettings.progress_phase_elapsed", { time: duration(phaseElapsed) }) : undefined;
@@ -232,11 +275,12 @@ export function HubUpdatePipeline({ s, run, onNow }: { s: HubUpdateStatus; run: 
               ))}
             </ul>
             <div className="mt-2 flex justify-end">
-              <Button tone="quiet" onClick={onNow} className="text-red enabled:hover:text-red pointer-coarse:min-h-11">{t("settings-hubsettings.update_now_ellipsis")}</Button>
+              <Button tone="quiet" disabled={s.cancelling} onClick={onNow} className="text-red enabled:hover:text-red pointer-coarse:min-h-11">{t("settings-hubsettings.update_now_ellipsis")}</Button>
             </div>
           </>
         )}
       </div>
+      {s.can_cancel && <CancelUpdate cancelling={Boolean(s.cancelling)} onCancel={onCancel} />}
     </section>
   );
 }

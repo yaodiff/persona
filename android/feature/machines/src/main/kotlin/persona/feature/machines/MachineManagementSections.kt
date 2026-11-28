@@ -96,7 +96,8 @@ internal fun LazyListScope.machineControls(
     }
     item("engine") {
         JGroupItem(GroupPosition.of(first, rows)) {
-            JRow(stringResource(R.string.machines_engine), leadingIcon = PhIcons.TerminalWindow, value = Engines.currentLabel(machine).text(), onClick = onEngine)
+            // A set of several engines (set up on the web) is named in full: "herdr + Orca + Paseo" (#17052).
+            JRow(stringResource(R.string.machines_engine), leadingIcon = PhIcons.TerminalWindow, value = Engines.summary(machine).text(), onClick = onEngine)
         }
     }
     if (botmux != null) item("botmux") {

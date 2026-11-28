@@ -1,6 +1,8 @@
 {
   "tree": "ファイル",
   "treeView": "ツリー表示",
+  "showTree": "ファイルツリーを表示",
+  "hideTree": "ファイルツリーを隠す",
   "loading": "読み込み中",
   "emptyFolder": "空のフォルダー",
   "hiddenOnly": "隠しファイルのみ",

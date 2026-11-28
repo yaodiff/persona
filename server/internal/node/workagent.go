@@ -122,6 +122,27 @@ func (n *Node) agyPaneStartModel(ctx context.Context, launcher, model, effort st
 // Code. plan never gets here: a read-only start on a work agent is refused (control.go).
 func agyStartMode(mode string) string { return cmp.Or(mode, proto.ModeBypass) }
 
+// agyAutoModeUnavailable reports whether this node's connected Antigravity runtime has advertised a restricted
+// permission_modes set that omits "auto".
+func (n *Node) agyAutoModeUnavailable(launcher string) bool {
+	if n.runtimes == nil {
+		return false
+	}
+	name := cmp.Or(launcher, agyAgent)
+	h := n.runtimes.launcherRuntime(name)
+	if h == nil && name != agyAgent {
+		h = n.runtimes.launcherRuntime(agyAgent)
+	}
+	if h == nil {
+		return false
+	}
+	l, ok := h.launcherNamed(name)
+	if !ok && name != agyAgent {
+		l, ok = h.launcherNamed(agyAgent)
+	}
+	return ok && l.PermissionModes != 0 && !slices.Contains(l.PermissionModes.List(), "auto")
+}
+
 // agyModeFlags are agy's own flags for a permission mode (agy --help: --dangerously-skip-permissions, --mode
 // accept-edits|auto|plan). default is agy's own approval, and "" (a record from before modes were kept) is no flag.
 func agyModeFlags(mode string) string {
@@ -171,6 +192,9 @@ func (n *Node) startWorkAgentWithResume(ctx context.Context, launch host.Launche
 			return nil, err
 		}
 		mode = agyStartMode(mode)
+		if mode == "auto" && n.agyAutoModeUnavailable(launcher) {
+			mode = proto.ModeBypass
+		}
 		n.ensureAgyHooksForLaunch() // agyhooks.go (#13950): ensure hooks exist before agy starts
 	} else {
 		effort, mode = "", ""
@@ -403,7 +427,7 @@ func (n *Node) abandonStart(ctx context.Context, created *host.Created, kind str
 		if h == nil {
 			return err
 		}
-		stopped, quitErr := n.quitAgentRound(cctx, id, pane, h, true)
+		stopped, quitErr := n.quitAgentRound(cctx, id, pane, h, true, nil)
 		if quitErr != nil {
 			log.Printf("abandon start in pane %s: quit %s: %v", pane, kind, quitErr)
 			return err
@@ -478,6 +502,7 @@ func (n *Node) reportedWorkAgent(pane, kind string) (id string, ambiguous bool) 
 type paneMessage struct {
 	Text   string
 	Images []proto.Image
+	Source *proto.MessageSource
 }
 
 // workAgentCalls serves a hub call for a Cursor or agy session herdr runs. A message goes through herdr's
@@ -504,63 +529,87 @@ func (n *Node) workAgentCalls(ctx context.Context, method, id string, a host.Age
 		// one typed again.
 		unlock := n.typing.lock(id)
 		defer unlock()
-		if a.Agent == agyAgent {
-			var opts sendOpts
-			_ = json.Unmarshal(params, &opts)
-			if opts.ApplySwitch {
-				_ = n.state.loaded(ctx)
-				if ps := n.pendingSwitch(id); ps != nil && ps.Agent != "" {
-					if handled, err := n.applyEngineSwitch(ctx, id, a.PaneID, agyAgent, *ps, msg.Text, msg.Images, opts); handled {
-						return okResult(nil), err, true
+		var opts sendOpts
+		_ = json.Unmarshal(params, &opts)
+		if a.Agent == agyAgent && opts.ApplySwitch {
+			_ = n.state.loaded(ctx)
+			if ps := n.pendingSwitch(id); ps != nil && ps.Agent != "" {
+				if handled, err := n.applyEngineSwitch(ctx, id, a.PaneID, agyAgent, *ps, msg.Text, msg.Images, opts); handled {
+					return okResult(nil), err, true
+				}
+			}
+		}
+		rawText, imageCount := msg.Text, len(msg.Images)
+		var queued bool
+		sendFn := func() error {
+			text := rawText
+			if len(msg.Images) > 0 {
+				paths, err := n.saveImages(msg.Images)
+				if err != nil {
+					return err
+				}
+				text = strings.TrimSpace(attachImages(text, paths))
+			}
+			typedAt := time.Now()
+			var delivery *agySendWatch
+			beforeQueued := -1
+			var beforeScreen string
+			if a.Agent == agyAgent {
+				delivery = n.watchAgySend(id, a.PaneID, text, typedAt)
+				if a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked || n.workSent.recent(a.PaneID, typedAt) {
+					if screen, err := n.readPane(ctx, a.PaneID, "visible", 80); err == nil {
+						beforeScreen = screen
+						beforeQueued = len(parseAgyQueuedLines(screen))
 					}
 				}
 			}
-		}
-		if len(msg.Images) > 0 {
-			paths, err := n.saveImages(msg.Images)
-			if err != nil {
-				return nil, err, true
+			if err := n.hostPrompt(ctx, a.PaneID, text); err != nil {
+				if r := deliveryRefusal(err); r != nil {
+					if (errors.Is(err, host.ErrDialogOpen) || errors.Is(err, host.ErrAgentBlocked)) && beforeScreen != "" && screen.Choosing(beforeScreen) {
+						r = dialogRefusalOf(beforeScreen, false)
+					}
+					log.Printf("send %s: the host refused it, nothing typed: %v", id, err)
+					return r
+				}
+				return fmt.Errorf("send: %w", err)
 			}
-			msg.Text = strings.TrimSpace(attachImages(msg.Text, paths))
-		}
-		typedAt := time.Now()
-		var delivery *agySendWatch
-		beforeQueued := -1
-		var beforeScreen string
-		if a.Agent == agyAgent {
-			delivery = n.watchAgySend(id, a.PaneID, msg.Text, typedAt)
-			if a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked || n.workSent.recent(a.PaneID, typedAt) {
-				if screen, err := n.readPane(ctx, a.PaneID, "visible", 80); err == nil {
-					beforeScreen = screen
-					beforeQueued = len(parseAgyQueuedLines(screen))
+			if a.Agent == agyAgent {
+				var err error
+				queued, err = n.confirmAgySend(ctx, id, a.PaneID, text, typedAt, delivery, beforeQueued)
+				if err != nil {
+					return err
 				}
 			}
+			return nil
 		}
-		if err := n.hostPrompt(ctx, a.PaneID, msg.Text); err != nil {
-			if r := deliveryRefusal(err); r != nil {
-				if (errors.Is(err, host.ErrDialogOpen) || errors.Is(err, host.ErrAgentBlocked)) && beforeScreen != "" && screen.Choosing(beforeScreen) {
-					r = dialogRefusalOf(beforeScreen, false)
-				}
-				log.Printf("send %s: the host refused it, nothing typed: %v", id, err)
-				return nil, r, true
-			}
-			return nil, fmt.Errorf("send: %w", err), true
+		var err error
+		if a.Agent == agyAgent && opts.ClientMsgID != "" && !isSyntheticSegmentMsgID(opts.ClientMsgID) {
+			after := n.agyEchoBase(id, a.PaneID)
+			err = n.sendWithEcho(id, opts.ClientMsgID, rawText, imageCount, after, msg.Source, nil, sendFn)
+		} else {
+			err = sendFn()
 		}
-		if a.Agent == agyAgent {
-			if err := n.confirmAgySend(ctx, id, a.PaneID, msg.Text, typedAt, delivery, beforeQueued); err != nil {
-				return nil, err, true
-			}
+		if err != nil {
+			return nil, err, true
 		}
 		n.lostFirst.clear(id) // the message the start could not deliver went in now, or another one
 		// Working until herdr shows the turn, so an interrupt right after the send stops it (worksent.go, #11437).
 		n.workSent.mark(a.PaneID, time.Now())
 		n.notifySessionsSoon()
 		time.AfterFunc(workSentGrace+100*time.Millisecond, func() { n.notifySessionsSoon() })
-		return okResult(nil), nil, true
+		res := map[string]any{"ok": true}
+		if queued {
+			res["queued"] = true
+		}
+		return res, nil, true
 	case "session.interrupt":
 		return okResult(n.sendKeys(ctx, a.PaneID, "escape")), nil, true
 	case "session.modes":
-		// Its mode is its start's flags, and its model and effort too; left to the Claude Code path, shift+tab would be
+		if a.Agent == agyAgent {
+			err := n.agyPaneModesCall(ctx, id, a, params)
+			return okResult(err), err, true
+		}
+		// Cursor's mode, model and effort are fixed at start; left to the Claude Code path, shift+tab would be
 		// pressed at a TUI that is not Claude Code's and fail as a 502. A launcher switch is taken before (node.go).
 		return nil, refusal(proto.CodeModesUnsupported, i18n.T(i18n.Default, "rpc-errors.modes_unsupported"), nil), true
 	default:

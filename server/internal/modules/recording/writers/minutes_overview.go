@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The summary card (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): besides the legacy lists the
@@ -124,12 +126,13 @@ type answerConclusion struct {
 	Photo modelPhoto `json:"photo"`
 }
 
-// placed is a point or decision kept by buildMinutes with what the overview needs of it: the answer's topic it came
-// in (-1: outside topics) and its bold places.
+// placed is a point or decision kept by buildMinutes with what the overview and debates need of it: the answer's topic
+// it came in (-1: outside topics), its bold places, and the transcript line it cited (0 when it cited a photo).
 type placed[T any] struct {
 	item   T
 	topic  int
 	strong []string
+	line   int
 }
 
 func placedItems[T any](list []placed[T]) []T {
@@ -140,8 +143,20 @@ func placedItems[T any](list []placed[T]) []T {
 	return out
 }
 
-// stripMarks is s without the model's ** marks.
-func stripMarks(s string) string { return strings.ReplaceAll(s, "**", "") }
+// speakerMarkerRe matches transcript speaker markers (〔S2〕, 〔S1?〕) so any marker a model accidentally echoes into a
+// text field is stripped before storage.
+var speakerMarkerRe = lazyre.New(`〔\s*[Ss][0-9]+\s*\??\s*〕`)
+
+// stripSpeakerMarkers removes leaked transcript speaker markers (〔S…〕) from s.
+func stripSpeakerMarkers(s string) string {
+	if !strings.ContainsRune(s, '〔') {
+		return s
+	}
+	return speakerMarkerRe.ReplaceAllString(s, "")
+}
+
+// stripMarks is s without the model's ** marks and any leaked transcript speaker markers (〔S…〕).
+func stripMarks(s string) string { return strings.ReplaceAll(stripSpeakerMarkers(s), "**", "") }
 
 // plainLine is a short field the model writes (the minutes' title, the place, a name, a deadline as said) on one line
 // and without marks: the answer marks only points, decisions and conclusions, so a ** elsewhere is a slip, and a name
@@ -177,6 +192,7 @@ func topicIcon(icon string) string {
 // punctuation at its ends moved outside it (strongEdge). A mark the cut reaches, or one the rule would find elsewhere
 // (an earlier copy of the same figure), is left out; its words stay. An unclosed ** is dropped.
 func strongText(s string, n int) (string, []string) {
+	s = stripSpeakerMarkers(s)
 	parts := strings.Split(s, "**")
 	var runes []rune
 	var mark []int // the mark each rune is in, from 1; 0 outside any

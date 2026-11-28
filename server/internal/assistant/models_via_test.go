@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/devices"
@@ -31,6 +32,9 @@ type viaDevs struct {
 func (d *viaDevs) Has(id string) bool         { return id == "server" }
 func (d *viaDevs) Canonical(id string) string { return id }
 func (d *viaDevs) List() []devices.Summary    { return nil }
+func (d *viaDevs) ConnectedAt(string) time.Time {
+	return time.Time{}
+}
 
 func (d *viaDevs) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
 	d.calls.Add(1)

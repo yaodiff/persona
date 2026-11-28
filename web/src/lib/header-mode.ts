@@ -68,7 +68,9 @@ export function modeMenuItems(s: Session, pick: (mode: string) => void, opts: { 
   const mode = s.permission_mode;
   const restart = bypassRestarts(s, opts.assistant);
   const note = bypassNote(s, opts.assistant);
-  const rows: MenuItem[] = switchableModes(opts.assistant || s.assistant, s.agent, canSwitchToBypass(s) || restart).map((m) => {
+  const allowed = s.capabilities?.permission_modes;
+  const choices = switchableModes(opts.assistant || s.assistant, s.agent, canSwitchToBypass(s) || restart);
+  const rows: MenuItem[] = (allowed?.length ? choices.filter((m) => allowed.includes(m.id)) : choices).map((m) => {
     const ask = modeConfirmation(s, m.id, opts.assistant);
     const later = m.id === BYPASS_MODE && note ? note : "";
     return {
@@ -117,6 +119,8 @@ export function pickerIcon(mode: string | null | undefined): IconName {
  *  confirmation. */
 export function leavePlanTo(s: Session, before: string | undefined, assistant?: boolean): string {
   if (!before || before === "plan" || before === BYPASS_MODE) return "default";
+  const allowed = s.capabilities?.permission_modes;
   const offered = switchableModes(assistant || s.assistant, s.agent, canSwitchToBypass(s));
-  return offered.some((m) => m.id === before) ? before : "default";
+  const filtered = allowed?.length ? offered.filter((m) => allowed.includes(m.id)) : offered;
+  return filtered.some((m) => m.id === before) ? before : "default";
 }

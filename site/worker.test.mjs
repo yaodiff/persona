@@ -195,6 +195,7 @@ test("the other files under /dl/ stay the site's static files", async () => {
 test("/dl/<version>/ comes from the kept release, never a slot", async () => {
   const DL = bucket({
     "release/v1-202611060000/personad-linux-amd64.gz": "kept bytes", "release/v1-202611060000/manifest.json": '{"version":"v1"}',
+    "release/v1-202611060000/core-manifest.json": '{"version":"v1","edition":"core"}',
     "a/personad-linux-amd64.gz": "slot bytes",
   });
   const env = { ASSETS: dlAssets("a"), DL };
@@ -212,6 +213,9 @@ test("/dl/<version>/ comes from the kept release, never a slot", async () => {
   assert.equal(r.status, 404);
   r = await worker.fetch(new Request("https://site.example/dl/v2/manifest.json"), env);
   assert.equal(r.status, 404);
+  // The core edition's manifest of a kept release (docs/operations/core-install.md) is served the same way.
+  r = await worker.fetch(new Request("https://site.example/dl/v1-202611060000/core-manifest.json"), env);
+  assert.equal(await r.text(), '{"version":"v1","edition":"core"}');
   r = await worker.fetch(new Request("https://site.example/dl/v1-202611060000/manifest.json", { method: "POST", body: "x" }), env);
   assert.equal(r.status, 405);
 });

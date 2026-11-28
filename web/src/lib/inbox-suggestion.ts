@@ -59,6 +59,8 @@ export function actedText(s: InboxSuggestion, action: SuggestionAction): string 
   switch (s.kind) {
     case "reply":
       return t("lib-inbox-events.sent");
+    case "handoff":
+      return t("lib-inbox-events.handed_off");
     case "agent":
       return t("lib-inbox-events.agent_started");
     case "conclusion":

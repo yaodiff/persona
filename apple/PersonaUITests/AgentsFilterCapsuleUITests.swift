@@ -57,6 +57,41 @@ final class AgentsFilterCapsuleUITests: XCTestCase {
     }
 
     private func filter(_ id: String) -> XCUIElement { app.buttons["agents.filter." + id].firstMatch }
+
+    @MainActor func testProjectHeadingOpensNewAgentInTheExactFolder() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PERSONA_PROJECT_HEADINGS"] == "1" else { throw XCTSkip("needs the project heading fixture") }
+        let appearance = environment["PERSONA_STYLE"] ?? "light"
+        app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-tab", "dev", "-dev.openChat", "",
+                               "-openAgentsFresh", "YES", "-dev.grouping", "space", "-ui.scheme", appearance,
+                               "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchPinned()
+        XCTAssertTrue(filter("all").waitForExistence(timeout: 25))
+        func projectButton(_ heading: String) -> XCUIElement {
+            let predicate = NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "agents.project.new", heading)
+            return app.descendants(matching: .any).matching(predicate).firstMatch
+        }
+        let desktop = projectButton("site · ~/Desktop")
+        let code = projectButton("site · ~/code")
+        app.bringAboveTabBar(desktop)
+        app.bringAboveTabBar(code)
+        XCTAssertTrue(code.isHittable, app.debugDescription)
+        XCTAssertFalse(projectButton("No project").exists)
+        for _ in 0..<8 where !desktop.isHittable { app.swipeDown(velocity: .slow) }
+        XCTAssertTrue(desktop.isHittable, app.debugDescription)
+        shot("project-headings-\(appearance)")
+        desktop.tap()
+        let directory = app.buttons["newChat.directory"].firstMatch
+        XCTAssertTrue(directory.waitForExistence(timeout: 20))
+        let folderKnown = expectation(for: NSPredicate { _, _ in
+            directory.label.contains("~/Desktop/site") || self.app.staticTexts["~/Desktop/site"].exists
+        }, evaluatedWith: directory)
+        XCTAssertEqual(XCTWaiter.wait(for: [folderKnown], timeout: 15), .completed)
+        shot("project-new-agent-\(appearance)")
+    }
+
     private var menu: XCUIElement { app.buttons["agents.grouping"].firstMatch }
     private var strip: XCUIElement { app.scrollViews["agents.filters.scroll"].firstMatch }
     /// The filters this list has, in the strip's order.

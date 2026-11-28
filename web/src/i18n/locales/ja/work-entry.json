@@ -1,7 +1,7 @@
 {
   "title": "履歴",
   "sessions": "履歴",
-  "content": "セッションまたはターミナル",
+  "content": "セッションまたはタブ",
   "back": "履歴に戻る",
   "terminal_unavailable": "ターミナルを利用できません",
   "pick_session": "セッションを開く",

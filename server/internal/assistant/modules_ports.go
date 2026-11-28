@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // modulePorts wires the narrow core ports (modapi.Ports) this Service serves to loaded modules.
@@ -241,6 +243,31 @@ func (p briefTodoPort) TodoTitle(id string) (string, bool) {
 	return t.Title, true
 }
 
+func (p briefTodoPort) DeferredSupervision(ctx context.Context, at time.Time) []modapi.BriefDeferredSupervision {
+	st, ok := p.s.store().(supervisionDecisionStore)
+	if !ok {
+		return nil
+	}
+	rows, err := st.DeferredSupervision(ctx, at.Add(-24*time.Hour), at)
+	if err != nil {
+		p.s.logf("briefing: could not read deferred supervision: %v", err)
+		return nil
+	}
+	var out []modapi.BriefDeferredSupervision
+	for _, row := range rows {
+		out = append(out, modapi.BriefDeferredSupervision{ID: modapi.BriefSupervisionDecisionID(row.ID), TodoID: wireids.TodoID(row.TodoID), Title: row.Title, Reason: row.Reason})
+	}
+	return out
+}
+
+func (p briefTodoPort) SupervisionBriefed(ctx context.Context, ids []string, at time.Time) {
+	if st, ok := p.s.store().(supervisionDecisionStore); ok {
+		if err := st.SupervisionBriefed(ctx, ids, at); err != nil {
+			p.s.logf("briefing: could not acknowledge deferred supervision: %v", err)
+		}
+	}
+}
+
 func (p briefTodoPort) StalePRFollowups(ctx context.Context, at time.Time, lang string) []modapi.BriefPRFollowup {
 	fups := p.s.stalePRFollowups(ctx, at)
 	if len(fups) == 0 {
@@ -303,6 +330,10 @@ func toBriefInboxSignals(items []InboxItem) []modapi.BriefInboxSignal {
 // ---- LaterPort ----
 
 type briefLaterPort struct{ s *Service }
+
+func (p briefLaterPort) Handle(ctx context.Context, id string) (bool, error) {
+	return p.s.laterHandled(ctx, id, time.Now())
+}
 
 func (p briefLaterPort) Rows(ctx context.Context, lang, web string, now time.Time, limit int) ([]modapi.BriefBoardRow, int) {
 	rows, total := p.s.laterRows(ctx, i18n.Lang(lang), web, now, limit)
@@ -485,25 +516,18 @@ type briefDeliveryPort struct{ s *Service }
 func (p briefDeliveryPort) SendFallback(ctx context.Context, req modapi.BriefFallbackSend) {
 	s := p.s
 	l := i18n.Lang(req.Facts.Lang)
-	card, plain, shown := s.briefCardWithHeader(req.Facts, req.Label, "", req.Header)
-	card.Buttons(s.openButton(ctx, req.Device.ID, req.Run.SessionID))
-	cards := splitBriefAnswerCards(card, plain, req.Header)
-
+	openLabel, openURL := s.openLink(ctx, req.Device.ID, req.Run.SessionID)
+	cards, plain, shown := s.scheduleCards(req.Facts, req.Label, "", req.Header, openLabel, openURL)
 	st, err := s.chat().Status(ctx)
 	ready := err == nil && st.Ready
 	s.larkModule().WorkbenchOn(st.Features, ready)
-	if ready && st.Features.Pushes {
-		mirror := &mirrorSend{
-			l: l, cards: cards,
-			target: botTarget{Kind: targetPersona, MachineID: req.Device.ID, SessionID: req.Run.SessionID},
-			label:  req.Label,
-			key:    "f" + req.ID,
-			sent:   func() { s.briefAsked(req.Facts, shown) },
-		}
+	_, delivery := s.taskDeliveryForConversation(ctx, req.Device.ID, req.Run.SessionID)
+	if ready && (st.Features.Pushes || isFeishuThreadDelivery(delivery)) {
 		// The fallback has no assistant answer of its own. Track the failed turn that is actually last, so a transient
 		// Feishu failure can retry, but a newer answer still makes this old occurrence too late to post.
-		_, mirror.answer, mirror.turn, _ = s.channelLastTurnOf(ctx, req.Device.ID, req.Run.SessionID)
-		s.feishuMirrorPost(ctx, mirror, 0)
+		_, answer, turn, _ := s.channelLastTurnOf(ctx, req.Device.ID, req.Run.SessionID)
+		to := s.larkMirror(req.Device.ID, req.Run.SessionID, req.Label, false, answer, turn, delivery)
+		s.postBriefMirror(ctx, to, l, cards, "f"+req.ID, func() { s.briefAsked(req.Facts, shown) })
 	}
 
 	// deliver preserves this stable notification ID (push/pushResult would replace it with a random one).
@@ -537,8 +561,17 @@ func (briefPromptPort) RenderNorthStarFacts(lines []string) string {
 func (briefPromptPort) BriefDayRunes(day *modapi.BriefDay) int { return prompts.BriefDayRunes(day) }
 func (briefPromptPort) StripContext(text string) string        { return stripContext(text) }
 
+func (briefPromptPort) BoardRowMarkdown(lang string, n int, row modapi.BriefBoardRow) string {
+	return boardRowMarkdown(i18n.Lang(lang), n, fromBriefBoardRow(row))
+}
+
+func (briefPromptPort) OpenStageBar(lang, stage string) string {
+	return stageBar(i18n.Lang(lang), stage, false)
+}
+
 func (briefPromptPort) BoardRowPlain(lang string, n int, row modapi.BriefBoardRow) string {
-	return boardRowPlain(i18n.Lang(lang), n, row)
+	l := i18n.Lang(lang)
+	return fmt.Sprintf("%d. %s · %s · %s", n, row.Summary, i18n.T(l, "assistant-feishu_cards.board_waited", i18n.Args{"wait": boardWait(l, row.Waited)}), row.From)
 }
 
 func (briefPromptPort) Translate(lang, key string, args map[string]any) string {

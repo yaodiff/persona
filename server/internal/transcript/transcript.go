@@ -139,6 +139,7 @@ type Meta struct {
 	ModelAt       time.Time
 	ServiceTier   string
 	ServiceTierAt time.Time
+	Speed         SpeedObservation
 	// Ultracode is independent of effort: nil means the transcript has no dated evidence. Since, when set by a
 	// caller, ignores observations from before the current Claude process (resume resets the session-only switch).
 	Ultracode        *bool
@@ -504,7 +505,7 @@ const (
 	CompactSummaryNotice = "已从压缩的上下文继续"
 )
 
-// CompactNotice is the notice a /compact without instructions becomes (no user line): a /compact sent from the phone
+// CompactNotice is the notice a /compact command becomes (no user line): a /compact sent from the phone
 // is tied to it (node/echo.go).
 const CompactNotice = "压缩上下文"
 

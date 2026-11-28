@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/streams"
@@ -22,6 +23,12 @@ import (
 type hubOpened struct {
 	streams map[string]bool // stream id -> offered directional EOF
 	terms   map[string]bool // watched terminals by session id
+}
+
+type portDialRelay func(context.Context, string, any) error
+
+func (relay portDialRelay) Call(ctx context.Context, method string, params, _ any) error {
+	return relay(ctx, method, params)
 }
 
 // callPortDial records the stream before the request goes out. The node can send a close before its reply, and a
@@ -43,7 +50,12 @@ func (m *Machine) callPortDial(ctx context.Context, peer *rpc.Peer, dial devicew
 	m.opened.streams[dial.ID] = halfClose
 	m.mu.Unlock()
 
-	err := peer.Call(ctx, devicewire.MethodPortDial, dial, out)
+	// The manager relays the node's result to the original caller, including
+	// fields only newer peers know about.
+	relay := portDialRelay(func(ctx context.Context, method string, params any) error {
+		return peer.Call(ctx, method, params, out)
+	})
+	_, err := buswire.Call(ctx, relay, devicewire.PortDialMethod, dial)
 	if err == nil {
 		return nil
 	}

@@ -20,5 +20,6 @@
   "settings_save_failed": "Could not save marketplace mirror settings. Retry.",
   "settings_invalid": "Invalid mirror URL. Use HTTPS without credentials, query, or fragment; the catalog needs its complete JSON URL.",
   "not_from_market": "This extension was not installed from a marketplace",
-  "refresh_rate_limited": "This marketplace was already asked to refresh recently. Try again later."
+  "refresh_rate_limited": "This marketplace was already asked to refresh recently. Try again later.",
+  "no_key": "No such trusted key on this marketplace"
 }

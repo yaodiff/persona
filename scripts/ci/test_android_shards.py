@@ -162,9 +162,20 @@ class ShellLaneTests(unittest.TestCase):
                           'if [[ "$1 $2 $3" == "target list --installed" ]]; then printf \'aarch64-linux-android\\nx86_64-linux-android\\n\'; fi\n')
         rustup.chmod(0o700)
         (self.root / "scripts/ci/test_android_shards.py").write_text("pass\n")
+        # Lane 0's real-hub driver is outside this mock toolchain test; record its invocation and sanitized evidence.
+        (self.root / "scripts/ci/android-core-only-hub.py").write_text(
+            "import os, pathlib, sys\n"
+            "pathlib.Path(os.environ['MOCK_ANDROID_HUB_LOG']).write_text(' '.join(sys.argv[1:]) + '\\n')\n"
+            "out = pathlib.Path(sys.argv[sys.argv.index('--evidence') + 1])\n"
+            "out.parent.mkdir(parents=True, exist_ok=True)\n"
+            "out.write_text('{}\\n')\n"
+            "print('PASS Android hub editions: mock toolchain')\n")
+        self.hub_log = self.root / "android-hub-driver-arguments"
         for name in ("test_refract_about_version.py", "test_refract_about_build.py", "test_android_i18n_check.py", "test_android_token_baseline.py",
                      "test_android_motion_baseline.py", "test_android_slot_order.py", "android_i18n_check.py",
-                     "android_token_baseline.py", "android_motion_baseline.py", "android_slot_order.py"):
+                     "android_token_baseline.py", "android_motion_baseline.py", "android_slot_order.py",
+                     "test_android_compose_budget.py", "test_android_nested_throwables.py",
+                     "android_compose_budget.py", "android_nested_throwables.py"):
             (self.root / "scripts/app" / name).write_text("pass\n")
         (self.root / "scripts/app/refract_about_version.py").write_text("pass\n")  # pinned About Version regeneration (#9694)
         (self.root / "scripts/app/refract_about_build.py").write_text("pass\n")  # independent Build probe (#13001)
@@ -189,6 +200,7 @@ class ShellLaneTests(unittest.TestCase):
                         ANDROID_HOME=str(self.root / "sdk"), ANDROID_SDK_ROOT=str(self.root / "sdk"),
                         ANDROID_CI_TIMEOUT_SECONDS="10", ANDROID_CI_MAX_WORKERS="2",
                         MOCK_GRADLE_LOG=str(self.log), MOCK_RUSTUP_LOG=str(self.root / "rustup-arguments"),
+                        MOCK_ANDROID_HUB_LOG=str(self.hub_log),
                         PATH=str(self.root / "bin") + os.pathsep + os.environ.get("PATH", ""))
 
     def calls(self):
@@ -204,6 +216,7 @@ class ShellLaneTests(unittest.TestCase):
 
     def run_lane(self, *args):
         self.log.unlink(missing_ok=True)
+        self.hub_log.unlink(missing_ok=True)
         return subprocess.run(["bash", str(self.root / "scripts/ci/android.sh"), *args],
                               env=self.env, capture_output=True, text=True, timeout=30)
 
@@ -237,6 +250,11 @@ class ShellLaneTests(unittest.TestCase):
                 lintish = lane in ("full", "lint-build-test-0")
                 self.assertEqual("motion checker tests" in result.stdout, lintish)
                 self.assertEqual("motion literal baseline" in result.stdout, lintish)
+                self.assertEqual("Android client on core-only and full hubs" in result.stdout, lintish)
+                self.assertEqual(self.hub_log.exists(), lintish)
+                if lintish:
+                    self.assertIn("--android-dir", self.hub_log.read_text())
+                    self.assertIn("--evidence", self.hub_log.read_text())
                 self.assertIn("run 1.98.0 cargo --version", (self.root / "rustup-arguments").read_text())
 
     def test_profile_and_gradle_failure_are_preserved(self):

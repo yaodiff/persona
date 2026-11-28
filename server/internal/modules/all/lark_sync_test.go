@@ -21,3 +21,9 @@ func TestLarkSyncerFollowsTheBuildTags(t *testing.T) {
 		t.Fatalf("lark syncer provided: %v, want %v for this build's tags", got, want)
 	}
 }
+
+func TestLarkSyncServiceFollowsTheBuildTags(t *testing.T) {
+	if got, want := botport.NewSyncService(nil) != nil, slices.Contains(wantModules, "lark"); got != want {
+		t.Fatalf("lark sync service provided: %v, want %v for this build's tags", got, want)
+	}
+}

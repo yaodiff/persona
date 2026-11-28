@@ -412,6 +412,9 @@ func TestDoctorGlobalPermissionHooks(t *testing.T) {
 	if !strings.Contains(c.Detail, "2 个") {
 		t.Errorf("detail %q", c.Detail)
 	}
+	if !strings.Contains(c.Hint, global) {
+		t.Errorf("hint %q does not name %q", c.Hint, global)
+	}
 	if string(mustRead(t, global)) != body {
 		t.Error("the doctor changed the user's settings")
 	}

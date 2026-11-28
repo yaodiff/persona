@@ -29,6 +29,7 @@ open class ActionReceiver : BroadcastReceiver() {
         if (intent.action != RESOLVE) return
         val id = intent.getStringExtra(EXTRA_ID) ?: return
         val action = intent.getStringExtra(EXTRA_ACTION) ?: return
+        val createdAt = intent.getStringExtra(EXTRA_CREATED_AT)
         val reply = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(EXTRA_REPLY)?.toString()
         val dependencies = Notify.dependencies(context)
         val pending = goAsync()
@@ -64,20 +65,21 @@ open class ActionReceiver : BroadcastReceiver() {
                         locked = { lockedAfterUnlockSettles({ keyguard.isDeviceLocked }) },
                         onInteraction = { session = it.sessionKey; request = it },
                         expiresAt = intent.getStringExtra(EXTRA_EXPIRES_AT),
-                        onProgress = { if (!quiet) dependencies.notifier().pending(id, session, it, assistant) },
+                        createdAt = createdAt,
+                        onProgress = { if (!quiet) dependencies.notifier().pending(id, session, it, assistant, createdAt) },
                     )
                     if (result == NotificationActionResult.NotSent) {
-                        dependencies.notifier().notSent(id, request, session, assistant)
+                        dependencies.notifier().notSent(id, request, session, assistant, createdAt)
                         return@withTimeout
                     }
-                    if (result != NotificationActionResult.Locked) dependencies.notifier().retract(id)
+                    if (result != NotificationActionResult.Locked) dependencies.notifier().retract(id, createdAt)
                     if (result != NotificationActionResult.Submitted) {
-                        dependencies.notifier().actionResult(id, session, result, assistant)
+                        dependencies.notifier().actionResult(id, session, result, assistant, createdAt)
                     }
                 }
             } catch (failure: Exception) {
-                if (claimed) dependencies.notifier().failure(id, session, assistant)
-                else dependencies.notifier().notSent(id, request, session, assistant)
+                if (claimed) dependencies.notifier().failure(id, session, assistant, createdAt)
+                else dependencies.notifier().notSent(id, request, session, assistant, createdAt)
                 if (failure is CancellationException) throw failure
             } finally {
                 pending.finish()
@@ -95,6 +97,7 @@ open class ActionReceiver : BroadcastReceiver() {
         internal const val EXTRA_ACTION = "resolution_action"
         internal const val EXTRA_REPLY = "resolution_reply"
         internal const val EXTRA_EXPIRES_AT = "expires_at"
+        internal const val EXTRA_CREATED_AT = "created_at"
         internal const val EXTRA_QUIET = "quiet"
     }
 }

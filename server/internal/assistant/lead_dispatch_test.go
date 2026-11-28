@@ -14,45 +14,25 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Decision rights: a supervisor (a direction lead, the main conversation) handing work or words to the owner's own
-// Agents and sessions is none of the six kinds of thing only the owner decides, so no phone card is raised for it,
-// whatever its track (health included) and whatever the words carry. An ordinary conversation is still asked.
-func TestSupervisorsHandOffWithoutAPhoneCard(t *testing.T) {
+// A supervisor's identity does not override an isolated track's privacy boundary.
+func TestSupervisorSensitiveHandoffStillChecksPrivacyBoundary(t *testing.T) {
 	ctx := context.Background()
 	s, f, _ := infoUseService(t)
-	setSettings(t, s, func(v *Settings) {
-		v.Main, v.Leaders, v.MachineID = "qa-main-chat", []string{"qa-main", "qa-health-1"}, "qa-machine"
+	f.setHello(func(h *Hello) {
+		h.Assistant.MachineID, h.Assistant.Machines = "qa-machine", []string{"qa-machine"}
 	})
-	f.setSessions("qa-machine", proto.Session{SessionID: "qa-main", MachineID: "qa-machine", Assistant: true},
-		proto.Session{SessionID: "qa-health-1", MachineID: "qa-machine", Assistant: true, Space: SpaceHealth},
-		proto.Session{SessionID: "qa-main-chat", MachineID: "qa-machine", Assistant: true},
-		proto.Session{SessionID: "qa-side", MachineID: "qa-machine", Assistant: true})
-	f.mu.Lock()
-	f.infoTag = `{"categories":["legal_id","health"]}`
-	f.mu.Unlock()
-	for _, self := range []string{"qa-main", "qa-health-1", "qa-main-chat"} {
-		for _, tool := range []string{"agent_start", "agent_send", "agent_interrupt", "a2a_send", "todo_create"} {
-			done := make(chan bool, 1)
-			go func() {
-				ok, _, err := s.confirmOutbound(ctx, "qa-machine", self, tool, "qa: a placeholder passport number", "summary", nil)
-				done <- ok && err == nil
-			}()
-			select {
-			case ok := <-done:
-				if !ok {
-					t.Fatalf("%s %s: the supervisor's hand-off was refused", self, tool)
-				}
-			case <-time.After(2 * time.Second):
-				t.Fatalf("%s %s: the supervisor's hand-off waits on a phone card", self, tool)
-			}
-			if qs := s.pendingQuestions(); len(qs) != 0 {
-				t.Fatalf("%s %s: a phone card was raised: %+v", self, tool, qs)
-			}
-		}
+	setSettings(t, s, func(v *Settings) {
+		v.Main, v.Leaders, v.MachineID = "qa-main-chat", []string{"qa-health-1"}, "qa-machine"
+	})
+	f.setSessions("qa-machine", proto.Session{SessionID: "qa-health-1", MachineID: "qa-machine", Assistant: true, Space: SpaceHealth},
+		proto.Session{SessionID: "qa-main-chat", MachineID: "qa-machine", Assistant: true})
+	if !s.selfPolicy(ctx, "qa-health-1").ConfirmOutbound {
+		t.Fatal("the fixture did not install the isolated track policy")
 	}
-	answerOutboundIn(t, s, "qa-side", "agent_send", "summary", "", false)
-	if ok, _, err := s.confirmOutbound(ctx, "qa-machine", "qa-side", "agent_send", "qa: a placeholder passport number", "summary", nil); err != nil || ok {
-		t.Fatalf("an ordinary conversation's hand-off was not asked about: %v %v", ok, err)
+	answerOutboundIn(t, s, "qa-health-1", "agent_send", "summary", "", false)
+	ok, _, err := s.confirmOutbound(ctx, "qa-machine", "qa-health-1", "agent_send", "qa: placeholder health data", "summary", nil)
+	if err != nil || ok {
+		t.Fatalf("isolated track bypassed owner boundary: %v %v", ok, err)
 	}
 }
 
@@ -82,8 +62,8 @@ func TestLeadPlanStartsAtOnce(t *testing.T) {
 	if res, err := s2.toolTaskPlan(ctx, "side1", planArgs(false)); err != nil || !strings.Contains(res, "card") {
 		t.Fatalf("an ordinary conversation's writable plan did not wait on its card: %s %v", res, err)
 	}
-	if got := f2.pushed(); len(got) != 1 {
-		t.Fatalf("an ordinary conversation's plan card, with the owner away, pushes once: %+v", got)
+	if got := f2.pushed(); len(got) != 0 {
+		t.Fatalf("an ordinary conversation without authority must not push a category-zero plan: %+v", got)
 	}
 }
 
@@ -270,8 +250,8 @@ func TestSupervisorPlanStartsAtOnceInScheduledFollowup(t *testing.T) {
 			if started != 0 {
 				t.Fatalf("unauthorized conversation started %d task(s) without Start", started)
 			}
-			if got := f.pushed(); len(got) != 1 {
-				t.Fatalf("waiting plan card with owner away should push once: %+v", got)
+			if got := f.pushed(); len(got) != 0 {
+				t.Fatalf("missing auto-start authority must not push a category-zero plan: %+v", got)
 			}
 		})
 	}

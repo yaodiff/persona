@@ -127,6 +127,22 @@ test('a local admission failure never becomes an unresolved dispatched write',as
 });
 
 const {HubRepository} = await import('../entry/src/main/ets/models/HubRepository.ets');
+test('the destination message budget reaches the transport with and without a write journal', async () => {
+  const {ResourceRow} = await import('../entry/src/main/ets/models/Wire.ets');
+  const row = new ResourceRow('chat', 'Chat', 'session');
+  row.machine = 'desk';
+  const limits = [];
+  globalThis.__personaRequest = async (_path, _method, _body, _op, limit) => {
+    limits.push(limit);
+    return '{}';
+  };
+  for (const local of [undefined, new MemoryStore()]) {
+    const repo = new HubRepository({managerId: 'personal', hubId: 'test'}, local);
+    await repo.send(row, 'photo', 'op', '', [], undefined, 6 * 1024 * 1024);
+  }
+  assert.deepEqual(limits, [6 * 1024 * 1024, 6 * 1024 * 1024]);
+});
+
 test('unrecognized receipt recovery stays journaled across detail reopen and storage restoration',async()=>{
  const {AssistantFeedModel}=await import('../entry/src/main/ets/models/AssistantFeed.ets');
  const {ResourceRow}=await import('../entry/src/main/ets/models/Wire.ets');

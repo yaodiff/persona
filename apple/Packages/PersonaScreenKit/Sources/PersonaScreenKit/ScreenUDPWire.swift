@@ -83,8 +83,10 @@ public struct ScreenUDPKeyMaterial: Equatable, Sendable {
 }
 
 public enum ScreenUDPPacket {
-    /// The nonce for packet `number`: the IV with the number XORed into its last 8 bytes, big-endian.
+    /// The nonce for packet `number`: the 12-byte IV with the number XORed into its last 8 bytes, big-endian.
+    /// Returns empty data if `iv` is not 12 bytes rather than trapping out of bounds.
     public static func nonce(iv: Data, number: UInt64) -> Data {
+        guard iv.count == 12 else { return Data() }
         var n = [UInt8](iv)
         for i in 0 ..< 8 { n[4 + i] ^= UInt8(truncatingIfNeeded: number >> (56 - 8 * UInt64(i))) }
         return Data(n)
@@ -105,6 +107,7 @@ public enum ScreenUDPPacket {
     }
 
     public static func seal(_ body: Data, cipher: ScreenUDPCipher, iv: Data, flow: Data, number: UInt64) -> Data? {
+        guard iv.count == 12, flow.count == 8 else { return nil }
         let header = header(flow: flow, number: number)
         guard let sealed = cipher.seal(body, nonce: nonce(iv: iv, number: number), header: header) else { return nil }
         return header + sealed
@@ -113,6 +116,9 @@ public enum ScreenUDPPacket {
     /// The body of a packet whose header was read, or nil when it doesn't open (another key, or changed on the way).
     public static func open(_ packet: Data, cipher: ScreenUDPCipher, iv: Data, number: UInt64) -> Data? {
         let p = [UInt8](packet)
+        guard p.count >= ScreenUDPWire.headerLength + ScreenUDPWire.tagLength + 1,
+              p[0] == ScreenUDPWire.version,
+              iv.count == 12 else { return nil }
         let header = Data(p[0 ..< ScreenUDPWire.headerLength])
         guard let body = cipher.open(Data(p[ScreenUDPWire.headerLength...]), nonce: nonce(iv: iv, number: number), header: header),
               !body.isEmpty else { return nil }
@@ -281,7 +287,9 @@ public enum ScreenUDPMessage: Equatable, Sendable {
             try need(ScreenUDPWire.dataHead)
             let h = ScreenUDPFragmentHead(channel: b[1], offset: B.readU64(b, 2), length: B.readU32(b, 10), block: B.readU16(b, 14),
                                           index: B.readU16(b, 16), data: b[18], parity: b[19], flags: b[20])
-            guard h.data > 0, Int(h.index) < Int(h.data) + Int(h.parity) else { throw Failure.malformed }
+            guard h.data > 0, Int(h.data) <= ScreenUDPWire.blockShards,
+                  Int(h.data) + Int(h.parity) <= 256,
+                  Int(h.index) < Int(h.data) + Int(h.parity) else { throw Failure.malformed }
             return .data(h, fragment: Data(b[ScreenUDPWire.dataHead...]))
         case .ack, .skip, .reset:
             try need(10)
@@ -320,8 +328,10 @@ public enum ScreenUDPLayout {
     }
 
     public static func blocks(length n: Int) -> [Block] {
+        guard n >= 0 else { return [] }
+        if n == 0 { return [Block(first: 0, data: 1, shardLength: 0)] }
         let f = ScreenUDPWire.fragment
-        let shards = max(1, (n + f - 1) / f)
+        let shards = (n - 1) / f + 1
         return stride(from: 0, to: shards, by: ScreenUDPWire.blockShards).map { first in
             Block(first: first, data: min(ScreenUDPWire.blockShards, shards - first), shardLength: min(f, n - first * f))
         }
@@ -329,7 +339,7 @@ public enum ScreenUDPLayout {
 
     /// The parity shards the node sends for a block of `data` shards at `ratio` (ten-thousandths).
     public static func parity(data k: Int, ratio: Int) -> Int {
-        guard ratio > 0, k > 0 else { return 0 }
+        guard ratio > 0, k > 0, k < 256 else { return 0 }
         let r = min(ratio, ScreenUDPWire.maxParity)
         return min((r * k + 9999) / 10000 + 1, 256 - k)
     }

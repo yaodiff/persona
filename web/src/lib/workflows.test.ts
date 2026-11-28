@@ -61,7 +61,7 @@ const session = (over: Partial<Session>): Session => ({ machine_id: "m", session
 describe("workflows (#2935)", () => {
   it("sums up a running run in one line", () => {
     const s = session({ workflows: [run], background: [{ id: "wdp5zxh37", kind: "workflow", run_id: run.run_id }] });
-    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分");
+    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分钟");
     expect(workflowPhase(run)).toBe("Verify 2/2");
     expect(workflowShortLine(s)).toBe("169/185+ · parity-audit · Verify");
   });
@@ -83,7 +83,7 @@ describe("workflows (#2935)", () => {
     const { agents: _agents, phases: _phases, ...progress } = run;
     const s = session({ waiting: true, background_count: 1, running_workflows: 1, workflow_progress: { ...progress, phase_count: 2 } });
     expect(workflowShortLine(s)).toBe("169/185+ · parity-audit · Verify");
-    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分");
+    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分钟");
     expect(backgroundCount(s)).toBe(1); // the summary's own count, not the run again
     // merged over an older complete row (the store keeps its workflows), the summary's own counts still win
     expect(workflowShortLine({ ...s, workflows: [] })).toBe("169/185+ · parity-audit · Verify");
@@ -252,7 +252,7 @@ describe("the run's card (#3434)", () => {
     expect(agentRunState({ ...a, status: "stopped" })).toBe("stopped");
     expect(agentRunState({ ...a, status: "failed" })).toBe("failed");
     expect(agentRunState({ ...a, running: true })).toBe("running");
-    expect(agentElapsed(a, start)).toBe("1 分");
+    expect(agentElapsed(a, start)).toBe("1 分钟");
     expect(agentElapsed({ ...a, running: true }, start + 1000 + 30_000)).toBe("30 秒");
     expect(agentElapsed({ ...a, started_at: undefined }, start)).toBe("");
     expect(agentDetail(a)).toBe("claude-example · Reading example.go");
@@ -319,6 +319,14 @@ describe("backgroundCommandLine (#7341)", () => {
     expect(backgroundCommandLine({ ...s, background: [{ ...first, description: "Package the release" }] })).toEqual({ what: "Package the release", more: 0, since: first.started_at });
   });
 
+  it("uses the scheduled prompt as the label, including schedules with commas or multiline prompts", () => {
+    for (const description of ["Cron: 0,30 * * * *, Prompt: Check the build\nReport failures", "Cron: */30 * * * *\nPrompt: Check the build"]) {
+      expect(backgroundCommandLine({ ...s, background: [{ ...first, description }] })?.what).toBe("Check the build");
+    }
+    expect(backgroundCommandLine({ ...s, background: [{ ...first, description: "Cron: */30 * * * *" }] })?.what).toBe("");
+    expect(backgroundCommandLine({ ...s, background: [{ ...first, description: "Display the Cron: configuration" }] })?.what).toBe("Display the Cron: configuration");
+  });
+
   it("has no clock without the command's start, keeps the label without a listed command, and needs the explicit flag", () => {
     expect(backgroundCommandLine({ ...s, background: [{ ...first, started_at: undefined }] })).toEqual({ what: "make release", more: 0 });
     expect(backgroundCommandLine({ ...s, background: [] })).toEqual({ what: "", more: 0 });
@@ -359,7 +367,7 @@ describe("the run's task card (#5030)", () => {
       { id: "a2", session_id: "s@a2", label: "two", running: false, status: "failed" },
       { id: "a3", session_id: "s@a3", running: true, status: "running" },
     ] };
-    expect(workflowStrip(small)).toEqual({ cells: [{ state: "done", label: "one" }, { state: "failed", label: "two" }, { state: "running", label: "agent" }], more: 0 });
+    expect(workflowStrip(small)).toEqual({ cells: [{ state: "done", label: "one" }, { state: "failed", label: "two" }, { state: "running", label: "Agent" }], more: 0 });
   });
 
   it("draws the agents the hub no longer lists from the run's counts, first, and stops at 40 with the rest as more", () => {

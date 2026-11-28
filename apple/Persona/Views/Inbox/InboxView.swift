@@ -18,8 +18,11 @@ import PersonaWire
 
     /// The accounts of `manager` (nil: the default's) as the hub has them now, kept; nil when they can't be read, or
     /// when another assistant became current meanwhile (they are not the page's any more).
-    static func read(_ model: AppModel) async -> [MailAccount]? {
+    /// With the hub's mail module off (`MailAccess.storedOnly`, #15995) nothing is asked: the accounts kept from before
+    /// still name the Inbox's mail groups and filters.
+    static func read(_ model: AppModel, access: MailAccess? = nil) async -> [MailAccount]? {
         let manager = model.assistantManagerID
+        guard (access ?? MailModule.access).offersMail else { return nil }
         guard let api = model.api?.manager(manager), let accounts = try? await api.mailAccounts(),
               manager == model.assistantManagerID else { return nil }
         StateCache.save(cacheName(manager), accounts)
@@ -64,6 +67,33 @@ extension InboxView {
             push(InboxChatRoute(key: key, manager: nil))
         } else {
             open()
+        }
+    }
+}
+
+/// The existing source entries and empty-state wording, from capability plus Core's retained presence (#17399).
+/// Unknown keeps today's behavior; a source is hidden only when its module is not offered and Core explicitly says none is stored.
+nonisolated struct InboxSourceVisibility: Hashable, Sendable {
+    let lark: Bool
+    let mail: Bool
+
+    init(larkOffered: Bool, mailOffered: Bool, stored: InboxStoredSources?) {
+        lark = larkOffered || stored?.lark != false
+        mail = mailOffered || stored?.mail != false
+    }
+
+    /// Only Mail's kind entry depends on mail; @Me, DMs, Group chat and Agent remain independent (#17814).
+    func shows(kind: String) -> Bool { kind != "mail" || mail }
+
+    /// All when the selected kind's entry disappeared; every still-visible selection stays as it was.
+    func selection(forKind kind: String) -> String { shows(kind: kind) ? kind : "" }
+
+    var caughtUpMessage: String {
+        switch (lark, mail) {
+        case (true, true): String(localized: "New Lark messages and emails show up here.")
+        case (true, false): String(localized: "New Lark messages show up here.")
+        case (false, true): String(localized: "New emails show up here.")
+        case (false, false): String(localized: "New messages show up here.")
         }
     }
 }
@@ -203,6 +233,7 @@ struct InboxPage: View {
                     // its Inbox opens on Needs You, as any Inbox entered (#9053)
                     bar.enter(query)
                 }
+                .onChange(of: sourceVisibility) { _, visibility in keepSelectedFilterVisible(visibility) }
                 // The section bar (#9053): text in the search shows All, clearing it brings the choice back.
                 .onChange(of: query) { _, text in bar.search(text) }
                 // The Inbox entered again while this page stayed up (the place in front chosen again, a widget, a quick
@@ -212,6 +243,7 @@ struct InboxPage: View {
                 // Entered for the first time beneath an item (a place's kept path brought back): the list opens on the
                 // item's choice, so Back lands where the item is. Later appearances keep the choice as it was.
                 .onAppear {
+                    keepSelectedFilterVisible(sourceVisibility)
                     guard !appeared else { return }
                     appeared = true
                     if let item = InboxBarLanding.shared.shown { land(on: item) }
@@ -585,8 +617,11 @@ struct InboxPage: View {
             }
             cleanButton
             Divider()
-            Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "", manager: model.assistantManagerID, accounts: accounts) } label: { Label("New Email", systemImage: Theme.Icon.compose) }
-                .disabled(accounts.isEmpty)
+            // Not offered while the hub's mail module is off: it could not be sent (#15995).
+            if MailModule.access.offersMail {
+                Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "", manager: model.assistantManagerID, accounts: accounts) } label: { Label("New Email", systemImage: Theme.Icon.compose) }
+                    .disabled(accounts.isEmpty)
+            }
             Button { showingMutes = true } label: { Label("Muted [Inbox Mutes View e5e468]", systemImage: Theme.Icon.mute) }
             Button { showingRules = true } label: { Label("Rules [Inbox Policy]", systemImage: Theme.Icon.inboxRule) }
             // Every source subscription, with the Inbox's other settings, once the hub shows them (#2041).
@@ -799,7 +834,7 @@ struct InboxPage: View {
                            tint: .secondary)
         case .caughtUp:
             EmptyStateView(symbol: "checkmark.seal", title: String(localized: "All Caught Up"),
-                           message: String(localized: "New Lark messages and emails show up here."))
+                           message: sourceVisibility.caughtUpMessage)
         case .filtered:
             EmptyStateView(symbol: Theme.Icon.filter, title: String(localized: "Nothing Open Matches These Filters"),
                            message: String(localized: "Clear the filters to see the whole Inbox."),
@@ -1297,13 +1332,28 @@ struct InboxPage: View {
 
     // MARK: Filters
 
+    private var sourceVisibility: InboxSourceVisibility {
+        InboxSourceVisibility(larkOffered: model.larkFeatures.chats || LarkModule.botEntry.isOffered,
+                              mailOffered: MailModule.access.offersMail, stored: store.storedSources)
+    }
+
+    private func keepSelectedFilterVisible(_ visibility: InboxSourceVisibility) {
+        let selected = visibility.selection(forKind: kind)
+        guard selected != kind else { return }
+        // All is source + kind; do not leave another source active beneath the reset Mail kind.
+        source = ""
+        kind = selected
+    }
+
     /// Sources (all, Lark, each mail account) then kinds, as one row of chips; in the BeautifulUI style its filter chips,
     /// wrapping to a second row (no sideways scrolling at the top of a page, like the Agents list).
     @ViewBuilder private var filters: some View {
         if AppStyle.current.usesBeautifulUI {
             LarkFlowLayout(spacing: Theme.Space.xs, lineSpacing: Theme.Space.sm) {
                 filterChip(String(localized: "All"), on: source.isEmpty && kind.isEmpty) { source = ""; kind = "" }
-                filterChip(String(localized: "Lark [Inbox Event Views 7e4419]"), on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                if sourceVisibility.lark {
+                    filterChip(String(localized: "Lark [Inbox Event Views 7e4419]"), on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                }
                 ForEach(accounts) { a in
                     filterChip(Self.short(a.email), on: source == a.id) { source = source == a.id ? "" : a.id }
                 }
@@ -1311,7 +1361,9 @@ struct InboxPage: View {
                     filterChip(c.name, on: source == c.id) { source = source == c.id ? "" : c.id }
                 }
                 ForEach(Self.kinds, id: \.0) { k, title in
-                    filterChip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    if sourceVisibility.shows(kind: k) {
+                        filterChip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1332,7 +1384,9 @@ struct InboxPage: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Theme.Space.s) {
                 chip(String(localized: "All"), on: source.isEmpty && kind.isEmpty) { source = ""; kind = "" }
-                chip(String(localized: "Lark [Inbox Event Views 7e4419]"), symbol: Theme.Icon.feishuChats, on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                if sourceVisibility.lark {
+                    chip(String(localized: "Lark [Inbox Event Views 7e4419]"), symbol: Theme.Icon.feishuChats, on: source == "feishu") { source = source == "feishu" ? "" : "feishu" }
+                }
                 ForEach(accounts) { a in
                     chip(Self.short(a.email), symbol: Theme.Icon.mail, on: source == a.id) { source = source == a.id ? "" : a.id }
                 }
@@ -1341,7 +1395,9 @@ struct InboxPage: View {
                 }
                 Divider().scaledFrame(height: Theme.Size.badge)
                 ForEach(Self.kinds, id: \.0) { k, title in
-                    chip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    if sourceVisibility.shows(kind: k) {
+                        chip(title, on: kind == k) { kind = kind == k ? "" : k }
+                    }
                 }
             }
             .padding(.horizontal, Theme.Space.l)
@@ -1466,7 +1522,8 @@ struct InboxRow: View {
                     // into), In Progress's state, the 'preparing a suggestion' line; its buttons are in the detail.
                     InboxEventMarkLine(mark: mark).padding(.top, Theme.Space.xxs)
                 } else if !item.isDone && item.suggestion == nil && item.handling == nil {
-                    if let draft = item.agentDraft, let send {
+                    // A mail's reply goes out through the hub's mail module: no Send while it is off (#15995).
+                    if let draft = item.agentDraft, let send, MailModule.access.offersReply(to: item) {
                         InboxDraftCard(draft: draft, changes: (item.agent?.changes ?? []).map { DocChangeText.line($0, in: item.doc) },
                                        sending: sending, send: { send(draft) }, edit: edit)
                             .padding(.top, Theme.Space.sm)
@@ -1748,6 +1805,8 @@ struct InboxDetailView: View {
                 slot.detailIdentityChanged(from: oldKey, to: newKey)
             }
             #endif
+            // Which knowledge base chat it came from, for Knowledge Page in More (#15356): asked once per item.
+            .task(id: Self.identity(for: item)) { await InboxKBChats.shared.load(current) }
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1785,6 +1844,8 @@ struct InboxDetailView: View {
                         }
                         Button { sameMatter = true } label: { Label("Same matter as…", systemImage: Theme.Icon.link) }
                             .accessibilityIdentifier("inbox.detail.sameMatter")
+                        // Its chat's knowledge page, when its read names one (#15356).
+                        InboxKBChatButton(item: current)
                     } label: { ThemedIcon(Theme.Icon.moreMenu) }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("inbox.detail.more")
@@ -1817,6 +1878,7 @@ struct InboxDetailView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     InboxActionBar(item: current, draft: { drafting = true }, handOff: { handingOff = true })
                 }
+                .textLookupSurface("inbox") // the summary's and a chat's words look up on a tap (#10977)
         }
     }
 
@@ -1847,7 +1909,7 @@ struct InboxDetailView: View {
         if let c = item.larkConversation {
             LarkChatView(conversation: c, manager: model.linkManager(current.manager))
         } else if let m = item.mailSummary {
-            MailDetailView(summary: m, accounts: accounts)
+            MailReaderView(item: item, summary: m, accounts: accounts)
         }
     }
 

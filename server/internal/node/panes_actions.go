@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -37,7 +39,18 @@ func (n *Node) listedPane(ctx context.Context, pane string) (host.Agent, error) 
 			}
 		}
 	}
-	return host.Agent{}, fmt.Errorf("pane %s is not running", pane)
+	return host.Agent{}, failure("pane_gone", fmt.Sprintf("pane %s is not running", pane), nil)
+}
+
+// spaceHostKind is the kind of host a space action names (git, a shell, a worktree in a workspace): a terminal host's or
+// an engine's as it is, any other "" (no kind: the default engine's, or the host that lists the workspace). A space can
+// hold the sessions of several apps (folderspace.go): a client that takes the space's kind from one of its sessions
+// (claude_desktop, codex_app, a runtime's) still means the terminal workspace the space is.
+func spaceHostKind(kind string) string {
+	if _, engine := engineRuntimes[kind]; engine || slices.Contains(host.Kinds, kind) {
+		return kind
+	}
+	return ""
 }
 
 // hostOfKind is the host a tab or workspace id belongs to: the one of that kind, else the engine's.
@@ -69,7 +82,7 @@ func (n *Node) listedTab(ctx context.Context, h host.Host, tab string) error {
 	if err := n.refreshHosts(ctx, h); err == nil && has() {
 		return nil
 	}
-	return fmt.Errorf("tab %s is not running", tab)
+	return failure("tab_gone", fmt.Sprintf("tab %s is not running", tab), nil)
 }
 
 // closeTab closes a tab with every pane in it.
@@ -86,7 +99,7 @@ func (n *Node) closeTab(ctx context.Context, kind, tab string) error {
 		return err
 	}
 	if err := c.CloseSlot(ctx, tab); err != nil {
-		return fmt.Errorf("关闭标签页失败：%w", err)
+		return hostFailure(ctx, "tab_close_failed", err)
 	}
 	_ = n.refreshHosts(ctx, h)
 	return nil
@@ -96,7 +109,8 @@ func (n *Node) closeTab(ctx context.Context, kind, tab string) error {
 func (n *Node) renameTab(ctx context.Context, kind, tab, label string) error {
 	label = strings.Join(strings.Fields(label), " ")
 	if label == "" || utf8.RuneCountInString(label) > maxLabel {
-		return fmt.Errorf("标签页名称要 1 到 %d 个字", maxLabel)
+		return failure("tab_name_invalid", i18n.T(i18n.From(ctx), "rpc-errors.tab_name_invalid", i18n.Args{"max": maxLabel}),
+			map[string]any{"max": maxLabel})
 	}
 	h, err := n.hostOfKind(kind)
 	if err != nil {
@@ -130,20 +144,23 @@ func (n *Node) closePane(ctx context.Context, pane string) error {
 		defer unlock()
 		return n.close(ctx, id)
 	}
-	if id := p.Tokens[personaTabToken]; validID(id) {
-		release := n.recovery.lock(id)
+	n.mu.Lock()
+	mark := n.personaTabLocked(p)
+	n.mu.Unlock()
+	if validID(mark) {
+		release := n.recovery.lock(mark)
 		defer release()
-		if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
+		if err := n.saveStopCause(ctx, mark, proto.StopUser); err != nil {
 			return err
 		}
-		defer n.state.stopped(id, proto.StopUser)
+		defer n.state.stopped(mark, proto.StopUser)
 	}
 	org, ref, err := paneCap[host.Organizer](n, pane)
 	if err != nil {
 		return err
 	}
 	if err := org.Close(ctx, ref, p.WorkspaceID, p.TabID); err != nil {
-		return fmt.Errorf("关闭窗格失败：%w", err)
+		return hostFailure(ctx, "pane_close_failed", err)
 	}
 	_ = n.refreshHosts(ctx)
 	return nil
@@ -186,7 +203,7 @@ func (n *Node) splitPane(ctx context.Context, pane, direction string) (proto.Pan
 	}
 	created, err := sp.Split(ctx, ref, direction, paneDir(p))
 	if err != nil {
-		return proto.PaneSplitResult{}, fmt.Errorf("新建窗格失败：%w", err)
+		return proto.PaneSplitResult{}, hostFailure(ctx, "pane_split_failed", err)
 	}
 	id := created.String()
 	_ = n.refreshHosts(ctx) // the new pane is in the layout the terminal call checks
@@ -263,7 +280,7 @@ func (n *Node) runAgentInPane(ctx context.Context, pane, launcher string) (*prot
 		return nil, err
 	}
 	if p.Agent != "" || n.sessionOfPane(pane) != "" {
-		return nil, errors.New("这个窗格里已经有 Agent 在运行")
+		return nil, refusal("pane_has_agent", i18n.T(i18n.From(ctx), "rpc-errors.pane_has_agent"), nil)
 	}
 	h, ref, err := n.paneHost(pane)
 	if err != nil {
@@ -282,19 +299,21 @@ func (n *Node) runAgentInPane(ctx context.Context, pane, launcher string) (*prot
 	}
 	names, err := f.PaneForeground(ctx, ref)
 	if err != nil {
-		return nil, fmt.Errorf("读不到窗格里运行的程序：%w", err)
+		return nil, host.Mark(refusal("pane_foreground_unknown", i18n.T(i18n.From(ctx), "rpc-errors.pane_foreground_unreadable", i18n.Args{"detail": err.Error()}),
+			map[string]any{"reason": "unreadable", "detail": err.Error()}), err)
 	}
 	if len(names) == 0 {
-		return nil, errors.New("读不到窗格里运行的程序")
+		return nil, refusal("pane_foreground_unknown", i18n.T(i18n.From(ctx), "rpc-errors.pane_foreground_unknown"), nil)
 	}
 	for _, name := range names {
 		if !shellProgram(name) {
-			return nil, fmt.Errorf("窗格里正在运行 %s，不在 shell 提示符下", name)
+			return nil, refusal("pane_not_at_prompt", i18n.T(i18n.From(ctx), "rpc-errors.pane_not_at_prompt", i18n.Args{"program": name}),
+				map[string]any{"program": name})
 		}
 	}
 	cwd := paneDir(p)
 	if cwd == "" {
-		return nil, errors.New("不知道这个窗格的目录")
+		return nil, refusal("pane_directory_unknown", i18n.T(i18n.From(ctx), "rpc-errors.pane_directory_unknown"), nil)
 	}
 	created := &host.Created{SlotID: p.TabID, SpaceID: p.WorkspaceID, Pane: ref}
 	return n.start(withAdoptedPane(ctx, created, names), cwd, launcher, "", "", p.WorkspaceID, "", "", "", "", "")
@@ -319,7 +338,7 @@ func (n *Node) gitDirOf(ctx context.Context, pane, workspace, kind string) (stri
 	if workspace == "" {
 		return "", errors.New("pane or workspace is required")
 	}
-	h, err := n.hostOfKind(kind)
+	h, err := n.hostOfKind(spaceHostKind(kind))
 	if err != nil {
 		return "", err
 	}

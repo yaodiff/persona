@@ -31,6 +31,10 @@ interface InteractionCenter {
     suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
         resolveOutcome(id, resolution)
 
+    /** Answers the occurrence the caller displayed, not a same-ID replacement that arrived before its coroutine ran. */
+    suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean = false): ResolveOutcome =
+        resolveOutcome(interaction.id, resolution, handoffCard)
+
     /** Replies to the exact proposal and removes it only after the hub confirms that same target. */
     suspend fun replyOwnerApproval(interaction: Interaction, phrase: String): Unit =
         throw UnsupportedOperationException("Exact owner replies unavailable")

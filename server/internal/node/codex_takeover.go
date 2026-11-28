@@ -128,16 +128,23 @@ func (n *Node) codexDesktopConflict(src codexSource, fresh bool, pass *codexList
 
 func (n *Node) takeoverSource(id string) (codexSource, bool) {
 	src, ok := n.codexSource(id)
-	if !ok || src.path == "" || src.thread == "" || n.codexBlocked(id) ||
-		n.isAssistantSession(id) || n.ownedAssistantSource(src.thread) {
+	if !ok || n.codexBlocked(id) || n.isAssistantSession(id) || n.ownedAssistantSource(src.thread) {
 		return codexSource{}, false
 	}
 	if _, live := n.agent(id); live {
 		return codexSource{}, false
 	}
-	o := readCodexOrigin(src.path)
-	if !o.interactive() {
+	o := codexThreadOrigin(src)
+	if (!o.cli && !o.desktop && !o.interactive()) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return codexSource{}, false
+	}
+	if o.cli && (src.path == "" || !n.codices.matchesSourceID(id, src)) {
+		return codexSource{}, false
+	}
+	if o.desktop && src.path == "" {
+		if _, hasAppRow := codexAppThreadOf(src); !hasAppRow {
+			return codexSource{}, false
+		}
 	}
 	if _, _, err := n.codexOwner(id); !errors.Is(err, errCodexNoOwner) {
 		return codexSource{}, false
@@ -145,17 +152,42 @@ func (n *Node) takeoverSource(id string) (codexSource, bool) {
 	return src, true
 }
 
-// takeoverHost selects an enabled non-Orca terminal host.Launcher (herdr, herdr-core, tern, ...).
+func (n *Node) codexEncryptedFailed(id string, m quickMeta) bool {
+	n.takeovers.mu.Lock()
+	failed := n.takeovers.failed[id]
+	n.takeovers.mu.Unlock()
+	return failed || encryptedCodexFailure(m.turnErr.code+" "+m.turnErr.text)
+}
+
+func codexHomeArgv(argv []string, srcHome, defaultHome string) []string {
+	if srcHome == "" || (defaultHome != "" && srcHome == defaultHome) {
+		return argv
+	}
+	for _, w := range argv {
+		if strings.HasPrefix(w, "CODEX_HOME=") {
+			return argv
+		}
+		if !strings.Contains(w, "=") {
+			break
+		}
+	}
+	return append([]string{"CODEX_HOME=" + srcHome}, argv...)
+}
+
+// takeoverHost selects an enabled terminal host.Launcher (herdr, herdr-core, Orca, tern, ...): the start's host first,
+// then the engine set's. Orca resumes a Codex thread as herdr does since #17044 (resumeCodex: a new terminal in the
+// worktree holding the thread's directory); before that a takeover never went to Orca, and an Orca-only computer had no
+// terminal engine for it.
 func (n *Node) takeoverHost(ctx context.Context) (context.Context, error) {
 	if n == nil || n.hosts == nil {
 		return ctx, noEngineRefusal()
 	}
 	var candidates []string
-	if start := n.startKind(ctx); start != "" && start != host.Orca && !proto.RuntimeEngine(start) {
+	if start := n.startKind(ctx); start != "" && !proto.RuntimeEngine(start) {
 		candidates = append(candidates, start)
 	}
 	for _, kind := range n.engineChoice().Hosts {
-		if kind == "" || kind == host.Orca || proto.RuntimeEngine(kind) || slices.Contains(candidates, kind) {
+		if kind == "" || proto.RuntimeEngine(kind) || slices.Contains(candidates, kind) {
 			continue
 		}
 		candidates = append(candidates, kind)
@@ -207,9 +239,26 @@ func (n *Node) codexTakeoverRow(id string, src codexSource, m quickMeta, running
 }
 
 func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, running bool, pass *codexListPass) *proto.CodexTakeover {
-	o := readCodexOrigin(src.path)
-	if src.path == "" || src.thread == "" || !o.interactive() {
+	o := codexThreadOrigin(src)
+	if (!o.cli && !o.desktop && !o.interactive()) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return nil
+	}
+	if o.cli && (src.path == "" || !n.codices.matchesSourceID(id, src)) {
+		return nil
+	}
+	desktop := o.desktopThread(src, pass)
+	if desktop {
+		if running {
+			return nil
+		}
+		if src.path == "" {
+			t, ok := codexAppThreadOf(src)
+			if !ok || t.Cwd == "" || n.codexAppHistoryPath(src, pass) == "" {
+				return nil
+			}
+		} else if m.cwd == "" && metaOf(src.home, src.path).cwd == "" {
+			return nil
+		}
 	}
 	_, hostErr := n.takeoverHost(context.Background())
 	hasShared := n.codexSharedRemote(src.home) != nil
@@ -217,17 +266,30 @@ func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, runni
 	if !canResumeTarget && !n.canContinueCodex(context.Background()) {
 		return nil
 	}
-	state := &proto.CodexTakeover{Running: running, CanResume: canResumeTarget}
-	n.takeovers.mu.Lock()
-	failed := n.takeovers.failed[id]
-	n.takeovers.mu.Unlock()
+	state := &proto.CodexTakeover{Running: running, CanResume: canResumeTarget, AppOwned: desktop}
 	switch {
-	case failed || encryptedCodexFailure(m.turnErr.code+" "+m.turnErr.text):
+	case n.codexEncryptedFailed(id, m):
 		state.CanResume, state.Reason = false, "encrypted_context"
 	case !canResumeTarget:
 		state.CanResume, state.Reason = false, "unavailable"
-	case o.desktop && (running || n.codexDesktopConflict(src, false, pass) || n.codexWriterLockHeld(src)):
-		state.CanResume, state.Reason = false, "unavailable"
+	case desktop:
+		if pass != nil {
+			if pass.desktopRunning(n, src.home) {
+				state.CanResume, state.Reason = false, "app_running"
+			}
+		} else {
+			appRunning, complete := n.codexAppRunningNow(src.home)
+			switch {
+			case appRunning:
+				state.CanResume, state.Reason = false, "app_running"
+			case !complete:
+				state.CanResume, state.Reason = false, "unavailable"
+			}
+		}
+		// App takeover, like ordinary terminal resume, is supported only in the legacy home.
+		if state.CanResume && (src.path == "" || src.thread != id || n.codexTurnRunning(src, m) || n.codexWriterLockHeld(src)) {
+			state.CanResume, state.Reason = false, "unavailable"
+		}
 	case !running && n.codexWriterLockHeld(src):
 		state.Running = true
 		state.CanResume, state.Reason = false, "unavailable"
@@ -258,16 +320,28 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 	if !canResumeTarget && !n.canContinueCodex(ctx) {
 		return nil, hostErr
 	}
-	st, err := os.Stat(src.path)
-	if err != nil {
-		return nil, err
+	var m quickMeta
+	transcriptPath := src.path
+	cwd := ""
+	if transcriptPath != "" {
+		st, err := os.Stat(transcriptPath)
+		if err != nil {
+			return nil, err
+		}
+		m = n.meta(transcriptPath, st)
+		cwd = m.cwd
+	} else if t, hasAppRow := codexAppThreadOf(src); hasAppRow {
+		_ = n.refreshCodexAppHistory(id)
+		transcriptPath = n.codexAppHistoryPath(src, nil)
+		cwd = t.Cwd
 	}
-	m := n.meta(src.path, st)
-	state := n.codexTakeoverRow(id, src, m, false)
-	if state == nil || m.cwd == "" {
+	if transcriptPath == "" || cwd == "" {
 		return nil, takeoverRefusal("unsupported")
 	}
-	o := readCodexOrigin(src.path)
+	state := n.codexTakeoverRowIn(id, src, m, false, nil)
+	if state == nil {
+		return nil, takeoverRefusal("unsupported")
+	}
 	writers, err := n.takeoverWriters(src)
 	if err != nil {
 		state.CanResume, state.Reason = false, "unavailable"
@@ -277,10 +351,10 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 		state.Running = true
 		state.CanResume, state.Reason = false, "unavailable"
 	}
-	if o.desktop && (state.Running || n.codexDesktopConflict(src, true, nil)) {
+	if state.AppOwned && (state.Running || n.codexTurnRunning(src, m) || n.codexRemoteConnecting(src.home)) {
 		state.CanResume, state.Reason = false, "unavailable"
 	}
-	if state.Running && runtime.GOOS == "windows" {
+	if state.Running && (runtime.GOOS == "windows" || n.codexLiveCannotQuit(id)) {
 		state.CanResume, state.Reason = false, "unavailable"
 	}
 	if state.Running && state.CanResume && n.takeovers.stop == nil {
@@ -288,12 +362,12 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 			state.CanResume, state.Reason = false, "unavailable"
 		}
 	}
-	recent, err := codexContinuation(src.path)
+	recent, err := codexContinuation(transcriptPath)
 	if err != nil {
 		return nil, err
 	}
-	p := codexTakeoverPlan{CodexTakeover: *state, Token: newUUID(), Cwd: m.cwd, TranscriptPath: src.path,
-		ContinuationPrompt: prompts.RenderCodexContinuation(prompts.CodexContinuation{Path: src.path, Messages: recent}),
+	p := codexTakeoverPlan{CodexTakeover: *state, Token: newUUID(), Cwd: cwd, TranscriptPath: transcriptPath,
+		ContinuationPrompt: prompts.RenderCodexContinuation(prompts.CodexContinuation{Path: transcriptPath, Messages: recent}),
 		id:                 id, source: src, writers: writers, expires: time.Now().Add(takeoverPlanTTL)}
 	n.takeovers.mu.Lock()
 	defer n.takeovers.mu.Unlock()
@@ -332,17 +406,26 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("expired")
 	}
 	if !p.CanResume {
+		if p.Reason == "app_running" {
+			return nil, takeoverRefusal("app_running")
+		}
 		return nil, takeoverRefusal("continue_only")
+	}
+	if p.AppOwned && !confirm {
+		return nil, takeoverRefusal("app_confirmation_required")
 	}
 	if p.Running && !confirm {
 		return nil, takeoverRefusal("confirmation_required")
 	}
 	src, ok := n.takeoverSource(id)
-	if !ok || src != p.source {
+	if !ok || src != p.source || src.path == "" || !n.codices.matchesSourceID(id, src) {
 		return nil, takeoverRefusal("changed")
 	}
 	o := readCodexOrigin(src.path)
-	if o.desktop && n.codexDesktopConflict(src, true, nil) {
+	desktopConflict := func() bool {
+		return o.desktopThread(src, nil) && n.codexDesktopConflict(src, true, nil)
+	}
+	if desktopConflict() {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	hostCtx, hostErr := n.takeoverHost(ctx)
@@ -351,6 +434,25 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		sharedRemote = n.codexSharedRemote(src.home)
 		if sharedRemote == nil {
 			return nil, hostErr
+		}
+	}
+	if p.AppOwned {
+		if n.codexRemoteConnecting(src.home) {
+			return nil, takeoverRefusal("writer_busy")
+		}
+		appRunning, complete := n.codexAppRunningNow(src.home)
+		if appRunning {
+			return nil, takeoverRefusal("app_running")
+		}
+		if !complete {
+			return nil, takeoverRefusal("unavailable")
+		}
+		st, err := os.Stat(src.path)
+		if err != nil {
+			return nil, takeoverRefusal("changed")
+		}
+		if n.codexTurnRunning(src, n.meta(src.path, st)) {
+			return nil, takeoverRefusal("writer_busy")
 		}
 	}
 	current, err := n.takeoverWriters(src)
@@ -370,6 +472,15 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		}
 		if src.thread != id && src.home != "" && !hasLeadingEnvArg(argv, "CODEX_HOME") {
 			argv = append([]string{"CODEX_HOME=" + src.home}, argv...)
+		}
+		if p.AppOwned {
+			appRunning, complete := n.codexAppRunningNow(src.home)
+			if appRunning {
+				return nil, takeoverRefusal("app_running")
+			}
+			if !complete {
+				return nil, takeoverRefusal("unavailable")
+			}
 		}
 		// Daemon startup may take a while. Never signal a replacement writer with an old confirmation.
 		if current, err = n.takeoverWriters(src); err != nil || !slices.Equal(current, p.writers) {
@@ -391,13 +502,13 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 {
 		return nil, takeoverRefusal("writer_busy")
 	}
-	if n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true, nil)) {
+	if n.codexWriterLockHeld(src) || desktopConflict() {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	if err := settledCodexRollout(ctx, src.path); err != nil {
 		return nil, err
 	}
-	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 || n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true, nil)) {
+	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 || n.codexWriterLockHeld(src) || desktopConflict() {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	if hostErr != nil {
@@ -431,6 +542,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if err != nil {
 		return nil, err
 	}
+	argv = codexHomeArgv(argv, src.home, canonicalCodexHome(n.codexHome(), n.home))
 	// A new tab is intentional: do not adopt or type into the source terminal.
 	st := sessionState{Launcher: "codex", Cwd: p.Cwd}
 	err = n.resumeCodex(hostCtx, launch, id, st, argv, "", ws, n.resumeTabName(id))

@@ -13,7 +13,7 @@ import (
 )
 
 func TestTodoRepositoryHTTPJourneyAndLegacyCompatibility(t *testing.T) {
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestTodoRepositoryHTTPJourneyAndLegacyCompatibility(t *testing.T) {
 }
 
 func TestTodoRepositoryToolsAndTransportCompatibility(t *testing.T) {
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
@@ -153,18 +153,17 @@ func TestTodoRepositoryToolsAndTransportCompatibility(t *testing.T) {
 }
 
 func TestTodoRepositoryAgentReportsUseUnifiedStore(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	s, _ := repositoryService(t, database)
-	todo, err := s.createPlainTodo(t.Context(), "Reported work", "", db.TodoEdit{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s, f := newQuietServiceOn(t, repositorystore.New(database))
+	todo := agentTask(t, s, f)
 	text := "Opened https://github.com/example/web/pull/7 and https://github.com/example/web/pull/8; https://gitlab.example.com/team/api/-/merge_requests/7"
-	s.advanceTaskReply(t.Context(), todo, "", "", text)
+	reply := artifactReportProof(f, todo, text, "https://github.com/example/web/pull/7", "https://github.com/example/web/pull/8",
+		"https://gitlab.example.com/team/api/-/merge_requests/7")
+	s.advanceTaskReplyAt(t.Context(), todo, todo.Agents[0].MachineID, todo.Agents[0].SessionID, text, reply.TS)
 	set, err := s.readTodoRepositories(t.Context(), todo.ID)
 	if err != nil || len(set.Repositories) != 2 || len(set.Repositories[0].Links) != 2 {
 		t.Fatal(set, err)
@@ -197,7 +196,7 @@ func TestTodoRepositoryAgentReportsUseUnifiedStore(t *testing.T) {
 }
 
 func TestAgentRepositoryToolsStayOnTheirOwnTodo(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,29 +232,28 @@ func TestAgentRepositoryToolsStayOnTheirOwnTodo(t *testing.T) {
 }
 
 func TestTodoRepositoryReportsNotifyWithoutChangingLegacyProgress(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	f := newFakeHub()
-	s := New(Options{Hub: f, Store: func() Store { return repositorystore.New(database) }})
-	todo, err := s.createPlainTodo(t.Context(), "Reported work", "", db.TodoEdit{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s, f := newQuietServiceOn(t, repositorystore.New(database))
+	todo := agentTask(t, s, f)
 	first := "https://github.com/example/web/pull/7"
-	s.advanceTaskReply(t.Context(), todo, "", "", first)
+	machine, session := todo.Agents[0].MachineID, todo.Agents[0].SessionID
+	reply := artifactReportProof(f, todo, first, first)
+	s.advanceTaskReplyAt(t.Context(), todo, machine, session, first, reply.TS)
 	todo = todoNow(s, todo.ID)
 	todosTold(t, s)
 	before := strings.Count(f.eventTypes(), "todos")
-	s.advanceTaskReply(t.Context(), todo, "", "", first+" https://github.com/example/web/pull/8")
+	reply = artifactReportProof(f, todo, "https://github.com/example/web/pull/8 "+first, first, "https://github.com/example/web/pull/8")
+	s.advanceTaskReplyAt(t.Context(), todo, machine, session, reply.Text, reply.TS)
 	todosTold(t, s)
 	after := strings.Count(f.eventTypes(), "todos")
 	if after <= before {
 		t.Fatal("new association with unchanged legacy stage/PR sent no update")
 	}
-	s.advanceTaskReply(t.Context(), todo, "", "", first+" https://github.com/example/web/pull/8")
+	s.advanceTaskReplyAt(t.Context(), todo, machine, session, reply.Text, reply.TS)
 	todosTold(t, s)
 	if got := strings.Count(f.eventTypes(), "todos"); got != after {
 		t.Fatal("replayed links emitted another update", after, got)
@@ -276,7 +274,7 @@ func TestTodoRepositoryReportsNotifyWithoutChangingLegacyProgress(t *testing.T) 
 }
 
 func TestTodoRepositoryLegacyPRsImportOnceBeforeFirstEdit(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,13 +313,23 @@ func TestTodoRepositoryLegacyPRsImportOnceBeforeFirstEdit(t *testing.T) {
 	}
 	next.advanceTaskReply(t.Context(), todoNow(next, todo.ID), "", "", "Opened https://code.example.com/Example/Api/pull/17.")
 	got, err = next.readTodoRepositories(t.Context(), todo.ID)
-	if err != nil || len(got.Repositories) != 1 || got.Repositories[0].SourceSnapshot.Identity.InstanceURL != "https://code.example.com" {
-		t.Fatal("self-hosted PR was not linked", got, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range got.Repositories {
+		for _, link := range row.Links {
+			if link.Role != repository.LinkRoleReference {
+				t.Fatal("an unlinked report claimed a self-hosted PR as delivery without ownership", got)
+			}
+		}
+	}
+	if old := todoNow(next, todo.ID); old.PRURL != "https://github.com/example/web/pull/8" {
+		t.Fatal("an unlinked report overwrote the legacy PR without ownership", old)
 	}
 }
 
 func TestTodoRepositoryEmptyTodoNeedsNoCatalog(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

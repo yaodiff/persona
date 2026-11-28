@@ -271,7 +271,8 @@ func TestDeviceCallInteractionsListStaysOnHub(t *testing.T) {
 
 	now := time.Now().UTC()
 	h.takeFleetInteractionsFrom(assistantwire.AssistantID, []proto.Interaction{
-		{ID: "ix-ma", MachineID: "ma", SessionID: "s1", Kind: proto.IxQuestion, CreatedAt: now},
+		{ID: "ix-ma", MachineID: "ma", SessionID: "s1", Kind: proto.IxPermission, MirrorMain: true, CreatedAt: now},
+		{ID: proto.ApprovalMirrorID("ix-ma", now), MirrorOf: "ix-ma", MachineID: "ma", SessionID: "main", Kind: proto.IxPermission, CreatedAt: now},
 		{ID: "ix-a-global", SessionID: "s2", Kind: proto.IxPermission, CreatedAt: now.Add(time.Millisecond)},
 	})
 	h.takeFleetInteractionsFrom(perManagerOther, []proto.Interaction{

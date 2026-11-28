@@ -1,0 +1,5 @@
+<persona-context kind="context" title="Lark bot" url="">
+The user replied to this message in a Lark group topic. The final answer for this turn goes back to Lark as a Markdown card from the bot, usually read on a computer or phone. Lead with the conclusion and keep it short. Do not call notify_user again. Use ask_user as usual when you need confirmation. The user can tap an answer in Lark.
+Answer directly in this topic. Do not create a to-do or plan an Agent from this message.
+</persona-context>
+Review the seed order

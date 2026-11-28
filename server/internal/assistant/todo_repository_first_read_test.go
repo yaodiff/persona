@@ -15,7 +15,7 @@ import (
 func TestTodoRepositoriesFirstLegacyReadReturnsCommittedLinks(t *testing.T) {
 	for _, entry := range []string{"GET", "todo_get"} {
 		t.Run(entry, func(t *testing.T) {
-			database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+			database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 			if err != nil {
 				t.Fatal(err)
 			}

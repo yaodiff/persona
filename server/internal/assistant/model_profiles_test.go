@@ -51,7 +51,7 @@ func storeProfiles(t *testing.T, st *downStore, profiles ...ModelProfile) {
 	}
 }
 
-func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
+func TestModelProfilesCaptureCurrentConfiguration(t *testing.T) {
 	s, f, st := modelService(t)
 	ctx := context.Background()
 	sealed, err := s.sealKey("test-secret-key")
@@ -72,17 +72,21 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 		}
 	}
 	before, puts := profileStoreSnapshot(st.memStore)
+	for revision, id := range []string{"performance", "economy"} {
+		body := fmt.Sprintf(`{"revision":%d,"name":%q,"capture":true}`, revision, id)
+		if r := request(s, http.MethodPut, "/api/v1/model-profiles/"+id, body); r.Code != http.StatusOK {
+			t.Fatalf("creating a profile from current settings: %d %s", r.Code, r.Body.String())
+		}
+	}
 	v := profilesOf(t, s)
-	// The templates are copies of the configuration: performance is marked in use (its tiers work from the start),
-	// nothing switches and there is nothing to roll back.
-	if v.Revision != 1 || v.Active != seededProfile || v.Rollback != nil || len(v.Events) != 1 || v.Events[0].Action != "seed" ||
-		v.Events[0].By.Kind != "system" || len(v.Profiles) != 2 {
-		t.Fatalf("seeding: %+v", v)
+	if v.Revision != 2 || v.Active != "" || v.Rollback != nil || len(v.Events) != 2 || v.Events[0].Action != "save" ||
+		len(v.Profiles) != 2 {
+		t.Fatalf("captured profiles: %+v", v)
 	}
 	for _, p := range v.Profiles {
 		if p.Purposes["assistant"].Model != "test-chat" || p.Purposes["assistant"].ConfigDir != "" ||
 			p.Purposes["agent.delegate"].Model != "test-delegate" || len(p.Changes) != 0 {
-			t.Fatalf("template is not the current model-only configuration: %+v", p)
+			t.Fatalf("capture differs from the current model-only configuration: %+v", p)
 		}
 		m := p.Launchers["current"]
 		for _, field := range m.fields(&l.ManagedLauncher) {
@@ -90,10 +94,10 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 				t.Fatalf("capture lost launcher field %s", field.name)
 			}
 		}
-		// Seeded by the kind of work (#14700): core is the main chat's choice, dev the Agents'.
+		// Core is the main chat's choice and dev the Agents'.
 		core, dev := p.Tiers["core"], p.Tiers["dev"]
 		if core.Description == "" || dev.Description == "" || len(p.Tiers) != 2 {
-			t.Fatalf("seeded tiers say nothing of when to use them: %+v", p.Tiers)
+			t.Fatalf("captured tiers lack descriptions: %+v", p.Tiers)
 		}
 		core.Description, dev.Description = "", ""
 		// Each answers to its older name too, as a migrated one does (#15010).
@@ -105,11 +109,11 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	after, n := profileStoreSnapshot(st.memStore)
 	delete(after, modelProfilesKey)
 	delete(after, modelProfileStateKey)
-	if !reflect.DeepEqual(before, after) || n != puts+2 { // the profiles and the state, in one transaction
-		t.Fatal("seeding reset model defaults or changed another setting")
+	if !reflect.DeepEqual(before, after) || n != puts+4 {
+		t.Fatal("capturing reset model defaults or changed another setting")
 	}
-	if f.eventTypes() != "" || len(f.managed) != 0 {
-		t.Fatal("seeding caused switch side effects")
+	if f.eventTypes() != "model_profile model_profile" || len(f.managed) != 0 {
+		t.Fatal("capturing did not publish catalog changes or pushed launcher settings")
 	}
 	before, puts = profileStoreSnapshot(st.memStore)
 	profilesOf(t, s)
@@ -127,13 +131,13 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	r := request(s, "PUT", "/api/v1/model-profiles/performance", `{"revision":2,"name":"Captured","capture":true}`)
+	r := request(s, "PUT", "/api/v1/model-profiles/performance", `{"revision":3,"name":"Captured","capture":true}`)
 	if r.Code != http.StatusOK {
 		t.Fatalf("capture: %d %s", r.Code, r.Body.String())
 	}
 	v = profilesOf(t, s)
 	if v.Profiles[0].Purposes["assistant"].Model != "test-later" ||
-		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != seededProfile {
+		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != "" {
 		t.Fatalf("capture applied or overwrote other profile data: %+v", v)
 	}
 	if got, err := s.modelRecord(ctx, "assistant"); err != nil || got.Binding.Model != "test-later" || got.Revision != 4 {
@@ -335,19 +339,27 @@ type nonAtomicProfileStore struct{ Store }
 
 func TestModelProfilesFailuresAreAtomicAndPropagated(t *testing.T) {
 	ctx := context.Background()
-	for _, operation := range []string{"view", "capture", "switch", "rollback", "save", "delete"} {
-		for _, failure := range []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant"), "write", "non-atomic"} {
-			if operation == "rollback" && failure == modelProfilesKey || operation == "delete" && (failure == launchersManagedKey || failure == modelRecordKey("assistant")) ||
-				(operation == "save" || operation == "delete") && failure == modelRecordKey("assistant") || operation == "capture" && (failure == modelProfilesKey || failure == modelProfileStateKey || failure == "write" || failure == "non-atomic") {
-				continue
-			}
-			t.Run(operation+"/"+failure, func(t *testing.T) {
+	for _, tc := range []struct {
+		operation string
+		failures  []string
+	}{
+		{"view", []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant")}},
+		{"capture", []string{launchersManagedKey, modelRecordKey("assistant")}},
+		{"switch", []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant"), "write", "non-atomic"}},
+		{"rollback", []string{modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant"), "write", "non-atomic"}},
+		{"save", []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, "write", "non-atomic"}},
+		{"delete", []string{modelProfilesKey, modelProfileStateKey, "write", "non-atomic"}},
+		{"deactivate", []string{modelProfileStateKey, "write", "non-atomic"}},
+		{"clear", []string{modelProfilesKey, modelProfileStateKey, "write", "non-atomic"}},
+	} {
+		for _, failure := range tc.failures {
+			t.Run(tc.operation+"/"+failure, func(t *testing.T) {
 				s, f, st := modelService(t)
 				f.hello.Models.AI = ai.Config{API: "responses", BaseURL: "https://example.invalid", APIKey: "test-key", Model: "test-original"}
 				putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", Model: "test-original"}})
 				storeProfiles(t, st, ModelProfile{ID: "selected", Name: "Selected", Purposes: map[string]ModelBinding{"assistant": {Model: "test-selected"}},
 					Launchers: map[string]LauncherModels{"gw": {Model: profileValue("test-selected")}}})
-				if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: "another", Previous: &modelProfileImage{Profile: "before",
+				if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: "selected", Previous: &modelProfileImage{Profile: "before",
 					Purposes: map[string]ModelBinding{"assistant": {Model: "test-before"}}, Launchers: map[string]LauncherModels{"gw": {Model: profileValue("test-before")}}}}); err != nil {
 					t.Fatal(err)
 				}
@@ -362,17 +374,11 @@ func TestModelProfilesFailuresAreAtomicAndPropagated(t *testing.T) {
 				default:
 					failing.readKey = failure
 				}
-				// View reads existing profiles, so explicitly force seeding for atomic-write failures.
-				if operation == "view" && (failure == "write" || failure == "non-atomic") {
-					st.memStore.mu.Lock()
-					delete(st.vals, modelProfilesKey)
-					st.memStore.mu.Unlock()
-				}
 				before, puts := profileStoreSnapshot(st.memStore)
 				cached := &prompts.Snapshot{Now: time.Now(), Zone: "UTC"}
 				s.live.snap = cached
 				var err error
-				switch operation {
+				switch tc.operation {
 				case "view":
 					_, err = s.modelProfilesView(ctx)
 				case "capture":
@@ -385,6 +391,10 @@ func TestModelProfilesFailuresAreAtomicAndPropagated(t *testing.T) {
 					_, err = s.saveModelProfile(ctx, nil, "selected", ProfileActor{}, func(p *ModelProfile, _ bool) error { p.Name = "Edited"; return nil })
 				case "delete":
 					err = s.deleteModelProfile(ctx, nil, "selected", ProfileActor{})
+				case "deactivate":
+					err = s.deactivateModelProfile(ctx, ProfileActor{})
+				case "clear":
+					err = s.clearModelProfiles(ctx, nil, ProfileActor{})
 				}
 				want := failed
 				if failure == "non-atomic" {
@@ -442,9 +452,9 @@ func TestModelProfileMissingLauncherRejectedBeforeTransaction(t *testing.T) {
 
 func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 	s, _, st := modelService(t)
-	profilesOf(t, s)
 	for _, path := range []string{"GET /api/v1/model-profiles", "PUT /api/v1/model-profiles/{id}", "DELETE /api/v1/model-profiles/{id}",
-		"POST /api/v1/model-profiles/{id}/apply", "POST /api/v1/model-profiles/rollback"} {
+		"DELETE /api/v1/model-profiles", "POST /api/v1/model-profiles/{id}/apply",
+		"POST /api/v1/model-profiles/rollback", "POST /api/v1/model-profiles/deactivate"} {
 		if !slices.Contains(s.Routes(), path) {
 			t.Fatalf("unregistered route: %s", path)
 		}
@@ -454,11 +464,13 @@ func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 		status             int
 	}{
 		{"PUT", "/api/v1/model-profiles/custom", `{"name":"Custom"}`, 400},
-		{"PUT", "/api/v1/model-profiles/custom", `{"revision":0,"name":"Custom"}`, 409},
-		{"PUT", "/api/v1/model-profiles/custom", `{"revision":1,"name":"Custom","api_key":"secret"}`, 400},
-		{"PUT", "/api/v1/model-profiles/rollback", `{"revision":1,"name":"Invalid"}`, 400},
+		{"PUT", "/api/v1/model-profiles/custom", `{"revision":1,"name":"Custom"}`, 409},
+		{"PUT", "/api/v1/model-profiles/custom", `{"revision":0,"name":"Custom","api_key":"secret"}`, 400},
+		{"PUT", "/api/v1/model-profiles/rollback", `{"revision":0,"name":"Invalid"}`, 400},
 		{"POST", "/api/v1/model-profiles/missing/apply", "", 404},
 		{"POST", "/api/v1/model-profiles/rollback", "", 409},
+		{"DELETE", "/api/v1/model-profiles?revision=invalid", "", 400},
+		{"DELETE", "/api/v1/model-profiles?revision=-1", "", 400},
 	} {
 		before, puts := profileStoreSnapshot(st.memStore)
 		r := request(s, tt.method, tt.path, tt.body)
@@ -468,12 +480,14 @@ func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 		requireProfileStoreUnchanged(t, st.memStore, before, puts)
 	}
 	for _, lang := range i18n.Langs {
-		for _, method := range []string{"PUT", "DELETE", "POST"} {
-			path := "/api/v1/model-profiles/performance"
-			if method == "POST" {
-				path += "/apply"
-			}
-			res, err := serveHTTP(context.Background(), s, assistantwire.HTTPRequest{Method: method, Path: path,
+		for _, route := range []struct{ method, path string }{
+			{"PUT", "/api/v1/model-profiles/performance"},
+			{"DELETE", "/api/v1/model-profiles/performance"},
+			{"DELETE", "/api/v1/model-profiles"},
+			{"POST", "/api/v1/model-profiles/performance/apply"},
+			{"POST", "/api/v1/model-profiles/deactivate"},
+		} {
+			res, err := serveHTTP(context.Background(), s, assistantwire.HTTPRequest{Method: route.method, Path: route.path,
 				Header: map[string][]string{RoleHeader: {"answer"}, "Accept-Language": {string(lang)}},
 				Body:   json.RawMessage(`{"revision":1,"name":"Edited"}`)}, s.lang)
 			if err != nil {
@@ -484,18 +498,18 @@ func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 			}
 		}
 	}
-	if r := request(s, "PUT", "/api/v1/model-profiles/custom", `{"revision":1,"name":"Custom","purposes":{"agent.new":{"model":"test-inherited"}}}`); r.Code != 200 {
+	if r := request(s, "PUT", "/api/v1/model-profiles/custom", `{"revision":0,"name":"Custom","purposes":{"agent.new":{"model":"test-inherited"}}}`); r.Code != 200 {
 		t.Fatalf("saving inherited model-only override: %d %s", r.Code, r.Body.String())
 	}
-	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=1", ""); r.Code != 409 {
+	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=0", ""); r.Code != 409 {
 		t.Fatalf("stale delete: %d %s", r.Code, r.Body.String())
 	}
-	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=2", ""); r.Code != 200 {
+	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=1", ""); r.Code != 200 {
 		t.Fatalf("delete: %d %s", r.Code, r.Body.String())
 	}
 }
 
-func TestModelProfileInitialFailureDoesNotSeedTemplates(t *testing.T) {
+func TestUnconfiguredModelProfileFailureDoesNotWrite(t *testing.T) {
 	s, _, st := modelService(t)
 	before, puts := profileStoreSnapshot(st.memStore)
 	if _, err := s.applyModelProfile(context.Background(), "missing", ProfileActor{}); !errors.Is(err, errModelProfileNotFound) {
@@ -582,6 +596,39 @@ func TestModelProfileCaptureDirectAPIAndUnrelatedLaunchers(t *testing.T) {
 	if len(launchers) != 1 || launchers["direct"].Model == nil || *launchers["direct"].Model != "test-direct" ||
 		launchers["direct"].Effort != nil || launchers["direct"].SmallModel != nil {
 		t.Fatalf("capture included unsupported API or unrelated launcher fields: %+v", launchers)
+	}
+}
+
+func TestModelProfileCaptureDoesNotTurnMissingAliasesIntoClears(t *testing.T) {
+	s, _, store := modelService(t)
+	ctx := t.Context()
+	launcher := storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "work", Model: "vendor/main", SonnetModel: "vendor/standard"}}
+	putLaunchers(t, s, launcher)
+	if err := s.saveModel(ctx, "agent.new", modelRecord{Binding: ModelBinding{Provider: "launcher.work"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, launchers, _, err := s.captureModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := launchers["work"]
+	if models.SonnetModel == nil || *models.SonnetModel != "vendor/standard" || models.OpusModel != nil ||
+		models.HaikuModel != nil || models.FableModel != nil || models.SubagentModel != nil {
+		t.Fatal("capture did not distinguish configured aliases from missing aliases")
+	}
+	storeProfiles(t, store, ModelProfile{ID: "captured", Name: "Captured", Launchers: launchers})
+	launcher.OpusModel = "vendor/strong"
+	launcher.HaikuModel = "vendor/fast"
+	launcher.FableModel = "vendor/fable"
+	launcher.SubagentModel = "vendor/helper"
+	putLaunchers(t, s, launcher)
+	if _, err := s.applyModelProfile(ctx, "captured", ProfileActor{Kind: "hub"}); err != nil {
+		t.Fatal(err)
+	}
+	got := s.storedLaunchers(ctx)[0]
+	if got.SonnetModel != "vendor/standard" || got.OpusModel != "vendor/strong" || got.HaikuModel != "vendor/fast" ||
+		got.FableModel != "vendor/fable" || got.SubagentModel != "vendor/helper" {
+		t.Fatalf("profile switch erased aliases set after capture: %+v", got)
 	}
 }
 
@@ -767,8 +814,7 @@ func TestModelProfilesViewReadsEachRecordOnce(t *testing.T) {
 		t.Fatalf("changes = %v, %v", v.Profiles[0].Changes, v.Profiles[1].Changes)
 	}
 
-	// Seeding captures every record once for the templates (inbox.triage twice more: the delegation and translation
-	// defaults use its connection), then the view reads each once to compare the two templates with it.
+	// An explicit capture reads every record once (inbox.triage twice more for the delegation and translation defaults).
 	s, _, st = modelService(t)
 	counter = countRecordReads(s, st)
 	capture := map[string]int{"assistant": 1, "agent.new": 1, "kb": 1, "inbox.triage": 3, "agent.delegate": 1, "translate": 1}
@@ -778,15 +824,11 @@ func TestModelProfilesViewReadsEachRecordOnce(t *testing.T) {
 	if reads := counter.takeReads(); !maps.Equal(reads, capture) {
 		t.Fatalf("capture record reads = %v, want %v", reads, capture)
 	}
-	if v := profilesOf(t, s); len(v.Profiles) != 2 || len(v.Profiles[0].Changes) != 0 || len(v.Profiles[1].Changes) != 0 {
-		t.Fatalf("seeded view: %+v", v.Profiles)
+	if v := profilesOf(t, s); len(v.Profiles) != 0 {
+		t.Fatalf("unconfigured view: %+v", v.Profiles)
 	}
-	seed := maps.Clone(capture)
-	for id := range seed {
-		seed[id]++
-	}
-	if reads := counter.takeReads(); !maps.Equal(reads, seed) {
-		t.Fatalf("seeding view record reads = %v, want %v", reads, seed)
+	if reads := counter.takeReads(); len(reads) != 0 {
+		t.Fatalf("empty profile view read live model records: %v", reads)
 	}
 }
 
@@ -827,9 +869,15 @@ func TestModelProfileRoundTripRollbackPreservesPreSwitchConfig(t *testing.T) {
 			ManagedLauncher: proto.ManagedLauncher{Name: "gw", API: "messages", Model: "test-default", BaseURL: "https://example.invalid"},
 			KeySealed:       key,
 		})
-		// Seed performance & economy from initial empty bindings (matching day-1 templates in #14060).
-		if v := profilesOf(t, s); v.Active != "performance" || len(v.Profiles) != 2 {
-			t.Fatalf("seeded view: %+v", v)
+		// Store legacy templates with explicit empty bindings, as installed hubs did in #14060.
+		purposes, launchers, tiers, err := s.captureModels(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		storeProfiles(t, st, ModelProfile{ID: "performance", Name: "Performance", Purposes: purposes, Launchers: launchers, Tiers: tiers},
+			ModelProfile{ID: "economy", Name: "Economy", Purposes: purposes, Launchers: launchers, Tiers: tiers})
+		if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: "performance"}); err != nil {
+			t.Fatal(err)
 		}
 		// User customizes five live categories without updating the stale templates.
 		live0 := map[string]ModelBinding{
@@ -1081,6 +1129,32 @@ func TestModelProfileRollbackHistoryBounded(t *testing.T) {
 		if got := s.storedLaunchers(ctx)[0].Model; got != fmt.Sprintf("m-%d", step) {
 			t.Fatalf("after rollback got %q, want m-%d", got, step)
 		}
+	}
+}
+
+func TestPresetHostProfileRoundTrip(t *testing.T) {
+	s, _, _ := modelService(t)
+	for _, tc := range []struct {
+		name, fields, want string
+		status             int
+	}{
+		{name: "set", fields: `,"host":" herdr "`, want: "herdr", status: http.StatusOK},
+		{name: "omit", want: "herdr", status: http.StatusOK},
+		{name: "invalid", fields: `,"host":"tmux"`, want: "herdr", status: http.StatusBadRequest},
+		{name: "clear", fields: `,"host":""`, status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"revision":%d,"name":"Host preset","tiers":{"agy-work":{"launcher":"agy"%s}}}`, profilesOf(t, s).Revision, tc.fields)
+			res := request(s, http.MethodPut, "/api/v1/model-profiles/host-preset", body)
+			if res.Code != tc.status {
+				t.Fatalf("PUT = %d %s, want %d", res.Code, res.Body, tc.status)
+			}
+			ps, _ := storedTiers(t, s)
+			tier, ok := tierOf(ps, "host-preset", "agy-work")
+			if !ok || tier.startHost() != tc.want {
+				t.Fatalf("stored tier = %+v, want host %q", tier, tc.want)
+			}
+		})
 	}
 }
 

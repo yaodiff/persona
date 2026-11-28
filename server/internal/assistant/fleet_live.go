@@ -101,6 +101,7 @@ func (s *Service) liveLoop(ctx context.Context) {
 	// what the manager allocated under churn (#3197). The 15 s look takes new arrays and gives these back, so a
 	// fleet gone quiet holds no second copy of its lists.
 	var lists map[string][]proto.Session
+	var quiet []fleetInput
 	round := fleetRound{logf: s.logf}
 	for {
 		select {
@@ -115,9 +116,11 @@ func (s *Service) liveLoop(ctx context.Context) {
 			lists = nil
 		}
 		l := s.lang(context.Background())
-		agents, ixs, told := s.fleetInputsInto(lists)
+		agents, ixs, told := s.fleetInputsForRound(lists, &quiet)
 		s.tellLive(round.buildFleet(l, agents, ixs))
-		attention, counts := round.linkAndCounts(l, agents, ixs, told, s.fleet.live.counts.todos.kept())
+		attention, counts := round.linkAndCounts(l, agents, ixs, told, quiet, s.fleet.live.counts.todos.kept())
+		clear(quiet)
+		quiet = quiet[:0]
 		s.devs.SetAttention(attention) // sent on only when it changed
 		s.tellCounts(counts)
 	}
@@ -163,6 +166,12 @@ func (s *Service) fleetInputs() ([]fleetInput, []proto.Interaction, map[string]b
 // until the next round: what the fleet makes of them (buildFleetIn, linkAttention) keeps strings and numbers, never a
 // row or a pointer to one.
 func (s *Service) fleetInputsInto(kept map[string][]proto.Session) ([]fleetInput, []proto.Interaction, map[string]bool) {
+	return s.fleetInputsForRound(kept, nil)
+}
+
+// fleetInputsForRound also appends quiet tasks' agents to quiet when supplied, for Persona's card count. Keeping them
+// outside agents preserves the Live Activity's side folds and the Agents badge's keys and held rows.
+func (s *Service) fleetInputsForRound(kept map[string][]proto.Session, quiet *[]fleetInput) ([]fleetInput, []proto.Interaction, map[string]bool) {
 	machines := s.fleetMachines()
 	lists := make([][]proto.Session, len(machines))
 	n := 0
@@ -188,7 +197,11 @@ func (s *Service) fleetInputsInto(kept map[string][]proto.Session) ([]fleetInput
 		list := lists[i]
 		for j := range list {
 			sess := &list[j]
-			if fleetcountadapt.Visibility(sess).LeftOut() { // a quiet task's agent: the main conversation tells about it (#1731)
+			visibility := fleetcountadapt.Visibility(sess)
+			if visibility.LeftOut() {
+				if quiet != nil && visibility == fleetcount.VisibilityQuiet() {
+					*quiet = append(*quiet, fleetInput{Session: sess, Muted: s.mutedAs(m.ID, sess.SessionID, sess.SpaceName)})
+				}
 				continue
 			}
 			agents = append(agents, fleetInput{
@@ -294,7 +307,7 @@ type fleetRound struct {
 // fill puts a round's agents and cards into f; told says which cards the owner was told of (nil: none). onLive
 // records, for each agent, whether fleetcount counts it on the Live Activity at all (Agent.Counts), which the working
 // and finished rows follow too.
-func (r *fleetRound) fill(f *fleetcountadapt.Fleet, agents []fleetInput, ixs []proto.Interaction, told map[string]bool) {
+func (r *fleetRound) fill(f *fleetcountadapt.Fleet, agents []fleetInput, ixs []proto.Interaction, told map[string]bool, quiet []fleetInput) {
 	f.Reset()
 	r.onLive = r.onLive[:0]
 	refused := 0
@@ -305,6 +318,14 @@ func (r *fleetRound) fill(f *fleetcountadapt.Fleet, agents []fleetInput, ixs []p
 		agent, failed := kitoutcome.Unpack(f.Agent(a.Machine, a.Session, a.Muted))
 		r.onLive = append(r.onLive, failed == nil && agent.Counts(fleetcount.SurfaceLiveActivity()))
 		if failed != nil {
+			if refused++; first == nil {
+				first, which = failed, "session "+a.Session.MachineID+"/"+a.Session.SessionID
+			}
+		}
+	}
+	for i := range quiet {
+		a := &quiet[i]
+		if _, failed := kitoutcome.Unpack(f.PersonaAgent(a.Session, a.Muted)); failed != nil {
 			if refused++; first == nil {
 				first, which = failed, "session "+a.Session.MachineID+"/"+a.Session.SessionID
 			}
@@ -449,7 +470,7 @@ func buildFleetIn(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction) Fle
 func (r *fleetRound) buildFleet(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction) FleetState {
 	var st FleetState
 	agents, ixs = foldSidesIn(agents, ixs)
-	r.fill(&r.live, agents, ixs, nil)
+	r.fill(&r.live, agents, ixs, nil, nil)
 	r.waiting = r.waiting[:0]
 	r.live.LiveActivity(string(l), &st, &r.waiting, sessionTitle)
 	asked := make(map[agentKey]bool, len(r.waiting))

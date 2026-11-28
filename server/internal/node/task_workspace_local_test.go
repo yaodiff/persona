@@ -160,3 +160,130 @@ func TestLocalTaskWorkspacePreservesAnExplicitExistingBranch(t *testing.T) {
 	}
 	workspaceGit(t, repo, "show-ref", "--verify", "refs/heads/topic/keep")
 }
+
+func bareWorktreeConfigFixture(t *testing.T, formatVersion string) (bare, checkout, head string) {
+	t.Helper()
+	seed := workspaceRemote(t, "trunk")
+	bare = filepath.Join(workspaceTemp(t), "cache.git")
+	workspaceGit(t, filepath.Dir(bare), "clone", "--bare", seed, bare)
+	workspaceGit(t, bare, "config", "core.repositoryformatversion", formatVersion)
+	workspaceGit(t, bare, "config", "extensions.worktreeConfig", "true")
+	checkout = filepath.Join(workspaceTemp(t), "source-wt")
+	workspaceGit(t, bare, "worktree", "add", "-b", "feature/base", "--", checkout, "HEAD")
+	workspaceGit(t, checkout, "config", "--worktree", "core.bare", "false")
+	workspaceGit(t, checkout, "config", "user.name", "Example")
+	workspaceGit(t, checkout, "config", "user.email", "me@example.com")
+	if err := os.WriteFile(filepath.Join(checkout, "local.txt"), []byte("Unpushed bare-cache work.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceGit(t, checkout, "add", ".")
+	workspaceGit(t, checkout, "commit", "-m", "Unpushed bare-cache work")
+	head = strings.TrimSpace(workspaceGit(t, checkout, "rev-parse", "HEAD"))
+	return bare, checkout, head
+}
+
+func TestLocalTaskWorkspaceFromLinkedWorktreeOfBareRepoWithWorktreeConfig(t *testing.T) {
+	for _, formatVersion := range []string{"0", "1"} {
+		t.Run("format-"+formatVersion, func(t *testing.T) {
+			home := workspaceTemp(t)
+			n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+			bare, checkout, head := bareWorktreeConfigFixture(t, formatVersion)
+
+			src := localWorkspaceSource(t, n, checkout, "")
+			if src.Error != "" || src.Repository == nil || src.Repository.Local == nil || src.Repository.Local.CommonDir != bare || src.Repository.Local.Commit != head {
+				t.Fatalf("unexpected local source: %+v", src)
+			}
+			plan := localWorkspacePlan(t, n, src, "")
+			req := taskworkspace.Request{WorkspaceID: "ws_bare_wtcfg", OperationID: "op_bare_wtcfg", Plan: plan}
+
+			ready := workspaceCall(t, n, "prepare", req)
+			if ready.State != "ready" || ready.Error != nil || len(ready.Repositories) != 1 || ready.Repositories[0].ResolvedCommit != head {
+				t.Fatalf("prepare from bare repo with worktreeConfig failed: %+v", ready)
+			}
+			root := ready.Plan.RootPath
+			if got := strings.TrimSpace(workspaceGit(t, root, "rev-parse", "--show-toplevel")); got != root {
+				t.Fatalf("show-toplevel = %q, want %q", got, root)
+			}
+			if got := strings.TrimSpace(workspaceGit(t, root, "status", "--porcelain")); got != "" {
+				t.Fatalf("status = %q, want clean", got)
+			}
+			if got := strings.TrimSpace(workspaceGit(t, bare, "rev-parse", "--is-bare-repository")); got != "true" {
+				t.Fatalf("shared bare repo was mutated: is-bare=%q", got)
+			}
+			if got := workspaceCall(t, n, "inspect", req); got.State != "ready" || got.Error != nil {
+				t.Fatalf("inspect failed: %+v", got)
+			}
+
+			// New commits in the prepared worktree work and cleanup removes the worktree cleanly.
+			workspaceGit(t, root, "commit", "--allow-empty", "-m", "Task work")
+			req.DeleteBranch = true
+			if got := workspaceCall(t, n, "cleanup", req); got.Error == nil || got.Error.Code != "worktree_unmerged" {
+				t.Fatalf("unmerged branch not protected: %+v", got)
+			}
+			req.DeleteBranch = false
+			if got := workspaceCall(t, n, "cleanup", req); got.State != "removed" || got.Error != nil {
+				t.Fatalf("cleanup failed: %+v", got)
+			}
+			if got := strings.TrimSpace(workspaceGit(t, bare, "rev-parse", "--is-bare-repository")); got != "true" {
+				t.Fatalf("shared bare repo after cleanup: is-bare=%q", got)
+			}
+		})
+	}
+}
+
+func TestLocalTaskWorkspaceRecoversMaterializingBareWorktreeAndRejectsSymlinkedConfig(t *testing.T) {
+	home := workspaceTemp(t)
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	_, checkout, head := bareWorktreeConfigFixture(t, "0")
+
+	src := localWorkspaceSource(t, n, checkout, "")
+	plan := localWorkspacePlan(t, n, src, "")
+	req := taskworkspace.Request{WorkspaceID: "ws_bare_recover", OperationID: "op_bare_recover", Plan: plan}
+
+	ready := workspaceCall(t, n, "prepare", req)
+	if ready.State != "ready" || ready.Error != nil {
+		t.Fatalf("initial prepare failed: %+v", ready)
+	}
+	gitDir := strings.TrimSpace(workspaceGit(t, plan.RootPath, "rev-parse", "--git-dir"))
+	wtCfg := filepath.Join(gitDir, "config.worktree")
+
+	// Simulate an earlier attempt that stopped after `git worktree add` before writing config.worktree.
+	if err := os.Remove(wtCfg); err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(n.dir, "task-workspaces", taskworkspace.Hash(req.WorkspaceID), "receipt.json")
+	raw, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var j workspaceJournal
+	if err := json.Unmarshal(raw, &j); err != nil {
+		t.Fatal(err)
+	}
+	j.State = "failed"
+	j.Repositories[0].State = "materializing"
+	if err := workspaceWrite(receiptPath, &j); err != nil {
+		t.Fatal(err)
+	}
+
+	n = &Node{home: home, dir: n.dir}
+	recovered := workspaceCall(t, n, "prepare", req)
+	if recovered.State != "ready" || recovered.Error != nil || recovered.Repositories[0].ResolvedCommit != head {
+		t.Fatalf("recovery of materializing bare worktree failed: %+v", recovered)
+	}
+
+	// Replacing config.worktree with a symlink must still be rejected.
+	outside := filepath.Join(workspaceTemp(t), "outside.cfg")
+	if err := os.WriteFile(outside, []byte("[core]\n\tbare = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(wtCfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, wtCfg); err != nil {
+		t.Skip("symlinks:", err)
+	}
+	if got := workspaceCall(t, n, "inspect", req); got.Error == nil || got.Error.Code != "git_layout_mismatch" {
+		t.Fatalf("symlinked config.worktree was accepted: %+v", got)
+	}
+}

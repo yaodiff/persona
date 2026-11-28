@@ -11,15 +11,15 @@ describe("/loop in the composer", () => {
   });
 
   it("says what is missing", () => {
-    expect(loopHint("/loop ")).toEqual({ missing: true, text: expect.stringContaining("/loop 10m 看下 CI") });
-    expect(loopHint("/loop 10m")).toEqual({ missing: true, text: "每 10 分钟：还没写要做的事" });
+    expect(loopHint("/loop ")).toEqual({ missing: true, text: expect.stringContaining("/loop 10m 检查 CI") });
+    expect(loopHint("/loop 10m")).toEqual({ missing: true, text: "每 10 分钟：尚未填写任务内容" });
   });
 
   it("says what it will repeat and how often", () => {
     expect(loopHint("/loop 10m 看下 CI")).toEqual({ missing: false, text: "每 10 分钟重复：看下 CI" });
     expect(loopHint("/loop 2H  跑一遍测试")).toEqual({ missing: false, text: "每 2 小时重复：跑一遍测试" });
     expect(loopHint("/loop 30s ping")?.text).toBe("每 30 秒重复：ping");
-    expect(loopHint("/loop 看下 CI 有没有过")).toEqual({ missing: false, text: "由 Claude 自己定节奏重复：看下 CI 有没有过" });
+    expect(loopHint("/loop 看下 CI 有没有过")).toEqual({ missing: false, text: "由 Claude 自动决定节奏重复：看下 CI 有没有过" });
   });
 
   it("leaves other drafts alone", () => {

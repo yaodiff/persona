@@ -123,7 +123,7 @@ describe("飞书聊天发附件", () => {
     await type("附件在这");
     await send();
     expect(posts()).toEqual([]);
-    expect(toasts).toContain("需要更新 Hub 上的飞书扩展，才能引用消息发送图片和文件");
+    expect(toasts).toContain("请先更新 hub 上的飞书扩展，即可在引用消息时发送图片和文件。");
     expect(host.querySelector("textarea")!.value).toBe("附件在这");
     expect(host.textContent).toContain("表格.csv");
   });

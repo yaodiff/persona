@@ -107,7 +107,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 			execution.Model, execution.Effort = current.Model, current.Effort
 			execution.UseEffort, execution.Fingerprint = current.UseEffort, current.Fingerprint
 			execution.Runtime, execution.IsMain, execution.External = current.Runtime, current.IsMain, current.External
-			execution.MainCompactWindow = n.mainWindowOn(launcher, current.IsMain, current.MainCompactWindow)
+			execution.MainCompactWindow = n.mainWindowOn(launcher, current.MainCompactWindow)
 			if err := n.checkExternalAssistant(ctx, id, launcher, execution, false); err != nil {
 				return err
 			}
@@ -173,7 +173,7 @@ func (n *Node) compactAssistantProc(ctx context.Context, p *assistantProc, start
 	p.mu.Unlock()
 	n.setCompaction(id, &proto.Compaction{State: proto.CompactionRunning, StartedAt: startedAt})
 	var err error
-	if p.agent == "codex" {
+	if p.cx != nil {
 		err = p.cx.compact(ctx)
 	} else {
 		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": n.assistantCompactCommand(id)}})

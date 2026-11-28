@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extwire"
 )
 
@@ -52,8 +53,7 @@ func (h *Hub) forwardUIStream(ctx context.Context, c *client, raw []byte) {
 		defer func() { <-c.uiRequests }()
 		callCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 		defer cancel()
-		var out json.RawMessage
-		if err := h.callBus(callCtx, manager, extwire.MethodUIStream, extwire.UIStreamCall{Who: who, Envelope: raw}, &out); err != nil {
+		if _, err := buswire.Call(callCtx, h.managerCaller(manager), extwire.UIStreamMethod, extwire.UIStreamCall{Who: who, Envelope: raw}); err != nil {
 			// Never include private RPC failure text on the app transport.
 			requestID := ""
 			if envelope.Request != nil {

@@ -11,8 +11,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -29,8 +31,9 @@ import (
 // MemoryReadBounds are the bounds of reading one memory_sources contribution for an assembly; the assistant gives
 // them (memory_extension_wire.go), so they are written once.
 type MemoryReadBounds struct {
-	// PageLimit is the limit each call asks for. ReadTimeout and TotalMost bound the complete read, never a prefix.
+	// PageLimit is the limit each call asks for. MaxPages (when > 0), ReadTimeout and TotalMost bound the complete read, never a prefix.
 	PageLimit   int
+	MaxPages    int
 	ReadTimeout time.Duration
 	TotalMost   int
 	// CallTimeout bounds one call; AnswerMost is the most bytes one answer may hold.
@@ -128,6 +131,9 @@ func readMemoryPages(ctx context.Context, proc memoryCaller, contribution string
 		if !page.HasMore || page.After == "" {
 			return pages, nil
 		}
+		if b.MaxPages > 0 && len(pages) >= b.MaxPages {
+			return nil, fmt.Errorf("incomplete memory read: over %d pages", b.MaxPages)
+		}
 		if sent[page.After] {
 			return nil, errors.New("incomplete memory read: repeated cursor")
 		}
@@ -140,8 +146,8 @@ func readMemoryPages(ctx context.Context, proc memoryCaller, contribution string
 func memoryPage(ctx context.Context, proc memoryCaller, params wire.MemoryEntriesParams, b MemoryReadBounds) (wire.MemoryEntriesResult, int, error) {
 	cctx, cancel := context.WithTimeout(ctx, b.CallTimeout)
 	defer cancel()
-	var raw json.RawMessage
-	if err := proc.Call(cctx, "memory.entries", params, &raw); err != nil {
+	raw, err := buswire.Call(cctx, proc, extwire.MemoryEntriesMethod, params)
+	if err != nil {
 		var re *rpc.Error
 		switch {
 		case ctx.Err() != nil:

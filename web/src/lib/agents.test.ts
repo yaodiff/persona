@@ -194,8 +194,8 @@ describe("account groups (#16248)", () => {
 
   it("draws a provider with its product's bundled mark, else its label's letter, never Claude Code's for an unknown one", () => {
     const mark = (p: string) => markId(providerMarkAgent(p));
-    expect(["grok_bot", "dots", "claude_duet", "gemini_tasks"].map(mark)).toEqual(["grok", "codex", "claude", "gemini"]);
-    for (const [p, letter] of [["muse", "M"], ["muse2api", "M"], ["cue", "C"], ["groq", "G"], ["some_new_bot", "S"]]) {
+    expect(["claude_duet", "gemini_tasks"].map(mark)).toEqual(["claude", "gemini"]);
+    for (const [p, letter] of [["grok_bot", "G"], ["dots", "D"], ["muse", "M"], ["muse2api", "M"], ["cue", "C"], ["groq", "G"], ["some_new_bot", "S"]]) {
       expect(mark(p)).not.toMatch(/^(claude|codex|opencode|pi|gemini|cursor|trae|grok|agy|dsh|kimi|copilot)$/);
       expect(agentLetter(providerMarkAgent(p))).toBe(letter);
     }

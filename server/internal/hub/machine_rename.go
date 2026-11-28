@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -169,24 +168,20 @@ func init() {
 	// A computer's Persona Link asks for another name (persona-link name, the tray, the menu bar). Only its manager
 	// speaks for it, and only once the user confirmed it: a computer waiting to be confirmed cannot pass itself off as
 	// another by its name.
-	handleBus(devicewire.MethodRename, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.Rename
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: devicewire.MethodRename + ": " + err.Error()}
-		}
+	handleTypedBus(devicewire.RenameMethod, devicewire.MethodRename+": ", func(h *Hub, ctx context.Context, c *busConn, p devicewire.Rename) (devicewire.RenameReply, error) {
 		if err := h.ownsMachine(c, p.MachineID); err != nil {
-			return nil, err
+			return devicewire.RenameReply{}, err
 		}
 		if h.machineUntrusted(p.MachineID) {
-			return nil, &rpc.Error{Code: devicewire.RenameCodePending, Message: i18n.T(h.userLang(), "hub-machine_rename.pending")}
+			return devicewire.RenameReply{}, &rpc.Error{Code: devicewire.RenameCodePending, Message: i18n.T(h.userLang(), "hub-machine_rename.pending")}
 		}
 		name, err := h.renameMachine(ctx, p.MachineID, p.Name, "link:"+p.MachineID, "link")
 		var e *addMachineError
 		switch {
 		case errors.As(err, &e):
-			return nil, &rpc.Error{Code: e.code, Message: i18n.Localize(e.err, h.userLang())}
+			return devicewire.RenameReply{}, &rpc.Error{Code: e.code, Message: i18n.Localize(e.err, h.userLang())}
 		case err != nil:
-			return nil, err
+			return devicewire.RenameReply{}, err
 		}
 		return devicewire.RenameReply{Name: name}, nil
 	})

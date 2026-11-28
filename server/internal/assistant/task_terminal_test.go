@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -261,5 +263,114 @@ func TestTaskTerminalDisappearanceBeforeAcceptanceStillOrphans(t *testing.T) {
 	sig, ok := s.orphanSignal(todoNow(s, task.ID))
 	if !ok || sig.Kind != sigOrphaned || sig.Orphan != orphanClosed {
 		t.Fatalf("original worker gone before acceptance: %+v, %t", sig, ok)
+	}
+}
+
+func TestTaskTerminalKeepsAgentWhenOwnerOpensItDuringProbe(t *testing.T) {
+	s, f, task := dispatchTerminalTask(t, true, true)
+	var probed bool
+	f.mu.Lock()
+	f.nodes[devicewire.MethodCloseTaskTerminal] = func(machine string, raw json.RawMessage) (any, error) {
+		f.mu.Unlock()
+		defer f.mu.Lock()
+		var req devicewire.TaskTerminalCloseRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		probed = true
+		setTaskViewer(t, s, machine, req.Terminal.SessionID, true)
+		if s.authorizeTaskTerminal(t.Context(), machine, req) {
+			t.Error("node received permission to close the session the owner just opened")
+		}
+		return map[string]string{"status": devicewire.TaskTerminalSkipped}, nil
+	}
+	f.mu.Unlock()
+	res, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": task.ID, "verdict": "accepted"})
+	if err != nil || !probed || !strings.Contains(res, "Terminal cleanup: skipped") {
+		t.Fatalf("review with owner activity during probe = %q, %v (probed: %t)", res, err, probed)
+	}
+}
+
+// runtimeTaskRow is an idle, finished runtime-backed (Antigravity) task session Persona started, which declares that
+// it can be closed; terminal says whether it also declares a terminal (its pane not listed yet).
+func runtimeTaskRow(id string, terminal bool, at time.Time) proto.Session {
+	canClose := true
+	return proto.Session{SessionID: id, MachineID: "box", Status: proto.StatusDone, Agent: "agy",
+		SourceKind: proto.SourceRuntime, SourceInstanceID: "agy", StartedByPersona: true, UpdatedAt: at,
+		Capabilities: &proto.SessionCapabilities{Close: &canClose, Terminal: terminal}}
+}
+
+// stopsAndCloses are the node calls that stop, retire or close session id, whatever the RPC.
+func stopsAndCloses(f *fakeHub, id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, c := range f.calls {
+		switch c.Method {
+		case deviceSessionStop, nodeproto.StopIfIdle, deviceSessionRetire, deviceSessionRetireGuarded, "session.close", "session.close_task_terminal":
+		default:
+			continue
+		}
+		if strings.Contains(string(c.Params), id) {
+			out = append(out, c.Method)
+		}
+	}
+	return out
+}
+
+// #17915: the owner's close_ended_terminals switch does not reach a runtime-backed task session. Persona closes an
+// Agent's session only through the user actions terminal_guard_test.go lists, and none of them can close a running
+// runtime session yet (the node refuses session.retire and session.stop for one), so it stays open after its task is
+// accepted, whether or not it declares a terminal; the owner can still Archive and close it.
+func TestRuntimeTaskSessionStaysOpenOnAccept(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("terminal=%t", terminal), func(t *testing.T) {
+			s, f := newQuietServiceOn(t, nil)
+			closeOnEnd(t, s, true)
+			row := runtimeTaskRow("agy-runtime-task", terminal, time.Now().Add(-time.Hour))
+			f.mu.Lock()
+			f.sessions["box"] = []proto.Session{row}
+			f.mu.Unlock()
+			todo := Todo{ID: fmt.Sprintf("todo_rt_accept_%t", terminal), Origin: "conv1", Title: "Runtime task",
+				Agents: []TodoAgent{{MachineID: "box", SessionID: row.SessionID, Cwd: "/work"}}}
+			putTodo(s, todo)
+			res, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted"})
+			if err != nil {
+				t.Fatalf("task_review: %v", err)
+			}
+			if !strings.Contains(res, "Terminal cleanup: "+devicewire.TaskTerminalSkipped+".") {
+				t.Fatalf("task_review = %q, want Terminal cleanup: %s.", res, devicewire.TaskTerminalSkipped)
+			}
+			if got := stopsAndCloses(f, row.SessionID); len(got) != 0 {
+				t.Fatalf("the accepted runtime task session was asked %v, want nothing", got)
+			}
+		})
+	}
+}
+
+// #17915: nor does the switch close a runtime task session once its task is done, on any pass.
+func TestCloseDoneTaskAgentsLeavesRuntimeSessions(t *testing.T) {
+	old := taskCloseIdle
+	taskCloseIdle = 0
+	t.Cleanup(func() { taskCloseIdle = old })
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("terminal=%t", terminal), func(t *testing.T) {
+			s, f := newQuietServiceOn(t, nil)
+			closeOnEnd(t, s, true)
+			doneAt := time.Now().Add(-5 * time.Minute)
+			row := runtimeTaskRow("agy-done-task", terminal, doneAt)
+			f.mu.Lock()
+			f.sessions["box"] = []proto.Session{row}
+			f.mu.Unlock()
+			putTodo(s, Todo{ID: fmt.Sprintf("todo_rt_done_%t", terminal), Origin: "conv1", Title: "Done runtime task",
+				DoneAt: &doneAt, DoneBy: db.DoneByReview,
+				Agents: []TodoAgent{{MachineID: "box", SessionID: row.SessionID, Cwd: "/work"}}})
+			seen := doneSeen{}
+			s.closeDoneTaskAgents(t.Context(), taskCloseRefused{}, seen)
+			s.closeDoneTaskAgents(t.Context(), taskCloseRefused{}, seen)
+			if got := stopsAndCloses(f, row.SessionID); len(got) != 0 {
+				t.Fatalf("the done runtime task session was asked %v, want nothing", got)
+			}
+		})
 	}
 }

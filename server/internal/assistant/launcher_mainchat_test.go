@@ -202,6 +202,7 @@ func TestMainChatPickerUsesKnownProvidersDuringShellTimeout(t *testing.T) {
 		t.Fatalf("picker with live runtime = %v", got)
 	}
 	_ = s.zshrcLaunchers(t.Context(), true)
+	s.invalidateLauncherListCache("server")
 	f.mu.Lock()
 	f.slowLaunchers = map[string]bool{"server": true}
 	f.mu.Unlock()
@@ -411,6 +412,7 @@ func TestSendRefusesOrReplacesALauncherThatCannotRunTheAssistant(t *testing.T) {
 		t.Fatalf("a runtime that runs the assistant: %v %v", p, err)
 	}
 	f.launcherList = nil // the list can't be read: nothing is refused on a guess
+	s.invalidateLauncherListCache("server")
 	if p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "ok", Params: map[string]any{"text": "hi", "launcher": "cc-relay"}}); err != nil || p["launcher"] != "cc-relay" {
 		t.Fatalf("unknown list: %v %v", p, err)
 	}
@@ -464,6 +466,7 @@ func TestMainChatPickerUsesCurrentLauncherFacts(t *testing.T) {
 	t.Run("shell added after the global discovery cache", func(t *testing.T) {
 		s, f := mainChatFixture(t)
 		_ = s.modelProviders(ctx) // Prime the global discovery snapshot before the node's current list changes.
+		s.invalidateLauncherListCache("server")
 		f.launcherList = append(f.launcherList, proto.Launcher{Name: "fresh-shell", Source: "zshrc", Agent: "claude"})
 		if names := pickerNames(t, s, "assistant"); !slices.Contains(names, "fresh-shell") {
 			t.Fatalf("current shell launcher missing from assistant picker: %v", names)
@@ -578,6 +581,7 @@ func TestPlainAgyAndOmpRequireConnectedAssistantRuntime(t *testing.T) {
 		{Name: "agy", Source: "agy", Agent: "agy", Assistant: true},
 		{Name: "omp", Source: "zshrc", Agent: "omp"},
 	}
+	s.invalidateLauncherListCache("server")
 	if got := strings.Join(pickerNames(t, s, "assistant"), ","); got != "claude,agy,agy-gw" {
 		t.Fatalf("assistant with agy runtime: %s", got)
 	}

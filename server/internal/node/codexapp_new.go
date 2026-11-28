@@ -105,7 +105,7 @@ func (n *Node) withCodexAppLauncher(list []proto.Launcher) (out []proto.Launcher
 	if _, err := codexAppCLI(); err != nil {
 		return list, false
 	}
-	return append(slices.Clone(list), proto.Launcher{Name: codexAppLauncher, Source: codexAppSource, Agent: "codex"}), true
+	return append(slices.Clone(list), proto.Launcher{Name: codexAppLauncher, Source: codexAppSource, Agent: "codex", DisplayName: "Codex App"}), true
 }
 
 // startInCodexApp starts a new chat in the Codex App for a start with its launcher; handled false for any other start
@@ -370,8 +370,22 @@ type codexStdio struct {
 }
 
 func startCodexStdio(ctx context.Context, cli, home, dir string) (*codexStdio, error) {
+	return startCodexStdioWithEnv(ctx, cli, home, dir, nil)
+}
+
+func startCodexStdioWithEnv(ctx context.Context, cli, home, dir string, extraEnv []string) (*codexStdio, error) {
 	ctx, cancel := context.WithTimeout(ctx, codexAppSeedWait)
-	program, env, err := codexStartProgram(cli, true, append(desktopSeedEnv(os.Environ()), "CODEX_HOME="+home))
+	baseEnv := desktopSeedEnv(os.Environ())
+	if len(extraEnv) > 0 {
+		var clear []string
+		for _, kv := range extraEnv {
+			if k, _, ok := strings.Cut(kv, "="); ok && k != "" {
+				clear = append(clear, k)
+			}
+		}
+		baseEnv = append(withoutEnv(baseEnv, clear), extraEnv...)
+	}
+	program, env, err := codexStartProgram(cli, true, append(baseEnv, "CODEX_HOME="+home))
 	if err != nil {
 		cancel()
 		return nil, err

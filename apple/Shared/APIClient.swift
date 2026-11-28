@@ -439,15 +439,23 @@ nonisolated struct APIClient: Sendable {
     /// (`If-None-Match`), else the new bytes and their tag. The fake transport has no headers: the tag rides in the query
     /// as `If-None-Match` and a 304 is an APIError with that status.
     func conditionalGet(_ path: String, query: [String: String], etag: String?) async throws -> (data: Data?, etag: String?) {
+        let answer = try await conditionalGet(path, query: query, etag: etag, header: nil)
+        return (answer.data, answer.etag)
+    }
+
+    /// `conditionalGet`, also giving the answer's `header` (a 304's too): nil when the hub sent none, and always from the
+    /// fake transport, which has no headers.
+    func conditionalGet(_ path: String, query: [String: String], etag: String?,
+                        header: String?) async throws -> (data: Data?, etag: String?, header: String?) {
         if requestRoute != nil {
             let routed = try await preparedForRequest()
-            return try await routed.conditionalGet(path, query: query, etag: etag)
+            return try await routed.conditionalGet(path, query: query, etag: etag, header: header)
         }
         try Self.refuseReplayed(path, query)
         if transport != nil || config.isDemo {
             var q = query
             if let etag { q["If-None-Match"] = etag }
-            do { return (try await request("GET", path, query: q), nil) } catch let e as APIError where e.status == 304 { return (nil, etag) }
+            do { return (try await request("GET", path, query: q), nil, nil) } catch let e as APIError where e.status == 304 { return (nil, etag, nil) }
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: 30)
         config.authorize(&req)
@@ -459,8 +467,9 @@ nonisolated struct APIClient: Sendable {
         for (name, value) in routing(path, query) { req.setValue(value, forHTTPHeaderField: name) }
         let (data, resp) = try await Self.uncachedSession.data(for: req) // our own cache: URLSession's would hide the 304
         let http = resp as? HTTPURLResponse
-        if http?.statusCode == 304 { return (nil, etag) }
-        return (try checked(data, resp, requestID: requestID, path: path), http?.value(forHTTPHeaderField: "ETag"))
+        let extra = header.flatMap { http?.value(forHTTPHeaderField: $0) }
+        if http?.statusCode == 304 { return (nil, etag, extra) }
+        return (try checked(data, resp, requestID: requestID, path: path), http?.value(forHTTPHeaderField: "ETag"), extra)
     }
 
     /// A request whose answer is read as it arrives (the realtime voice saying a text, `voiceSpeak`): the response once
@@ -1269,9 +1278,10 @@ nonisolated struct APIClient: Sendable {
         var via: MessageVia?
         var waitForEffort: Bool?
         var approvalReplyTo: String?
+        var approvalReplyCreatedAt: String?
         enum CodingKeys: String, CodingKey {
             case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
-            case waitForEffort = "wait_for_effort", approvalReplyTo = "approval_reply_to"
+            case waitForEffort = "wait_for_effort", approvalReplyTo = "approval_reply_to", approvalReplyCreatedAt = "approval_reply_created_at"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
@@ -1326,7 +1336,7 @@ nonisolated struct APIClient: Sendable {
         }
         let eventID = opID.uuidString.lowercased()
         let data = try await post(sp(ix.sessionKey) + "/messages",
-                                  body: SendBody(text: phrase, clientMsgID: eventID, approvalReplyTo: ix.id),
+                                  body: SendBody(text: phrase, clientMsgID: eventID, approvalReplyTo: ix.id, approvalReplyCreatedAt: ix.createdAtWire),
                                   timeout: 100, opID: opID)
         let reply = try JSON.decoder.decode(SendReply.self, from: data)
         guard reply.approvalReply == true, reply.interactionID == ix.id else {
@@ -1669,7 +1679,7 @@ nonisolated struct APIClient: Sendable {
         try await post(sp(k) + "/queue/send-now", timeout: 30)
     }
 
-    struct AssistantState: Codable, Sendable {
+    struct AssistantState: Codable, Equatable, Sendable {
         var machineID: String
         var launcher: String
         var cwd: String
@@ -2432,10 +2442,12 @@ nonisolated struct APIClient: Sendable {
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
     /// `handoffCard`: a hand-off or explicit env card's own approval, which says so on this request alone.
+    /// `occurrence`: the exact creation timestamp on the card whose button was pressed; the hub must not rebind an answer to a replacement.
     /// `secretRunEnv` selects the env feature; otherwise the hand-off feature is used.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false, secretRunEnv: Bool = false) async throws -> ResolveResult {
-        let headers = handoffCard ? ["X-Persona-Features": secretRunEnv ? "secret_run_env" : SecretHandoff.feature] : [:]
-        return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID,
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), occurrence: String? = nil, handoffCard: Bool = false, secretRunEnv: Bool = false) async throws -> ResolveResult {
+        var headers = occurrence.map { ["X-Persona-Interaction-Created-At": $0] } ?? [:]
+        if handoffCard { headers["X-Persona-Features"] = secretRunEnv ? "secret_run_env" : SecretHandoff.feature }
+        return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(Self.pathPart(id))/resolve", body: r, opID: opID,
                                                                                  extraHeaders: headers))
     }
 
@@ -2587,6 +2599,17 @@ nonisolated struct APIClient: Sendable {
     func usageHours(_ days: Int = 7) async throws -> UsageHours {
         struct Body: Decodable { var usage: UsageHours }
         return try await currentAssistantSettings().get("/api/v1/usage/hours", query: ["days": String(days)], as: Body.self).usage
+    }
+    /// Today's, the last 3 and the last 7 days' tokens by project across computers (`GET /api/v1/usage/projects`, #16530,
+    /// docs/server/machines.md "Token usage by project"). 404 from a hub before it.
+    func usageProjects() async throws -> UsageProjects {
+        struct Body: Decodable { var usage: UsageProjects }
+        return try await currentAssistantSettings().get("/api/v1/usage/projects", as: Body.self).usage
+    }
+    /// One project's breakdown for the same ranges (`GET /api/v1/usage/projects/detail`).
+    func usageProjectDetail(_ key: String) async throws -> UsageProjectDetail {
+        struct Body: Decodable { var usage: UsageProjectDetail }
+        return try await currentAssistantSettings().get("/api/v1/usage/projects/detail", query: ["key": key], as: Body.self).usage
     }
     /// Whether this device has the Home Screen widgets, alone: while its app is not open, the hub wakes it to write them
     /// again when the agents' counts change (#5721). An older hub keeps the field and does nothing with it.
@@ -2760,6 +2783,14 @@ extension APIClient {
             AgentsDisplaySettings.self,
             from: await request("PUT", "/api/v1/agents/display-settings", body: Body(useHerdrTabName: enabled))
         )
+    }
+
+    static let agentAutonameFeature = "agent_autoname"
+
+    /// The manager publishes the new title before replying. Let the session feed apply it so
+    /// a delayed HTTP response can never overwrite a more recent manual rename.
+    func autoRenameSession(_ key: SessionKey) async throws {
+        _ = try await request("POST", "/api/v1/sessions/\(Self.enc(key.machineID))/\(Self.enc(key.sessionID))/autoname", timeout: 60)
     }
 
     /// Renames the session's herdr tab and / or the Claude session (`/rename`).

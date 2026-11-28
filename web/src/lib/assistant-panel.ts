@@ -12,23 +12,24 @@ import { t } from "../i18n";
 import { agentId, agentName, providerAgent } from "./agent-kind";
 import { explicitLauncherModel } from "./compatibility";
 import type { AssistantSetup } from "./assistant-models";
-import { ALL_EFFORTS, defaultModel, modelName, modelSupportsFast, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
+import { ALL_EFFORTS, defaultModel, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
 import { launcherSupervisionPolicy } from "./launcher-supervision";
 import { validModelId } from "./model-id";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelProvider, type PanelState } from "./model-panel";
 import { providerTitle } from "./provider-names";
 import { currentModelRow, modelLabel, type AssistantLaunchers, type ModelList } from "./session-models";
+import { startSpeedOptions, type SpeedOption } from "./session-speed";
 import type { ModelPick } from "./types";
 
 /** A model of a launcher's list as the panel shows it: an ID typed before takes any of Claude Code's efforts (nobody
  *  knows which it has). */
-function panelModel(m: AgentModel, engine: string, catalogFast: boolean): PanelModel {
+function panelModel(m: AgentModel, engine: string, starting: boolean): PanelModel {
   const out: PanelModel = { id: m.id, name: modelName(m), efforts: m.efforts ?? (m.custom && engine === "claude" ? ALL_EFFORTS : []) };
   if (m.description) out.description = m.description;
   if (m.resolved) out.resolved = m.resolved;
   if (m.aliases?.length) out.aliases = m.aliases;
   if (m.default_effort) out.defaultEffort = m.default_effort;
-  if (catalogFast && modelSupportsFast(m)) out.fast = true;
+  if (starting && engine === "codex") out.speeds = startSpeedOptions(m);
   if (m.custom) out.custom = true;
   return out;
 }
@@ -51,9 +52,7 @@ export interface AssistantPanelOptions {
   supervision?: boolean;
   /** A new conversation may choose an advertised native speed for its first turn. */
   starting?: boolean;
-  /** The chat has Codex's Fast speed: the model it runs offers it ("as it runs": on when `fastOn`). */
-  fast?: boolean;
-  fastOn?: boolean;
+  speeds?: readonly SpeedOption[];
 }
 
 /** The panel's providers and state for a Persona chat running `setup`: `info` the computer's launchers for the main chat
@@ -71,10 +70,9 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
     const defaultRow = currentModelRow(e.list?.models ?? [], configured) ?? defaultModel(e.list?.models ?? []);
     const defaultName = defaultRow ? (defaultRow.resolved ? modelLabel(defaultRow.resolved) : modelName(defaultRow)) : configured ? modelLabel(configured) : undefined;
     const p: PanelProvider = { id: l.name, name: providerTitle(l), engine: kind, models: null, isDefault, defaultModel: defaultName };
-    if (e.list === undefined) {
-      if (e.error) p.error = e.error;
-      else p.loading = true;
-    } else {
+    if (e.error) p.error = e.error;
+    if (e.loading || (e.list === undefined && !e.error)) p.loading = true;
+    if (e.list !== undefined) {
       let models = (e.list?.models ?? []).map((m) => panelModel(m, kind, Boolean(o.starting)));
       // a launcher that fixes its own --model takes no model with a pick: what it runs by default, only
       if (e.list?.locked) models = models.filter((m) => m.id === defaultModel(e.list?.models ?? [])?.id);
@@ -93,7 +91,10 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
     const claude = setup.provider === "claude";
     const e = listOf(setup.provider);
     const models = e.list ? e.list.models.map((m) => panelModel(m, engine, Boolean(o.starting))) : setup.model ? [{ id: setup.model, name: modelLabel(setup.model), efforts: [] }] : [];
-    providers.unshift({ id: setup.provider, name: providerTitle({ name: setup.provider }), engine, models: claude && !e.list ? null : models, ...(claude ? (e.list ? {} : { loading: true }) : { unavailable: t("chat-modelpill.provider_gone") }) });
+    providers.unshift({
+      id: setup.provider, name: providerTitle({ name: setup.provider }), engine, models: claude && e.list === undefined && !e.error ? null : models,
+      ...(claude ? { loading: e.loading || (e.list === undefined && !e.error), error: e.error } : { unavailable: t("chat-modelpill.provider_gone") }),
+    });
   }
   // what can't run it, a Paseo provider among them: that provider is its engine, never "paseo" (#8142)
   for (const u of info?.unavailable ?? []) {
@@ -104,11 +105,11 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
   const own = providers.find((p) => p.id === setup.provider);
   const row = own?.models ? currentModelRow(listOf(setup.provider).list?.models ?? [], setup.model) : undefined;
   const model = row?.id ?? setup.model ?? explicitLauncherModel(launchers.find((l) => l.name === setup.provider)?.model);
-  if (o.fast && model && own?.models) own.models = own.models.map((m) => (m.id === model ? { ...m, fast: true } : m));
-  const currentRow = own?.models?.find((m) => m.id === model);
-  const canFast = Boolean(currentRow?.fast || o.fast);
+  if (o.speeds?.length && model && own?.models) own.models = own.models.map((m) => (m.id === model ? { ...m, speeds: o.speeds } : m));
+  const startSpeeds = o.starting ? own?.models?.find((m) => m.id === model)?.speeds : undefined;
+  const speed = o.starting ? startSpeeds && (startSpeeds.some(({ id }) => id === setup.speed) ? setup.speed : "standard") : setup.speed;
   const state: PanelState = {
-    current: model ? cleanSetup({ provider: setup.provider, model, effort: setup.effort, fast: canFast && Boolean(setup.fast || o.fastOn) }) : null,
+    current: model ? cleanSetup({ provider: setup.provider, model, effort: setup.effort, speed }) : null,
     recommended: own && !own.unavailable ? [setup.provider] : [],
   };
   return { providers, state };

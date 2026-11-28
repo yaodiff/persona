@@ -79,12 +79,21 @@ export function accentCSS(choice: AccentChoice, persona: Pair | null, extension 
 export const TEXT_SIZES = ["small", "standard", "large"] as const;
 export type TextSize = (typeof TEXT_SIZES)[number];
 
+/** Window material style (#16607): "default" keeps the opaque surface intact; "liquid-glass" is opt-in under Appearance. */
+export const SURFACE_STYLES = ["default", "liquid-glass"] as const;
+export type SurfaceStyle = (typeof SURFACE_STYLES)[number];
+export const DEFAULT_GLASS_TRANSLUCENCY = 75;
+
 // ── the saved choices ─────────────────────────────────────
 
 const ACCENT_KEY = "persona.accent";
 const PERSONA_ACCENT_KEY = "persona.accent.persona";
 /** index.html reads this one before the first paint. */
 export const TEXT_SIZE_KEY = "persona.text-size";
+/** index.html reads this one before the first paint. */
+export const SURFACE_STYLE_KEY = "persona.surface-style";
+/** index.html reads this one before the first paint. */
+export const GLASS_TRANSLUCENCY_KEY = "persona.glass-translucency";
 
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((l) => l());
@@ -129,6 +138,22 @@ export function textSize(): TextSize {
   return (TEXT_SIZES as readonly string[]).includes(v ?? "") ? (v as TextSize) : "standard";
 }
 
+export function surfaceStyle(): SurfaceStyle {
+  const v = read(SURFACE_STYLE_KEY);
+  return v === "liquid-glass" ? "liquid-glass" : "default";
+}
+
+function clampTranslucency(v: number): number {
+  return Math.round(Math.min(100, Math.max(0, v)));
+}
+
+export function glassTranslucency(): number {
+  const raw = read(GLASS_TRANSLUCENCY_KEY);
+  if (raw === null || raw.trim() === "") return DEFAULT_GLASS_TRANSLUCENCY;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? clampTranslucency(parsed) : DEFAULT_GLASS_TRANSLUCENCY;
+}
+
 const STYLE_ID = "persona-accent";
 let extensionActive = false;
 
@@ -159,13 +184,35 @@ export function applyLook(doc: Document = document) {
   const size = textSize();
   if (size === "standard") delete root.dataset.textSize;
   else root.dataset.textSize = size;
+  const style = surfaceStyle();
+  if (style === "default") {
+    delete root.dataset.surfaceStyle;
+    delete root.dataset.desktopGlass;
+    root.style.removeProperty("--glass-t");
+  } else {
+    root.dataset.surfaceStyle = style;
+    root.style.setProperty("--glass-t", (glassTranslucency() / 100).toFixed(2));
+    const desktopGlass =
+      typeof window !== "undefined" &&
+      doc === document &&
+      window.personaDesktop?.platform === "darwin" &&
+      typeof window.personaDesktop.setSurfaceStyle === "function";
+    if (desktopGlass) root.dataset.desktopGlass = "1";
+    else delete root.dataset.desktopGlass;
+  }
+  if (typeof window !== "undefined" && doc === document) {
+    const rawTheme = read("persona.theme");
+    const theme = rawTheme === "light" || rawTheme === "dark" ? rawTheme : "system";
+    window.personaDesktop?.setThemeSource?.(theme);
+    window.personaDesktop?.setSurfaceStyle?.(style);
+  }
 }
 
 // Another tab of this browser changed one (or its storage was cleared): this one follows at once, as with the appearance
 // (views/theme.ts), and its Settings show the choice it shows.
 if (typeof window !== "undefined")
   addEventListener("storage", (e) => {
-    if (e.key !== null && e.key !== ACCENT_KEY && e.key !== PERSONA_ACCENT_KEY && e.key !== TEXT_SIZE_KEY) return;
+    if (e.key !== null && e.key !== ACCENT_KEY && e.key !== PERSONA_ACCENT_KEY && e.key !== TEXT_SIZE_KEY && e.key !== SURFACE_STYLE_KEY && e.key !== GLASS_TRANSLUCENCY_KEY) return;
     applyLook();
     notify();
   });
@@ -192,8 +239,23 @@ export function setTextSize(s: TextSize) {
   notify();
 }
 
+export function setSurfaceStyle(s: SurfaceStyle) {
+  write(SURFACE_STYLE_KEY, s === "default" ? null : s);
+  applyLook();
+  notify();
+}
+
+export function setGlassTranslucency(value: number) {
+  const clamped = clampTranslucency(value);
+  write(GLASS_TRANSLUCENCY_KEY, clamped === DEFAULT_GLASS_TRANSLUCENCY ? null : String(clamped));
+  applyLook();
+  notify();
+}
+
 export const useAccentChoice = () => useSyncExternalStore(subscribe, accentChoice);
 export const useTextSize = () => useSyncExternalStore(subscribe, textSize);
+export const useSurfaceStyle = () => useSyncExternalStore(subscribe, surfaceStyle);
+export const useGlassTranslucency = () => useSyncExternalStore(subscribe, glassTranslucency);
 /** Serialized so useSyncExternalStore sees the same value until it changes. */
 const personaAccentRaw = () => read(PERSONA_ACCENT_KEY);
 export function usePersonaAccent(): Pair | null {

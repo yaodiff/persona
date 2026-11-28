@@ -216,6 +216,13 @@ interface InboxAssistantConnection {
 
 interface AssistantConversations : AssistantRepository {
     /**
+     * Manager [manager]'s main conversation when it already exists, without creating one. The default reads the selected
+     * manager's snapshot only; implementations that can ask a manager directly do so.
+     */
+    suspend fun mainConversationOrNull(manager: String): SessionKey? =
+        assistant.value.takeIf { it.managerId == manager }?.mainSession
+
+    /**
      * Manager [manager]'s main conversation, made if it has none (docs/assistant/managers.md step 4): a message written while it
      * was on the page goes there even if the page moved on since. Fails rather than answer another manager's.
      */

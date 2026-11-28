@@ -434,7 +434,12 @@ func taskLedger(t *testing.T, s *Service, convs ...string) string {
 	s.todos.mu.RLock()
 	todos := make([]Todo, 0, len(s.todos.todos))
 	for _, td := range s.todos.todos {
-		todos = append(todos, copyTodoLocked(td))
+		copy := copyTodoLocked(td)
+		if copy.Supervision != nil {
+			// These snapshots guard ownership and lifecycle; task_followup_test.go checks send receipts separately.
+			copy.Supervision.FollowedUpAt = nil
+		}
+		todos = append(todos, copy)
 	}
 	s.todos.mu.RUnlock()
 	slices.SortFunc(todos, func(a, b Todo) int { return strings.Compare(a.ID, b.ID) })

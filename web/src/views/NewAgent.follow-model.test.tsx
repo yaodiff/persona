@@ -171,7 +171,7 @@ describe("New Agent Follow model settings single source of truth (#12379)", () =
 
     // Bottom pill matches claude · deepseek-v4.1-flash · max (NOT agy / Gemini 4 Neon).
     expect(pill().querySelector("[data-pill-engine]")!.getAttribute("data-pill-engine")).toBe("claude");
-    expect(pill().title).toBe("Claude Code · deepseek-v4.1-flash · Claude Code · Max");
+    expect(pill().title).toBe("Claude Code · deepseek-v4.1-flash · Max");
     expect(pill().textContent).not.toContain("Gemini 4 Neon");
 
     // Dropdown: Follow row is checked and names Claude Code · deepseek-v4.1-flash · Max;
@@ -214,7 +214,7 @@ describe("New Agent Follow model settings single source of truth (#12379)", () =
     localStorage.setItem(recentSetupsKey(), JSON.stringify([staleFollow]));
 
     await openNewAgent();
-    expect(pill().title).toBe("Claude Code · deepseek-v4.1-flash · Claude Code · Max");
+    expect(pill().title).toBe("Claude Code · deepseek-v4.1-flash · Max");
     expect(pill().title).not.toContain("stale-model-id");
   });
 
@@ -295,7 +295,7 @@ describe("New Agent Follow model settings single source of truth (#12379)", () =
     const sessionPill = host.querySelector<HTMLButtonElement>("[data-model-pill]")!;
     expect(sessionPill.textContent).toContain("deepseek-v4.1-flash");
     expect(sessionPill.textContent).not.toContain("Default (recommended)");
-    expect(sessionPill.title).toBe("Claude Code · deepseek-v4.1-flash · Claude Code · Max");
+    expect(sessionPill.title).toBe("Claude Code · deepseek-v4.1-flash · Max");
 
     // Once the server reports an actual model, session.model takes over.
     act(() => root.render(<AgentModelPill session={{ ...session, model: "claude-sonnet-5-5" }} />));

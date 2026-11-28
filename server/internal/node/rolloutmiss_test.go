@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // expireRollouts makes the next rollouts call list again as if 5 seconds (recent days) or a minute (older days too)
@@ -292,14 +294,15 @@ func BenchmarkRolloutPathMiss(b *testing.B) {
 }
 
 // countRolloutGlobs counts, until the test ends, rolloutPath's globs under home: perID for one thread's id
-// (rollout-*-<id>*.jsonl, across history), listings for one directory a new rollout appears in (rollout-*.jsonl).
+// (rollout-*-<id>*.jsonl*, across history), listings for one directory a new rollout appears in (rollout-*.jsonl*;
+// the trailing * takes in a rollout Codex compressed to .jsonl.zst, #17768).
 func countRolloutGlobs(t *testing.T, home string) (perID, listings *atomic.Int64) {
 	t.Helper()
 	perID, listings = new(atomic.Int64), new(atomic.Int64)
 	glob := rolloutGlob
 	rolloutGlob = func(pattern string) ([]string, error) {
 		if strings.HasPrefix(pattern, home+string(filepath.Separator)) {
-			if filepath.Base(pattern) == "rollout-*.jsonl" {
+			if filepath.Base(pattern) == "rollout-*.jsonl*" {
 				listings.Add(1)
 			} else {
 				perID.Add(1)
@@ -311,15 +314,22 @@ func countRolloutGlobs(t *testing.T, home string) (perID, listings *atomic.Int64
 	return perID, listings
 }
 
-// Threads with no rollout (Codex compressed theirs to .jsonl.zst, or an app-server thread never wrote one) are globbed
-// for once. Not again each minute when the older days are listed (528 such threads took 14 s of CPU every minute),
-// nor when another thread's rollout is written: the directories it appears in are listed once per list pass instead.
+// Old threads are globbed for once: those with no rollout (an app-server thread never wrote one), and those whose
+// rollout Codex compressed to .jsonl.zst, which this node reads since #17768. Not again each minute when the older days
+// are listed (528 compressed threads took 14 s of CPU every minute, #17809), nor when another thread's rollout is
+// written: the directories it appears in are listed once per list pass instead.
 func TestRolloutPathMissesOutliveRelisting(t *testing.T) {
 	home := t.TempDir()
 	codex := filepath.Join(home, ".codex")
 	now := time.Now()
 	writeRollout(t, home, "11111111-1111-1111-1111-111111111111", "/w", now.AddDate(0, 0, -40), now.AddDate(0, 0, -40))
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
 	var ids []string
+	want := map[string]string{} // id → its compressed rollout; none for a thread with no rollout
 	for i := range 50 {
 		id := fmt.Sprintf("%08x-aaaa-4aaa-8aaa-aaaaaaaaaaaa", i)
 		ids = append(ids, id)
@@ -328,11 +338,19 @@ func TestRolloutPathMissesOutliveRelisting(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		// What Codex leaves of an old rollout it compressed: not a rollout this node reads.
+		if i%2 == 0 {
+			continue
+		}
+		// What Codex leaves of an old rollout it compressed, as old as the day it started.
 		zst := filepath.Join(dir, "rollout-"+day.Format("2006-01-02T15-04-05")+"-"+id+".jsonl.zst")
-		if err := os.WriteFile(zst, []byte("zstd"), 0o644); err != nil {
+		meta := `{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"` + id + `","cwd":"/w"}}` + "\n"
+		if err := os.WriteFile(zst, encoder.EncodeAll([]byte(meta), nil), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chtimes(zst, day, day); err != nil {
+			t.Fatal(err)
+		}
+		want[id] = zst
 	}
 	ageDirs(t, codex)
 	perID, listings := countRolloutGlobs(t, codex)
@@ -343,8 +361,8 @@ func TestRolloutPathMissesOutliveRelisting(t *testing.T) {
 		pass := newCodexListPass()
 		for _, id := range ids {
 			for range 2 { // the list asks twice for each: listedCodexSource, then the transcript lookup
-				if p := rolloutPathIn(codex, id, pass); p != "" {
-					t.Fatalf("%s: %s has no rollout, got %q", when, id, p)
+				if p := rolloutPathIn(codex, id, pass); p != want[id] {
+					t.Fatalf("%s: %s got %q, want %q", when, id, p, want[id])
 				}
 			}
 		}
@@ -354,7 +372,8 @@ func TestRolloutPathMissesOutliveRelisting(t *testing.T) {
 		}
 	}
 	dirs := int64(len(missDirs(codex, now)))
-	list("first look", int64(2*len(ids)), 0) // sessions/, then archived_sessions/
+	none := len(ids) - len(want)
+	list("first look", int64(2*none+len(want)), 0) // no rollout: sessions/, then archived_sessions/; compressed: sessions/
 	list("second look", 0, 0)
 	expireRollouts(codex, true)
 	list("after the older days were listed again", 0, 0)
@@ -362,7 +381,9 @@ func TestRolloutPathMissesOutliveRelisting(t *testing.T) {
 	writeRollout(t, home, "22222222-2222-2222-2222-222222222222", "/w", now, now)
 	list("just after another thread's rollout was written today", 0, dirs)
 	list("in the next pass, the directory still within its mtime's granularity", 0, dirs)
-	ageDirs(t, codex) // the directories have not changed for an hour
+	// Today's directory, the one that changed, has not changed since for an hour. Only it: re-dating the old day
+	// directories would look like a change to the compressed rollouts' own directories.
+	ageDirs(t, filepath.Join(codex, "sessions", now.Format("2006"), now.Format("01"), now.Format("02")))
 	list("once the directories settled", 0, dirs)
 	list("and after that", 0, 0)
 	if p := rolloutPath(codex, "22222222-2222-2222-2222-222222222222"); p == "" {
@@ -578,7 +599,7 @@ func TestRolloutPathNamesListedDuringAChangeAreNotKept(t *testing.T) {
 	glob := rolloutGlob
 	t.Cleanup(func() { rolloutGlob = glob })
 	rolloutGlob = func(pattern string) ([]string, error) {
-		if pattern == filepath.Join(archived, "rollout-*.jsonl") { // today's directory changes while they are listed
+		if pattern == filepath.Join(archived, "rollout-*.jsonl*") { // today's directory changes while they are listed
 			if err := os.WriteFile(filepath.Join(today, "note"), nil, 0o644); err != nil {
 				t.Error(err)
 			}

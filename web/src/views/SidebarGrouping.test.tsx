@@ -6,6 +6,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedAgentsDisplay } from "../lib/agents-display";
+const v2TreeLoaded = vi.hoisted(() => vi.fn());
+vi.mock("../features/todos/board-sidebar-tree", async (load) => {
+  v2TreeLoaded();
+  return load();
+});
 // jsdom has no matchMedia (the sidebar's modules read it when they load) and no ResizeObserver (its highlight)
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -13,7 +18,7 @@ vi.hoisted(() => {
 });
 import { t } from "../i18n";
 import { filterAgentList, resetAgentListFilters } from "../lib/agent-list-filters";
-import { connect, refresh, reset, upsertSession } from "../lib/store";
+import { connect, getState, patchAssistant, refresh, reset, upsertSession } from "../lib/store";
 import type { Todo } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Icon, type IconName } from "../ui/icons";
@@ -52,7 +57,7 @@ const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.
 /** fetch for a hub with `mac` and its one agent; GET /todos answers with `todos`. */
 const hub = (todos: () => Promise<Response>) =>
   vi.fn((url: string) => {
-    if (url.endsWith("/api/v1/todos")) return todos();
+    if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return todos();
     if (url.endsWith("/api/v1/sessions")) return json({ sessions: [agent] });
     if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
     return json({});
@@ -99,6 +104,26 @@ afterEach(() => {
 });
 
 describe("按待办 before the todos have loaded", () => {
+  it("loads the v2 sidebar chunk only when the Lab and By to-do are both active", async () => {
+    vi.stubGlobal("fetch", hub(() => json({ todos: [todo] })));
+    await refresh();
+    Object.assign(getState(), { assistant: { machine_id: "mac", conversations: [], todos_v2: false } });
+    await render();
+    const choose = (label: string) => segments().find((b) => b.getAttribute("aria-label") === label)!.click();
+    expect(checked()).toBe("按待办");
+    expect(v2TreeLoaded).not.toHaveBeenCalled();
+
+    await act(async () => choose("按机器"));
+    await act(async () => patchAssistant({ todos_v2: true }));
+    await flush();
+    expect(v2TreeLoaded).not.toHaveBeenCalled();
+
+    await act(async () => choose("按待办"));
+    await flush();
+    expect(v2TreeLoaded).toHaveBeenCalledTimes(1);
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:td1"]')).not.toBeNull();
+  });
+
   it("says 加载中… until GET /todos answers, then draws the agent under its todo, never under 没挂待办的 first", async () => {
     let answer!: (r: Response) => void;
     const todos = new Promise<Response>((r) => (answer = r));
@@ -113,7 +138,7 @@ describe("按待办 before the todos have loaded", () => {
     await render();
     expect(checked()).toBe("按待办");
     expect(agentsBlock().textContent).toContain("加载中…");
-    expect(agentsBlock().textContent).not.toContain("没挂待办的");
+    expect(agentsBlock().textContent).not.toContain("未关联待办");
     expect(agentsBlock().textContent).not.toContain("改发布脚本");
 
     await act(async () => answer(new Response(JSON.stringify({ todos: [todo] }), { status: 200 })));
@@ -123,13 +148,13 @@ describe("按待办 before the todos have loaded", () => {
     expect(agentsBlock().textContent).toContain("改发布脚本");
     // the agent sits under its to-do; 没挂待办的 is listed (#6458) and holds none
     expect(agentsBlock().querySelector('[data-tree-branch="todo:td1"]')?.textContent).toContain("改发布脚本");
-    expect(agentsBlock().querySelector('[data-tree-branch="todo:none"] [data-tree-branch-row]')?.textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
+    expect(agentsBlock().querySelector('[data-tree-branch="todo:none"] [data-tree-branch-row]')?.textContent).toMatch(/^未关联待办.*0 个 Agent$/);
     expect(agentsBlock().querySelector('[data-tree-branch="todo:none"]')?.textContent).not.toContain("改发布脚本");
   });
 
   it("draws the todos as soon as GET /todos answers, while GET /sessions is still on its way", async () => {
     const slow = vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return json({ todos: [todo] });
       if (url.endsWith("/api/v1/sessions")) return new Promise<Response>(() => {});
       if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
       return json({});
@@ -274,7 +299,7 @@ describe("按待办's 最近（未运行）", () => {
     const gone: Session = { ...agent, session_id: "s2", title: "旧的发布检查", status: "offline", state: "offline" };
     let sessions = [agent, gone];
     vi.stubGlobal("fetch", vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return json({ todos: [todo] });
       if (url.endsWith("/api/v1/sessions")) return json({ sessions });
       if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
       return json({});
@@ -336,7 +361,7 @@ describe("relative-time Agents filters", () => {
     vi.setSystemTime(start);
     const aging = { ...agent, updated_at: new Date(start.getTime() - 24 * 60 * 60 * 1000 + 30_000).toISOString() };
     vi.stubGlobal("fetch", vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return json({ todos: [todo] });
       if (url.endsWith("/api/v1/sessions")) return json({ sessions: [aging] });
       if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
       return json({});
@@ -504,7 +529,7 @@ describe("stable machine, workspace and tab order (#11801)", () => {
       sessions[0]!,
       placed("b1", "beta", { state: "needs_you" }),
       placed("c1", "gamma", { work: { phase: "done", just_finished: true } }),
-      placed("d1", "delta", { status: "working", state: "working", background_waiting: true }),
+      placed("d1", "delta", { status: "working", state: "working", background_working: true, background_waiting: true }),
     ];
     act(() => sessions.slice(1).forEach((session) => upsertSession(session)));
     await flush();

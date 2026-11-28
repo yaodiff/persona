@@ -87,6 +87,54 @@ func TestEngineHostsEmptyAndInvalid(t *testing.T) {
 	}
 }
 
+// A phone that knows only single engines saves the one it shows (#17052): on a set built on the web, an engine already
+// in it only becomes the default, both keys keep the set's single engine, and an engine outside it replaces it as before.
+func TestEngineSingleSaveKeepsAWebSet(t *testing.T) {
+	h, st, _, mux := engineHub(t)
+	if code, out := put(t, mux, "/api/v1/machines/m1/engine", `{"hosts":["herdr","orca","paseo"],"default":"orca"}`); code != 200 {
+		t.Fatalf("set: %d %v", code, out)
+	}
+	code, out := put(t, mux, "/api/v1/machines/m1/engine", `{"engine":"herdr"}`)
+	if code != 200 || out["engine"] != "herdr" || out["engine_default"] != "herdr" {
+		t.Fatalf("single in the set: %d %v", code, out)
+	}
+	if hosts, _ := json.Marshal(out["engine_hosts"]); string(hosts) != `["herdr","orca","paseo"]` {
+		t.Errorf("engine_hosts %s, want all three kept", hosts)
+	}
+	var sets map[string]proto.EngineChoice
+	if ok, _ := st.Setting(context.Background(), engineHostsKey, &sets); !ok || !slices.Equal(sets["m1"].Hosts, []string{"herdr", "orca", "paseo"}) || sets["m1"].Default != "herdr" {
+		t.Errorf("stored sets %v", sets)
+	}
+	var single map[string]string
+	if ok, _ := st.Setting(context.Background(), enginesKey, &single); !ok || single["m1"] != "herdr" {
+		t.Errorf("stored single %v", single)
+	}
+	// Saving the engine shown again changes nothing.
+	if code, _ := put(t, mux, "/api/v1/machines/m1/engine", `{"engine":"herdr"}`); code != 200 {
+		t.Fatalf("again: %d", code)
+	}
+	if c := h.engineChoiceOf("m1"); !slices.Equal(c.Hosts, []string{"herdr", "orca", "paseo"}) || c.Default != "herdr" {
+		t.Errorf("after a second save: %v", c)
+	}
+	// An engine outside the set is that engine alone, as before.
+	if code, out := put(t, mux, "/api/v1/machines/m1/engine", `{"engine":"herdr-core"}`); code != 200 || out["engine"] != "herdr-core" {
+		t.Fatalf("outside the set: %d %v", code, out)
+	}
+	if c := h.engineChoiceOf("m1"); !slices.Equal(c.Hosts, []string{"herdr-core"}) || c.Default != "herdr-core" {
+		t.Errorf("outside the set = %v", c)
+	}
+	// A set a single engine stands for is still replaced: the phone could show it, so its choice is exact.
+	if code, _ := put(t, mux, "/api/v1/machines/m1/engine", `{"engine":"herdr-both"}`); code != 200 {
+		t.Fatalf("herdr-both: %d", code)
+	}
+	if code, _ := put(t, mux, "/api/v1/machines/m1/engine", `{"engine":"herdr"}`); code != 200 {
+		t.Fatalf("herdr after herdr-both: %d", code)
+	}
+	if c := h.engineChoiceOf("m1"); !slices.Equal(c.Hosts, []string{"herdr"}) {
+		t.Errorf("herdr-both narrowed = %v", c)
+	}
+}
+
 // A machine chosen before sets (only the single key) is the set its engine stands for; a stored set wins over it.
 func TestEngineHostsMigrateFromSingle(t *testing.T) {
 	h := newTestDevices(t)
@@ -218,24 +266,33 @@ func TestEngineChoiceForAMove(t *testing.T) {
 	h, _, _, _ := engineHub(t)
 	ctx := context.Background()
 	get := func(d *Devices) (devicewire.MachineEngine, error) {
-		out, handled, err := d.Request(ctx, devicewire.MethodEngineGet, json.RawMessage(`{"machine_id":"m1"}`))
+		out, handled, err := d.Request(ctx, devicewire.MethodEngineGet, json.RawMessage(`{"machine_id":"m1","future_field":true}`))
 		if !handled {
 			t.Fatal("devices.engine.get not handled")
 		}
 		got, _ := out.(devicewire.MachineEngine)
 		return got, err
 	}
-	if got, err := get(h); err != nil || got.Choice != nil {
+	got, err := get(h)
+	if err != nil || got.Choice != nil {
 		t.Fatalf("never chosen: %+v %v", got, err)
 	}
+	if reply, err := json.Marshal(got); err != nil || string(reply) != `{"machine_id":"m1"}` {
+		t.Fatalf("wire reply for an unset choice = %s, %v", reply, err)
+	}
 	put := func(body string) error {
-		_, handled, err := h.Request(ctx, devicewire.MethodEnginePut, json.RawMessage(body))
+		out, handled, err := h.Request(ctx, devicewire.MethodEnginePut, json.RawMessage(body))
 		if !handled {
 			t.Fatal("devices.engine.put not handled")
 		}
+		if err == nil {
+			if reply, err := json.Marshal(out); err != nil || string(reply) != `{}` {
+				t.Fatalf("wire acknowledgment = %s, %v", reply, err)
+			}
+		}
 		return err
 	}
-	if err := put(`{"machine_id":"m1","choice":{"hosts":["orca","herdr"],"default":"orca"}}`); err != nil {
+	if err := put(`{"machine_id":"m1","choice":{"hosts":["orca","herdr"],"default":"orca"},"future_field":true}`); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := get(h); err != nil || got.Choice == nil || !slices.Equal(got.Choice.Hosts, []string{"herdr", "orca"}) || got.Choice.Default != "orca" {

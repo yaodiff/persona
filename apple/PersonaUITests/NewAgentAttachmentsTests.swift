@@ -87,8 +87,8 @@ final class NewAgentAttachmentsTests: XCTestCase {
     @MainActor func testCodexTakesNoAttachments() throws {
         openNewAgent(attaching: "photo")
         see(app.buttons["newChat.launcher"], "launcher row", timeout: 30).tap()
-        see(button("codex"), "codex launcher").tap()
-        see(app.staticTexts["codex"], "launcher picked")
+        see(button("Codex"), "codex launcher").tap()
+        see(app.staticTexts["Codex"], "launcher picked")
         reveal(app.buttons["移除图片 1"], "the photo's ×", timeout: 30)
         XCTAssertFalse(app.buttons["newChat.attach"].exists, "no add menu for Codex")
         let note = reveal(app.descendants(matching: .any).matching(identifier: "newChat.codexNote").firstMatch, "the web's words")
@@ -126,10 +126,10 @@ final class NewAgentAttachmentsTests: XCTestCase {
         // screen (recent setups above can push the section below it).
         reveal(app.staticTexts["权限与思考"], "Claude Code's Permissions & Thinking", timeout: 20)
         reveal(app.buttons["newChat.launcher"], "launcher row", up: false).tap()
-        let pick = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "omp")).firstMatch
+        let pick = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Oh My Pi")).firstMatch
         guard pick.waitForExistence(timeout: 10) else { throw XCTSkip("needs MOCK_OMP=1: no omp launcher listed") }
         pick.tap()
-        see(app.staticTexts["omp"], "launcher picked")
+        see(app.staticTexts["Oh My Pi"], "launcher picked")
         // First Message on screen: Permissions & Thinking, just above it, would be made too.
         reveal(app.buttons["移除图片 1"], "the photo's ×", timeout: 30)
         XCTAssertFalse(app.staticTexts["权限与思考"].exists, "no Permissions & Thinking for omp")

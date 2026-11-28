@@ -21,7 +21,7 @@ func TestEvolveProjectAliasesAreValidated(t *testing.T) {
 	c := &Chat{ID: "lark-f1", Kind: "group", Name: "示例群"}
 	now := time.Now().UTC()
 
-	slug := e.evolveProject("Beta 迁移", "short", []string{"alpha 发布", "阿尔法", "ss", "项目", "Beta迁移", "贝塔", "贝塔"}, "", c, "", now)
+	slug := e.evolveProject("Beta 迁移", "short", []string{"alpha 发布", "阿尔法", "ss", "项目", "Beta迁移", "贝塔", "贝塔"}, "", c, true, "", now)
 	if slug != "beta" {
 		t.Fatalf("slug = %q", slug)
 	}
@@ -38,7 +38,7 @@ func TestEvolveProjectAliasesAreValidated(t *testing.T) {
 	for i := range 30 {
 		many = append(many, fmt.Sprintf("贝塔%02d", i))
 	}
-	e.evolveProject("Beta 迁移", "short", many, "", c, "", now)
+	e.evolveProject("Beta 迁移", "short", many, "", c, true, "", now)
 	beta, _ = e.Store.Project("beta")
 	if len(beta.Aliases) != maxProjectAliases || beta.Aliases[0] != "贝塔" {
 		t.Fatalf("beta has %d aliases: %v", len(beta.Aliases), beta.Aliases)
@@ -51,7 +51,7 @@ func TestEvolveProjectDoesNotSnowball(t *testing.T) {
 	_ = e.Store.PutProject(&Project{Slug: "alpha", Name: "Alpha 发布", Status: "active"})
 	_ = e.Store.PutProject(&Project{Slug: "beta", Name: "Beta 迁移", Aliases: []string{"迁移二期"}, Status: "active"})
 	c := &Chat{ID: "lark-f1", Kind: "group", Name: "示例群"}
-	slug := e.evolveProject("新叫法", "short", []string{"迁移二期", "Alpha 发布"}, "", c, "", time.Now().UTC())
+	slug := e.evolveProject("新叫法", "short", []string{"迁移二期", "Alpha 发布"}, "", c, true, "", time.Now().UTC())
 	if slug != "beta" {
 		t.Fatalf("slug = %q", slug)
 	}

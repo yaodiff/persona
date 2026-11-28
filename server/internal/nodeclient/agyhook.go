@@ -2,6 +2,8 @@ package nodeclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -24,9 +26,12 @@ var AgyEvents = []string{"PreInvocation", "Stop"}
 
 // AgyReport is what one agy hook tells the node about the pane it runs in.
 type AgyReport struct {
-	Event          string `json:"event"`
-	Conversation   string `json:"conversation"`
-	TranscriptPath string `json:"transcript_path,omitempty"`
+	Event           string `json:"event"`
+	Conversation    string `json:"conversation"`
+	TranscriptPath  string `json:"transcript_path,omitempty"`
+	PromptDigest    string `json:"prompt_digest,omitempty"`
+	InvocationSteps int    `json:"invocation_steps,omitempty"`
+	Settled         bool   `json:"settled,omitempty"`
 }
 
 var agyUUID = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -47,11 +52,34 @@ func ParseAgyReport(event string, input []byte) (AgyReport, bool) {
 	var in struct {
 		Conversation string `json:"conversationId"`
 		Transcript   string `json:"transcriptPath"`
+		Prompt       string `json:"lastUserInput"`
+		Steps        int    `json:"initialNumSteps"`
+		FullyIdle    bool   `json:"fullyIdle"`
+		Reason       string `json:"terminationReason"`
+		Error        string `json:"error"`
 	}
 	if !known || json.Unmarshal(input, &in) != nil || !agyUUID.MatchString(in.Conversation) {
 		return AgyReport{}, false
 	}
-	return AgyReport{Event: event, Conversation: strings.ToLower(in.Conversation), TranscriptPath: in.Transcript}, true
+	report := AgyReport{Event: event, Conversation: strings.ToLower(in.Conversation), TranscriptPath: in.Transcript,
+		PromptDigest: AgyPromptDigest(in.Prompt)}
+	if event == "PreInvocation" {
+		report.InvocationSteps = in.Steps
+	}
+	if event == "Stop" && in.FullyIdle && in.Error == "" {
+		report.Settled = strings.EqualFold(in.Reason, "NO_TOOL_CALL") || strings.EqualFold(in.Reason, "model_stop")
+	}
+	return report, true
+}
+
+// AgyPromptDigest ties a report to a transcript input without sending the prompt over the hook socket.
+func AgyPromptDigest(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(prompt))
+	return hex.EncodeToString(sum[:])
 }
 
 // RunAgyHook is `<binary> hook --agy <Event>`: agy's hook input on stdin, `{}` on stdout whatever happens, so agy goes

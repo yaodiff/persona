@@ -16,9 +16,10 @@ import (
 )
 
 type storeFileField struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	File string `json:"file"`
+	Name   string `json:"name"`
+	Type   string `json:"type,omitempty"`
+	File   string `json:"file,omitempty"`
+	Delete bool   `json:"delete,omitempty"`
 }
 type storeFileManifest struct {
 	Operation string           `json:"operation"`
@@ -58,12 +59,23 @@ func storeManifest(raw []byte) (storeFileManifest, wire.SecretStoreTarget, error
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if d.Decode(&m) != nil || d.Decode(new(any)) != io.EOF {
-		return m, wire.SecretStoreTarget{}, errors.New("invalid secret storage file manifest; fields accept name, type and file only")
+		return m, wire.SecretStoreTarget{}, errors.New("invalid secret storage file manifest; fields accept name, type, file and delete only")
 	}
 	t := wire.SecretStoreTarget{Operation: m.Operation, Vault: m.Vault, Item: m.Item, Title: m.Title, Category: m.Category}
 	for _, f := range m.Fields {
+		if f.Delete {
+			if m.Operation != "edit" || f.File != "" || f.Type != "" {
+				return m, t, errors.New("delete fields are allowed only on edit without type or file")
+			}
+			t.Fields = append(t.Fields, wire.SecretStoreField{Name: f.Name, Delete: true})
+			continue
+		}
 		if f.File == "" {
-			return m, t, errors.New("every secret field requires a local file")
+			if m.Operation != "edit" || f.Type == "" {
+				return m, t, errors.New("every secret field requires a local file, or on edit an explicit type to update in place")
+			}
+			t.Fields = append(t.Fields, wire.SecretStoreField{Name: f.Name, Type: f.Type, KeepValue: true})
+			continue
 		}
 		typ := f.Type
 		if typ == "" {
@@ -129,6 +141,9 @@ func secretStore(ctx context.Context, args []string, stdin io.Reader, stdout, st
 		}
 	}()
 	for _, f := range m.Fields {
+		if f.Delete || f.File == "" {
+			continue
+		}
 		b, e := readPrivateFile(f.File, wire.SecretStoreValueMost)
 		if e != nil || len(b) == 0 || !utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0 {
 			clear(b)

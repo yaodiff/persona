@@ -8,6 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -31,11 +32,26 @@ func (ps *extensions) extensionModelCall(ctx context.Context, id string, params 
 	if err != nil {
 		return nil, err
 	}
-	var out json.RawMessage
-	if err := ps.h.kbAsk(ctx, assistantwire.MethodModelsExtensionComplete, assistantwire.ExtensionComplete{Extension: id, StorageID: storageID, Params: params}, &out); err != nil {
+	out, err := callAssistantRaw(ctx, ps.h.kbAsk, assistantwire.ModelsExtensionCompleteMethod, assistantwire.ExtensionComplete{
+		Extension: id, StorageID: storageID, Params: params,
+	})
+	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+type assistantCaller func(ctx context.Context, method string, params, out any) error
+
+func (call assistantCaller) Call(ctx context.Context, method string, params, out any) error {
+	return call(ctx, method, params, out)
+}
+
+// callAssistantRaw binds the request to its descriptor and forwards the entire reply, including fields from newer assistants.
+func callAssistantRaw[P, R any](ctx context.Context, call assistantCaller, method buswire.Method[P, R], params P) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := call(ctx, method.Name, params, &out)
+	return out, err
 }
 
 // assistantStorageID checks support on the authenticated manager-to-assistant channel.
@@ -52,10 +68,8 @@ func (ps *extensions) assistantStorageID(ctx context.Context, p *extension.Exten
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var capability struct {
-		Supported bool `json:"supported"`
-	}
-	if err := ps.h.kbAsk(ctx, assistantwire.MethodExtensionIdentity, map[string]any{}, &capability); err != nil || !capability.Supported {
+	capability, err := buswire.Call(ctx, assistantCaller(ps.h.kbAsk), assistantwire.ExtensionIdentityMethod, buswire.None{})
+	if err != nil || !capability.Supported {
 		return "", i18n.Err("extension-identity.assistant_required")
 	}
 	return p.Record.StorageKey(), nil

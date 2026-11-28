@@ -120,4 +120,32 @@ describe("FilesPanel navigation (#5827)", () => {
     await act(async () => (found.querySelector("button") as HTMLButtonElement).click()); await flush();
     expect(current()).toBe("/home/me/app/src/config");
   });
+
+  it("exits multi-select on Escape from a row checkbox without propagating to an enclosing SidePanel, and ignores IME Escape", async () => {
+    await click(t("session-filespanel.more"));
+    await click(t("files-ops.select"));
+    const checkbox = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox).toBeTruthy();
+
+    const outerKeyDown = vi.fn();
+    window.addEventListener("keydown", outerKeyDown);
+    try {
+      // Safari IME Escape (keyCode 229) must not exit multi-select.
+      checkbox.focus();
+      const imeEsc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      Object.defineProperty(imeEsc, "keyCode", { value: 229 });
+      await act(async () => { checkbox.dispatchEvent(imeEsc); });
+      expect(host.querySelector('input[type="checkbox"]')).toBeTruthy();
+
+      // Real Escape on the checkbox exits multi-select and stops propagation so enclosing SidePanel stays open.
+      outerKeyDown.mockClear();
+      const esc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      await act(async () => { checkbox.dispatchEvent(esc); });
+      expect(esc.defaultPrevented).toBe(true);
+      expect(host.querySelector('input[type="checkbox"]')).toBeNull();
+      expect(outerKeyDown).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", outerKeyDown);
+    }
+  });
 });

@@ -22,18 +22,19 @@ const standingAuthorizationsKey = "assistant.standing_authorizations"
 
 var errStandingConflict = errors.New("standing authorizations changed; read the current revision and try again")
 
-// StandingAuthorization is a user-approved grant for one computer and directory tree.
+// StandingAuthorization is a user-approved computer/directory grant or explicit message scope.
 // Conditions are retained verbatim; only independently verified conditions permit automatic answers.
 type StandingAuthorization struct {
-	ID         string    `json:"id"`
-	MachineID  string    `json:"machine_id"`
-	Directory  string    `json:"directory"`
-	Actions    []string  `json:"actions"`
-	Conditions []string  `json:"conditions"`
-	Quote      string    `json:"quote"`
-	Source     string    `json:"source"`
-	GrantedAt  time.Time `json:"granted_at"`
-	Reversible bool      `json:"reversible"`
+	ID         string                `json:"id"`
+	MachineID  string                `json:"machine_id"`
+	Directory  string                `json:"directory"`
+	Actions    []string              `json:"actions"`
+	Conditions []string              `json:"conditions"`
+	Quote      string                `json:"quote"`
+	Source     string                `json:"source"`
+	GrantedAt  time.Time             `json:"granted_at"`
+	Reversible bool                  `json:"reversible"`
+	Messages   *MessageAuthorization `json:"messages,omitempty"`
 }
 
 // StandingAuthorizations keeps the revision even after all grants are revoked.
@@ -72,6 +73,9 @@ func (s *Service) standingForDirectory(ctx context.Context, machine, cwd string)
 	}
 	cwd = path.Clean(cwd)
 	for _, grant := range list.Authorizations {
+		if grant.Messages != nil {
+			continue
+		}
 		if grant.MachineID != machine {
 			continue
 		}
@@ -92,12 +96,18 @@ func validStandingDirectory(dir string) bool {
 }
 
 func checkStandingGrant(grant StandingAuthorization) error {
-	if grant.MachineID == "" || strings.TrimSpace(grant.MachineID) != grant.MachineID ||
-		len(grant.MachineID) > 200 || strings.ContainsAny(grant.MachineID, "*?/\\\n\r\x00") {
-		return errors.New("machine_id must name one computer")
-	}
-	if !validStandingDirectory(grant.Directory) || len(grant.Directory) > 2000 {
-		return errors.New("directory must be a specific absolute directory without wildcards")
+	if grant.Messages != nil {
+		if err := checkMessageAuthorization(grant); err != nil {
+			return err
+		}
+	} else {
+		if grant.MachineID == "" || strings.TrimSpace(grant.MachineID) != grant.MachineID ||
+			len(grant.MachineID) > 200 || strings.ContainsAny(grant.MachineID, "*?/\\\n\r\x00") {
+			return errors.New("machine_id must name one computer")
+		}
+		if !validStandingDirectory(grant.Directory) || len(grant.Directory) > 2000 {
+			return errors.New("directory must be a specific absolute directory without wildcards")
+		}
 	}
 	if len(grant.Actions) == 0 || len(grant.Actions) > 7 {
 		return errors.New("actions must contain one or more supported actions")
@@ -211,7 +221,13 @@ func (s *Service) setStandingAuthorizations(ctx context.Context, value json.RawM
 	oldJSON, _ := json.MarshalIndent(before, "", "  ")
 	newJSON, _ := json.MarshalIndent(after, "", "  ")
 	return &ownChange{applyChecksProposal: true, cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-standing_authorizations.change", i18n.Args{"before": string(oldJSON), "after": string(newJSON)})
+		text := ""
+		for _, grant := range after.Authorizations {
+			if grant.Messages != nil && !slices.ContainsFunc(before.Authorizations, func(old StandingAuthorization) bool { return old.ID == grant.ID }) {
+				text += messageScopeText(l, *grant.Messages) + "\n\n"
+			}
+		}
+		return text + i18n.T(l, "assistant-standing_authorizations.change", i18n.Args{"before": string(oldJSON), "after": string(newJSON)})
 	}, apply: func(ctx context.Context) (string, error) {
 		s.standingMu.Lock()
 		defer s.standingMu.Unlock()

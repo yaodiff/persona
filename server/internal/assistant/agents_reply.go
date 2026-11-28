@@ -228,7 +228,7 @@ func (s *Service) remindReply(machine string, sess proto.Session) error {
 	s.logf("reply reminder %s/%s: %s", machine, short(sess.SessionID), body)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if to, ok := s.nonOwnerCardTarget(ctx, machine, sess.SessionID); ok {
+	if to, _ := s.nonOwnerCardTarget(ctx, machine, sess.SessionID); to != "" {
 		text := fmt.Sprintf("Agent waiting for a reply (machine=%s session_id=%s): %s\n%s", machine, sess.SessionID, head, body)
 		if _, kept := s.keepRelayLater(to, relayMsg{
 			From:      cardAgentReply,
@@ -244,8 +244,10 @@ func (s *Service) remindReply(machine string, sess proto.Session) error {
 	n := Notification{ID: "ntf_" + randomHex(8),
 		Kind: assistantwire.NotifyReply, DeviceID: machine, SessionID: sess.SessionID, Subtitle: s.pushPlace(machine, sess),
 		Title: head, Body: body, RelatedKey: replyRelatedKey(sess)}
-	s.noteCard(ctx, cardAgentReply, n)
-	_, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err == nil {
+		s.noteCardResult(ctx, cardAgentReply, n, res)
+	}
 	return err
 }
 

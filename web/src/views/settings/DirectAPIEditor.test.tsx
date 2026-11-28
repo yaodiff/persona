@@ -706,7 +706,7 @@ describe("DirectAPIEditor", () => {
 
   it.each([
     ["en", "This hub cannot verify"],
-    ["zh-Hans", "此中枢无法验证"],
+    ["zh-Hans", "当前 hub 无法验证"],
     ["ja", "このハブでは"],
   ])("does not verify a successful old-hub response without effort echo (%s)", async (language, expected) => {
     await initI18n(language);

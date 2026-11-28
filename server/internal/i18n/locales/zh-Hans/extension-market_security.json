@@ -22,5 +22,8 @@
   "credential_move": "迁移到其他来源或 GitHub 所有者前，请先清空市场 token。",
   "no_store": "此扩展管理器没有设置存储。",
   "http_status": "镜像仓库返回 HTTP {status}。",
-  "credential_refused": "镜像仓库拒绝了这个市场的 token（HTTP {status}），不带 token 也拉不到这个包。如果是私有包，token 需要读取包的权限（GitHub 上是 read:packages）。"
+  "credential_refused": "镜像仓库拒绝了这个市场的 token（HTTP {status}），不带 token 也拉不到这个包。如果是私有包，token 需要读取包的权限（GitHub 上是 read:packages）。",
+  "private_signature": "目录没有用这个市场信任的任何一把公钥签名。",
+  "official_key": "官方市场的公钥是内置的，不能加到别的市场。",
+  "too_many_keys": "一个市场最多信任 {most} 把公钥。"
 }

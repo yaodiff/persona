@@ -34,6 +34,74 @@ import PersonaWire
         #expect(SpaceGroup.build([s]).first?.todoSpace == "workspace")
     }
 
+    @Test func projectHeadingsUseTheMostCommonFolderAndQualifyNamesOnTheSameComputer() throws {
+        func row(_ id: String, _ machine: String, _ space: String?, _ name: String, _ cwd: String, physical: String? = nil) -> Session {
+            var row = session(id, state: "working")
+            row.machineID = machine
+            row.spaceID = space
+            row.spaceName = name
+            row.cwd = cwd
+            row.workspaceCWD = physical
+            return row
+        }
+        let mac = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"mac","name":"Laptop","kind":"local","online":true,"home":"/Users/sample"}"#.utf8))
+        let rows = [
+            row("a", "mac", "desk", "site", "/tmp/site", physical: "/Users/sample/Desktop/site"),
+            row("b", "mac", "desk", "site", "/Users/sample/Desktop/site"),
+            row("c", "mac", "desk", "site", "/Users/sample/other/site"),
+            row("d", "mac", "code", "SITE", "/Users/sample/code/site"),
+            row("e", "pc", "remote", "site", #"C:\Users\Sample\code\site"#),
+            row("f", "mac", nil, "No project", "/Users/sample/tmp")
+        ]
+        var workspace = row("g", "mac", nil, "Workspace", "/Users/sample/fixtures/workspace")
+        workspace.workspaceID = "workspace"
+        let groups = SpaceGroup.withProjectFolders(SpaceGroup.build(rows + [workspace], byProject: true), machines: [mac.ref: mac])
+        #expect(groups.first { $0.spaceID == "desk" }?.projectFolder?.cwd == "/Users/sample/Desktop/site")
+        #expect(groups.first { $0.spaceID == "desk" }?.headingLabel == "site · ~/Desktop")
+        #expect(groups.first { $0.spaceID == "code" }?.headingLabel == "SITE · ~/code")
+        #expect(groups.first { $0.spaceID == "remote" }?.headingLabel == "site")
+        #expect(groups.first { $0.id == "mac/-" }?.projectFolder == nil)
+        #expect(groups.first { $0.id == "mac/workspace" }?.projectFolder?.cwd == workspace.cwd)
+        #expect(groups.first { $0.id == "mac/workspace" }?.todoSpace == nil)
+        #expect(AgentProjectFolder.parentLabel(#"C:\Users\Sample\code\site"#, home: #"c:\users\sample"#) == #"~\code"#)
+    }
+
+    @Test func aFilterDoesNotMoveTheProjectsFolder() {
+        func row(_ id: String, _ state: String, _ cwd: String) -> Session {
+            var row = session(id, state: state)
+            row.spaceID = "desk"
+            row.spaceName = "site"
+            row.cwd = cwd
+            return row
+        }
+        let rows = [row("usual-a", "idle", "/work/main/site"), row("usual-b", "idle", "/work/main/site"),
+                    row("elsewhere", "working", "/work/elsewhere/site")]
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "space"
+        settings.filter = .working
+        let result = AgentListProjection.build(.init(sessions: rows, machines: [], settings: settings))
+        #expect(result.active.first?.sessions.map(\.sessionID) == ["elsewhere"])
+        #expect(result.active.first?.projectFolder?.cwd == "/work/main/site")
+    }
+
+    @Test func aSearchDoesNotMoveTheProjectsFolder() {
+        func row(_ id: String, _ state: String, _ cwd: String) -> Session {
+            var row = session(id, state: state)
+            row.spaceID = "desk"
+            row.spaceName = "site"
+            row.cwd = cwd
+            return row
+        }
+        let rows = [row("usual-a", "idle", "/work/main/site"), row("usual-b", "idle", "/work/main/site"),
+                    row("elsewhere", "working", "/work/elsewhere/site")]
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "space"
+        settings.query = "elsewhere"
+        let result = AgentListProjection.build(.init(sessions: rows, machines: [], settings: settings))
+        #expect(result.active.first?.sessions.map(\.sessionID) == ["elsewhere"])
+        #expect(result.active.first?.projectFolder?.cwd == "/work/main/site")
+    }
+
     @Test func eachFilterKeepsItsState() {
         let all = [session("a", state: "needs_you"), session("b", state: "unread"), session("c", state: "unread"),
                    session("d", state: "working"), session("e", state: "idle")]

@@ -1,6 +1,8 @@
 package serve
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,6 +11,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A write runs once by its request id: asked again (at once or later), the program answers what the first run did.
@@ -170,5 +174,76 @@ func TestSentRefsRetryAfterFailure(t *testing.T) {
 	}
 	if len(r.sent) > doneMost || len(r.order) > doneMost {
 		t.Fatalf("remembers %d sends", len(r.sent))
+	}
+}
+
+type serveApprovalConn struct {
+	gotProto    string
+	gotApproval connector.AutoConfirmApproval
+	grant       *connector.AutoConfirmGrant
+}
+
+func (*serveApprovalConn) ID() string   { return "example" }
+func (*serveApprovalConn) Name() string { return "Example" }
+func (*serveApprovalConn) Manifest() connector.Manifest {
+	return connector.Manifest{Capabilities: []connector.Capability{connector.CapActions}}
+}
+func (*serveApprovalConn) Actions() []proto.Tool { return []proto.Tool{{Name: "example_do"}} }
+func (*serveApprovalConn) Describe(context.Context, string, json.RawMessage) (connector.Action, string, error) {
+	return connector.Action{Name: "example_do", Visible: "example"}, "summary", nil
+}
+func (c *serveApprovalConn) DescribeWithApproval(_ context.Context, name string, _ json.RawMessage, protocol string) (connector.Action, string, *connector.AutoConfirmGrant, error) {
+	c.gotProto = protocol
+	return connector.Action{Name: name, Visible: "example"}, "summary", c.grant, nil
+}
+func (*serveApprovalConn) Do(context.Context, string, json.RawMessage) (string, error) {
+	return "manual", nil
+}
+func (c *serveApprovalConn) DoWithApproval(_ context.Context, _ string, _ json.RawMessage, approval connector.AutoConfirmApproval) (connector.DoResult, error) {
+	c.gotApproval = approval
+	return connector.DoResult{Text: "auto", MessageRef: "m1"}, nil
+}
+
+func TestHandleGuardedAutoConfirmWire(t *testing.T) {
+	exp := time.Date(2026, 11, 25, 13, 0, 0, 0, time.UTC)
+	c := &serveApprovalConn{grant: &connector.AutoConfirmGrant{Token: "tok_1", ExpiresAt: exp}}
+	s := &server{c: c}
+
+	// Describe without approval_protocol omits auto_confirm even if connector returns one.
+	out, err := s.handle(context.Background(), InPlugin(MDescribe), json.RawMessage(`{"contribution":"example","name":"example_do","args":{"a":1}}`))
+	if err != nil {
+		t.Fatalf("unnegotiated describe: %v", err)
+	}
+	if dr := out.(DescribeResult); dr.AutoConfirm != nil || c.gotProto != "" {
+		t.Fatalf("unnegotiated describe leaked auto_confirm: %+v proto=%q", dr, c.gotProto)
+	}
+
+	// Describe with approval_protocol forwards protocol and returns auto_confirm.
+	out, err = s.handle(context.Background(), InPlugin(MDescribe), json.RawMessage(`{"contribution":"example","name":"example_do","args":{"a":1},"approval_protocol":"guarded-auto-confirm-v1"}`))
+	if err != nil {
+		t.Fatalf("negotiated describe: %v", err)
+	}
+	if dr := out.(DescribeResult); dr.AutoConfirm == nil || dr.AutoConfirm.Token != "tok_1" || !dr.AutoConfirm.ExpiresAt.Equal(exp) || c.gotProto != connector.ApprovalProtocolGuardedAutoConfirmV1 {
+		t.Fatalf("negotiated describe: %+v proto=%q", dr, c.gotProto)
+	}
+
+	// Do rejects unpaired approval_mode / approval_token and unsupported approval_mode.
+	for _, raw := range []string{
+		`{"contribution":"example","name":"example_do","request_id":"r1","approval_mode":"auto_confirm"}`,
+		`{"contribution":"example","name":"example_do","request_id":"r2","approval_token":"tok_1"}`,
+		`{"contribution":"example","name":"example_do","request_id":"r3","approval_mode":"other","approval_token":"tok_1"}`,
+	} {
+		if _, err := s.handle(context.Background(), InPlugin(MDo), json.RawMessage(raw)); err == nil {
+			t.Errorf("expected error for invalid actions.do params: %s", raw)
+		}
+	}
+
+	// Do with valid paired approval_mode + approval_token routes to DoWithApproval.
+	out, err = s.handle(context.Background(), InPlugin(MDo), json.RawMessage(`{"contribution":"example","name":"example_do","request_id":"r4","approval_mode":"auto_confirm","approval_token":"tok_1"}`))
+	if err != nil {
+		t.Fatalf("approved do: %v", err)
+	}
+	if cr := out.(CallResult); cr.Text != "auto" || cr.MessageRef != "m1" || c.gotApproval.Mode != connector.ApprovalModeAutoConfirm || c.gotApproval.Token != "tok_1" {
+		t.Fatalf("approved do: %+v approval=%+v", cr, c.gotApproval)
 	}
 }

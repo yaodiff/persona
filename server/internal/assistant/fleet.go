@@ -32,10 +32,19 @@ import (
 // pushes to deliver) and keeps the last of them while the manager is away; it relays the apps' answers here
 // (fleetRoutes) and delivers the pushes (APNs, the relay, its apps' notify events).
 
+// interactionAdmission serializes first-create history checks and registration
+// for one interaction ID without keeping fleet.mu held across database reads.
+// refs includes both the holder and waiters, so an idle gate can be removed.
+type interactionAdmission struct {
+	mu   sync.Mutex
+	refs int
+}
+
 // fleetBook is what the manager keeps of it.
 type fleetBook struct {
 	mu           sync.Mutex
 	interactions map[string]*pending
+	admissions   map[string]*interactionAdmission
 	seen         map[[2]string]time.Time      // (machine, session) -> when the user last looked at it
 	seenLoaded   bool                         // seen holds the table's times (loadSeen succeeded once)
 	stateSince   map[[2]string]stateMark      // (machine, session) -> its state and when it entered it
@@ -71,6 +80,7 @@ type fleetBook struct {
 	upgradeEvery, upgradeFor time.Duration
 	upgrades                 sync.WaitGroup // active screen-upgrade loops; database-backed fixtures wait during teardown
 	completionRuns           sync.WaitGroup // delayed turn completions already running when a fixture tears down
+	resolvedRuns             sync.WaitGroup // answered cards' hooks still running (interactionResolvedSoon)
 	completionTimers         map[*time.Timer]struct{}
 	completionStopped        bool // test teardown only: no new delayed completion after the drain starts
 	// hooked: Persona's hooks run in the session (a hook event came since the manager started).
@@ -174,6 +184,7 @@ type fleetReport struct {
 type fleetStore interface {
 	InsertInteraction(ctx context.Context, ix proto.Interaction) error
 	FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) error
+	FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (matched, currentTerminal bool, err error)
 	InteractionOutcome(ctx context.Context, id string) (status string, res *proto.Resolution, err error)
 	Interactions(ctx context.Context, machine, session string, limit int) ([]db.InteractionRecord, error)
 	AllowAlways(ctx context.Context, session, tool string, keys []string) error
@@ -260,6 +271,11 @@ func (g guardedStore) FinishInteraction(ctx context.Context, id, status string, 
 	return g.st.FinishInteraction(ctx, id, status, res)
 }
 
+func (g guardedStore) FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (matched, currentTerminal bool, err error) {
+	defer guard(&err)
+	return g.st.FinishInteractionOccurrence(ctx, ix, status, res)
+}
+
 func (g guardedStore) InteractionOutcome(ctx context.Context, id string) (status string, res *proto.Resolution, err error) {
 	defer guard(&err)
 	return g.st.InteractionOutcome(ctx, id)
@@ -324,16 +340,21 @@ func (s *Service) fleetOn() bool { return s.devs != nil }
 // fleetStart starts the fleet's loops, once. The seen times are read again on each call until they could be: a
 // database that failed while the manager started does not leave every session the user had looked at unread.
 // restoreInteractions stays once: expiring the stale rows later would cancel the ones created since.
+//
+// ctx is the manager run's: the loops end with it. They used to run on with its cancellation taken off, so a run that
+// ended (a revoked token, a restart in place for a new binary) left them reading its closed store every 15 s and
+// telling the hub an old fleet (#16215). The one-time reads still finish when the run ends meanwhile.
 func (s *Service) fleetStart(ctx context.Context) {
 	if !s.fleetOn() {
 		return
 	}
+	once := context.WithoutCancel(ctx)
 	s.fleet.started.Do(func() {
-		s.restoreInteractions(ctx)
+		s.restoreInteractions(once)
 		go s.expireLoop(ctx)
 		go s.liveLoop(ctx)
 	})
-	s.loadSeen(ctx)
+	s.loadSeen(once)
 }
 
 // ---- the states (docs/protocol/agent-states.md) ----
@@ -370,15 +391,40 @@ func agentState(sess proto.Session, seenAt time.Time) string {
 // goes on. Needs-you stays first; a stopped one (offline) has nothing running. Not the assistant's conversations:
 // their Monitors and background tasks stay on, and a conversation always "Working" would skip every scheduled run.
 // What waits for a turn to end (the finished push, scheduled runs, the hub's own update) reads the host's status.
+// Background commands the node found stalled, with nothing else running, do not make it working (#16418): they keep
+// their rows and background_stalled_since for a look, and the finished turn settles.
 func backgroundState(state string, sess proto.Session) string {
 	if sess.Assistant || !backgroundRunning(sess) {
 		return state
 	}
 	switch state {
 	case proto.StateUnread, proto.StateIdle, proto.StateUnknown:
+		if backgroundStalledShellOnly(sess) {
+			return state
+		}
 		return proto.StateWorking
 	}
 	return state
+}
+
+// stalledAfterTurn: an agent's finished turn that backgroundState left as it was for its stalled background commands
+// alone (backgroundStalledShellOnly): its row keeps background_stalled_since though it is not background_working.
+func stalledAfterTurn(sess proto.Session) bool {
+	switch sess.State {
+	case proto.StateUnread, proto.StateIdle, proto.StateUnknown:
+		return !sess.Assistant && sess.Status != proto.StatusWorking && backgroundStalledShellOnly(sess)
+	}
+	return false
+}
+
+// backgroundStalledShellOnly (#16418): all the background work left is background commands, and the node found them
+// stalled (Session.BackgroundStalledSince: no CPU and no output past its grace, or their shells gone). No subagent,
+// workflow or Monitor runs: a Monitor wakes the agent by itself, and those are work whatever its shells do.
+func backgroundStalledShellOnly(sess proto.Session) bool {
+	if sess.BackgroundStalledSince == 0 || len(sess.Background) == 0 || backgroundIsWork(sess) {
+		return false
+	}
+	return !slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind != "shell" })
 }
 
 // stateWithBackground is backgroundState, and whether the background work is all that makes it working

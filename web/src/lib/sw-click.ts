@@ -49,6 +49,8 @@ export interface NoteMessage {
   action: "allow" | "deny" | "open";
   /** The permission card the notification is about. */
   ix: string;
+  /** The exact occurrence the notification drew; absent only on a legacy notification. */
+  created_at?: string;
   url?: string;
   /** A page that gets the message after this (ms since the epoch) leaves it to the worker, which may have stopped
    *  waiting: half the wait, so its answer is back in time. */
@@ -104,14 +106,14 @@ export function answeringWindows(wins: ClickWindow[]): ClickWindow[] {
  * keep another from answering, and only one ever answers. When none takes it in time (none open, an older page, all
  * frozen), the conversation opens as for any other notification.
  */
-export async function clickNotification(clients: ClickClients, data: { url?: string; ix?: string } | null | undefined, action: string, wait = ANSWER_WAIT_MS): Promise<void> {
+export async function clickNotification(clients: ClickClients, data: { url?: string; ix?: string; created_at?: string } | null | undefined, action: string, wait = ANSWER_WAIT_MS): Promise<void> {
   const url = data?.url;
   if (!data?.ix) return openFromNotification(clients, url);
   const answer = action === "allow" || action === "deny" ? action : undefined;
   const wins = answeringWindows(await clients.matchAll({ type: "window", includeUncontrolled: false }));
   const share = wins.length ? wait / wins.length : 0;
   for (const win of wins) {
-    if (await handOver(win, { type: NOTE_MESSAGE, action: answer ?? "open", ix: data.ix, url, until: Date.now() + share / 2 }, share)) {
+    if (await handOver(win, { type: NOTE_MESSAGE, action: answer ?? "open", ix: data.ix, created_at: data.created_at, url, until: Date.now() + share / 2 }, share)) {
       if (!answer) await win.focus().catch(() => null);
       return;
     }

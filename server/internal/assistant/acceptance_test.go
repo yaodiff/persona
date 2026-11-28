@@ -16,10 +16,19 @@ import (
 
 const deployedReply = "已合入 https://github.com/o/r/pull/9 并已部署到 n37。打开 https://hub.example.com/settings?tab=feishu 能看到新开关"
 
-// acceptService is reportService with the small model answering the "Please verify" lines, the cards' updates and notes kept.
-func acceptService(t *testing.T) (*Service, *fakeHub, func() []string) {
+// These acceptance fixtures start with a recorded task PR. The deploy checker tests exercise the node proof separately.
+func turnWithRecordedDeployment(t *testing.T, s *Service, f *fakeHub) {
 	t.Helper()
-	s, f, posts := reportService(t, true)
+	if todo, ok := s.openTodoOfAgent("box", "s1"); ok && todo.PRURL == "" {
+		s.setTaskStage(t.Context(), todo.ID, "", "https://github.com/o/r/pull/9")
+	}
+	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+}
+
+// acceptService is reportService with the small model answering the "Please verify" lines, the cards' updates and notes kept.
+func acceptService(t *testing.T, stores ...Store) (*Service, *fakeHub, func() []string) {
+	t.Helper()
+	s, f, posts := reportService(t, true, stores...)
 	s.ownerVerifiesAll = true // these tests cover the owner's "Please verify" (a big feature's; ownerVerifies)
 	f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置 › 飞书机器人，应看到「任务进展发到飞书」"}`
 	f.answerApp(AppFeishu, FeishuUpdateCard, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
@@ -70,7 +79,7 @@ func TestDeployedTaskAsksForAcceptance(t *testing.T) {
 	s, f, posts := acceptService(t)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, todo.ID, posts)
 	card := acceptCardOf(posts())
 	for _, want := range []string{"改了什么", "飞书机器人多了任务进展开关", "去哪看", "https://hub.example.com/settings?tab=feishu", "怎么验", "通过", `"a":"accept"`} {
@@ -87,7 +96,7 @@ func TestDeployedTaskAsksForAcceptance(t *testing.T) {
 	}
 	// Another turn that says deployed again does not ask twice.
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	time.Sleep(6 * testReportDelay)
 	n := 0
 	for _, p := range posts() {
@@ -108,7 +117,7 @@ func TestAcceptanceFeedbackGoesToTheAgent(t *testing.T) {
 	f.judge = `{"changed":"改了","link":"https://evil.example.com/x","how":"看看"}`
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, todo.ID, posts)
 	if card := acceptCardOf(posts()); strings.Contains(card, "evil.example.com") || !strings.Contains(card, "/todos/"+todo.ID) {
 		t.Fatalf("link:\n%s", card)
@@ -138,7 +147,7 @@ func TestAcceptanceReminderNextMorning(t *testing.T) {
 	s, f, posts := acceptService(t)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, todo.ID, posts)
 	loc := s.location(context.Background())
 	s.accept.mu.Lock()
@@ -162,7 +171,7 @@ func TestUnacceptedInTheMorningBriefing(t *testing.T) {
 	s, f, posts := acceptService(t)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, todo.ID, posts)
 	ctx := context.Background()
 	loc := s.location(ctx)
@@ -211,7 +220,7 @@ func TestAcceptanceFeedbackReopensTheClosedTask(t *testing.T) {
 	s, f, posts := acceptService(t)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, todo.ID, posts)
 	ctx := context.Background()
 	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {
@@ -246,7 +255,7 @@ func TestAcceptanceFeedbackReopensTheClosedTask(t *testing.T) {
 		}
 	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "a new 请验收 card", func() bool {
 		m := 0
 		for _, p := range posts() {
@@ -317,7 +326,7 @@ func TestAcceptanceAskEndedElsewhere(t *testing.T) {
 		s, f, posts := acceptService(t)
 		todo := startedTask(t, s, f)
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		// Wait for the final ask (MessageID is set only after botPost returns): backdating AskedAt must not race the
 		// post-botPost replacement of the claimed placeholder.
 		waitAcceptCard(t, s, todo.ID, posts)
@@ -374,7 +383,7 @@ func askedToAccept(t *testing.T) (s *Service, f *fakeHub, posts, notes func() []
 	})
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, todo.ID, posts)
 	return s, f, posts, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), said...) }, todo.ID
 }
@@ -451,7 +460,7 @@ func TestAcceptanceReopenRound(t *testing.T) {
 		closeReopen(s, id)
 		reopened := *onlyTodo(s).ReopenedAt
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "a new 请验收 card", func() bool { // the post fake reuses one message id: rounds tell apart by AskedAt
 			a := askOf(s, id)
 			return a != nil && a.MessageID != "" && a.AskedAt.After(reopened)
@@ -474,7 +483,7 @@ func TestAcceptanceReopenRound(t *testing.T) {
 		f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_round2"}, nil })
 		closeReopen(s, id)
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitFor(t, "the second round's card", func() bool { a := askOf(s, id); return a != nil && a.MessageID == "om_round2" })
 		press := func(mid string) *botcard.CardAction {
 			var a botcard.CardAction
@@ -606,7 +615,7 @@ func TestAcceptanceSweepKeepsANewRound(t *testing.T) {
 		s, f, posts := acceptService(t)
 		todo := startedTask(t, s, f)
 		agentTurn(s, f, proto.StatusWorking, "", 0)
-		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		turnWithRecordedDeployment(t, s, f)
 		waitAcceptCard(t, s, todo.ID, posts)
 		first := askOf(s, todo.ID)
 		fired := false

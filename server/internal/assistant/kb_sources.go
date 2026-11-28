@@ -94,7 +94,9 @@ func (s *Service) kbConnectors(ctx context.Context, e *kb.Engine) {
 
 // kbCollectItems records every connector's items (documents, meetings and events) and tags new ones; more: untagged
 // ones are left (past the round's cap, a paused connection) and kbTagItems goes on with them next round. When it
-// stops before tagging (not writable, the connectors not answering, none with items) it is more as it was.
+// stops before tagging (not writable, the connectors not answering) it is more as it was. No connector with items
+// does not stop it: items also arrive without one (documents linked in chats, an import of the owner's minutes), and
+// they are tagged too.
 func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine, more bool) bool {
 	s.kb.sourceWrites.Lock()
 	defer s.kb.sourceWrites.Unlock()
@@ -104,9 +106,6 @@ func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine, more bool) b
 	var list assistantwire.Archives
 	if err := s.appCall(ctx, AppConnectors, assistantwire.ConnectorsArchives, map[string]any{}, &list); err != nil {
 		s.logf("kb: the connectors' items: %v", err)
-		return more
-	}
-	if len(list.Items) == 0 {
 		return more
 	}
 	for _, id := range list.Items {

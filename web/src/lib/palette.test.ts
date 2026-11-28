@@ -119,7 +119,7 @@ describe("registered commands", () => {
     const list = appCommands(base);
     expect(list.map((c) => c.id)).toContain("app:jump");
     const jump = list.find((c) => c.id === "app:jump")!;
-    expect(jump).toMatchObject({ title: "跳转到会话或终端窗格", chord: "Mod+K", section: "全局" });
+    expect(jump).toMatchObject({ title: "前往会话或标签页", chord: "Mod+K", section: "全局" });
     expect(list.find((c) => c.id === "app:right-panel")).toMatchObject({ section: "会话页", chord: "Mod+B" });
     expect(list.find((c) => c.id === "app:collapse-tree")).toMatchObject({ section: "侧边栏", chord: "Mod+Alt+Shift+Up" });
   });
@@ -141,7 +141,7 @@ describe("registered commands", () => {
     const ran: unknown[][] = [];
     const list = appCommands({ ...base, machines: [{ id: "a", name: "Alpha" }, { id: "b", name: "Beta" }], run: (...a) => void ran.push(a) });
     const machines = list.filter((c) => c.id.startsWith("app:machine:"));
-    expect(machines.map((c) => [c.title, c.chord])).toEqual([["切到电脑：Alpha", "Mod+1"], ["切到电脑：Beta", "Mod+2"]]);
+    expect(machines.map((c) => [c.title, c.chord])).toEqual([["切换到电脑：Alpha", "Mod+1"], ["切换到电脑：Beta", "Mod+2"]]);
     machines[1]!.run();
     expect(ran).toEqual([["machine", 2]]);
     expect(list.some((c) => c.id === "app:machine")).toBe(false);

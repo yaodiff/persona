@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The `brief` item of a routine's conversation (briefing_feed.go): the apps' copy of the card, written whether or not the
+// The `brief` item of a routine's conversation (modules/briefing/feed.go): the apps' copy of the card, written whether or not the
 // Lark bot is on.
 
 func (e *briefRunEnv) briefItems() []FeedItem {
@@ -184,7 +184,7 @@ func TestBriefAcceptAfterARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.s.accept.loaded, e.s.accept.asks = false, nil
-	if ok, _ := e.s.acceptTryFromBrief(context.Background(), "todo_v1", asked.Format(timeKeyLayout)); !ok.taken {
+	if ok, _ := e.s.acceptReviewRound(context.Background(), "todo_v1", asked.Format(timeKeyLayout)); !ok.taken {
 		t.Fatal("the button of the round that waits was refused before the asks were read")
 	}
 }

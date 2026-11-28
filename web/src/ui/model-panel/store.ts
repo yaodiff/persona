@@ -29,11 +29,17 @@ export const panelStoreKey = (scope: PanelScope, kind: Kind, base = BASE) => `pe
 
 const str = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 
+function storedSpeed(o: Record<string, unknown>): string | undefined {
+  if (str(o.speed)) return o.speed;
+  if (typeof o.fast === "boolean") return o.fast ? "fast" : "standard";
+}
+
 function setupOf(v: unknown): PanelConfig | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
   if (!str(o.provider) || !str(o.model)) return null;
-  return { provider: o.provider, model: o.model, ...(str(o.effort) ? { effort: o.effort } : {}), ...(o.fast === true ? { fast: true } : {}) };
+  const speed = storedSpeed(o);
+  return { provider: o.provider, model: o.model, ...(str(o.effort) ? { effort: o.effort } : {}), ...(speed ? { speed } : {}) };
 }
 
 // What a stored value may be; anything else (an older shape, a hand edit) reads as nothing.
@@ -48,7 +54,8 @@ const PARSE: { [K in Kind]: (v: unknown) => unknown } = {
       const r = o as Record<string, unknown>;
       const e: PanelOverride = {};
       if (str(r.effort)) e.effort = r.effort;
-      if (typeof r.fast === "boolean") e.fast = r.fast;
+      const speed = storedSpeed(r);
+      if (speed) e.speed = speed;
       if (Object.keys(e).length) out[k] = e;
     }
     return out;

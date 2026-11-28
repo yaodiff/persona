@@ -111,6 +111,7 @@
   "read_only_claude_inbox": "这个 Claude 的消息通道 Persona 用不了（版本不认识或缺少钥匙）：手机上只能看，回复请在电脑上",
   "attention_claude_computer": "它在等电脑上的一个问题或权限请求：手机上答不了，请到电脑上处理。下次在 tmux 里或从 Persona 启动 Claude，就能在手机上回答",
   "attention_claude_desktop_computer": "它在等 Claude 桌面端的安全复核或仅限电脑确认的请求：Claude Code 仅允许在电脑端批准此类操作，请到电脑上处理",
+  "attention_claude_plugin_passed_over": "Claude Code 的管理设置策略跳过了 Persona 插件的权限钩子，所以此类请求只能在电脑上批准。请在电脑上处理，或从 Persona 用终端引擎启动会话后在手机上批准",
   "attention_claude_answer": "它在问你一个问题：在卡片上作答，或者直接回复",
   "work_agent_first_dialog": "终端上开着一个对话框，重试发送首条消息被拦截了：请先在终端里处理它，并确认首条消息是否已经开始执行，没收到再重发。",
   "model_refusal": "Claude Code 拒绝通知（{subtype}）。",

@@ -75,3 +75,28 @@ func TestNoneDivertNotices(t *testing.T) {
 	}()
 	board.DivertNotices(t.Context(), assistantwire.NoticeKind{}, nil, nil)
 }
+
+func TestNonePush(t *testing.T) {
+	var push Push = None{}
+	to := assistantwire.SessionRef{MachineID: "machine", SessionID: "session"}
+	unexpected := func() { t.Fatal("a push callback ran without the module") }
+	if err := push.PushKeyed(t.Context(), to, "title", "body", "key", assistantwire.LarkPushCopy{
+		Started: unexpected, Delivered: unexpected,
+	}); err != nil {
+		t.Fatalf("a keyed push would retry: %v", err)
+	}
+	push.TodoReminder(to, assistantwire.LarkReminder{Copy: func(context.Context) (string, string, bool) {
+		unexpected()
+		return "", "", false
+	}})
+	push.AgentDone(to, func(context.Context) (assistantwire.LarkAgentDone, bool) {
+		unexpected()
+		return assistantwire.LarkAgentDone{}, false
+	})
+	m := assistantwire.LarkMirror{SessionRef: to, StillDue: func(context.Context, bool) bool {
+		unexpected()
+		return false
+	}}
+	push.Mirror(t.Context(), m, "en", assistantwire.LarkMirrorTurn{})
+	push.MirrorPost(t.Context(), m, "en", nil, nil, "key", unexpected)
+}

@@ -1,14 +1,12 @@
 package hub
 
 import (
+	"container/list"
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/bus"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // What a manager made while the hub was away comes with manager.outbox once it is back (docs/operations/hub-restart.md "The
@@ -20,11 +18,7 @@ import (
 // not deliver it again either.
 
 func init() {
-	handleBus(assistantwire.MethodOutbox, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.Outbox
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodOutbox + ": " + err.Error()}
-		}
+	handleTypedBus(assistantwire.OutboxMethod, assistantwire.MethodOutbox+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.Outbox) (assistantwire.OutboxResult, error) {
 		from := c.managerID()
 		out := assistantwire.OutboxResult{Done: []string{}}
 		for _, it := range p.Items {
@@ -126,37 +120,60 @@ func (h *Hub) forgetHandOver(manager, id string, held bool) {
 	h.handedOver.forget(manager + "\x00" + id)
 }
 
+type seenEntry struct {
+	key string
+	at  time.Time
+}
+
 // seenItems are the keys of what managers handed the hub lately, in memory.
 type seenItems struct {
-	mu    sync.Mutex
-	at    map[string]time.Time
-	order []string
+	mu      sync.Mutex
+	entries map[string]*list.Element
+	order   list.List
 }
 
 // first records key and reports whether it is new (not handed over within handedOverFor).
 func (s *seenItems) first(key string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.at == nil {
-		s.at = map[string]time.Time{}
+	if s.entries == nil {
+		s.entries = map[string]*list.Element{}
 	}
-	for len(s.order) > 0 && (len(s.order) >= handedOverMost || now.Sub(s.at[s.order[0]]) > handedOverFor) {
-		delete(s.at, s.order[0])
-		s.order = s.order[1:]
+	for front := s.order.Front(); front != nil; front = s.order.Front() {
+		e := front.Value.(seenEntry)
+		if now.Sub(e.at) <= handedOverFor {
+			break
+		}
+		s.order.Remove(front)
+		delete(s.entries, e.key)
 	}
-	if t, ok := s.at[key]; ok && now.Sub(t) <= handedOverFor {
-		return false
+	if el, ok := s.entries[key]; ok {
+		e := el.Value.(seenEntry)
+		if now.Sub(e.at) <= handedOverFor {
+			return false
+		}
+		s.order.Remove(el)
+		delete(s.entries, key)
 	}
-	if _, ok := s.at[key]; !ok {
-		s.order = append(s.order, key)
+	for s.order.Len() >= handedOverMost {
+		front := s.order.Front()
+		if front == nil {
+			break
+		}
+		e := front.Value.(seenEntry)
+		s.order.Remove(front)
+		delete(s.entries, e.key)
 	}
-	s.at[key] = now
+	s.entries[key] = s.order.PushBack(seenEntry{key: key, at: now})
 	return true
 }
 
-// forget drops key (its order entry goes when it is the oldest).
+// forget drops key immediately from both the lookup map and the eviction order.
 func (s *seenItems) forget(key string) {
 	s.mu.Lock()
-	delete(s.at, key)
+	if el, ok := s.entries[key]; ok {
+		s.order.Remove(el)
+		delete(s.entries, key)
+	}
 	s.mu.Unlock()
 }

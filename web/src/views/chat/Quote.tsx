@@ -2,21 +2,17 @@
 // two-line plain summary, × to drop it; in a sent bubble, the leading `> ` block as a three-line card that opens to
 // the whole passage. The message itself still carries the `> ` block (lib/drafts.ts withQuoteBlock / splitQuote). A
 // task's card quotes as its title (and todo id, on the block's first line) and what its agent said last.
-import { Suspense, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { openSpot } from "../../lib/comments";
-import { parseQuote, parseQuotes, useQuotes, type DraftQuote } from "../../lib/drafts";
+import { parseQuote, parseQuotes, type CommentImagePicker, type DraftQuote } from "../../lib/drafts";
 import { getSession } from "../../lib/store";
 import { clock } from "../../lib/format";
-import { lazyPage } from "../../lib/lazy-page";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { cx, EASE } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { CommentBlock, goToComment } from "./CommentCard";
-import { OverlayBoundary } from "../LazyOverlay";
+import { CommentBlock, CommentsChip, fileCommentPanel, goToComment } from "./CommentCard";
 import { t } from "../../i18n";
-
-const CommentCard = lazyPage(() => import("./DraftCommentCard").then((m) => m.CommentCard));
 
 /** "Quoting Persona · 16:45" / "Quoting task "…" · 16:45": who said it, or which task, and when, as far as is known. */
 export function quoteSource(q: DraftQuote): string {
@@ -55,29 +51,24 @@ export function QuoteBar({ quote, onRemove }: { quote: DraftQuote; onRemove: () 
   );
 }
 
-/** Everything waiting above the input: the message quote (at most one), then the comments numbered in order. */
-export function QuoteBars({ draftKey, quotes, onRemove }: { draftKey: string; quotes: readonly DraftQuote[]; onRemove: (id: string) => void }) {
-  const { editing } = useQuotes(draftKey);
-  let n = 0;
+/** Everything waiting above the input: the message quote (at most one), then a single compact chip for all comments. */
+export function QuoteBars({ draftKey, quotes, onRemove, onAddCommentImages }: {
+  draftKey?: string; quotes: readonly DraftQuote[]; onRemove: (id: string) => void; onAddCommentImages?: CommentImagePicker;
+}) {
+  const messageQuotes = quotes.filter((q) => !q.comment);
+  const comments = quotes.filter((q) => q.comment);
   return (
-    <div className="relative flex max-h-[25dvh] flex-col gap-1.5 overflow-y-auto overscroll-contain px-0.5 pt-0.5 [&>div]:shrink-0" data-quotes data-scroll-box>
-      {quotes.map((q) => {
-        const remove = () => onRemove(q.id!);
-        const preview = <QuoteBar quote={q} onRemove={remove} />;
-        return q.comment ? (
-          <OverlayBoundary key={q.id} open onClose={() => {}} fallback={preview}>
-            <Suspense fallback={preview}>
-              <CommentCard draftKey={draftKey} quote={q} n={++n} editing={editing === q.id} onRemove={remove} />
-            </Suspense>
-          </OverlayBoundary>
-        ) : <QuoteBar key={q.id} quote={q} onRemove={remove} />;
-      })}
+    <div className="relative flex flex-col gap-1.5 px-0.5 pt-0.5" data-quotes>
+      {messageQuotes.map((q) => (
+        <QuoteBar key={q.id} quote={q} onRemove={() => onRemove(q.id!)} />
+      ))}
+      {comments.length > 0 && <CommentsChip draftKey={draftKey} comments={comments} onRemove={onRemove} onAddImages={onAddCommentImages} />}
     </div>
   );
 }
 
 /** A sent message's leading quote blocks (splitQuotes): the quote card, and a comment card for each comment. `mid`/`sid`
- *  let a code comment open its file or diff again. */
+ *  let a file or code comment open its source again. */
 export function QuoteStack({ blocks, mid, sid }: { blocks: readonly string[]; mid?: string; sid?: string }) {
   const quotes = parseQuotes(blocks);
   let n = 0;
@@ -89,6 +80,7 @@ export function QuoteStack({ blocks, mid, sid }: { blocks: readonly string[]; mi
         const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
         // the path the agent read is relative to the session's folder; with the folder known it opens again
         let open = spot && mid && cwd ? () => openSpot({ ...spot, mid, sid, cwd, path: spot.diff || spot.file.startsWith("/") ? spot.path : `${cwd.replace(/\/+$/, "")}/${spot.file}` }) : undefined;
+        if (fileCommentPanel(q.comment.file, mid, sid)) open = () => goToComment(q, { mid, sid });
         // an element of a preview: that session's preview, at the page it was on (the port is the page's)
         const el = q.comment.element;
         const port = el ? Number(new URL(el.url, "http://localhost").port) : 0;

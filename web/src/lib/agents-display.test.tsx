@@ -54,6 +54,19 @@ it("retains the legacy key on failed reads and migration writes, then retries",a
  fail="PUT";await refreshAgentsDisplay();expect(localStorage.getItem("persona.agentHideBotmux")).toBe("1");expect(saved).toBeUndefined();
  fail="";await refreshAgentsDisplay();expect(saved).toBe(false);expect(localStorage.getItem("persona.agentHideBotmux")).toBeNull();
 });
+it("migrates a locally hidden chip only when the hub has no explicit choice", async () => {
+  localStorage.setItem("persona.agentBotmuxMode", "hide");
+  await refreshAgentsDisplay();
+  expect(requests.at(-1)?.body).toEqual({ show_botmux: false, only_if_unset: true });
+  expect(localStorage.getItem("persona.agentBotmuxMode")).toBeNull();
+
+  saved = true;
+  localStorage.setItem("persona.agentBotmuxMode", "hide");
+  await refreshAgentsDisplay();
+  expect(requests.at(-1)?.method).toBe("GET");
+  expect(saved).toBe(true);
+  expect(localStorage.getItem("persona.agentBotmuxMode")).toBeNull();
+});
 it("a concurrent explicit choice wins at the conditional server boundary",async()=>{
  localStorage.setItem("persona.agentHideBotmux","1");
  const fetcher=vi.mocked(fetch);fetcher.mockImplementationOnce(async()=>{saved=true;return json({show_botmux:true,configured:false});});

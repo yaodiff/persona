@@ -176,8 +176,10 @@ func TestPersonalAgentHTTPProviderOR8000FrozenPagesCountsAndDelta(t *testing.T) 
 		"provider": {"Provider-A", "provider-c", "provider-a"},
 	}
 	delta := personalORMustPage(t, handler, deltaValues)
+	// added names the rows created or newly entering the filter since the baseline (docs/protocol/protocol.md, #16389):
+	// the new row, and s0001, which entered the OR set by its provider edit.
 	if delta.Total != currentCounts.Total || !reflect.DeepEqual(personalORIDs(delta.Sessions), []string{"demo:new", "demo:s0001"}) ||
-		!reflect.DeepEqual(delta.Remove, []string{"demo:s0000"}) || !reflect.DeepEqual(delta.Added, []string{"demo:new"}) {
+		!reflect.DeepEqual(delta.Remove, []string{"demo:s0000"}) || !reflect.DeepEqual(delta.Added, []string{"demo:new", "demo:s0001"}) {
 		t.Fatalf("provider-edit delta = %+v", delta)
 	}
 	gotCurrent := personalORMustCounts(t, handler, url.Values{"provider": append([]string(nil), providers...)})

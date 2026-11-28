@@ -35,7 +35,7 @@
   "generated_stale_hint": "ノードを再起動すると書き換わります。personad node doctor --fixでも修復できます",
   "global_hooks_extensions": "同期PermissionRequestフック：{count}件、すべてインストール済みの拡張機能のもの（{extensions}）",
   "global_hooks_found": "同期PermissionRequestフック：{count}件（最初：{hook}）",
-  "global_hooks_found_hint": "これらとPersonaのスマートフォン承認の両方が権限リクエストを止め、相互に影響する可能性があります。Personaはこのファイルを変更しないため、必要に応じて自分で確認してください",
+  "global_hooks_found_hint": "これらとPersonaのスマートフォン承認の両方が権限リクエストを止め、相互に影響する可能性があります。Personaは {path} を変更しないため、必要に応じて自分で確認してください",
   "global_hooks_found_with_extensions": "同期PermissionRequestフック：{count}件（最初：{hook}）、ほかにインストール済みの拡張機能のもの{extension_count}件（{extensions}）",
   "global_hooks_invalid": "グローバルsettings.jsonが正しいJSONではありません",
   "global_hooks_invalid_hint": "Claude Codeも読み取れません。Personaはこのファイルを変更しません",
@@ -102,6 +102,7 @@
   "preflight_shown_link": "{path} → {target}（{role}）",
   "preflight_shown_path": "{path}（{role}）",
   "preflight_slow_hint": "読み取りが遅すぎます。再確認し、続く場合は作業ディレクトリやリンクがネットワークディスク上にあるか確認してください",
+  "preflight_symlink_loop_hint": "このシンボリックリンクが循環しています。壊れたリンクを削除するか、実際のディレクトリを指すように修正してください",
   "preflight_tcc_hint": "macOSのプライバシー保護により{target}へのアクセスがブロックされました。「システム設定 › プライバシーとセキュリティ › フルディスクアクセス」で{program}を追加して有効にするか、{folder}の外に移動してください",
   "preflight_unchecked_hung": "前の読み取りが停止したため、{count}個のパスを確認できていません",
   "preflight_unchecked_slow": "時間がかかりすぎて停止したため、{count}個のパスを確認できていません",
@@ -164,5 +165,10 @@
   "agy_hooks_stale": "PersonaのAntigravity CLIフックが別のプログラムを指しています",
   "agy_hooks_hint": "personad node doctor --fix を実行してください（どのエンジンのagyペインでも会話を読めるようになります）",
   "agy_hooks_off": "PersonaのAntigravity CLIフックは意図的に削除されています（personad node agy-hooks install で戻せます）",
-  "agy_hooks_unreadable": "Antigravity CLIのフックファイルを読み取れません（{error}）"
+  "agy_hooks_unreadable": "Antigravity CLIのフックファイルを読み取れません（{error}）",
+  "orca_ok": "Orca {version} は実行中です",
+  "orca_stopped": "Orca はインストールされていますが、起動していません",
+  "orca_stopped_hint": "このコンピューターのエンジンが Orca の場合は先に開いてください。別のエンジンを使う場合は無視してかまいません",
+  "orca_incompatible": "Orca {version} は実行中ですが、このバージョンの Persona と互換性がありません",
+  "orca_incompatible_hint": "Orca と Persona を最新バージョンに更新してください"
 }

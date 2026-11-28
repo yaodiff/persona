@@ -433,24 +433,37 @@ func (s *Schema) CheckSaved(raw json.RawMessage) error {
 		return s.Check(raw)
 	}
 	copy := *s
-	var optional func(Field) Field
-	optional = func(f Field) Field {
-		f.Required = false
-		f.Fields = slices.Clone(f.Fields)
-		for i := range f.Fields {
-			f.Fields[i] = optional(f.Fields[i])
-		}
-		if f.Items != nil {
-			item := optional(*f.Items)
-			f.Items = &item
-		}
-		return f
-	}
-	copy.Fields = slices.Clone(s.Fields)
-	for i := range copy.Fields {
-		copy.Fields[i] = optional(copy.Fields[i])
-	}
+	copy.Fields = optionalFields(s.Fields)
 	return copy.Check(raw)
+}
+
+// CheckPartial holds a proposed part of a configuration to the schema: every supplied property is known and has the
+// right kind, bounds and choices, while required properties it does not name are left for the existing configuration.
+func (s *Schema) CheckPartial(raw json.RawMessage) error {
+	if s == nil {
+		return s.Check(raw)
+	}
+	copy := *s
+	copy.Fields = optionalFields(s.Fields)
+	return copy.Check(raw)
+}
+
+func optionalFields(fields []Field) []Field {
+	out := slices.Clone(fields)
+	for i := range out {
+		out[i] = optionalField(out[i])
+	}
+	return out
+}
+
+func optionalField(f Field) Field {
+	f.Required = false
+	f.Fields = optionalFields(f.Fields)
+	if f.Items != nil {
+		item := optionalField(*f.Items)
+		f.Items = &item
+	}
+	return f
 }
 
 // CheckPreservingEntries checks an older client's ordinary fields strictly while applying CheckSaved's missing-required

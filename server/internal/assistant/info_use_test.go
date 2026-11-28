@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -166,6 +168,54 @@ func TestSensitiveTextOutsideHealth(t *testing.T) {
 	out, isErr := spaceTool(t, s, "work-0000-0000", "agent_send", `{"session_id":"code-0000-0000","text":"qa invoice total"}`)
 	if isErr || !strings.Contains(out, "declined") || len(f.agentSent) != 0 {
 		t.Fatalf("declined agent_send: %s, sent %v", out, f.agentSent)
+	}
+}
+
+// Exercise the outbound classifier prompt and the approval decision through agent_send. The fake model supplies
+// categories, so this checks the prompt and gate together without relying on live model responses.
+func TestAgentSendPrivacyClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		text       string
+		categories string
+	}{
+		{"technical token usage", "请减少 token 消耗。更新技能说明并提交代码，先不要跑评测。", `{"categories":[]}`},
+		{"project budget", "Keep API costs under $20 for the project evaluation. Update the config and leave the run paused.", `{"categories":[]}`},
+		{"personal finance with token usage", "Reduce token usage. The API charged $20 to my personal credit card and I cannot pay the bill.", `{"categories":["finance"]}`},
+		{"health with token usage", "Keep token usage low. I was diagnosed with diabetes last week.", `{"categories":["health"]}`},
+		{"identity with token usage", "Keep token usage low. My passport number is TEST-0000.", `{"categories":["legal_id"]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := healthHub()
+			f.infoTagModel = true
+			f.infoTag = tc.categories
+			f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000",
+				Cwd: "/home/me/src/app", Agent: "claude", Status: proto.StatusIdle, Title: "app"})
+			s := newTestService(t, f)
+			setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
+			const caller = "work-0000-0000"
+			const tool = "agent_send"
+			private := tc.categories != `{"categories":[]}`
+			if private {
+				answerOutboundIn(t, s, caller, tool, tc.text, "/home/me/.persona/assistant", false)
+			}
+			raw, err := json.Marshal(map[string]string{"session_id": "code-0000-0000", "text": tc.text})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, isErr := spaceTool(t, s, caller, tool, string(raw))
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if isErr || private && (!strings.Contains(out, "declined") || len(f.agentSent) != 0) ||
+				!private && (len(f.agentSent) != 1 || f.agentSent[0]["text"] != tc.text) {
+				t.Fatalf("agent_send = %q (error %v), sends = %v", out, isErr, f.agentSent)
+			}
+			if len(f.infoTagAsked) != 1 || f.infoTagAsked[0].User != tc.text {
+				t.Fatalf("outbound classifier calls = %+v", f.infoTagAsked)
+			}
+			jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
+			golden(t, "info_tag", strings.TrimSuffix(f.infoTagAsked[0].System, "\n\n"+jsonOnly))
+		})
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -15,7 +14,6 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/db/dbtest"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -897,16 +895,7 @@ func TestInboxReplySurvivesMetadataRollbackWhileSending(t *testing.T) {
 
 func replyRecoveryDatabase(t *testing.T) *db.DB {
 	t.Helper()
-	base := os.Getenv(dbtest.Env)
-	if base == "" {
-		t.Skip(dbtest.Env + " not set")
-	}
-	own, done, err := dbtest.Own(t.Context(), base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(done)
-	database, err := db.Open(t.Context(), own, db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

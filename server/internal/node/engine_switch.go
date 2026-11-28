@@ -1104,9 +1104,12 @@ func (n *Node) engineSwitchedTo(ctx context.Context, c *engineCarry, newID strin
 	if p.to == "claude" {
 		n.noteSwitchedModel(newID, c.ps)
 	}
-	if p.a.Tokens[personaTabToken] == c.id {
+	n.mu.Lock()
+	mark := n.personaTabLocked(p.a)
+	n.mu.Unlock()
+	if mark == c.id {
 		if launch, ok := p.h.(host.Launcher); ok {
-			markPersonaTab(ctx, launch, p.ref, newID)
+			n.markPersonaTab(ctx, launch, p.ref, newID)
 		}
 	}
 	n.notifySessions()

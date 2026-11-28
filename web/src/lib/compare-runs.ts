@@ -21,6 +21,7 @@ export interface RunSpec {
   inlinePrompt?: boolean;
   model?: string;
   effort?: string;
+  serviceTier?: string;
   launcherDefaultEffort?: boolean;
   permissionMode?: string;
   host?: string;
@@ -78,7 +79,7 @@ function readSpec(v: unknown): RunSpec | null {
   const s = v as Record<string, unknown>;
   if (typeof s.launcher !== "string") return null;
   const spec: RunSpec = { launcher: s.launcher };
-  for (const k of ["agentType", "model", "effort", "permissionMode", "host"] as const) {
+  for (const k of ["agentType", "model", "effort", "serviceTier", "permissionMode", "host"] as const) {
     const x = str(s[k]);
     if (x) spec[k] = x;
   }

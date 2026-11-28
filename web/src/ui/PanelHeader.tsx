@@ -10,6 +10,7 @@ export function PanelHeader({
   icon,
   title,
   subtitle,
+  leading,
   actions,
   onBack,
   onClose,
@@ -17,6 +18,7 @@ export function PanelHeader({
   icon: IconName;
   title: React.ReactNode;
   subtitle?: React.ReactNode;
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
   onBack?: () => void;
   onClose: () => void;
@@ -26,6 +28,7 @@ export function PanelHeader({
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
       {back && <IconButton icon="arrowLeft" label={t("sidepanel.back")} onClick={back} />}
+      {leading}
       <span className="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-field text-ink-2">
         <Icon name={icon} size={14} />
       </span>

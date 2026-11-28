@@ -5,11 +5,14 @@ import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import {
   getTodosV2State,
+  isValidTodosV2QuietHours,
+  parseTodosV2QuietHours,
   resolveTodosV2AttentionPrefs,
   saveTodosV2AttentionPrefs,
   subscribeTodosV2State,
   TODOS_V2_AUTO_SEEN_OPTIONS,
   TODOS_V2_CAN_WAIT_SLA_OPTIONS,
+  TODOS_V2_DIGEST_WINDOW_OPTIONS,
   TODOS_V2_PENDING_REVIEW_SLA_OPTIONS,
 } from "../../lib/labs-todos-v2";
 import { sameManager, shownManager } from "../../lib/manager-choice";
@@ -18,9 +21,10 @@ import type {
   TodosV2AttentionPrefs as TodosV2AttentionPrefsPatch,
   TodosV2AutoSeen,
   TodosV2CanWaitSLAHours,
+  TodosV2DigestWindowMinutes,
   TodosV2PendingReviewSLAHours,
 } from "../../lib/types";
-import { Spinner } from "../../ui/atoms";
+import { Button, Spinner } from "../../ui/atoms";
 import { Segmented } from "../assistant/parts";
 import { Switch } from "./SettingsParts";
 
@@ -47,6 +51,12 @@ function canWaitLabel(h: TodosV2CanWaitSLAHours): string {
     : t("settings-labs.todos_v2_hours", { hours: h });
 }
 
+function digestWindowLabel(m: TodosV2DigestWindowMinutes): string {
+  return m === 0
+    ? t("settings-labs.todos_v2_digest_window_off")
+    : t("settings-labs.todos_v2_minutes", { minutes: m });
+}
+
 export function TodosV2AttentionPrefs({ manager }: { manager: string }) {
   const snapshot = useSyncExternalStore(
     subscribeTodosV2State,
@@ -61,6 +71,10 @@ export function TodosV2AttentionPrefs({ manager }: { manager: string }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const parsedQuiet = parseTodosV2QuietHours(prefs.todos_v2_quiet_hours);
+  const [quietStart, setQuietStart] = useState(parsedQuiet?.start ?? "");
+  const [quietEnd, setQuietEnd] = useState(parsedQuiet?.end ?? "");
+  const [quietValidationError, setQuietValidationError] = useState<string | null>(null);
   const activeManager = useRef(manager);
   const mounted = useRef(true);
 
@@ -76,11 +90,21 @@ export function TodosV2AttentionPrefs({ manager }: { manager: string }) {
     setSaving(false);
     setSaved(false);
     setError(null);
+    setQuietValidationError(null);
   }, [manager]);
+
+  useEffect(() => {
+    const parsed = parseTodosV2QuietHours(prefs.todos_v2_quiet_hours);
+    setQuietStart(parsed?.start ?? "");
+    setQuietEnd(parsed?.end ?? "");
+    setQuietValidationError(null);
+  }, [prefs.todos_v2_quiet_hours]);
 
   const autoSeenHintId = useId();
   const pendingReviewHintId = useId();
   const canWaitHintId = useId();
+  const quietHoursHintId = useId();
+  const digestWindowHintId = useId();
   const foldHintId = useId();
 
   if (!enabled) return null;
@@ -203,6 +227,125 @@ export function TodosV2AttentionPrefs({ manager }: { manager: string }) {
                 const next = Number(v) as TodosV2CanWaitSLAHours;
                 if (next !== prefs.todos_v2_can_wait_sla_hours) {
                   void commit({ todos_v2_can_wait_sla_hours: next });
+                }
+              }}
+            />
+          </fieldset>
+        </div>
+
+        <div
+          data-todos-v2-pref="todos_v2_quiet_hours"
+          className="flex flex-col gap-x-3 gap-y-2 py-2.5 sm:flex-row sm:items-center"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="text-meta text-ink">{t("settings-labs.todos_v2_quiet_hours_label")}</div>
+            <p id={quietHoursHintId} className="mt-0.5 text-submeta leading-snug text-ink-3">
+              {t("settings-labs.todos_v2_quiet_hours_hint")}
+            </p>
+            {quietValidationError && (
+              <p role="alert" data-testid="todos-v2-quiet-hours-error" className="mt-1 text-submeta leading-snug text-red">
+                {quietValidationError}
+              </p>
+            )}
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <input
+              type="time"
+              data-testid="todos-v2-quiet-hours-start"
+              aria-label={t("settings-labs.todos_v2_quiet_hours_start")}
+              aria-describedby={quietHoursHintId}
+              disabled={saving}
+              value={quietStart}
+              onChange={(e) => {
+                setQuietStart(e.target.value);
+                setQuietValidationError(null);
+              }}
+              className="h-7 rounded-control border border-line bg-surface px-2 text-submeta text-ink tabular-nums focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+            />
+            <span className="text-submeta text-ink-3" aria-hidden>–</span>
+            <input
+              type="time"
+              data-testid="todos-v2-quiet-hours-end"
+              aria-label={t("settings-labs.todos_v2_quiet_hours_end")}
+              aria-describedby={quietHoursHintId}
+              disabled={saving}
+              value={quietEnd}
+              onChange={(e) => {
+                setQuietEnd(e.target.value);
+                setQuietValidationError(null);
+              }}
+              className="h-7 rounded-control border border-line bg-surface px-2 text-submeta text-ink tabular-nums focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+            />
+            <Button
+              tone="secondary"
+              size="sm"
+              testId="todos-v2-quiet-hours-save"
+              disabled={
+                saving ||
+                (!quietStart && !quietEnd && prefs.todos_v2_quiet_hours === "") ||
+                (Boolean(quietStart && quietEnd) && `${quietStart}-${quietEnd}` === prefs.todos_v2_quiet_hours)
+              }
+              onClick={() => {
+                const start = quietStart.trim();
+                const end = quietEnd.trim();
+                if (!start && !end) {
+                  setQuietValidationError(null);
+                  if (prefs.todos_v2_quiet_hours !== "") void commit({ todos_v2_quiet_hours: "" });
+                  return;
+                }
+                const next = `${start}-${end}`;
+                if (!isValidTodosV2QuietHours(next)) {
+                  setQuietValidationError(t("settings-labs.todos_v2_quiet_hours_invalid"));
+                  return;
+                }
+                setQuietValidationError(null);
+                if (next !== prefs.todos_v2_quiet_hours) void commit({ todos_v2_quiet_hours: next });
+              }}
+              className="h-7 px-2.5 text-submeta whitespace-nowrap"
+            >
+              {t("settings-labs.todos_v2_quiet_hours_save")}
+            </Button>
+            {(prefs.todos_v2_quiet_hours !== "" || quietStart !== "" || quietEnd !== "") && (
+              <Button
+                tone="quiet"
+                size="sm"
+                testId="todos-v2-quiet-hours-clear"
+                disabled={saving}
+                onClick={() => {
+                  setQuietStart("");
+                  setQuietEnd("");
+                  setQuietValidationError(null);
+                  if (prefs.todos_v2_quiet_hours !== "") void commit({ todos_v2_quiet_hours: "" });
+                }}
+                className="h-7 px-2 text-submeta whitespace-nowrap"
+              >
+                {t("settings-labs.todos_v2_quiet_hours_clear")}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div
+          data-todos-v2-pref="todos_v2_digest_window_minutes"
+          className="flex flex-col gap-x-3 gap-y-2 py-2.5 sm:flex-row sm:items-center"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="text-meta text-ink">{t("settings-labs.todos_v2_digest_window_label")}</div>
+            <p id={digestWindowHintId} className="mt-0.5 text-submeta leading-snug text-ink-3">
+              {t("settings-labs.todos_v2_digest_window_hint")}
+            </p>
+          </div>
+          <fieldset disabled={saving} aria-describedby={digestWindowHintId} className="shrink-0">
+            <Segmented<string>
+              compact
+              wrap
+              label={t("settings-labs.todos_v2_digest_window_label")}
+              value={String(prefs.todos_v2_digest_window_minutes)}
+              options={TODOS_V2_DIGEST_WINDOW_OPTIONS.map((m) => ({ v: String(m), label: digestWindowLabel(m) }))}
+              onChange={(v) => {
+                const next = Number(v) as TodosV2DigestWindowMinutes;
+                if (next !== prefs.todos_v2_digest_window_minutes) {
+                  void commit({ todos_v2_digest_window_minutes: next });
                 }
               }}
             />

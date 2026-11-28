@@ -6,6 +6,7 @@ import { IconActions } from '../design/IconActions';
 import { tr } from '../design/Strings';
 import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
+import { Motion } from '../design/Motion';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { MarkdownText } from './MarkdownText';
 
@@ -57,6 +58,7 @@ export struct PhoneMessageLift {
   @Event onClose: () => void = () => {};
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Local selecting: boolean = false;
+  @Local entered: boolean = false;
   @Local windowTop: number = 0;
   @Local windowHeight: number = 1;
   @Local windowWidth: number = 1;
@@ -67,8 +69,8 @@ export struct PhoneMessageLift {
   private open: boolean = false;
   private readonly quoteId: TextMenuItemId = TextMenuItemId.of('persona.quote');
 
-  aboutToAppear(): void { this.open = true; this.selecting = this.selectOnOpen; }
-  aboutToDisappear(): void { this.open = false; }
+  aboutToAppear(): void { this.open = true; this.selecting = this.selectOnOpen; this.entered = this.environment.reduceMotion; }
+  aboutToDisappear(): void { this.open = false; this.entered = false; }
 
   @Computed get words(): string { return liftedMessageWords(this.text,this.own); }
   @Computed get runs(): MarkdownProseRun[] { return markdownProseRuns(this.words); }
@@ -145,6 +147,7 @@ export struct PhoneMessageLift {
   build() {
     Stack({alignContent:Alignment.TopStart}) {
       Rect().width('100%').height('100%').fill(this.environment.dark ? '#4D000000' : '#14000000')
+        .opacity(this.entered ? 1 : 0).animation(Motion.reveal(this.environment.reduceMotion))
         .accessibilityText(tr('close')).accessibilityRole(AccessibilityRoleType.BUTTON).id('chat.lift.close')
         .onClick(() => { if (this.selecting) this.dismissSelection(); else this.onClose(); })
       Scroll(this.scroll) {
@@ -156,10 +159,14 @@ export struct PhoneMessageLift {
       }.width(this.frame.width).height(this.placement.height).align(Alignment.TopStart)
         .backgroundColor(this.own ? Colors.control : Colors.surface).borderRadius(16).clip(true)
         .border({width:0.5,color:Colors.divider,radius:16}).shadow({radius:12,color:'#26000000',offsetY:4})
+        .scale({x:this.entered ? 1 : 0.96,y:this.entered ? 1 : 0.96}).opacity(this.entered ? 1 : 0.85)
+        .animation(Motion.release(this.environment.reduceMotion))
         .position({x:this.frame.left,y:this.placement.top-this.windowTop}).id('chat.lift.message')
         .onAppear(() => {
           this.getUIContext().postFrameCallback(new LiftFrameCallback((): void => {
-            if (this.open && this.placement.offset>0) this.scroll.scrollTo({xOffset:0,yOffset:this.placement.offset});
+            if (!this.open) return;
+            if (!this.entered) Motion.run(this.getUIContext(), Motion.reveal(this.environment.reduceMotion), () => { this.entered = true; });
+            if (this.placement.offset>0) this.scroll.scrollTo({xOffset:0,yOffset:this.placement.offset});
           }));
         })
       if (!this.selecting) {
@@ -190,6 +197,8 @@ export struct PhoneMessageLift {
         }
         }.width(this.barWidth).height(this.barHeight)
           .backgroundColor(Colors.surface).borderRadius(12).shadow({radius:10,color:'#26000000',offsetY:3})
+          .opacity(this.entered ? 1 : 0).scale({x:this.entered ? 1 : 0.94,y:this.entered ? 1 : 0.94})
+          .animation(Motion.state(this.environment.reduceMotion))
           .position({x:Math.max(8,Math.min(this.own ? this.frame.left+this.frame.width-this.barWidth : this.frame.left,this.windowWidth-this.barWidth-8)),
             y:this.placement.barTop-this.windowTop}).id('chat.lift.actions')
       }

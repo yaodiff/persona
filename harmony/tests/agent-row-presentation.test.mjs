@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
+import { herdrTabName } from '../entry/src/main/ets/core/SessionNaming.ts';
 
 const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
 const rowBindingSource = readFileSync(new URL('../entry/src/main/ets/models/RowBinding.ets', import.meta.url), 'utf8');
@@ -43,11 +44,11 @@ const BoundAgentRow = new Function('AgentRowPresentation', 'return ' + stripType
 const BoundAgentGroup = new Function('return ' + stripTypeScriptTypes(classCode('BoundAgentGroup')) + ';')();
 
 function pageClass(wire, translate) {
-  return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows',
-    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'needsStatusLabel', 'rowPlace']
+  return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows', 'herdrTabName',
+    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'needsStatusLabel', 'rowTitle', 'rowPlace']
       .map(methodCode).join('\n') + '\n}\n') + '\nreturn Page;')(
         BoundAgentRow, AgentRowPresentation, BoundAgentGroup, wire, translate,
-        { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows);
+        { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows, herdrTabName);
 }
 
 function row(raw, fields = {}) {
@@ -256,14 +257,14 @@ test('state group headers replace repeated status words, while muted and machine
  assert.equal(page.rowPlace(display),'Claude · MacBook · login-form');
  page.workspace.groupingMode='machine';assert.equal(page.rowPlace(display),'Claude · login-form');
  const row=source.slice(source.indexOf('  @Builder agentRow('),source.indexOf('  @Builder rowContext('));
- assert.match(row,/\.accessibilityText\(\[binding\.bound\.value\.title[\s\S]*this\.rowStatus\(binding\.presentation\)/);
+ assert.match(row,/\.accessibilityText\(\[this\.rowTitle\(binding\)[\s\S]*this\.rowStatus\(binding\.presentation\)/);
 });
 
 test('phone search starts folded, reveals only from a downward top pull, and a saved query survives leaving',()=>{
  const TouchType={Down:0,Move:1,Up:2};
  const Search=new Function('TouchType','return '+stripTypeScriptTypes('class Search {'+
    ['searchVisible','setSearchEditing','resetSearchReveal','trackPull','refreshAgents'].map(methodCode).join('\n')+'}'))(TouchType);
- const page=new Search(); page.refreshGroupingSupport=()=>{};page.reloadDecisions=()=>{};
+ const page=new Search(); page.refreshGroupingSupport=()=>{};page.reloadDecisions=()=>{};page.refreshPersonalAgents=()=>Promise.resolve();
  let top=0,refreshes=0;
  page.workspace={search:'',setReadingDetail(){},refresh(){refreshes++;return Promise.resolve();},isBoundTo(){return true;}};
  page.agentScroller={currentOffset:()=>({yOffset:top})};page.compactRoot=true;page.active=true;page.onSearchMode=()=>{};page.resetSearchReveal();
@@ -329,4 +330,62 @@ test('Needs You surfaces follow the visible oldest-first order as the decisions 
   assert.equal(page.startsSurface(b,group.value.id),true);assert.equal(page.endsSurface(b,group.value.id),true);
   page.rail=true;assert.equal(page.startsSurface(b,group.value.id),false);
   assert.equal(page.endsSurface(b,'state/working'),true);
+});
+
+test('herdrTabName is projected once per raw update and rowTitle toggles cleanly without extra Wire.parse calls', () => {
+  const context = fixture(), { page } = context;
+  const firstRow = row(
+    { slot_id: 'slot-1', space_kind: 'herdr', slot_name: 'auth-refactor', last_text: 'Initial' },
+    { title: 'Work on session 1a2b' }
+  );
+  const bound = { identity: '["session/m1/s1",0]', key: 'row-1', value: firstRow };
+  const bindings = page.bindAgentRows([], [bound], true);
+  const binding = bindings[0];
+
+  assert.equal(context.parseCount, 1);
+  assert.equal(binding.presentation.herdrTabName, 'auth-refactor');
+  assert.equal(page.rowTitle(binding), 'Work on session 1a2b');
+
+  page.model = { ...page.model, useHerdrTabName: true };
+  assert.equal(page.rowTitle(binding), 'auth-refactor');
+  assert.equal(context.parseCount, 1, 'toggling useHerdrTabName on does not re-parse raw');
+
+  page.model = { ...page.model, useHerdrTabName: false };
+  assert.equal(page.rowTitle(binding), 'Work on session 1a2b');
+  assert.equal(context.parseCount, 1, 'toggling useHerdrTabName off does not re-parse raw');
+
+  page.bindAgentRows(bindings, [bound], true);
+  assert.equal(context.parseCount, 1, 'unchanged raw does not re-parse');
+
+  bound.value = row(
+    { slot_id: 'slot-1', space_kind: 'herdr', slot_name: 'renamed-tab', last_text: 'Updated' },
+    { title: 'Work on session 1a2b' }
+  );
+  page.bindAgentRows(bindings, [bound], true);
+  assert.equal(context.parseCount, 2, 'raw change parses once');
+  assert.equal(binding.presentation.herdrTabName, 'renamed-tab');
+
+  page.model = { ...page.model, useHerdrTabName: true };
+  assert.equal(page.rowTitle(binding), 'renamed-tab');
+
+  // Directory owner preference overrides root model preference when present.
+  page.model = { ...page.model, useHerdrTabName: true, directoryOwnerFor: () => ({ useHerdrTabName: false }) };
+  assert.equal(page.rowTitle(binding), 'Work on session 1a2b');
+  page.model = { ...page.model, useHerdrTabName: false, directoryOwnerFor: () => ({ useHerdrTabName: true }) };
+  assert.equal(page.rowTitle(binding), 'renamed-tab');
+  page.model = { ...page.model, useHerdrTabName: true, directoryOwnerFor: () => ({ machineName: id => 'Computer ' + id }) };
+
+  bound.value = row({ slot_id: 'slot-1', space_kind: 'orca', slot_name: 'ignored' }, { title: '' });
+  page.bindAgentRows(bindings, [bound], true);
+  assert.equal(context.parseCount, 3);
+  assert.equal(binding.presentation.herdrTabName, '');
+  assert.equal(page.rowTitle(binding), 'agent_untitled');
+
+  const needsCardsBlock = source.slice(source.indexOf('  @Builder needsYouCards('), source.indexOf('  @Computed get orderedNeedsRows'));
+  assert.match(needsCardsBlock, /this\.rowTitle\(binding\)/);
+  assert.doesNotMatch(needsCardsBlock, /binding\.bound\.value\.title/);
+
+  const railBlock = source.slice(source.indexOf('  @Builder railAvatar('), source.indexOf('  @Builder resultList('));
+  assert.match(railBlock, /this\.rowTitle\(binding\)/);
+  assert.doesNotMatch(railBlock, /binding\.bound\.value\.title/);
 });

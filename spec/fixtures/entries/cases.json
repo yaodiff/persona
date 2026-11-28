@@ -3592,6 +3592,9 @@
         "needs_you": [
           "task:t-personal-check"
         ],
+        "web_verify": [
+          "task:t-personal-check"
+        ],
         "running": [],
         "shelved": []
       }
@@ -3660,6 +3663,9 @@
       },
       "expected": {
         "needs_you": [
+          "task:t-personal-check"
+        ],
+        "web_verify": [
           "task:t-personal-check"
         ],
         "running": [],

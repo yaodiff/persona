@@ -12,24 +12,18 @@ import (
 	"github.com/nwverse/persona/server/internal/larksyncwire"
 )
 
-// The Lark user sync's tables (migrations/manager/20261125053132_lark_sync.sql; internal/extmgr larksync*.go): each
+// The Lark user sync's tables (migrations/manager/20261125053132_lark_sync.sql; internal/modules/lark/larksync): each
 // binding's cursors, the dedup index across bindings and the outbox the knowledge base's larksync connector reads.
 // A run is committed in one transaction (CommitLarkSyncRun), so content, cursors and index move together or not at all.
 
 // LarkSyncOutbox is one row of the outbox: a chat batch (Kind "chat") or a document (Kind "doc"), its payload the
 // JSON the connector hands the knowledge base as it is.
-type LarkSyncOutbox struct {
-	Seq          int64
-	Kind         string
-	CanonicalKey string
-	Payload      json.RawMessage
-	CreatedAt    time.Time
-}
+type LarkSyncOutbox = larksyncwire.OutboxRow
 
 // Outbox kinds.
 const (
-	LarkSyncChat = "chat"
-	LarkSyncDoc  = "doc"
+	LarkSyncChat = larksyncwire.OutboxChat
+	LarkSyncDoc  = larksyncwire.OutboxDoc
 )
 
 // LarkSyncCursors are a binding's cursors by resource.
@@ -118,10 +112,10 @@ func (d *DB) CommitLarkSyncRun(ctx context.Context, binding string, cursors map[
 		}
 		for _, row := range outbox {
 			if row.Kind != LarkSyncChat && row.Kind != LarkSyncDoc {
-				return errors.New("lark sync outbox: unknown kind " + row.Kind)
+				return errors.New("lark sync outbox: unknown kind " + string(row.Kind))
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO lark_sync_outbox (kind, canonical_key, payload) VALUES ($1, $2, $3)`,
-				row.Kind, row.CanonicalKey, []byte(row.Payload)); err != nil {
+				string(row.Kind), row.CanonicalKey, []byte(row.Payload)); err != nil {
 				return err
 			}
 		}
@@ -212,12 +206,12 @@ func mergeLarkSyncRecord(have larksyncwire.IndexRecord, ok bool, add larksyncwir
 }
 
 // LarkSyncOutboxAfter are the outbox rows of kind after the sequence after, oldest first, at most limit.
-func (d *DB) LarkSyncOutboxAfter(ctx context.Context, kind string, after int64, limit int) ([]LarkSyncOutbox, error) {
+func (d *DB) LarkSyncOutboxAfter(ctx context.Context, kind larksyncwire.OutboxKind, after int64, limit int) ([]LarkSyncOutbox, error) {
 	if limit < 1 {
 		limit = 100
 	}
 	rows, err := d.pool.Query(ctx, `SELECT seq, kind, canonical_key, payload, created_at FROM lark_sync_outbox
-		WHERE kind = $1 AND seq > $2 ORDER BY seq LIMIT $3`, kind, after, limit)
+		WHERE kind = $1 AND seq > $2 ORDER BY seq LIMIT $3`, string(kind), after, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,11 @@ import UIKit
 /// at every text size, so what is typed and the placeholder must fit them. The field in the list's row is made at launch,
 /// before the window's cap is set, and kept the system's AX5 words (53 pt) in the capsule.
 @MainActor struct AgentsSearchFieldTextSizeTests {
+    /// iOS 18's shorter navigation clearance stops the bar one size earlier.
+    private var topBarCap: UIContentSizeCategory {
+        if #available(iOS 26.0, *) { .extraExtraExtraLarge } else { .extraExtraLarge }
+    }
+
     /// A field as `AgentsSearchField.makeUIView` makes it: the search bar's own, taken out of the bar.
     private func field() -> AgentsSearchField.Holder {
         let bar = UISearchBar()
@@ -42,16 +47,16 @@ import UIKit
     /// the system's AX5 size from when it was made. UIKit follows only a change of the field's size, so they stayed.
     @Test func wordsMadeAtAnotherSizeAreFittedInTheWindow() throws {
         let holder = field()
-        holder.traitOverrides.preferredContentSizeCategory = .extraExtraExtraLarge
+        holder.traitOverrides.preferredContentSizeCategory = topBarCap
         holder.updateTraitsIfNeeded()
         let made = body(at: .accessibilityExtraExtraExtraLarge)
         holder.field.font = try #require(holder.field.font).withSize(made)
         let placeholder = NSMutableAttributedString(attributedString: try #require(holder.field.attributedPlaceholder))
         placeholder.addAttribute(.font, value: try placeholderFont(holder.field).withSize(made), range: NSRange(location: 0, length: placeholder.length))
         holder.field.attributedPlaceholder = placeholder
-        let window = try show(holder, at: .extraExtraExtraLarge)
-        #expect(holder.field.font?.pointSize == body(at: .extraExtraExtraLarge))
-        #expect(try placeholderFont(holder.field).pointSize == body(at: .extraExtraExtraLarge))
+        let window = try show(holder, at: topBarCap)
+        #expect(holder.field.font?.pointSize == body(at: topBarCap))
+        #expect(try placeholderFont(holder.field).pointSize == body(at: topBarCap))
         window.isHidden = true
     }
 
@@ -61,9 +66,9 @@ import UIKit
         let holder = field()
         let window = try show(holder, at: size)
         let font = try #require(holder.field.font)
-        #expect(font.pointSize == body(at: .extraExtraExtraLarge))
+        #expect(font.pointSize == body(at: topBarCap))
         #expect(font.lineHeight < Theme.Size.searchField)
-        #expect(try placeholderFont(holder.field).pointSize == body(at: .extraExtraExtraLarge))
+        #expect(try placeholderFont(holder.field).pointSize == body(at: topBarCap))
         window.isHidden = true
     }
 
@@ -72,7 +77,7 @@ import UIKit
     func upToTheCapTheWordsAreTheBars(_ size: UIContentSizeCategory) throws {
         let bar = UISearchBar()
         bar.placeholder = "Search"
-        let barWindow = try show(bar, at: size)
+        let barWindow = try show(bar, at: min(size, topBarCap))
         let holder = field()
         let window = try show(holder, at: size)
         let font = try #require(holder.field.font), reference = try #require(bar.searchTextField.font)
@@ -90,7 +95,7 @@ import UIKit
         let holder = field()
         let window = try show(holder, at: .large)
         for (size, expected) in [(UIContentSizeCategory.extraExtraLarge, UIContentSizeCategory.extraExtraLarge),
-                                 (.accessibilityExtraExtraExtraLarge, .extraExtraExtraLarge), (.small, .small)] {
+                                 (.accessibilityExtraExtraExtraLarge, topBarCap), (.small, .small)] {
             window.traitOverrides.preferredContentSizeCategory = size
             window.layoutIfNeeded()
             holder.updateTraitsIfNeeded()
@@ -102,6 +107,7 @@ import UIKit
 
     @Test func theCapIsTheTopBars() {
         #expect(AgentsSearchField.largestTypeSize == UIContentSizeCategory(Theme.Shell.topBarLargestTypeSize))
+        #expect(AgentsSearchField.largestTypeSize == topBarCap)
         #expect(AgentsSearchField.textSize(for: .large) == .large)
         #expect(AgentsSearchField.textSize(for: .accessibilityExtraExtraExtraLarge) == AgentsSearchField.largestTypeSize)
     }

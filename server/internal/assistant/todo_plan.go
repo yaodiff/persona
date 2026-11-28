@@ -275,6 +275,10 @@ func (s *Service) createPieceTodo(ctx context.Context, conversation, title, note
 // todo it closes has its outcome recorded and a question's to-do answered as dropped. db.ErrTodoNotFound when it is not
 // there.
 func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo, error) {
+	return s.editTodoWithCloseActivity(ctx, id, e, false)
+}
+
+func (s *Service) editTodoWithCloseActivity(ctx context.Context, id string, e db.TodoEdit, checkActivity bool) (Todo, error) {
 	if e.Audience != nil {
 		if err := db.ValidateTodoAudience(*e.Audience); err != nil {
 			return Todo{}, err
@@ -309,30 +313,26 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	} else if e.SetResponsible && e.Responsible != nil && e.Responsible.Kind == db.ResponsibleSession && e.Responsible.SessionID != "" {
 		fencedSessions = [][2]string{{e.Responsible.MachineID, e.Responsible.SessionID}}
 	}
-	for {
-		if reopening {
-			// Keep a concurrent ledger writer from publishing an older state over the reopened row.
-			s.supervise.writeMu.Lock()
-		}
-		s.todos.writing.Lock()
-		if ch := s.idleCloseFenceForSessions(fencedSessions); ch != nil {
-			s.todos.writing.Unlock()
-			if reopening {
-				s.supervise.writeMu.Unlock()
-			}
-			select {
-			case <-ch:
-				continue
-			case <-ctx.Done():
-				return Todo{}, ctx.Err()
-			}
-		}
-		break
+	// The idle-close fence is checked with the to-do writer held. Waiting releases it before taking the ledger
+	// writer, so terminal review and guarded park can still enter in to-do → ledger order.
+	if err := s.lockTodoWritingForSessions(ctx, fencedSessions); err != nil {
+		return Todo{}, err
+	}
+	if reopening {
+		s.supervise.writeMu.Lock()
 	}
 	unlock := func() {
-		s.todos.writing.Unlock()
 		if reopening {
 			s.supervise.writeMu.Unlock()
+		}
+		s.todos.writing.Unlock()
+	}
+	if e.Done != nil && *e.Done {
+		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+			if err := s.investigationCloseError(ctx, current); err != nil {
+				unlock()
+				return Todo{}, err
+			}
 		}
 	}
 	if links {
@@ -346,6 +346,28 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		e.PartOf, e.After = l.PartOf, l.After
 	}
 	now := time.Now().UTC()
+	var closeGuard func(Todo) error
+	if e.Done != nil && *e.Done {
+		closeGuard = func(live Todo) error {
+			if checkActivity {
+				return s.taskCloseSnapshotError(live, time.Now())
+			}
+			if work := s.unconfirmedTaskClose(ctx, live); work != nil {
+				return &taskCloseHoldError{todo: id, work: work}
+			}
+			return nil
+		}
+		e.CloseGuard = func() error {
+			if live, ok := s.todoNow(id); ok {
+				return closeGuard(live)
+			}
+			return db.ErrTodoNotFound
+		}
+		if err := e.CloseGuard(); err != nil {
+			unlock()
+			return Todo{}, err
+		}
+	}
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -365,8 +387,19 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		e.Apply(&r, now)
 		row = &r
 	}
-	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
+	var beforeWrite func(*Todo) bool
+	var hold error
+	if closeGuard != nil && s.todoDB() == nil {
+		beforeWrite = func(live *Todo) bool {
+			hold = closeGuard(*live)
+			return hold == nil
+		}
+	}
+	out, doneKeys, applied := s.setTodoRow(id, *row, beforeWrite)
 	unlock()
+	if hold != nil {
+		return Todo{}, hold
+	}
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
@@ -527,11 +560,9 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 	// notice on every copy.
 	// Feishu's copy, which carries the notes and a link, also stays behind the notice when the origin cannot be told,
 	// with the notice it always had then.
-	lark := &todoReminderSend{private: private || !known, space: space}
-	if !private && !known {
-		lark.noticeTitle, lark.noticeBody = spaceNotice(s.botLang(ctx))
-	}
-	go s.feishuTodoReminderSend(set.MachineID, set.Main, larkTitle, larkBody, todo, lark)
+	to := assistantwire.SessionRef{MachineID: set.MachineID, SessionID: set.Main}
+	reminder := s.larkReminder(ctx, to, todo, larkTitle, larkBody, private, known, space)
+	go s.larkModule().TodoReminder(to, reminder)
 	go s.channelPush(set.MachineID, set.Main, channelTitle, channelBody)
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
 }

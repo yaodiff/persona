@@ -1,5 +1,8 @@
 {
   "assistant": "助手",
+  "external": "外部",
+  "settings": "设置",
+  "tab_bar": "主要页面",
   "sidebar": "侧边栏",
   "switch_page": "切换页面",
   "waiting_label_other": "{label}，{count} 个需要你"

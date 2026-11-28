@@ -80,10 +80,10 @@ describe("removing a market", () => {
     await open();
     expect(note()).toBeNull();
     await click("删除");
-    expect(note()).toBe("hub 不再读这个市场。从它装的 2 个扩展留着，但不再升级，直到用同样的地址把市场加回来。");
+    expect(note()).toBe("hub 将不再读取此市场。此前通过该市场安装的 2 个扩展会予以保留，但不再升级，直到你使用相同地址重新添加该市场。");
     await click("确认删除");
     expect(hub.removed).toEqual(["m1"]);
-    expect(hub.toasts).toEqual(["已删除「Market m1」，从它装的扩展留着，但不再升级"]);
+    expect(hub.toasts).toEqual(["已删除「Market m1」，此前通过该市场安装的扩展将予以保留，但不再自动升级"]);
     expect(note()).toBeNull();
   });
 
@@ -91,7 +91,7 @@ describe("removing a market", () => {
     hub.extensions = [{ id: "c", auto_upgrade: true, market: "m2" }];
     await open();
     await click("删除");
-    expect(note()).toBe("hub 不再读这个市场。没有扩展是从它装的。");
+    expect(note()).toBe("hub 将不再读取此市场。当前没有通过该市场安装的扩展。");
     await click("确认删除");
     expect(hub.toasts).toEqual(["已删除「Market m1」"]);
   });
@@ -100,14 +100,14 @@ describe("removing a market", () => {
     hub.extensions = [{ id: "a", auto_upgrade: true }]; // a hub from before `market`
     await open();
     await click("删除");
-    expect(note()).toBe("hub 不再读这个市场。从它装的扩展留着，但不再升级，直到用同样的地址把市场加回来。");
+    expect(note()).toBe("hub 将不再读取此市场。此前通过该市场安装的扩展会予以保留，但不再升级，直到你使用相同地址重新添加该市场。");
     await click("取消");
     expect(note()).toBeNull();
     hub.listFails = true;
     await click("删除");
-    expect(note()).toContain("从它装的扩展留着，但不再升级");
+    expect(note()).toContain("此前通过该市场安装的扩展会予以保留，但不再升级");
     await click("确认删除");
-    expect(hub.toasts).toEqual(["已删除「Market m1」，从它装的扩展留着，但不再升级"]);
+    expect(hub.toasts).toEqual(["已删除「Market m1」，此前通过该市场安装的扩展将予以保留，但不再自动升级"]);
   });
 
   it("keeps each market's count to its own confirmation", async () => {
@@ -117,10 +117,10 @@ describe("removing a market", () => {
     const deletes = () => [...host.querySelectorAll("button")].filter((x) => x.textContent === "删除");
     act(() => deletes()[0].click());
     await flush();
-    expect(note()).toContain("从它装的 1 个扩展");
+    expect(note()).toContain("此前通过该市场安装的 1 个扩展");
     await click("取消");
     act(() => deletes()[1].click());
     await flush();
-    expect(note()).toBe("hub 不再读这个市场。没有扩展是从它装的。");
+    expect(note()).toBe("hub 将不再读取此市场。当前没有通过该市场安装的扩展。");
   });
 });

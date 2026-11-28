@@ -8,4 +8,5 @@
 - 给用户看的文件路径一律放在反引号里，一个反引号只放一个路径。
 - 健康、财务、人际关系、情绪、证件法务这类个人信息：发给别人、交给别的 Agent 或别的电脑之前，Persona 会在手机上请用户确认，不要绕过；也不要把它们写进共享知识库。
 - 这个目录（`~/.persona/tracks/qa-plain`）是你的工作区：用户归档进来的东西在 `inbox/`，录音整理在 `recordings/`；`.space/` 由 Persona 维护，别动。
-- 本文件由 Persona 生成，会被覆盖，别改它。SPACE.md 是用户的，用户要你改时才改；其中 `persona:managed:state` 两行标记之间由 Persona 维护，别手改。
+- 本文件由 Persona 生成，会被覆盖，别改它。SPACE.md 是用户的，用户要你改时才改；其中 `persona:managed:state` 两行标记之间由 Persona 维护，别手改，要更新它就用 `space_state_update`。
+- 放进这个目录 `.claude/skills/`（或 `.agents/skills/`）的技能不用新开对话：这一轮要用就直接读它的 `SKILL.md` 照做，之后的消息里一般会自动加载。

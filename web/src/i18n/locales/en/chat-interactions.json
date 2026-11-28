@@ -1,4 +1,11 @@
 {
+  "decision_view_source": "View in Chat",
+  "decision_skip_label": "Skip",
+  "decision_collapse": "Collapse",
+  "decision_skip_terminal": "Answer this question on the computer.",
+  "decision_skip_terminal_chat": "Use Reply in Chat Instead for this terminal question.",
+  "decision_skip_permission": "Use Deny to stop this tool from running.",
+  "decision_skip_plan": "Send the plan back to stop it from going ahead.",
   "close_agent": "Close Agent",
   "close_agent_confirm": "Close and archive",
   "close_agent_cancel": "Cancel",

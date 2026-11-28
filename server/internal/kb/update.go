@@ -292,13 +292,14 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	var recording map[string][]byte
 	var meeting *Meeting
 	var hub HubTranscript
+	var speakerTurns *SpeakerTurnsFile
 	var raw []byte
 	var err error
 	var project *Project
 	if kind == KindRecording {
-		// Its files with its meeting.json and the hub's transcript, read together: detail.segments is the transcript of
-		// record, detail.meta has the transcription.
-		recording, meeting, hub, err = e.Store.recordSnapshot(id)
+		// Its files with its meeting.json, the hub's transcript and speaker turns, read together: detail.segments is
+		// the transcript of record (with speaker labels when a timeline exists), detail.meta has the transcription.
+		recording, meeting, hub, speakerTurns, err = e.Store.recordSnapshotWithSpeakers(id)
 		raw = recording["meta.json"]
 		if err == nil && raw == nil {
 			err = ErrNotFound
@@ -327,12 +328,25 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	}
 	if kind == KindRecording {
 		d.Segments = nonNilSegments(recordOf(recording, meeting, hub))
+		var recMeta Recording
+		hasRecMeta := json.Unmarshal(recording["meta.json"], &recMeta) == nil
+		if hasRecMeta && recMeta.ID == "" {
+			recMeta.ID = id
+		}
+		var minutesRaw []byte
 		if raw, err := os.ReadFile(e.Store.path(kind, id, "minutes.json")); err == nil && json.Valid(raw) {
-			var r Recording
-			if json.Unmarshal(recording["meta.json"], &r) == nil {
-				raw = minutesWithSpan(raw, &r, e.Store.Zone())
+			minutesRaw = raw
+			if hasRecMeta {
+				raw = minutesWithSpan(raw, &recMeta, e.Store.Zone())
 			}
 			d.Minutes = raw
+		}
+		if meeting != nil && meeting.Speakers != nil {
+			var recPtr *Recording
+			if hasRecMeta {
+				recPtr = &recMeta
+			}
+			d.Speakers, d.Segments = e.speakerDetail(recPtr, meeting, hub, speakerTurns, d.Segments, minutesRaw)
 		}
 		d.Meta, d.Recap = e.dayDetail(id, d.Meta)
 		if d.Summary == "" && d.Recap != nil {
@@ -496,16 +510,26 @@ func (e *Engine) applyUser(kind, id string, uu UserUpdate) (string, error) {
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	uu.Update = u
+	var tree treeEdit
 	if kind == KindProject {
 		if err := e.projectSourceUpdate(id, &uu); err != nil {
 			return "", err
 		}
+		var err error
+		if tree, err = e.projectTreeUpdate(id, uu); err != nil {
+			return "", err
+		}
 		u = e.projectUpdate(u)
+	} else {
+		uu.Parent, uu.Milestones, uu.Milestone = nil, nil, nil
 	}
 	uu.Update = u
 	out, err := e.apply(kind, id, uu, userEdit(uu), UserWriter)
 	if err == nil && u.MergeInto == "" {
 		err = e.claim(kind, out, u, "", nil, nil)
+	}
+	if err == nil && kind == KindProject {
+		err = e.writeTree(out, tree)
 	}
 	if err == nil && profile != nil {
 		_, err = e.putProfile(out, UserWriter, profile)
@@ -609,6 +633,9 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 		for _, cid := range u.Chats {
 			c, ok, err := e.Store.editChat(cid, func(c *Chat) {
 				c.Projects = addUnique(c.Projects, p.Slug)
+				if le.user { // an extension's link does not lift what the user held
+					c.HeldOffProjects = false
+				}
 				if u.Lock == nil || *u.Lock {
 					c.LockedFields = addUnique(c.LockedFields, "projects")
 				}
@@ -673,8 +700,14 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 				c.Projects = addUnique(c.Projects, pr.Slug)
 				le.linked(&c.Tagging, "projects", pr.Slug)
 			}
+			if le.user && (len(linked) > 0 || len(le.allow["projects"]) > 0) { // the user's own link, not an extension's
+				c.HeldOffProjects = false
+			}
 			c.People = removeStrings(c.People, u.RemovePeople)
 			c.Projects = removeStrings(c.Projects, u.RemoveProjects)
+			if le.user && le.lockLists && len(u.RemoveProjects) > 0 && len(c.Projects) == 0 {
+				c.HeldOffProjects = true // took off every project and held the list: compression links it to none
+			}
 			le.removed(&c.Tagging, "people", e.existing(KindPerson, u.RemovePeople)...)
 			le.removed(&c.Tagging, "projects", e.existing(KindProject, u.RemoveProjects)...)
 			le.allowed(&c.Tagging, "people", "projects")

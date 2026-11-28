@@ -4,7 +4,7 @@
 
 import { isDone, type InboxItem } from "./inbox";
 import type { FeedItem } from "./feed";
-import type { InboxSuggestionAttempt } from "./inbox-events";
+import type { InboxMention, InboxSuggestionAttempt } from "./inbox-events";
 
 /** The card's body (assistant/inbox_handoff_card.go handoffCard). */
 export interface HandoffCardBody {
@@ -13,6 +13,7 @@ export interface HandoffCardBody {
   /** A conclusion's: "fyi" (worth knowing; OK files it) or "done" (filed at once). */
   outcome?: string;
   text: string;
+  mentions?: InboxMention[];
   note?: string;
   recap?: string;
   title: string;
@@ -60,6 +61,7 @@ export function handoffCardState(card: HandoffCardBody, conversation: string, it
   }
   if (isDone(item)) {
     if (!newest) return { state: "replaced" };
+    if (item.done_by === "source_replied") return { state: "self" };
     if (item.done_by === "replied") {
       const last = [...(item.chain ?? [])].reverse().find((e) => e.kind === "confirmed" || e.kind === "self_replied");
       if (last?.kind === "self_replied") return { state: "self" };

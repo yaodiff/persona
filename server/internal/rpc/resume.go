@@ -59,12 +59,13 @@ var errResumed = errors.New("rpc: transport replaced")
 // resumeState is a peer's resuming (mu): enabled with a window, on once negotiated, the token, the transport's
 // generation, and whether it is lost.
 type resumeState struct {
-	window time.Duration
-	on     bool
-	token  string
-	gen    uint64
-	lost   bool
-	timer  *time.Timer
+	window   time.Duration
+	on       bool
+	token    string
+	gen      uint64
+	lost     bool
+	timer    *time.Timer
+	timerGen uint64 // incremented under p.mu whenever timer is armed, disarmed, or closed
 	// accepting: an AcceptResume is writing its answer.
 	accepting bool
 	// prev is the token the last AcceptResume was asked with, still taken until the new transport carries a byte
@@ -72,6 +73,8 @@ type resumeState struct {
 	prev string
 	sr   *swapReader
 	fr   *frameReader
+	// testWindowExpire, when non-nil in tests, wraps the window timer's expire call.
+	testWindowExpire func(expire func())
 }
 
 type resumeRequest struct {
@@ -246,9 +249,19 @@ func (p *Peer) armWindowLocked(err error) {
 	if rs.timer != nil {
 		rs.timer.Stop()
 	}
-	window := rs.window
+	rs.timerGen++
+	gen, tgen, window, hook := rs.gen, rs.timerGen, rs.window, rs.testWindowExpire
+	expire := func() {
+		p.closeIf(fmt.Errorf("rpc: not resumed within %s: %w", window, err), func() bool {
+			return p.resume == rs && rs.lost && rs.gen == gen && rs.timerGen == tgen
+		})
+	}
 	rs.timer = time.AfterFunc(window, func() {
-		p.Close(fmt.Errorf("rpc: not resumed within %s: %w", window, err))
+		if hook != nil {
+			hook(expire)
+			return
+		}
+		expire()
 	})
 }
 
@@ -427,6 +440,7 @@ func (p *Peer) installLocked(r io.Reader, w io.Writer, peerRead uint64) {
 	rs := p.resume
 	rs.gen++
 	rs.lost = false
+	rs.timerGen++
 	if rs.timer != nil {
 		rs.timer.Stop()
 		rs.timer = nil
@@ -470,9 +484,11 @@ type swapReader struct {
 	gen  uint64
 	seen uint64        // the generation the reader read from last: the first read after another is errResumed
 	next chan struct{} // closed when the next generation is installed
-	// waiting is since when a read has waited for bytes (unix nanoseconds), 0 while none does: a transport is
-	// silent only while this side reads it (watchStale), not while its read loop is busy with a line.
-	waiting atomic.Int64
+	// waitGen and waitSince track when a read of generation waitGen began waiting for bytes (monotonic time.Time;
+	// zero while none waits): a transport is silent only while this side reads its current generation (watchStale),
+	// not while its read loop is busy with a line or an older transport's Read is still unwinding.
+	waitGen   uint64
+	waitSince time.Time
 	// fresh: an AcceptResume installed the transport and nothing came on it yet (confirmResume).
 	fresh atomic.Bool
 }
@@ -489,10 +505,14 @@ func (s *swapReader) Read(b []byte) (int, error) {
 		s.mu.Unlock()
 		return 0, errResumed
 	}
+	s.waitGen, s.waitSince = gen, time.Now()
 	s.mu.Unlock()
-	s.waiting.Store(time.Now().UnixNano())
 	n, err := r.Read(b)
-	s.waiting.Store(0)
+	s.mu.Lock()
+	if s.waitGen == gen {
+		s.waitSince = time.Time{}
+	}
+	s.mu.Unlock()
 	if n > 0 && s.fresh.Load() {
 		s.p.confirmResume(gen)
 	}
@@ -517,8 +537,18 @@ func (s *swapReader) install(r io.Reader, gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.r, s.gen = r, gen
+	s.waitSince = time.Time{}
 	close(s.next)
 	s.next = make(chan struct{})
+}
+
+func (s *swapReader) waitingSince(gen uint64) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.waitGen != gen {
+		return time.Time{}
+	}
+	return s.waitSince
 }
 
 // errStale is why watchStale lost a transport.
@@ -541,12 +571,13 @@ func (p *Peer) watchStale(stale, every time.Duration) {
 			p.mu.Unlock()
 			continue
 		}
-		gen, waiting := rs.gen, rs.sr.waiting.Load()
+		gen, sr := rs.gen, rs.sr
 		p.mu.Unlock()
-		if waiting == 0 {
-			continue // not reading now: a read loop busy with a line is no sign of a dead transport
+		since := sr.waitingSince(gen)
+		if since.IsZero() {
+			continue // not reading this generation now: a read loop busy with a line or an unwinding older read is no sign of a dead transport
 		}
-		now, since := time.Now(), time.Unix(0, waiting)
+		now := time.Now()
 		if oldest := lw.oldestKept(); !oldest.IsZero() && now.Sub(oldest) > stale && now.Sub(since) > stale {
 			p.lose(fmt.Errorf("%w for %s", errStale, now.Sub(since).Round(time.Second)), gen)
 		}

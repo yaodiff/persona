@@ -18,7 +18,8 @@ describe("Brief.tsx stays off the first screen", () => {
     expect(read("./TaskDecision.tsx")).toMatch(/^import\s+[^;]*\bAcceptRow\b[^;]*from\s+["']\.\/Brief["']/m);
 
     const briefStartup = startup.filter((key) => key === "assistant-brief" || key.startsWith("assistant-brief."));
-    expect(briefStartup).toEqual(["assistant-brief.failed_", "assistant-brief.open"]);
+    // Tasks.tsx (first screen) toasts an accept's outcome (#15680); the rest of the briefing words stay off it
+    expect(briefStartup).toEqual(["assistant-brief.accept_failed", "assistant-brief.accepted", "assistant-brief.failed_", "assistant-brief.open"]);
 
     const inStartup = startupMatcher(startup);
     expect(inStartup("assistant-brief.open")).toBe(true);

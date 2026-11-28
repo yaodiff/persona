@@ -18,8 +18,7 @@ import (
 // category's choice (the model configuration's records, models.go), the model fields of providers added in Persona
 // (launchers.managed, models_launchers.go) and named tiers an Agent can be started on (agent_start, task_plan). A
 // switch writes all of it in one transaction and keeps what it replaced, so one rollback undoes it; every switch,
-// rollback and edit is in the history. Profiles are the user's to edit: the two built-in ones start as copies of the
-// configuration they were made from.
+// rollback and edit is in the history. Users can create profiles or use their model settings directly.
 
 const (
 	modelProfilesKey     = "model_profiles"       // modelProfiles: the profiles
@@ -38,9 +37,6 @@ const (
 	shownProfileEvents  = 20
 	modelProfileRolling = "rollback" // not an id: POST /api/v1/model-profiles/rollback
 	legacyRollbackID    = "previous" // fallback rollback id for legacy single-slot Previous images
-	// seededProfile is the template marked in use when the templates are made: a copy of the configuration, so
-	// nothing switches, and the tiers work from the start.
-	seededProfile = "performance"
 )
 
 var (
@@ -98,7 +94,7 @@ func profileValue(v string) *string { return &v }
 
 // ModelTier is what an Agent started on a tier (an Agent preset) runs on: a launcher, and its model, effort, start
 // speed and permission mode ("" for its defaults). Description says when to use it (Paseo's "When to use"): the
-// assistant reads it to pick a tier, the New Agent form shows it.
+// assistant reads it to pick a tier, the New Agent form shows it. Host applies to the whole tier.
 //
 // A tier may list several ordered candidates (#14700): the hub picks one at dispatch (pickTierCandidate), in the
 // user's order. The flat fields are always candidate 0, so an older client that reads or writes only them keeps
@@ -111,9 +107,15 @@ type ModelTier struct {
 	Effort         string          `json:"effort,omitempty"`
 	Speed          string          `json:"speed,omitempty"`
 	PermissionMode string          `json:"permission_mode,omitempty"`
+	Host           *string         `json:"host,omitempty"` // tier-wide start host. A profile edit can omit it to keep it or send "" to clear it.
 	Description    string          `json:"description,omitempty"`
 	Candidates     []TierCandidate `json:"candidates,omitempty"`
 	Aliases        []string        `json:"aliases,omitempty"`
+	// Runtime and Channel are candidate 0's runtime and channel (docs/assistant/execution-spec.md): given with no
+	// launcher, a save fills the launcher alias that runs them. The launcher is what runs.
+	Runtime string `json:"runtime,omitempty"`
+	// Channel: see Runtime.
+	Channel string `json:"channel,omitempty"`
 }
 
 // TierCandidate is one launcher a tier may run on, with its model, effort, start speed and permission mode.
@@ -123,11 +125,16 @@ type TierCandidate struct {
 	Effort         string `json:"effort,omitempty"`
 	Speed          string `json:"speed,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
+	// Runtime and Channel are the candidate's runtime and channel, as ModelTier's.
+	Runtime string `json:"runtime,omitempty"`
+	// Channel: see Runtime.
+	Channel string `json:"channel,omitempty"`
 }
 
 // first is candidate 0: the flat fields.
 func (t ModelTier) first() TierCandidate {
-	return TierCandidate{Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Speed: t.Speed, PermissionMode: t.PermissionMode}
+	return TierCandidate{Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Speed: t.Speed, PermissionMode: t.PermissionMode,
+		Runtime: t.Runtime, Channel: t.Channel}
 }
 
 // list is every candidate in the user's order; one (the flat fields) for a tier that lists none.
@@ -141,12 +148,14 @@ func (t ModelTier) list() []TierCandidate {
 // on is t run on candidate c alone: c's fields with t's description, no other candidate and no alias. A start uses it,
 // so the code after the pick sees the one-candidate tier it always did.
 func (t ModelTier) on(c TierCandidate) ModelTier {
-	return ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort, Speed: c.Speed, PermissionMode: c.PermissionMode, Description: t.Description}
+	return ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort, Speed: c.Speed, PermissionMode: c.PermissionMode, Host: t.Host, Description: t.Description,
+		Runtime: c.Runtime, Channel: c.Channel}
 }
 
 // setFirst replaces candidate 0 with c and keeps the others.
 func (t *ModelTier) setFirst(c TierCandidate) {
 	t.Launcher, t.Model, t.Effort, t.Speed, t.PermissionMode = c.Launcher, c.Model, c.Effort, c.Speed, c.PermissionMode
+	t.Runtime, t.Channel = c.Runtime, c.Channel
 	if len(t.Candidates) > 0 {
 		t.Candidates = slices.Clone(t.Candidates)
 		t.Candidates[0] = c
@@ -156,6 +165,13 @@ func (t *ModelTier) setFirst(c TierCandidate) {
 // normalize makes the flat fields candidate 0 and drops a list of one (the flat fields say it all), so a tier with
 // one candidate is stored exactly as before. Aliases are trimmed, in order, without repeats.
 func (t *ModelTier) normalize() {
+	if t.Host != nil {
+		if host := strings.TrimSpace(*t.Host); host != "" {
+			t.Host = &host
+		} else {
+			t.Host = nil
+		}
+	}
 	switch len(t.Candidates) {
 	case 0:
 		t.Candidates = nil
@@ -178,16 +194,22 @@ func (t *ModelTier) normalize() {
 
 // equal: the same candidates, description and aliases.
 func (t ModelTier) equal(o ModelTier) bool {
-	return t.first() == o.first() && t.Description == o.Description && slices.Equal(t.Candidates, o.Candidates) &&
+	return t.first() == o.first() && t.startHost() == o.startHost() && t.Description == o.Description && slices.Equal(t.Candidates, o.Candidates) &&
 		slices.Equal(t.Aliases, o.Aliases)
+}
+
+func (t ModelTier) startHost() string {
+	if t.Host == nil {
+		return ""
+	}
+	return *t.Host
 }
 
 // answersTo: name is t's alias.
 func (t ModelTier) answersTo(name string) bool { return slices.Contains(t.Aliases, name) }
 
-// runs is what the tier runs on, in a line: candidate 0's launcher, then the model, effort, speed and permission mode
-// it sets.
-func (t ModelTier) runs() string { return t.first().runs() }
+// runs is what the tier runs on, in a line: candidate 0's launch settings followed by the tier's host, when set.
+func (t ModelTier) runs() string { return t.withHostLabel(t.first().runs()) }
 
 // allRuns is every candidate in a line, in order (one candidate: runs).
 func (t ModelTier) allRuns() string {
@@ -195,7 +217,14 @@ func (t ModelTier) allRuns() string {
 	for _, c := range t.list() {
 		parts = append(parts, c.runs())
 	}
-	return strings.Join(parts, " / ")
+	return t.withHostLabel(strings.Join(parts, " / "))
+}
+
+func (t ModelTier) withHostLabel(run string) string {
+	if host := t.startHost(); host != "" {
+		return run + " · " + host
+	}
+	return run
 }
 
 func (c TierCandidate) runs() string {
@@ -237,7 +266,7 @@ type modelProfiles struct {
 }
 
 type modelProfileState struct {
-	Active         string              `json:"active,omitempty"` // the profile last switched to ("" none yet)
+	Active         string              `json:"active,omitempty"` // the profile in use ("" none)
 	At             time.Time           `json:"at,omitzero"`
 	By             ProfileActor        `json:"by,omitzero"`
 	Previous       *modelProfileImage  `json:"previous,omitempty"`         // latest rollback point (synced with Rollbacks for backward compatibility)
@@ -289,6 +318,9 @@ func cloneModelProfile(p ModelProfile) ModelProfile {
 	if p.Tiers != nil {
 		tiers := make(map[string]ModelTier, len(p.Tiers))
 		for name, tier := range p.Tiers {
+			if tier.Host != nil {
+				tier.Host = new(*tier.Host)
+			}
 			tier.Candidates = slices.Clone(tier.Candidates)
 			tier.Aliases = slices.Clone(tier.Aliases)
 			tiers[name] = tier
@@ -537,15 +569,8 @@ func (s *Service) normalizeProfilePurposes(ctx context.Context, purposes map[str
 	return out, nil
 }
 
-// seed marks seededProfile in use when the templates are made (modelProfilesLocked said so): it is a copy of the
-// configuration, so nothing switches and there is nothing to roll back to.
-func (st *modelProfileState) seed() {
-	if st.Active != "" {
-		return
-	}
-	now := time.Now().UTC()
-	st.Active, st.At, st.By = seededProfile, now, ProfileActor{Kind: "system"}
-	st.record(ModelProfileEvent{At: now, Action: "seed", To: seededProfile, By: st.By})
+func (st *modelProfileState) clearActive() {
+	st.Active, st.At, st.By = "", time.Time{}, ProfileActor{}
 }
 
 func (st *modelProfileState) record(e ModelProfileEvent) {
@@ -557,6 +582,7 @@ func (st *modelProfileState) record(e ModelProfileEvent) {
 
 var (
 	errModelProfileNotFound    = i18n.Err("assistant-model_profiles.err_not_found")
+	errModelProfileEmpty       = i18n.Err("assistant-model_profiles.err_no_profiles")
 	errModelProfileConflict    = i18n.Err("assistant-model_profiles.err_conflict")
 	errModelProfileNoRollback  = i18n.Err("assistant-model_profiles.err_no_rollback")
 	errModelProfileAtomicStore = i18n.Err("assistant-model_profiles.err_atomic_store")
@@ -592,7 +618,7 @@ func (s *Service) readModelProfiles(ctx context.Context) (modelProfiles, bool, e
 var seededTierNames = [][2]string{{"strong", "core"}, {"standard", "dev"}}
 
 // seededTierAliases are the older names the seeded tier name answers to (strong for core, standard for dev), in a
-// fresh slice. The templates and a capture give them to the tiers they make, as migrateSeededTiers gives them to a
+// fresh slice. A capture gives them to the tiers it makes, as migrateSeededTiers gives them to a
 // migrated tier, so a stored plan task, a start-defaults preset or an older client naming the old one resolves on
 // every profile, whichever is in use.
 func seededTierAliases(name string) []string {
@@ -672,38 +698,23 @@ func (s *Service) putModelProfileSettings(ctx context.Context, values map[string
 	return errModelProfileAtomicStore
 }
 
-// modelProfilesLocked reads profiles or builds two templates from the current configuration (models.mu held).
-// The caller persists templates only after its operation has passed all checks, with the state seed() marks.
-func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, bool, error) {
+// modelProfilesLocked reads the catalog (models.mu held). An unconfigured hub has the zero-value catalog.
+func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, error) {
 	if plan := ownerProfilePlanFrom(ctx); plan != nil {
 		if !plan.loaded {
-			ps, _, err := s.modelProfilesLocked(withoutOwnerProfilePlan(ctx))
+			ps, _, err := s.readModelProfiles(ctx)
 			if err != nil {
-				return modelProfiles{}, false, err
+				return modelProfiles{}, err
 			}
 			plan.profiles = cloneModelProfiles(ps)
 			plan.loaded = true
 		}
 		// Every preparation receives its own deep copy. Only an explicit planned
 		// catalog write advances the shared batch snapshot.
-		return cloneModelProfiles(plan.profiles), false, nil
+		return cloneModelProfiles(plan.profiles), nil
 	}
-	ps, ok, err := s.readModelProfiles(ctx)
-	if err != nil || ok {
-		return ps, false, err
-	}
-	purposes, launchers, tiers, err := s.captureModels(ctx)
-	if err != nil {
-		return ps, false, err
-	}
-	l, now := s.requestCtxLang(ctx), time.Now().UTC()
-	for _, id := range []string{"performance", "economy"} {
-		ps.Profiles = append(ps.Profiles, ModelProfile{ID: id, Name: i18n.T(l, "assistant-model_profiles.name_"+id),
-			Description: i18n.T(l, "assistant-model_profiles.about_"+id), Purposes: maps.Clone(purposes),
-			Launchers: maps.Clone(launchers), Tiers: maps.Clone(tiers), UpdatedAt: now})
-	}
-	ps.Revision = 1
-	return ps, true, nil
+	ps, _, err := s.readModelProfiles(ctx)
+	return ps, err
 }
 
 // captureModels is the configuration as a profile would set it: every category's own choice, the model fields of the
@@ -760,6 +771,9 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 		var m LauncherModels
 		for _, f := range m.fields(&l.ManagedLauncher) {
 			if l.Kind == "api" && f.name != "model" {
+				continue
+			}
+			if *f.launcher == "" && f.name != "small_model" && strings.HasSuffix(f.name, "_model") {
 				continue
 			}
 			*f.set = profileValue(*f.launcher)

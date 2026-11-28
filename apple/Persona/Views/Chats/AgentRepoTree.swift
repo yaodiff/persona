@@ -67,13 +67,29 @@ nonisolated struct RepoPlace: Equatable, Sendable {
     /// A session's place: the node's when it says, else from its working directory.
     static func of(_ s: Session) -> RepoPlace { git(s) ?? RepoPlace(cwd: s.cwd, repoRoot: s.repoRoot) }
 
-    private static func trimmed(_ path: String?) -> String {
+    static func knownRepository(_ session: Session) -> String? {
+        let root = git(session)?.repo ?? trimmed(session.repoRoot)
+        return root.isEmpty ? nil : root
+    }
+
+    /// The repository-named folder in a collection at the computer's home, with at least one tree below it.
+    static func apartRepository(_ path: String, home: String?) -> String? {
+        let home = trimmed(home)
+        guard !home.isEmpty,
+              let prefix = ["/.worktrees/", "/.herdr/worktrees/"].map({ home + $0 }).first(where: { path.hasPrefix($0) })
+        else { return nil }
+        let parts = path.dropFirst(prefix.count).split(separator: "/", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count > 1, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return prefix + parts[0]
+    }
+
+    static func trimmed(_ path: String?) -> String {
         var path = Substring(path ?? "")
         while path.hasSuffix("/") { path = path.dropLast() }
         return String(path)
     }
 
-    private static func baseName(_ path: String) -> String {
+    static func baseName(_ path: String) -> String {
         path.split(separator: "/" as Character).last.map(String.init) ?? ""
     }
 }
@@ -104,6 +120,7 @@ nonisolated struct RepoTree {
         var treeSessions: [Session] { sessions + children.flatMap(\.treeSessions) }
         var catalog = false
         var workspace: HostWorkspace? = nil
+        var unavailable: Bool { workspace?.online == false || workspace?.available == false }
         /// Derived once with the tree, so sorting ancestors does not traverse their descendants again.
         var latestPinnedAt: Date? = nil
 
@@ -137,11 +154,19 @@ nonisolated struct RepoTree {
         /// Native pins first; the other worktrees keep their host/main-checkout order.
         var worktrees: [Worktree]
         var latestPinnedAt: Date? = nil
+        var apart = false
+        var catalogProject = false
         var sessions: [Session] { worktrees.flatMap(\.treeSessions) }
-        /// Only its main checkout, nothing nested under it and no branch the node named: its agents sit right under it,
-        /// with no working-tree level. A named branch keeps its level (#1805: machine → project → branch → agents).
+        /// A lone unnamed checkout, or a herdr workspace that repeats the repository's name, shares its heading.
         var flat: Bool {
-            worktrees.count == 1 && worktrees[0].main && worktrees[0].children.isEmpty && !worktrees[0].catalog && worktrees[0].branch == nil
+            guard worktrees.count == 1, let tree = worktrees.first, tree.children.isEmpty, tree.branch == nil else { return false }
+            if let workspace = tree.workspace, workspace.source == "herdr" {
+                return tree.name == name && !tree.sessions.isEmpty
+            }
+            return tree.main && !tree.catalog
+        }
+        var flattenedWorkspace: Worktree? {
+            flat && worktrees.first?.workspace?.source == "herdr" ? worktrees.first : nil
         }
         var structured: Bool { worktrees.contains { $0.catalog || !$0.children.isEmpty } }
     }
@@ -163,6 +188,14 @@ nonisolated struct RepoTree {
     /// A session's space on its machine, unique across hosts; nil outside a space.
     static func spaceKey(_ s: Session) -> String? {
         s.spaceID.map { s.machineRef.path + "/" + (s.spaceKind ?? "") + ":" + $0 }
+    }
+
+    /// Repository catalog bindings use the host and its exact workspace ID, even when two hosts share a directory.
+    static func catalogKey(_ session: Session) -> String? {
+        guard let source = session.spaceKind, source == "paseo" || source == "herdr" else { return nil }
+        let explicit = session.workspaceID.flatMap { $0.isEmpty ? nil : $0 }
+        guard let id = explicit ?? (source == "herdr" ? session.spaceID : nil), !id.isEmpty else { return nil }
+        return session.machineRef.path + "/" + source + ":" + id
     }
 
     /// The space each nested space hangs under (`parent_space_id`): only a parent that is listed (it has a live agent),
@@ -204,16 +237,16 @@ nonisolated struct RepoTree {
 
     static func build(_ sessions: [Session], machines: [MachineRef], workspaces: [HostWorkspace] = [],
                       includeEmpty: Bool = true, showEmptyWorkspaces: Bool = false, search: String = "",
-                      navigationSessions: [Session] = []) -> [Host] {
+                      navigationSessions: [Session] = [], homes: [MachineRef: String] = [:],
+                      knownSessions: [Session]? = nil) -> [Host] {
         var nodes: [String: Node] = [:]
         var loose: [Session] = []
-        let paseoWorkspaces = Dictionary(workspaces.filter { $0.source == "paseo" }.map { ($0.key, $0) },
-                                        uniquingKeysWith: { first, _ in first })
+        let terminalCatalog = Dictionary(workspaces.filter { $0.source == "paseo" || $0.source == "herdr" }.map { ($0.key, $0) },
+                                         uniquingKeysWith: { first, _ in first })
         for s in sessions {
             // Paseo's space is a project, not a workspace. Only its explicit workspace identity binds a session;
             // tasks sharing a folder stay independent, and old nodes without a catalog retain path-based grouping.
-            if s.spaceKind == "paseo", let id = s.workspaceID,
-               let w = paseoWorkspaces[s.machineRef.path + "/paseo:" + id] {
+            if let key = catalogKey(s), let w = terminalCatalog[key] {
                 if nodes[w.key] == nil {
                     nodes[w.key] = Node(machine: w.machineRef, path: w.cwd, name: w.title,
                                         index: w.index ?? Int.max, parent: w.parentKey, sessions: [])
@@ -231,20 +264,26 @@ nonisolated struct RepoTree {
         }
         // Discovery supplies containers, including existing workspaces with no running Agent. Its source-local identity
         // keeps two workspaces in the same directory distinct and permits cross-project Orca lineage.
-        for w in workspaces where w.source == "orca" || w.source == "paseo" {
+        let navigationKeys = Set(navigationSessions.compactMap(catalogKey))
+        var herdrKeys = Set<String>()
+        for w in workspaces where w.source == "herdr" && (nodes[w.key] != nil || w.pinnedAt != nil ||
+            navigationKeys.contains(w.key) || (showEmptyWorkspaces && w.available && w.online)) {
+            var key: String? = w.key
+            while let current = key, herdrKeys.insert(current).inserted {
+                key = terminalCatalog[current]?.parentKey
+            }
+        }
+        for w in workspaces where w.source == "orca" || w.source == "paseo" || herdrKeys.contains(w.key) {
             let old = nodes[w.key]
             nodes[w.key] = Node(machine: w.machineRef, path: w.cwd, name: w.title,
                                 index: w.index ?? old?.index ?? Int.max,
                                 parent: w.parentKey ?? (w.index == nil ? old?.parent : nil),
-                                sessions: old?.sessions ?? [], hasNavigation: old?.hasNavigation ?? false,
+                                sessions: old?.sessions ?? [], hasNavigation: navigationKeys.contains(w.key),
                                 catalog: true, workspace: w)
         }
         // Pinned Agents rendered in the top Pinned section keep their catalog workspace reachable without duplicating rows.
-        for s in navigationSessions {
-            if s.spaceKind == "paseo", let id = s.workspaceID {
-                let key = s.machineRef.path + "/paseo:" + id
-                if nodes[key] != nil { nodes[key]!.hasNavigation = true }
-            } else if s.spaceKind == "orca", let key = spaceKey(s), nodes[key] != nil {
+        for s in navigationSessions where s.spaceKind == "orca" {
+            if let key = spaceKey(s), nodes[key] != nil {
                 nodes[key]!.hasNavigation = true
             }
         }
@@ -290,18 +329,37 @@ nonisolated struct RepoTree {
             // The node's git place when it sends one (#1805), else the path inference.
             let place = n.sessions.first.flatMap(RepoPlace.git) ?? RepoPlace(cwd: n.path, repoRoot: n.sessions.first?.repoRoot)
             let metadata = n.workspace
+            let herdr = metadata?.source == "herdr"
             let addressProject = metadata?.sourceID.components(separatedBy: "::")
             let projectID = metadata?.projectID.flatMap { $0.isEmpty ? nil : $0 }
-                ?? ((addressProject?.count ?? 0) > 1 ? addressProject?.first.flatMap { $0.isEmpty ? nil : $0 } : nil)
+                ?? (!herdr && (addressProject?.count ?? 0) > 1 ? addressProject?.first.flatMap { $0.isEmpty ? nil : $0 } : nil)
+            let roots = herdr ? Set(w.treeSessions.compactMap(RepoPlace.knownRepository)) : []
+            let providerPath = metadata?.projectPath.flatMap { $0.isEmpty ? nil : $0 }
+            let projectPath = RepoPlace.trimmed(providerPath)
+            let inferred = herdr ? RepoPlace(cwd: n.path).repo : place.repo
+            let herdrPath = projectPath.isEmpty ? ((roots.count == 1 ? roots.first : nil) ?? inferred) : projectPath
+            let pathOwnsHerdr = herdr && projectID == nil && !herdrPath.isEmpty && (!projectPath.isEmpty || roots.count <= 1)
+            let pathKey = pathOwnsHerdr ? herdrPath : (n.catalog ? "workspace/" + key : place.repo)
             let repoKey = n.machine.path + "/" + (projectID.map { "project/" + (metadata?.source ?? "orca") + ":" + $0 }
-                ?? (n.catalog ? "workspace/" + key : place.repo))
+                ?? pathKey)
+            let apart = pathOwnsHerdr && projectPath.isEmpty && roots.isEmpty &&
+                RepoPlace.apartRepository(n.path, home: homes[n.machine]) == herdrPath
+            let name = metadata?.projectName.flatMap { $0.isEmpty ? nil : $0 }
+                ?? (pathOwnsHerdr ? RepoPlace.baseName(herdrPath) : (n.catalog && projectID == nil ? w.name : place.name))
+            let path = pathOwnsHerdr ? herdrPath : (providerPath ?? place.repo)
             var repo = repos[repoKey] ?? Repo(id: "repo/" + repoKey, machine: n.machine,
-                                            name: metadata?.projectName.flatMap { $0.isEmpty ? nil : $0 }
-                                                ?? (n.catalog && projectID == nil ? w.name : (place.name.isEmpty ? unnamed : place.name)),
-                                            path: metadata?.projectPath.flatMap { $0.isEmpty ? nil : $0 } ?? place.repo, worktrees: [])
+                                            name: name.isEmpty ? unnamed : name, path: path, worktrees: [],
+                                            apart: apart, catalogProject: projectID != nil || (n.catalog && !pathOwnsHerdr))
             if let name = metadata?.projectName, !name.isEmpty { repo.name = name }
-            if let path = metadata?.projectPath, !path.isEmpty { repo.path = path }
-            w.main = metadata?.isMain ?? place.main
+            if let providerPath { repo.path = pathOwnsHerdr ? herdrPath : providerPath }
+            repo.apart = repo.apart && apart
+            if herdr {
+                let checkout = projectPath.isEmpty ? (pathOwnsHerdr ? herdrPath : nil) : projectPath
+                w.main = metadata?.isMain ?? (checkout == RepoPlace.trimmed(w.path))
+                w.branch = (metadata?.branch).flatMap { $0.isEmpty ? nil : $0 }
+            } else {
+                w.main = metadata?.isMain ?? place.main
+            }
             if !n.catalog {
                 // Orca's sidebar and git name a working tree by its branch.
                 let branch = n.sessions.first?.branch.flatMap { $0.isEmpty ? nil : $0 }
@@ -318,14 +376,18 @@ nonisolated struct RepoTree {
         }
         // Sessions without host placement keep the established path-based repository grouping.
         var worktreeIndices = repos.mapValues { repo in
-            Dictionary(repo.worktrees.enumerated().map { ($0.element.path, $0.offset) }, uniquingKeysWith: { a, _ in a })
+            Dictionary(repo.worktrees.enumerated().filter { !$0.element.catalog }.map { ($0.element.path, $0.offset) },
+                       uniquingKeysWith: { a, _ in a })
         }
         for s in loose {
             let place = RepoPlace.of(s)
             let key = s.machineRef.path + "/" + place.repo
+            let apart = RepoPlace.knownRepository(s) == nil && RepoPlace.apartRepository(s.cwd, home: homes[s.machineRef]) == place.repo
             if repos[key] == nil {
                 repos[key] = Repo(id: "repo/" + key, machine: s.machineRef,
-                                  name: place.name.isEmpty ? unnamed : place.name, path: place.repo, worktrees: [])
+                                  name: place.name.isEmpty ? unnamed : place.name, path: place.repo, worktrees: [], apart: apart)
+            } else {
+                repos[key]!.apart = repos[key]!.apart && apart
             }
             // Preserve the projection's linear accumulation for large inventories.
             let branch = s.branch.flatMap { $0.isEmpty ? nil : $0 }
@@ -344,6 +406,7 @@ nonisolated struct RepoTree {
                 worktreeIndices[key, default: [:]][place.worktree] = index
             }
         }
+        joinApart(&repos, homes: homes, known: knownSessions ?? sessions)
         // One folder can be a working tree of two repositories: a Codex App project names its own folder (`repo_root`
         // ~/work) while git places the tree in the repository inside it (~/work/code/app), whose other agents put it
         // under that one. A tree's id is its path, and the list keys its rows, folds and quiet state by it, so the
@@ -372,6 +435,7 @@ nonisolated struct RepoTree {
             }
             repo.worktrees.sort { a, b in
                 if let pinned = pinPrecedes(a.latestPinnedAt, b.latestPinnedAt, a.id, b.id) { return pinned }
+                if (a.workspace?.source == "herdr" || b.workspace?.source == "herdr"), a.main != b.main { return a.main }
                 if a.catalog && b.catalog, let ai = a.workspace?.index, let bi = b.workspace?.index, ai != bi { return ai < bi }
                 if a.main != b.main { return a.main }
                 if a.name == b.name && a.path == b.path { return a.id < b.id }
@@ -384,6 +448,41 @@ nonisolated struct RepoTree {
             Host(ref: ref, repos: hosts[ref, default: []].sorted {
                 pinPrecedes($0.latestPinnedAt, $1.latestPinnedAt, $0.id, $1.id) ?? before($0.name, $0.id, $1.name, $1.id)
             })
+        }
+    }
+
+    /// Recover removed home-level trees only when Git or a unique repository on that machine identifies their section.
+    private static func joinApart(_ repos: inout [String: Repo], homes: [MachineRef: String], known: [Session]) {
+        let sources = repos.keys.filter { repos[$0]!.apart }.sorted()
+        guard !sources.isEmpty else { return }
+        let placed = Dictionary(grouping: repos.keys.filter { !repos[$0]!.apart }, by: { repos[$0]!.machine })
+        var learned: [MachineRef: [String: Set<String>]] = [:]
+        for session in known {
+            guard let git = RepoPlace.git(session), !git.main,
+                  let folder = RepoPlace.apartRepository(git.worktree, home: homes[session.machineRef]) else { continue }
+            learned[session.machineRef, default: [:]][folder, default: []].insert(git.repo)
+        }
+        for key in sources {
+            let source = repos[key]!
+            let local = placed[source.machine] ?? []
+            let candidates: [String]
+            if let roots = learned[source.machine]?[source.path] {
+                guard roots.count == 1, let root = roots.first else { continue }
+                candidates = local.filter { repos[$0]!.path == root }
+            } else {
+                candidates = local.filter { repos[$0]!.name == source.name }
+            }
+            guard candidates.count == 1, let target = candidates.first, var joined = repos[target], !joined.catalogProject else { continue }
+            for tree in source.worktrees {
+                if let i = joined.worktrees.firstIndex(where: { $0.id == tree.id }) {
+                    joined.worktrees[i].sessions += tree.sessions
+                    joined.worktrees[i].children += tree.children
+                } else {
+                    joined.worktrees.append(tree)
+                }
+            }
+            repos[target] = joined
+            repos.removeValue(forKey: key)
         }
     }
 

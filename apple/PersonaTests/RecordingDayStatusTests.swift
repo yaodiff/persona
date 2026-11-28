@@ -579,14 +579,16 @@ private nonisolated final class Touched: @unchecked Sendable {
         let symbols = RecordingDayConsentPoint.allCases.map(\.symbol)
         #expect(Set(symbols).count == symbols.count, "one mark per point")
         for point in RecordingDayConsentPoint.allCases {
-            #expect(!point.text(transcriptDays: 14).isEmpty, "\(point)")
+            #expect(!point.text(textDays: 14).isEmpty, "\(point)")
         }
     }
 
-    /// The text's retention is the hub's `recording_days` (one test of the localized key).
-    @Test func theRetentionPointSaysTheHubsDays() {
-        #expect(RecordingDayConsentPoint.howLongItIsKept.text(transcriptDays: 30)
-                == String(localized: "The text is kept for \(30) days, and the day's recap as long as meeting minutes, which is forever by default."))
-        #expect(RecordingDayConsentPoint.howLongItIsKept.text(transcriptDays: 30) != RecordingDayConsentPoint.howLongItIsKept.text(transcriptDays: 14))
+    /// The text's retention is the hub's `text_days`, forever included (one test of the localized key).
+    @Test func theRetentionPointSaysTheHubsTextDays() {
+        let thirty = RecordingDayConsentPoint.howLongItIsKept.text(textDays: 30)
+        #expect(thirty == String(localized: "The text is \(RecordingRetentionText.kept(30)), and the day's recap is kept as long as meeting minutes, which is forever by default."))
+        #expect(thirty != RecordingDayConsentPoint.howLongItIsKept.text(textDays: 14))
+        #expect(RecordingDayConsentPoint.howLongItIsKept.text(textDays: 0) != thirty, "forever is not shown as days")
+        #expect(RecordingDayConsentPoint.howLongItIsKept.text(textDays: 1000).contains("1000"), "past 365 is exact")
     }
 }

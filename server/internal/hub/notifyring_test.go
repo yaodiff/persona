@@ -149,6 +149,35 @@ func TestNotifyRingReplaysWhatAnOfflineDeviceMissed(t *testing.T) {
 	}
 }
 
+func TestNotifyRingReplaysOnlyTheDisplayedOccurrence(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		t.Run(fmt.Sprint("replacement_", replacement), func(t *testing.T) {
+			h := ringHub(t)
+			phone := ringConnect(t, h, "phone", "ws_notify")
+			ringDisconnect(h, phone)
+			ix := proto.Interaction{ID: "ix1", MachineID: "m", SessionID: "s", Kind: proto.IxPermission,
+				Summary: "first", CreatedAt: time.Date(2026, 11, 25, 1, 2, 3, 123456789, time.UTC)}
+			ringPending(h, ix)
+			h.notifyInteraction(assistantwire.AssistantID, ix, "box", false)
+			ringResolve(h, ix.ID)
+			current := ix
+			if replacement {
+				current.Summary = "replacement"
+				current.CreatedAt = current.CreatedAt.Add(time.Nanosecond)
+			}
+			ringPending(h, current)
+			got := ringDecoded(t, ringSent(ringConnect(t, h, "phone", "ws_notify")))
+			if replacement {
+				if len(got) != 0 {
+					t.Fatalf("replayed the old occurrence over its replacement: %v", got)
+				}
+			} else if len(got) != 1 || got[0]["interaction_created_at"] != ix.CreatedAt.Format(time.RFC3339Nano) {
+				t.Fatalf("same occurrence did not retain its exact identity: %v", got)
+			}
+		})
+	}
+}
+
 // What is kept is what a socket would have got at that moment: the device's settings decide when the event is
 // selected (needs you, "Finished", a manager's mute, quiet hours, the capability a card needs) and are not applied
 // again on replay.

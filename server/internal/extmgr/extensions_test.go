@@ -43,7 +43,11 @@ func TestMain(m *testing.M) {
 		return
 	}
 	if run, ok := builtinext.LookupProgram("volc"); ok && len(os.Args) > 1 && os.Args[1] == "volc" { // the built-in Volcengine speech extension run by the hub (volc_extension_test.go)
-		if err := run(context.Background(), "test"); err != nil { // newTestManager's version
+		version := "test" // newTestManager's version
+		if len(os.Args) == 3 {
+			version = os.Args[2]
+		} // packaged speech fixture
+		if err := run(context.Background(), version); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -92,8 +96,16 @@ func TestMain(m *testing.M) {
 		serveAuthRelayExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "lookup" {
+		serveTextLookupExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "secrets" {
 		serveSecretProviderExtensionForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "routine" {
+		serveRoutineForTest()
 		return
 	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "memory" { // memory_sources_test.go

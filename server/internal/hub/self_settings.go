@@ -152,18 +152,14 @@ func orNone(s string) string {
 // (#5907). When the caller stops waiting, so does the manager, which withdraws its card (serveBus's Cancels). Reading
 // (get) shows no card and keeps the two minutes.
 func (h *Hub) managerSettingsTool(ctx context.Context, id, action string, params any) (string, error) {
-	raw, err := json.Marshal(params)
-	if err != nil {
-		return "", err
-	}
-	call := h.callBus
+	c := h.managerCaller(id)
 	if action != "get" {
-		call = h.callBusAsIs
+		c.call = h.callBusAsIs
 	}
 	var res struct {
 		Text string `json:"text"`
 	}
-	if err := call(ctx, id, extwire.MethodHubCall, extwire.HubCall{Method: extwire.HubSettingsTool, Params: raw}, &res); err != nil {
+	if err := callExtensionManager(ctx, c, extwire.HubSettingsTool, params, &res); err != nil {
 		return "", err
 	}
 	return res.Text, nil

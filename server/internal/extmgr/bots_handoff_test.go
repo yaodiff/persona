@@ -385,3 +385,71 @@ func TestHandoffAuditKeepsNoContent(t *testing.T) {
 }
 
 func handoffJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+func TestFeishuBotSettingsHandoffJSONRoundTrip(t *testing.T) {
+	in := FeishuBotSettings{
+		Enabled: true,
+		Handoff: &botHandoffPolicy{
+			Off:          true,
+			DirectChats:  []string{"oc_direct_1", "oc_direct_2"},
+			BlockedChats: []string{"oc_blocked_1"},
+			Launcher:     "codex",
+		},
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		t.Fatalf("unmarshal raw map: %v", err)
+	}
+	var handoffMap map[string]any
+	if err := json.Unmarshal(rawMap["handoff"], &handoffMap); err != nil {
+		t.Fatalf("unmarshal handoff field: %v", err)
+	}
+	if handoffMap["off"] != true || handoffMap["launcher"] != "codex" {
+		t.Fatalf("unexpected handoff JSON fields: %v", handoffMap)
+	}
+	var out FeishuBotSettings
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	if !handoffPolicyEqual(in.Handoff, out.Handoff) {
+		t.Fatalf("round-trip mismatch: got %+v, want %+v", out.Handoff, in.Handoff)
+	}
+
+	emptyRaw, err := json.Marshal(FeishuBotSettings{})
+	if err != nil {
+		t.Fatalf("marshal empty settings: %v", err)
+	}
+	if strings.Contains(string(emptyRaw), `"handoff"`) {
+		t.Fatalf("expected nil handoff to be omitted, got %s", emptyRaw)
+	}
+	var emptyOut FeishuBotSettings
+	if err := json.Unmarshal(emptyRaw, &emptyOut); err != nil {
+		t.Fatalf("unmarshal empty settings: %v", err)
+	}
+	if emptyOut.Handoff != nil {
+		t.Fatalf("expected nil handoff after unmarshal, got %+v", emptyOut.Handoff)
+	}
+
+	for _, valid := range []string{"r1", "A_b:1.2-3"} {
+		if !botHandoffRefPattern.MatchString(valid) {
+			t.Errorf("expected ref %q to match botHandoffRefPattern", valid)
+		}
+		if e := checkHandoffRequest(&botHandoffRequest{ChatID: "oc_group", Ref: valid, Question: "q"}); e != nil {
+			t.Errorf("expected ref %q to pass checkHandoffRequest: %v", valid, e)
+		}
+	}
+	for _, invalid := range []string{"", "has space", "a/b"} {
+		if botHandoffRefPattern.MatchString(invalid) {
+			t.Errorf("expected ref %q to fail botHandoffRefPattern", invalid)
+		}
+		if invalid != "" {
+			if e := checkHandoffRequest(&botHandoffRequest{ChatID: "oc_group", Ref: invalid, Question: "q"}); e == nil {
+				t.Errorf("expected ref %q to fail checkHandoffRequest", invalid)
+			}
+		}
+	}
+}

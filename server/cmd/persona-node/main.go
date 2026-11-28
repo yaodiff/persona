@@ -54,7 +54,7 @@ func main() {
 		}
 		return
 	}
-	handled, err := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonaNode})
+	handled, err := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonaNode, Edition: update.ThisEdition})
 	if !handled {
 		fmt.Fprintln(os.Stderr, nodecmd.Named(usage))
 		// Say where the commands it leaves out are rather than only listing its own.

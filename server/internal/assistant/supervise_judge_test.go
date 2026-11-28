@@ -229,12 +229,12 @@ func TestEarlierReportNotForSideTurns(t *testing.T) {
 	peer := text("user", "好了吗？")
 	peer.From = "another-agent"
 	f.setItems(text("assistant", fullReport), peer, text("assistant", "好了，全部完成。"))
-	replies, _ := s.taskReplies(context.Background(), todoNow(s, todo.ID))
+	replies, _, _ := s.taskReplies(context.Background(), todoNow(s, todo.ID))
 	if len(replies) != 1 || replies[0].Source != "peer" || replies[0].Earlier != "" {
 		t.Fatalf("replies = %+v", replies)
 	}
 	f.setItems(text("assistant", fullReport), text("user", "好了吗？"), text("assistant", "好了，全部完成。"))
-	replies, _ = s.taskReplies(context.Background(), todoNow(s, todo.ID))
+	replies, _, _ = s.taskReplies(context.Background(), todoNow(s, todo.ID))
 	if len(replies) != 1 || replies[0].Source != "" || replies[0].Earlier != fullReport {
 		t.Fatalf("own follow-up: %+v", replies)
 	}

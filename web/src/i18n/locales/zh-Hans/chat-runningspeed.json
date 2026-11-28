@@ -1,7 +1,7 @@
 {
   "latest": "最近速度",
   "history": "生成速度历史",
-  "description": "最近一段生成速度，不含工具执行与等待。",
+  "description": "最近一段的生成速度，不包含工具执行与等待时间。",
   "unit": "tok/s",
   "average": "本轮平均",
   "output": "累计输出",

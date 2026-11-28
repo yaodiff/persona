@@ -15,7 +15,29 @@ Close, send back or hand up one of the worker tasks you handed out with task_pla
     },
     "verdict": {
       "type": "string",
-      "enum": ["accepted", "rework", "needs_user", "cancelled"]
+      "enum": ["accepted", "rework", "needs_user", "cancelled", "findings"]
+    },
+    "findings_review": {
+      "type": "object",
+      "description": "verdict=findings: omit to read; supply the displayed version to confirm and record dispositions without moving task state.",
+      "required": ["version"],
+      "properties": {
+        "version": {"type":"integer","minimum":1},
+        "dispositions": {
+          "type":"array",
+          "items": {
+            "type":"object",
+            "required":["id"],
+            "properties": {
+              "id":{"type":"string"},
+              "follow_up_todo_id":{"type":"string","description":"Independent supervised to-do with the finding’s exact next action in done_when."},
+              "wait_target":{"type":"string","description":"A single finding may match the park evidence's target."},
+              "done_evidence":{"type":"string","description":"Evidence that this finding was resolved."},
+              "owner_drop_decision_id":{"type":"string","description":"Owner's manual decision, question 'Drop investigation finding <id>?', choice 'Drop', with reason."}
+            }
+          }
+        }
+      }
     },
     "rework_kind": {
       "type": "string",

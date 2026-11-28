@@ -47,6 +47,26 @@ func TestProgramOfTellsPersonaNodeFromPersonad(t *testing.T) {
 	}
 }
 
+func TestProgramRefusalPrecedesEditionWithoutWeakeningDeviceFiles(t *testing.T) {
+	corePersonad := updatetest.CoreProgram(t, "personad", "", "", "old")
+	fullNode := updatetest.Program(t, "persona-node", "", "")
+	// Both rules refuse this, and the established program-identity reason stays stable in a core-only test run.
+	if err := CheckReplace(corePersonad, fullNode); err == nil || !strings.Contains(err.Error(), "not replacing it with persona-node") {
+		t.Fatalf("core personad -> full persona-node: %v", err)
+	}
+	// A device file may change program, but not edition.
+	device := filepath.Join(t.TempDir(), "persona-node")
+	b, _ := os.ReadFile(corePersonad)
+	_ = os.WriteFile(device, b, 0o755)
+	if err := CheckReplace(device, fullNode); err == nil || !strings.Contains(err.Error(), "edition") {
+		t.Fatalf("a core device file accepted a full build: %v", err)
+	}
+	coreNode := updatetest.CoreProgram(t, "persona-node", "", "", "next")
+	if err := CheckReplace(device, coreNode); err != nil {
+		t.Fatalf("a core device file refused a core build: %v", err)
+	}
+}
+
 // The suffix ProgramOf looks for is the package persona-node is built from.
 func TestProgramOfMatchesTheCommandDirectory(t *testing.T) {
 	if fi, err := os.Stat(filepath.Join("..", "..", "cmd", nodeproto.ProgramPersonaNode, "main.go")); err != nil || fi.IsDir() {

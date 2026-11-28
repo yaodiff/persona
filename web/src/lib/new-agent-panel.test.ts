@@ -55,7 +55,7 @@ const provider = (p: ReturnType<typeof panel>, id: string) => p.providers.find((
 describe("the panel's providers", () => {
   it("says which Persona providers pi can use too (#8194)", () => {
     const p = panel({ launchers: [...launchers.slice(0, 4), { name: "p-relay", display_name: "Team relay", source: "persona", pi: true }] });
-    expect(provider(p, "p-relay").alsoNote).toBe("pi 也能用");
+    expect(provider(p, "p-relay").alsoNote).toBe("pi 也可使用");
     expect(provider(p, "claude").alsoNote).toBeUndefined();
   });
   it("one per launcher in the hub's order, named by display name, each led by its Default row", () => {
@@ -150,7 +150,7 @@ describe("the panel's providers", () => {
   it("an ID typed for this start is not one the hub remembers: no Typed before, nothing to forget", () => {
     const row = provider(panel({ choice: { launcher: "claude", model: "vendor/new", effort: "" }, configured: null }), "claude").models?.at(-1);
     expect(row?.custom).toBeUndefined();
-    expect(row?.description).toBe("这次手输的模型 ID");
+    expect(row?.description).toBe("本次手动输入的模型 ID");
   });
 
   it("Codex offers only each model's reported efforts and keeps unset effort at Codex's default; a list still read is a spinner", () => {

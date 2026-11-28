@@ -184,4 +184,45 @@ describe("PreviewPanel's keys field with a mouse", () => {
     go("/settings");
     expect(document.activeElement).toBe(keys);
   });
+
+  it("guards prompt Enter/Escape and address-bar Escape against IME and cancels prompt on real Escape", async () => {
+    const { sock } = await live();
+    const outerKeyDown = vi.fn();
+    window.addEventListener("keydown", outerKeyDown);
+    try {
+      // Address bar Safari IME Escape (keyCode 229) keeps focus on address input.
+      const addr = host.querySelector<HTMLInputElement>("[data-preview-address]")!;
+      act(() => { addr.focus(); });
+      const imeAddrEsc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      Object.defineProperty(imeAddrEsc, "keyCode", { value: 229 });
+      act(() => { addr.dispatchEvent(imeAddrEsc); });
+      expect(document.activeElement).toBe(addr);
+
+      // Show a window.prompt() dialog bar from the preview socket.
+      act(() => sock.onmessage?.({ data: JSON.stringify({ t: "dialog", kind: "prompt", message: "Your name?" }) }));
+      const input = host.querySelector<HTMLInputElement>('[data-preview-bar="dialog"] input')!;
+      expect(input).toBeTruthy();
+
+      // IME Enter (isComposing / Safari keyCode 229) must NOT submit the prompt.
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "draft");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const imeEnter1 = new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true });
+      const imeEnter2 = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      Object.defineProperty(imeEnter2, "keyCode", { value: 229 });
+      act(() => { input.dispatchEvent(imeEnter1); input.dispatchEvent(imeEnter2); });
+      expect(sock.sent.filter((m) => m.t === "dialog")).toEqual([]);
+
+      // Real Escape cancels the prompt and stops propagation so enclosing SidePanel stays open.
+      outerKeyDown.mockClear();
+      const esc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      act(() => { input.dispatchEvent(esc); });
+      expect(esc.defaultPrevented).toBe(true);
+      expect(sock.sent.filter((m) => m.t === "dialog")).toEqual([{ t: "dialog", accept: false, text: "" }]);
+      expect(outerKeyDown).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", outerKeyDown);
+    }
+  });
 });

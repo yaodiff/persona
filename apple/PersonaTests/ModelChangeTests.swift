@@ -294,7 +294,7 @@ struct ModelChangeTests {
         #expect(replyModelName(Self.sonnet) == "Sonnet 4.5")
         #expect(replyModelName("us.anthropic.claude-sonnet-4-5-20250929-v1:0") == "Sonnet 4.5")
         #expect(replyModelName("claude-sonnet-4-5@20250929") == "Sonnet 4.5")
-        #expect(replyModelName("gpt-6.1-sol") == "6.1 Sol")
+        #expect(replyModelName("gpt-6.1-sol") == "GPT-6.1 Sol")
         #expect(replyModelName("vendor/glm-5.1") == "glm-5.1")
     }
 

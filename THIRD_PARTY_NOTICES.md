@@ -101,6 +101,10 @@ a license file.
 - Authors' email addresses are left out of the license texts: the published hub binary embeds the web client, and the
   release scan (`scripts/release/check_bundle_privacy.py`) refuses email addresses in it.
 
+The client also includes the unmodified Latin variable WOFF2 subsets of Inter and JetBrains Mono from
+Fontsource 5.3.0. Their SIL Open Font License 1.1 texts are included beside their sources in
+`web/src/ui/font-assets/` and in the generated `third-party-licenses.txt`.
+
 ## Ovis
 
 Parts of `server/internal/screen` (Claude Code input-box rules) are ported from Ovis, and

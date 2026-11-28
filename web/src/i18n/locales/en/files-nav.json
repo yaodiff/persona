@@ -16,6 +16,6 @@
   "link_to": "Link → {target}",
   "link_broken": "Link broken · {target} isn’t there",
   "show_in_files": "Show in Files",
-  "open_terminal": "Open terminal here",
-  "terminal_failed": "Couldn’t open a terminal: {error}"
+  "open_terminal": "Open shell here",
+  "terminal_failed": "Couldn’t open a shell: {error}"
 }

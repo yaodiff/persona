@@ -8,10 +8,10 @@
   "wiki": "知识库",
   "page": "页面",
   "whiteboard": "画板",
-  "see_images": "请看图片",
-  "see_context": "参考上面的内容。",
-  "see_forward": "请看上面转发的消息。",
-  "edit_with_ask": "按要求修改上面选中的内容：{ask}",
-  "edit_plain": "按上面选中的内容修改。",
-  "see_forwards": "请看上面转发的几条消息。"
+  "see_images": "请查看图片",
+  "see_context": "请参考以上内容。",
+  "see_forward": "请查看以上转发的消息。",
+  "edit_with_ask": "请按要求修改以上选中的内容：{ask}",
+  "edit_plain": "请基于以上选中的内容进行修改。",
+  "see_forwards": "请查看以上转发的多条消息。"
 }

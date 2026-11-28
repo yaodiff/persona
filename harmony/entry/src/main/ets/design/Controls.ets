@@ -26,9 +26,11 @@ class PersonaButtonModifier implements AttributeModifier<ButtonAttribute> {
       .labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
       .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap });
     if (this.role === 'primary') button.buttonStyle(ButtonStyleMode.EMPHASIZED).backgroundColor(Colors.action)
-      .fontColor(Colors.onAction).fontWeight(FontWeight.Medium).borderRadius(Tokens.capsule);
+      .fontColor(Colors.onAction).fontWeight(FontWeight.Medium).borderRadius(Tokens.capsule)
+      .shadow({ radius: 10, color: '#24007AFF', offsetY: 3 });
     else if (this.role === 'secondary') button.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.control)
-      .fontColor(Colors.link).borderRadius(Tokens.capsule);
+      .fontColor(Colors.link).fontWeight(FontWeight.Medium).borderRadius(Tokens.capsule)
+      .border({ width: 0.5, color: Colors.divider, radius: Tokens.capsule });
     else button.buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).fontColor(Colors.link)
       .padding({ left: Tokens.inset, right: Tokens.inset, top: Tokens.gap, bottom: Tokens.gap });
   }

@@ -37,6 +37,15 @@ func init() {
 			return nil, nil
 		},
 		Namespaces: map[string]pserve.Handler{"kbtest": func(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+			if method == "checkpoint" || method == "markers" {
+				name := kbImportCheckpoint
+				if method == "markers" {
+					name = kbSentMarkers
+				}
+				var result json.RawMessage
+				err := hub.Call(ctx, name, raw, &result)
+				return result, err
+			}
 			if method == "day" {
 				var result assistantwire.KBDayResult
 				err := hub.Call(ctx, assistantwire.MethodKBDay, raw, &result)

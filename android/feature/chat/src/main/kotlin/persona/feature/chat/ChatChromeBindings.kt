@@ -5,6 +5,7 @@ import persona.core.contracts.api.ChatActions
 import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.SessionFiles
 import persona.core.domain.sort.SessionRenamer
+import persona.core.navigation.DecisionSource
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -40,6 +41,9 @@ data class ChatChromeBindings(
      */
     val waiting: List<WaitingRequest> = emptyList(),
     val onOpenRequest: ((SessionKey, requestId: String) -> Unit)? = null,
+    val decisionSource: DecisionSource? = null,
+    /** A task's source chat opens over the pager and keeps the Assistant's selection. */
+    val onOpenDecisionSource: ((SessionKey, toolUseId: String?) -> Unit)? = null,
     /** Opens an assistant conversation (a branch of the Persona conversation, web `forkAt`); null: assistant branches are not offered. */
     val onOpenAssistant: ((SessionKey) -> Unit)? = null,
     val onConnectionDetails: (() -> Unit)? = null,

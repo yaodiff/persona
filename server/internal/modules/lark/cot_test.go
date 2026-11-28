@@ -115,6 +115,19 @@ func cotRun(s *Service) (*channel.Run, *chanLive) {
 	return r, prog
 }
 
+// cotFeatures answers the bot's status with the usual switches plus the given ids on (dm_cot, cot_answer).
+func cotFeatures(s *Service, on ...string) {
+	extra := map[string]bool{}
+	for _, id := range on {
+		extra[id] = true
+	}
+	s.hub.(*fakeHub).answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0),
+			Features: FeishuFeatures{Main: true, Cards: true, TopicCot: true, DMCot: extra["dm_cot"], CotAnswer: extra["cot_answer"]}}, nil
+	})
+	s.sink().s.feishuForgetStatus() // a status read moments ago would hide the switch for three seconds
+}
+
 // withCot gives r an agent message, as a run made before new turns went to the progress card has.
 func withCot(s *Service, r *channel.Run) {
 	s.setRunExt(r, "cot", "cot1")

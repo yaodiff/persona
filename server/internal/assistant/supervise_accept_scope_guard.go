@@ -12,7 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Structural multi-scope coverage guard for bare `task_review accepted` (#13169).
+// Multi-scope coverage guard for legacy bare `task_review accepted` (#13169). Structured task contracts with
+// validated checks use the explicit deferred_scope and follow_up_todo_id fields for handoffs.
 //
 // The wording guard in supervise_accept_guard.go (#12026) catches explicit blocker, closeout-not-done and
 // inconclusive phrasing, but a supervisor can reword leftover scope as a finished handoff ("not touched this round,

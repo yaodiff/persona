@@ -4,11 +4,15 @@ import Foundation
 /// `sessions_list` hint for each working agent's update, about one a second; reading after each one kept a list's
 /// requests going back to back while nobody looked at it. The first read after a quiet window starts at once; one asked
 /// for less than the window after the last started waits for the window's end, and the hints that arrive meanwhile
-/// share it. The length is asked each time: the hub's lists use the window only while no Agents list is in sight
-/// (`RuntimeSessionLists.listInSight`), so what is on screen keeps its timeliness (docs/apple/ios-state.md "Timely").
+/// share it. The length is asked each time: the hub's lists use `length` while no Agents list is in sight and the
+/// shorter `inSight` while one is (`RuntimeSessionLists.listInSight`, #16758), so what is on screen keeps its
+/// timeliness (docs/apple/ios-state.md "Timely").
 @MainActor final class HintWindow {
     /// The web's window: long enough to merge a busy fleet's hints, short enough that nothing looks stale on return.
     nonisolated static let length: Duration = .seconds(2)
+    /// An Agents list in sight (#16758): a hint waits at most this long (about what a read already in flight cost before),
+    /// so what is on screen stays within its 1 s limit's reach, while a busy fleet's hints share one read a second.
+    nonisolated static let inSight: Duration = .seconds(1)
 
     private let length: @MainActor () -> Duration
     private let now: @MainActor () -> ContinuousClock.Instant

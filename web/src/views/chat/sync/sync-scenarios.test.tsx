@@ -8,6 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeSocket, SyncHub, type Message, type Request, type Seen, type Step, type SyncCase, type View } from "./fake-hub";
 import { project } from "./project";
+import type { Interaction } from "../../../lib/types";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -33,15 +34,17 @@ vi.mock("../../assistant/Readiness", () => ({
   ChatOnlyNote: () => null,
   FailureCard: () => <div data-start-failure />,
 }));
-vi.mock("../../assistant/Tasks", () => ({
-  DayLine: () => null,
-  FeedLineView: () => null,
-  QuickResultCard: () => null,
-  RouteChip: () => null,
-  AssistantActionBar: () => null,
-  TaskDock: () => null,
-  TaskQuestions: () => null,
-}));
+vi.mock("../../assistant/Tasks", async () => {
+  const { DecisionPager } = await import("../../assistant/DecisionPager");
+  const { useDecisionPager } = await import("../../assistant/decision-dock");
+  // Keep the actual cards and their first slot. The trays and their unrelated requests are outside the sync fixture.
+  function AssistantActionBar({ turnAsks = [] }: { turnAsks?: readonly Interaction[] }) {
+    const pager = useDecisionPager(turnAsks.map((interaction) => ({ interaction })));
+    return <DecisionPager pager={pager} id="sync-decisions" openSource={() => {}} />;
+  }
+  return { DayLine: () => null, FeedLineView: () => null, QuickResultCard: () => null, RouteChip: () => null,
+    AssistantActionBar, TaskDock: () => null };
+});
 
 const store = await import("../../../lib/store");
 const { setToken } = await import("../../../lib/api");

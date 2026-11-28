@@ -331,7 +331,10 @@ func renameSlot(ctx context.Context, launch host.Launcher, slot, name string) er
 	return org.RenameSlot(ctx, slot, name)
 }
 
-// unsupported: the host lacks the capability asked for ("unsupported: …", errors.Is host.ErrUnsupported).
+// unsupported: the host lacks the capability asked for ("unsupported: …", errors.Is host.ErrUnsupported). The words
+// stay what they were, for the clients and the hub that tell it by its "unsupported" prefix; the code and the data
+// (reason engine_unsupported, the engine) are for the hub to word it in the reader's language (#17057).
 func unsupported(h host.Host) error {
-	return fmt.Errorf("%w: %s cannot do this", host.ErrUnsupported, h.Kind())
+	return host.Mark(failure("unsupported", fmt.Sprintf("%v: %s cannot do this", host.ErrUnsupported, h.Kind()),
+		map[string]any{"reason": "engine_unsupported", "engine": h.Kind()}), host.ErrUnsupported)
 }

@@ -2,10 +2,16 @@ package node
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 const snapA = `**这是主对话**：示例用户平时都在这里找你，接着之前聊过的事往下做。
@@ -163,5 +169,72 @@ func TestToolsChangedIsLogged(t *testing.T) {
 	start(`"Read","mcp__persona__agents_list"`)
 	if !strings.Contains(logs.String(), "tools changed since its last start (+[] -[mcp__persona__phone_device_info])") {
 		t.Fatalf("logged %q", logs.String())
+	}
+}
+
+// assistant.context carries the conversation's launch directory so the hub can resolve a new space conversation's
+// context on its first turn, before assistant.send returns or sessions.changed arrives (#17557).
+func TestAssistantContextSendsCwd(t *testing.T) {
+	n := codexTestNode(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	n2hR, n2hW := io.Pipe()
+	h2nR, h2nW := io.Pipe()
+	peer := rpc.New("n", n2hW)
+	hub := rpc.New("h", h2nW)
+	n.peer = peer
+
+	var mu sync.Mutex
+	var calls []map[string]any
+	hub.OnRequest = func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		if method == "assistant.context" {
+			var body map[string]any
+			_ = json.Unmarshal(raw, &body)
+			mu.Lock()
+			calls = append(calls, body)
+			mu.Unlock()
+			return map[string]any{"text": "- 现在：测试时间"}, nil
+		}
+		return map[string]any{}, nil
+	}
+	go peer.Serve(ctx, h2nR)
+	go hub.Serve(ctx, n2hR)
+	t.Cleanup(func() {
+		cancel()
+		_ = n2hW.Close()
+		_ = h2nW.Close()
+		_ = n2hR.Close()
+		_ = h2nR.Close()
+	})
+
+	// 1. Existing session state supplies cwd to assistantContext(id).
+	const spaceDir = "/home/u/.persona/tracks/qa-plain"
+	n.state.put("sess-known", sessionState{Launcher: "claude", Cwd: spaceDir})
+	_ = n.assistantContext("sess-known")
+
+	// 2. New Codex/app-server start has an empty session id when asking for context, and still carries cwd.
+	_ = n.assistantContextForCwd("", spaceDir, "hello codex")
+
+	// 3. Real assistantSend supplies cwd on assistant.context during a send (even if state was not set yet).
+	in := &stdinBuf{}
+	p := viewErrorsClaude(t, n, in)
+	p.cwd = spaceDir
+	n.state.put(testThread, sessionState{Launcher: "claude", StartedAt: time.Now().UTC()})
+	if _, err := n.assistantSend(context.Background(), testThread, spaceDir, "claude", "hello space", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) < 3 {
+		t.Fatalf("expected at least 3 assistant.context calls, got %d", len(calls))
+	}
+	if got, _ := calls[0]["cwd"].(string); got != spaceDir {
+		t.Fatalf("assistantContext(sess-known) cwd = %q, want %q (params=%v)", got, spaceDir, calls[0])
+	}
+	if got, _ := calls[1]["cwd"].(string); got != spaceDir {
+		t.Fatalf("assistantContextForCwd(empty id) cwd = %q, want %q (params=%v)", got, spaceDir, calls[1])
+	}
+	if got, _ := calls[2]["cwd"].(string); got != spaceDir {
+		t.Fatalf("assistantSend assistant.context cwd = %q, want %q (params=%v)", got, spaceDir, calls[2])
 	}
 }

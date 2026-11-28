@@ -4,6 +4,7 @@ import type { Session, Subagent, Workflow } from "./types";
 import type { SessionLookup, Todo } from "./todos";
 import { backgroundCommandLine, backgroundWaitLine, waitingOnWorkflow, workflowCounts, type WaitLine } from "./workflows";
 import { runningChildren } from "./child-sessions";
+import { timeOrNaN } from "./times";
 
 /** Live work, not a waiting label: summary counts win over omitted detail arrays. */
 export interface BackgroundWork {
@@ -50,7 +51,7 @@ export function backgroundStall(s: Session | undefined, now = Date.now()): Backg
 
 /** "Background commands quiet for 3 hr" from the time they went quiet; "" when there is none (or it is Go's zero time). */
 export function stalledText(since: string | undefined, now = Date.now()): string {
-  const at = since ? Date.parse(since) : NaN;
+  const at = timeOrNaN(since);
   if (!Number.isFinite(at) || at < 86400_000) return "";
   const minutes = Math.max(1, Math.floor((now - at) / 60_000));
   if (minutes < 60) return t("lib-state-labels.bg_stalled_minutes", { count: minutes });

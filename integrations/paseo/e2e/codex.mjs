@@ -164,12 +164,12 @@ try {
   const directWorkspace = await workspace(initial.workspaceId)
   check('direct Agent start keeps the original project without adding one', directWorkspace?.projectId === projectId && (await projects()).length === before,
     `before=${before} after=${(await projects()).length} project=${directWorkspace?.projectId} expected=${projectId}`)
-  // Make the duplicate explicitly in this disposable daemon only. Records at one physical root resolve by stable ID,
-  // independent of registry order; a selected workspace still supplies its own owner (#14844).
+  // Make the duplicate explicitly in this disposable daemon only. Records at one physical root prefer the one registered
+  // at the physical path, independent of registry order; a selected workspace still supplies its own owner (#14844).
   const duplicateProject = await paseo.request('project.add.request', { cwd: work })
   const duplicateId = duplicateProject.project?.projectId
   if (!duplicateId || duplicateId === projectId) throw new Error('Fixture could not reproduce distinct alias projects')
-  const selectedProject = [projectId, duplicateId].sort()[0]
+  const selectedProject = duplicateId
   const duplicateCount = (await projects()).length
   const duplicateTree = await node.call('worktree.create', { cwd: alias, kind: 'paseo', branch: 'e2e/duplicate-root', path: join(prep.path, 'duplicate-root') }, 150_000)
   const duplicateTreeWorkspace = await workspace(duplicateTree.workspace_id)
@@ -255,12 +255,15 @@ try {
     await until('Persona clears the completed native task', () => !row()?.background?.some((task) => task.id === native.id), 15_000)
     check('the completed native task leaves Persona without an open chat', !row()?.background?.length)
   }
+  // The Paseo-originated fixture above registers its own project; count from here so only this start is measured.
+  const beforeDuplicateStart = (await projects()).length
   const duplicateStart = await node.call('session.start', { cwd: work, launcher: 'e2e-codex', prompt: 'E2E_CODEX_DUPLICATE' }, 60_000)
   const duplicateAgentId = duplicateStart.session?.session_id?.replace(/^paseo-/, '')
   const duplicateAgent = duplicateAgentId ? await agent(duplicateAgentId) : undefined
   const duplicateAgentWorkspace = duplicateAgent ? await workspace(duplicateAgent.workspaceId) : undefined
   check('same-root duplicate direct Agent start uses the stable project', duplicateAgentWorkspace?.projectId === selectedProject &&
-    (await projects()).length === duplicateCount, `project=${duplicateAgentWorkspace?.projectId} expected=${selectedProject}`)
+    (await projects()).length === beforeDuplicateStart,
+    `before=${beforeDuplicateStart} after=${(await projects()).length} project=${duplicateAgentWorkspace?.projectId} expected=${selectedProject}`)
 } catch (error) {
   check('real Codex archive lifecycle completed', false, error.stack)
   console.error('Paseo log:', daemonLog.join('').slice(-16000))

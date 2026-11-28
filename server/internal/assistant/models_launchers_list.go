@@ -30,33 +30,33 @@ type launcherListing struct {
 // listLaunchers asks one online machine for its list, giving it launcherSyncTimeout in total.
 // Ordinary lists never load external sources; those use their own handshake-gated, source-scoped RPC.
 func (s *Service) listLaunchers(ctx context.Context, d Device, refresh ...bool) (launcherListing, error) {
+	return s.listLaunchersWith(ctx, d, launcherListReadOpts{refresh: len(refresh) > 0 && refresh[0]})
+}
+
+func (s *Service) listLaunchersWith(ctx context.Context, d Device, opts launcherListReadOpts) (launcherListing, error) {
 	if !d.Online {
 		return launcherListing{}, apierr.ErrOffline
 	}
 	cctx, cancel := context.WithTimeout(ctx, launcherSyncTimeout)
 	defer cancel()
-	read := func(ctx context.Context, params map[string]any) (launcherListing, error) {
-		var res launcherListing
-		err := s.call(ctx, d.ID, DeviceLaunchersList, params, &res)
-		return res, err
-	}
 	var res launcherListing
 	var err error
-	if len(refresh) > 0 && refresh[0] {
+	if opts.refresh {
 		// Retry starts a real scan. Reserve part of the same budget for the last node snapshot if the scan is slow
 		// or fails. Execution recovery uses machineLaunchersOn and requires a successful scan.
 		reserve := min(time.Second, launcherSyncTimeout/2)
 		rctx, stop := context.WithTimeout(cctx, launcherSyncTimeout-reserve)
-		res, err = read(rctx, map[string]any{"refresh": true})
+		err = s.cachedLauncherList(rctx, d.ID, launcherListReadOpts{refresh: true}, &res)
 		stop()
 		if err != nil && cctx.Err() == nil {
-			cached, cacheErr := read(cctx, map[string]any{"cache_only": true})
+			var cached launcherListing
+			cacheErr := s.call(cctx, d.ID, DeviceLaunchersList, map[string]any{"cache_only": true}, &cached)
 			if cacheErr == nil && len(cached.Launchers) > 0 {
 				return cached, nil
 			}
 		}
 	} else {
-		res, err = read(cctx, map[string]any{})
+		err = s.cachedLauncherList(cctx, d.ID, opts, &res)
 	}
 	if err != nil && cctx.Err() != nil && ctx.Err() == nil {
 		err = context.DeadlineExceeded
@@ -249,14 +249,8 @@ func withLauncherRefresh(ctx context.Context) context.Context {
 // known distinguishes an explicit node list (including []) from a missing/null catalog on an older node.
 func (s *Service) machineLaunchersOn(ctx context.Context, machine, host string) (list []proto.Launcher, hostRuntime, known bool, err error) {
 	var res machineLauncherListing
-	params := map[string]any{}
-	if refresh, _ := ctx.Value(launcherRefreshKey{}).(bool); refresh {
-		params["refresh"] = true
-	}
-	if host != "" {
-		params["host"] = host
-	}
-	if err := s.call(ctx, machine, DeviceLaunchersList, params, &res); err != nil {
+	refresh, _ := ctx.Value(launcherRefreshKey{}).(bool)
+	if err := s.cachedLauncherList(ctx, machine, launcherListReadOpts{host: host, refresh: refresh}, &res); err != nil {
 		return nil, false, false, err
 	}
 	list, hostRuntime = s.machineLaunchersFrom(ctx, machine, res, true)
@@ -301,7 +295,7 @@ func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res 
 	// same installation signal used by the built-in provider and Agent-start fallback, and works with older nodes.
 	if !res.HostRuntime && d.ClaudeVersion != "" && !slices.Contains(hidden, "claude") &&
 		!slices.ContainsFunc(out, func(l proto.Launcher) bool { return l.Name == "claude" }) {
-		out = append(out, proto.Launcher{Name: "claude", Source: "builtin"})
+		out = append(out, proto.Launcher{Name: "claude", Source: "builtin", DisplayName: "Claude Code"})
 	}
 	agyAssistant := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "agy" && l.Assistant })
 	agyPolicy := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "agy" && l.Assistant && l.SupervisionPolicy })

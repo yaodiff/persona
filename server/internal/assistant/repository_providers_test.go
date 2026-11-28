@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const acmeProviderID = "ext:acme-code/acme"
@@ -132,6 +133,24 @@ func acmeService(t *testing.T, store Store) (*Service, *acmeProvider, *int) {
 	f := newAcmeProvider()
 	s.repoExt = f
 	return s, f, checks
+}
+
+// repositoryReporter attaches a real task Agent in the fixture. Its report and
+// independent native creation outcomes are supplied separately by each test.
+func repositoryReporter(t *testing.T, s *Service, id string) func(string, ...string) {
+	t.Helper()
+	const machine, session, cwd = "box", "provider-reporter", "/home/test/work"
+	f := s.hub.(*fakeHub)
+	f.setSessions(machine, proto.Session{MachineID: machine, SessionID: session, Cwd: cwd, Status: proto.StatusIdle})
+	if err := s.linkTodoAgent(t.Context(), id, machine, session, "Reporter", cwd, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	return func(text string, created ...string) {
+		t.Helper()
+		todo := todoNow(s, id)
+		reply := artifactReportProof(f, todo, text, created...)
+		s.advanceTaskReplyAt(t.Context(), todo, machine, session, text, reply.TS)
+	}
 }
 
 func savedRepository(t *testing.T, s *Service, body string) RepositoryBinding {
@@ -274,7 +293,7 @@ func linkTitles(row repository.TaskRepository) map[string]string {
 }
 
 func TestTodoRepositoryLinksThroughAProvider(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +382,7 @@ func TestTodoRepositoryLinksThroughAProvider(t *testing.T) {
 }
 
 func TestTodoRepositoryLinkAddressesThroughAProvider(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,8 +416,11 @@ func TestTodoRepositoryLinkAddressesThroughAProvider(t *testing.T) {
 		t.Fatal("a saved link was asked again", got)
 	}
 	// Reports: an off provider's links are skipped (and never guessed as GitHub's); on, they go through it.
+	report := repositoryReporter(t, s, todo.ID)
+	const nextReview = "https://code.acme.test/team/app/reviews/16"
+	const otherPR = "https://code.acme.test/team/app/pull/17"
 	f.set(true, repository.ProviderOff)
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", "Opened https://code.acme.test/team/app/reviews/16 and https://code.acme.test/team/app/pull/17.")
+	report("Opened "+nextReview+" and "+otherPR+".", nextReview, otherPR)
 	if got := f.asked(); len(got) != 0 {
 		t.Fatal("an off provider was asked", got)
 	}
@@ -406,7 +428,15 @@ func TestTodoRepositoryLinkAddressesThroughAProvider(t *testing.T) {
 		t.Fatalf("off report changed links: %+v", got)
 	}
 	f.set(true, repository.ProviderAvailable)
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", "Opened https://code.acme.test/team/app/reviews/16, see https://code.acme.test/team/app/issues/2.")
+	report("Opened " + nextReview) // An attached Agent's report still needs independent proof.
+	s.reportedLinks.runs.Wait()
+	if got := f.asked(); len(got) != 0 {
+		t.Fatal("an unproven report reached the provider", got)
+	}
+	if got := todoRepositoriesOf(t, s, todo.ID); got.Revision != set.Revision {
+		t.Fatalf("an unproven report changed associations: %+v", got)
+	}
+	report("Opened "+nextReview+", see https://code.acme.test/team/app/issues/2.", nextReview)
 	s.reportedLinks.runs.Wait()
 	if got := todoRepositoriesOf(t, s, todo.ID); len(got.Repositories) != 1 || len(got.Repositories[0].Links) != 2 || linkTitles(got.Repositories[0])["https://code.acme.test/team/app/reviews/16"] != "Title of 16" {
 		t.Fatalf("report: %+v", got)
@@ -414,7 +444,7 @@ func TestTodoRepositoryLinkAddressesThroughAProvider(t *testing.T) {
 }
 
 func TestTodoRepositoryLegacyImportNeverAsksAProvider(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +469,7 @@ func TestTodoRepositoryLegacyImportNeverAsksAProvider(t *testing.T) {
 }
 
 func TestTodoRepositoryBuiltinLinksNeverAskAProvider(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +491,8 @@ func TestTodoRepositoryBuiltinLinksNeverAskAProvider(t *testing.T) {
 	if _, err := s.toolTodoRepositoryLinksAdd(t.Context(), "", "", "todo_repository_links_add", args); err != nil {
 		t.Fatal(err)
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, id), "", "", "Opened https://github.com/example/web/pull/10 (see https://github.com/example/web/actions)")
+	const reportedPR = "https://github.com/example/web/pull/10"
+	repositoryReporter(t, s, id)("Opened "+reportedPR+" (see https://github.com/example/web/actions)", reportedPR)
 	set := todoRepositoriesOf(t, s, id)
 	if len(set.Repositories) != 1 || len(set.Repositories[0].Links) != 4 || set.Repositories[0].ProviderState != "" {
 		t.Fatalf("%+v", set)
@@ -473,7 +504,7 @@ func TestTodoRepositoryBuiltinLinksNeverAskAProvider(t *testing.T) {
 
 // A GitHub or GitLab repository saved by choice on a host a provider claims keeps the built-in rules, offline.
 func TestTodoRepositoryBuiltinRowOnAClaimedHost(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +529,7 @@ func TestTodoRepositoryBuiltinRowOnAClaimedHost(t *testing.T) {
 			t.Fatal(state, err)
 		}
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, created.Todo.ID), "", "", "Opened "+web+"5")
+	repositoryReporter(t, s, created.Todo.ID)("Opened "+web+"5", web+"5")
 	set := todoRepositoriesOf(t, s, created.Todo.ID)
 	if len(set.Repositories) != 1 || set.Repositories[0].RepoID != repo.ID || len(set.Repositories[0].Links) != 3 {
 		t.Fatalf("%+v", set)
@@ -519,7 +550,7 @@ func TestTodoRepositoryBuiltinRowOnAClaimedHost(t *testing.T) {
 
 // With its provider gone, a host the catalog's extension repositories use never gets a GitHub-style guess.
 func TestTodoRepositoryCatalogHostWithoutItsProvider(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +571,8 @@ func TestTodoRepositoryCatalogHostWithoutItsProvider(t *testing.T) {
 		!strings.HasPrefix(err.Error(), "task_repositories_no_provider: ") || !strings.Contains(err.Error(), "Acme Code") {
 		t.Fatal("links_add:", err)
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", "Opened https://code.acme.test/team/app/pull/7")
+	const reportedPR = "https://code.acme.test/team/app/pull/7"
+	repositoryReporter(t, s, todo.ID)("Opened "+reportedPR, reportedPR)
 	s.reportedLinks.runs.Wait()
 	if set := todoRepositoriesOf(t, s, todo.ID); len(set.Repositories) != 0 {
 		t.Fatalf("guessed: %+v", set)
@@ -552,7 +584,7 @@ func TestTodoRepositoryCatalogHostWithoutItsProvider(t *testing.T) {
 
 // Right after a restart the providers are not listed yet: nothing on a host no built-in owns is guessed meanwhile.
 func TestTodoRepositoryLinksWaitForTheProviders(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +609,8 @@ func TestTodoRepositoryLinksWaitForTheProviders(t *testing.T) {
 	if set := todoRepositoriesOf(t, s, todo.ID); len(set.Repositories) != 0 {
 		t.Fatalf("imported before the start: %+v", set)
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", "Opened https://code.acme.test/team/app/reviews/31")
+	const reportedPR = "https://code.acme.test/team/app/reviews/31"
+	repositoryReporter(t, s, todo.ID)("Opened "+reportedPR, reportedPR)
 	if got := f.asked(); len(got) != 0 {
 		t.Fatal("asked before the start", got)
 	}
@@ -622,7 +655,7 @@ func (p slowAcme) RepositoryParse(ctx context.Context, provider, remote string) 
 
 // An agent's reply never waits on a provider, and asks it about an address once, the PR it names included.
 func TestReportedLinksNeverWaitOnAProvider(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,9 +667,10 @@ func TestReportedLinksNeverWaitOnAProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const mr = "Opened https://code.acme.test/team/app/merge_requests/3"
+	const mr = "https://code.acme.test/team/app/merge_requests/3"
+	report := repositoryReporter(t, s, todo.ID)
 	start := time.Now()
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", mr)
+	report("Opened "+mr, mr)
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatal("the reply waited on the provider", took)
 	}
@@ -645,21 +679,47 @@ func TestReportedLinksNeverWaitOnAProvider(t *testing.T) {
 	if got := f.asked(); !slices.Equal(got, []string{"parse", "link"}) {
 		t.Fatal("asked", got) // the provider has no such link: asked once, for the reply and its PR together
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", mr+" again")
+	report("Opened "+mr+" again", mr)
 	s.reportedLinks.runs.Wait()
 	if got := f.asked(); len(got) != 0 {
 		t.Fatal("asked again", got)
 	}
-	s.advanceTaskReply(t.Context(), todoNow(s, todo.ID), "", "", "Opened https://code.acme.test/team/app/reviews/4")
+	const reportedPR = "https://code.acme.test/team/app/reviews/4"
+	report("Opened "+reportedPR, reportedPR)
 	s.reportedLinks.runs.Wait()
 	if set := todoRepositoriesOf(t, s, todo.ID); len(set.Repositories) != 1 || len(set.Repositories[0].Links) != 1 {
 		t.Fatalf("%+v", set)
 	}
 }
 
+func TestReportedLinkOwnershipIsRecheckedAfterProviderLookup(t *testing.T) {
+	s, f, _ := acmeService(t, todoTestDB(t))
+	slow := slowAcme{f, make(chan struct{})}
+	s.repoExt = slow
+	todo, err := s.createPlainTodo(t.Context(), "Reported work", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const url = "https://code.acme.test/team/app/reviews/4"
+	repositoryReporter(t, s, todo.ID)("Opened "+url, url)
+	a := todoNow(s, todo.ID).Agents[0]
+	removed := placeDo(s, "", "DELETE", "/api/v1/todos/"+todo.ID+"/agents/"+a.MachineID+"/"+a.SessionID, "")
+	close(slow.release)
+	s.reportedLinks.runs.Wait()
+	if removed.Code != 200 {
+		t.Fatalf("unlink: %d %s", removed.Code, removed.Body)
+	}
+	if got := f.asked(); !slices.Equal(got, []string{"parse", "link", "describe"}) {
+		t.Fatal("the provider did not finish resolving the report", got)
+	}
+	if set := todoRepositoriesOf(t, s, todo.ID); len(set.Repositories) != 0 {
+		t.Fatalf("the released Agent's report added a repository: %+v", set)
+	}
+}
+
 // A provider is sent only plain links on its own hosts: anything else is refused before any call.
 func TestProviderLinksSendOnlyPlainLinks(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

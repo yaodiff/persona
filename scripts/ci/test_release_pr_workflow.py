@@ -285,7 +285,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--reserved", text)
         self.assertLess(text.index('refs/heads/release/*'), text.index('schedule-version'))
         self.assertIn('releases/latest', text)
-        self.assertIn(r'select(.head.ref == \$branch)', text)
+        self.assertIn('pulls?state=open&base=main&per_page=100" --paginate > release-open-prs.json', text)
+        self.assertIn('pulls?state=open&base=main&per_page=100" --paginate > release-open-prs-current.json', text)
+        self.assertIn('cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"', text)
+        self.assertLess(
+            select.index('git switch --detach FETCH_HEAD'),
+            select.index('cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"'),
+        )
+        self.assertLess(
+            select.index('cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"'),
+            select.index('git switch --detach "$green_commit"'),
+        )
+        self.assertIn('"$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --channel "$CHANNEL" --pulls release-open-prs-current.json', text)
+        self.assertIn('"$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --branch "$branch" --pulls release-open-prs-current.json', text)
+        self.assertNotIn('scripts/operations/release_candidate.py --repository "$REPOSITORY" --branch', text)
+        self.assertNotIn("--jq --arg", text)
         self.assertNotIn("--force", text)
         self.assertNotIn('refs/tags/$TAG', text)
         self.assertNotIn("gh release create", text)
@@ -402,6 +416,38 @@ class ReleaseWorkflowTests(unittest.TestCase):
                       if step.get('name') == 'Advance only the verified stable Latest pointer')
         self.assertEqual(stable['if'], "needs.authorize.outputs.channel == 'release'")
         self.assertIn('--manifest release/downloads/latest.json', stable['run'])
+
+    def test_schedule_pins_newest_full_green_ci_commit_and_keeps_merge_vs_target_distinct(self):
+        schedule_text = SCHEDULE.read_text()
+        schedule = yaml.load(schedule_text, Loader=yaml.BaseLoader)
+        self.assertEqual(schedule["permissions"]["actions"], "read")
+        select = next(step for step in schedule["jobs"]["plan"]["steps"]
+                      if step.get("id") == "select")
+        self.assertEqual(select["env"]["ACTIONS_TOKEN"], "${{ secrets.GITHUB_TOKEN }}")
+        self.assertIn("scripts/operations/select_green_commit.py", select["run"])
+        self.assertIn('GH_TOKEN="$ACTIONS_TOKEN" python3 scripts/operations/select_green_commit.py', select["run"])
+        self.assertIn('git switch --detach "$green_commit"', select["run"])
+        self.assertLess(select["run"].index("select_green_commit.py"), select["run"].index('git switch --detach "$green_commit"'))
+        self.assertLess(select["run"].index('git switch --detach "$green_commit"'), select["run"].index('\ncommit="$(git rev-parse HEAD)"'))
+        self.assertIn("No newer full green CI commit found on main", select["run"])
+        self.assertIn("'ci_run_id':int(os.environ['CI_RUN_ID'])", schedule_text)
+
+        pr_text = PR.read_text()
+        self.assertEqual(self.pr["jobs"]["plan"]["outputs"]["merge_commit"], "${{ steps.plan.outputs.merge_commit }}")
+        self.assertIn("resolve-target --dir .github/release-prs", pr_text)
+        merge_check = next(step for step in self.pr["jobs"]["plan"]["steps"]
+                           if step.get("id") == "merge-check")
+        self.assertEqual(merge_check["env"]["COMMIT"], "${{ steps.plan.outputs.merge_commit }}")
+        self.assertIn('--merge-commit "$MERGE_COMMIT"', pr_text)
+        self.assertIn("--merge-commit '${{ needs.plan.outputs.merge_commit }}'", pr_text)
+
+        publish_text = PUBLISH.read_text()
+        self.assertEqual(self.publish["jobs"]["authorize"]["outputs"]["merge_commit"], "${{ steps.source.outputs.merge_commit }}")
+        self.assertIn("resolve-target --dir .github/release-prs", publish_text)
+        self.assertIn('verify-merged-pr --pr-json release/merged-pr.json --commit "$MERGE_COMMIT"', publish_text)
+        self.assertIn('git merge-base --is-ancestor "$MERGE_COMMIT" FETCH_HEAD', publish_text)
+        self.assertIn('git merge-base --is-ancestor "$COMMIT" "$MERGE_COMMIT"', publish_text)
+        self.assertIn('verify-artifacts --plan release/plan.json --commit "$COMMIT" --merge-commit "$MERGE_COMMIT"', publish_text)
 
     def test_workflows_lint(self):
         result = subprocess.run(["actionlint", str(PR), str(PUBLISH), str(SCHEDULE)], capture_output=True, text=True)

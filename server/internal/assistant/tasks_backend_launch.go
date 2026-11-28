@@ -465,6 +465,8 @@ func (s *Service) admitPreparedTaskWorkspace(ctx context.Context, t *PlanTask, o
 }
 
 func (s *Service) startBackendTask(ctx context.Context, t *PlanTask, params map[string]any, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, taskStartTimeout)
+	defer cancel()
 	req := t.backendRequest
 	if req == nil {
 		return errors.New("backend workspace admission required")
@@ -549,7 +551,10 @@ func (s *Service) releaseStoppedBackendUses(ctx context.Context, r *taskworkspac
 			return err
 		}
 		obs := view.Observation
-		if obs == nil || obs.Error != nil || obs.OperationID != r.OperationID || obs.NodeOperationID != r.OperationID || obs.WorkspaceID != r.WorkspaceID {
+		// A checkout's Git drift says nothing about its launch. Release still
+		// requires the Node to prove that the exact launch is stopped.
+		if obs == nil || obs.Error != nil && obs.Error.Code != "workspace_drift" || obs.OperationID != r.OperationID ||
+			obs.NodeOperationID != r.OperationID || obs.WorkspaceID != r.WorkspaceID || obs.InputDigest != r.InputDigest {
 			return taskworkspace.Failure("operation_unknown", "release", r.OperationID, "", r.Plan.RootPath)
 		}
 		// A confirmed cancellation also rules out a late start that had not dispatched.

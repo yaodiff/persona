@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/shareproof"
@@ -242,8 +243,8 @@ func (h *Hub) shareRelay(w http.ResponseWriter, r *http.Request, id string, c de
 	if c.Kind == "admin" {
 		req.Header[assistantwire.AdminHeader] = []string{"1"}
 	}
-	var res assistantwire.HTTPResponse
-	if err := h.callBus(r.Context(), id, assistantwire.MethodHTTP, req, &res); err != nil {
+	res, err := buswire.Call(r.Context(), h.managerCaller(id), assistantwire.HTTPMethod, req)
+	if err != nil {
 		if public {
 			shareNotFound(w)
 		} else {

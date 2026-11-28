@@ -10,7 +10,7 @@ describe("quickAnswers (#4090, as iOS's 需要你 cards)", () => {
     const q = quickAnswers(ix({ tool_name: "Bash", tool_input: { command: "swift test" } }))!;
     expect(q.map((c) => c.label)).toEqual(["允许", "拒绝"]);
     expect(q[0].body).toEqual({ allow: true });
-    expect(q[1].body).toEqual({ allow: false, message: "用户拒绝了" });
+    expect(q[1].body).toEqual({ allow: false, message: "用户已拒绝" });
   });
 
   it("leaves a permission with fields to fill in to its chat", () => {

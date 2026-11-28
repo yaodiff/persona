@@ -1,5 +1,6 @@
 package persona.core.hub
 
+import persona.core.contracts.Interaction
 import persona.core.contracts.Resolution
 import persona.core.contracts.api.InteractionGoneException
 import persona.core.contracts.api.ResolveOutcome
@@ -47,6 +48,17 @@ class ResolveOpIdTest {
         // The next answer is another operation.
         transport.resolve("ix2", Resolution(allow = false))
         assertEquals("op-2", (sent.last().opId).zhAny())
+    }
+
+    @Test fun aDisplayedOccurrenceIsPinnedOnTheResolveRequest() = runTest {
+        var occurrence: String? = null
+        val transport = HubChatTransport({ path, _, _, headers ->
+            occurrence = headers["X-Persona-Interaction-Created-At"]
+            ok(path)
+        }, awaitOnline = { true }, clockMillis = { testScheduler.currentTime })
+        val card = Interaction(id = "ix", createdAt = "2026-11-24T01:02:03.123456789Z")
+        transport.resolveOccurrence(card, Resolution(allow = true))
+        assertEquals(card.createdAt, occurrence)
     }
 
     @Test fun theHandoffFeatureStaysOnOneFullCardApprovalAndItsRetries() = runTest {

@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -35,14 +34,14 @@ func TestLarkSyncCommitIsAtomic(t *testing.T) {
 	doc := larksyncwire.KeyDoc + "dox1"
 	if err := d.CommitLarkSyncRun(ctx, "b1", map[string]string{"drive": "10", "im:oc_1": "100"},
 		[]larksyncwire.IndexRecord{{Key: doc, Kind: "doc", Revision: 2, BodyHash: "h2", Sources: []larksyncwire.SourceRef{larkRef("b1", "drive")}}},
-		[]LarkSyncOutbox{{Kind: LarkSyncChat, CanonicalKey: "chat:oc_1", Payload: json.RawMessage(`{"chat":{"id":"oc_1"}}`)},
-			{Kind: LarkSyncDoc, CanonicalKey: doc, Payload: json.RawMessage(`{"id":"dox1","revision":2}`)}}); err != nil {
+		[]LarkSyncOutbox{{Kind: LarkSyncChat, CanonicalKey: "chat:oc_1", Payload: larksyncwire.OutboxPayload(`{"chat":{"id":"oc_1"}}`)},
+			{Kind: LarkSyncDoc, CanonicalKey: doc, Payload: larksyncwire.OutboxPayload(`{"id":"dox1","revision":2}`)}}); err != nil {
 		t.Fatal(err)
 	}
 	// A bad row in the middle: nothing of this commit stays.
 	err := d.CommitLarkSyncRun(ctx, "b1", map[string]string{"drive": "20", "wiki:s": "5"},
 		[]larksyncwire.IndexRecord{{Key: doc, Kind: "doc", Revision: 9, BodyHash: "h9"}},
-		[]LarkSyncOutbox{{Kind: LarkSyncDoc, CanonicalKey: doc, Payload: json.RawMessage(`{"revision":9}`)}, {Kind: "other", Payload: json.RawMessage(`{}`)}})
+		[]LarkSyncOutbox{{Kind: LarkSyncDoc, CanonicalKey: doc, Payload: larksyncwire.OutboxPayload(`{"revision":9}`)}, {Kind: "other", Payload: larksyncwire.OutboxPayload(`{}`)}})
 	if err == nil {
 		t.Fatal("a bad outbox row was committed")
 	}
@@ -133,12 +132,12 @@ func TestLarkSyncIndexMergesAcrossBindings(t *testing.T) {
 func TestLarkSyncOutboxReads(t *testing.T) {
 	d, ctx := openSyncTables(t), context.Background()
 	for i, row := range []LarkSyncOutbox{
-		{Kind: LarkSyncChat, CanonicalKey: "chat:oc_1", Payload: json.RawMessage(`{"n":1}`)},
-		{Kind: LarkSyncDoc, CanonicalKey: "feishu_doc:a", Payload: json.RawMessage(`{"rev":1}`)},
-		{Kind: LarkSyncChat, CanonicalKey: "chat:oc_2", Payload: json.RawMessage(`{"n":2}`)},
-		{Kind: LarkSyncDoc, CanonicalKey: "feishu_doc:a", Payload: json.RawMessage(`{"rev":2}`)},
-		{Kind: LarkSyncDoc, CanonicalKey: "feishu_doc:b", Payload: json.RawMessage(`{"rev":1}`)},
-		{Kind: LarkSyncChat, CanonicalKey: "chat:oc_1", Payload: json.RawMessage(`{"n":3}`)},
+		{Kind: LarkSyncChat, CanonicalKey: "chat:oc_1", Payload: larksyncwire.OutboxPayload(`{"n":1}`)},
+		{Kind: LarkSyncDoc, CanonicalKey: "feishu_doc:a", Payload: larksyncwire.OutboxPayload(`{"rev":1}`)},
+		{Kind: LarkSyncChat, CanonicalKey: "chat:oc_2", Payload: larksyncwire.OutboxPayload(`{"n":2}`)},
+		{Kind: LarkSyncDoc, CanonicalKey: "feishu_doc:a", Payload: larksyncwire.OutboxPayload(`{"rev":2}`)},
+		{Kind: LarkSyncDoc, CanonicalKey: "feishu_doc:b", Payload: larksyncwire.OutboxPayload(`{"rev":1}`)},
+		{Kind: LarkSyncChat, CanonicalKey: "chat:oc_1", Payload: larksyncwire.OutboxPayload(`{"n":3}`)},
 	} {
 		if err := d.CommitLarkSyncRun(ctx, "b1", map[string]string{"r": string(rune('0' + i))}, nil, []LarkSyncOutbox{row}); err != nil {
 			t.Fatal(err)

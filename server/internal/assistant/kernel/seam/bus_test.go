@@ -106,3 +106,26 @@ func TestABusMethodAnswers(t *testing.T) {
 		_, _, _ = zero.Answer(ctx, "inbox.item", nil)
 	})
 }
+
+func TestTypedBusMethodAnswers(t *testing.T) {
+	var id assistantwire.InboxMuteID
+	var handlerErr error
+	reg := newPorts().registry()
+	reg.Register(named("inbox", func(k seam.Kernel) {
+		k.Bus(seam.NewTypedBusMethod(assistantwire.InboxUnmuteMethod, func(_ context.Context, p assistantwire.InboxUnmuteParams) (assistantwire.InboxAck, error) {
+			id = p.ID
+			return assistantwire.InboxAck{}, handlerErr
+		}))
+	}))
+	reg.Seal()
+	ctx := context.Background()
+	params := json.RawMessage(`{"id":"m1","from_a_newer_peer":true}`)
+	reply, ok, err := reg.Answer(ctx, assistantwire.MethodInboxUnmute, params)
+	if !ok || err != nil || id != "m1" || string(reply) != `{}` {
+		t.Fatalf("Answer = %s, %v, %v with id %q, want {} for m1", reply, ok, err, id)
+	}
+	handlerErr = &rpc.Error{Code: assistantwire.CodeInboxUnavailable, Message: "the store is down"}
+	if reply, ok, err := reg.Answer(ctx, assistantwire.MethodInboxUnmute, params); !ok || reply != nil || err != handlerErr {
+		t.Errorf("Answer = %s, %v, %v, want the original RPC error", reply, ok, err)
+	}
+}

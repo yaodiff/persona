@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="terminal_stopped">这个 Agent 已停止。点「恢复会话」会在它电脑上的终端里让它接着运行。</string>
+    <string name="terminal_stopped">此会话已结束。可以在原电脑上恢复。</string>
     <string name="terminal_panes_finished">已结束：%1$s</string>
     <string name="terminal_panes_close_title">关闭「%1$s」？</string>
     <string name="terminal_panes_close_detail">其中运行的程序会结束，无法撤销。</string>
-    <string name="terminal_panes_close_finished">关闭已结束的终端</string>
-    <string name="terminal_panes_no_finished">没有可关闭的已结束终端</string>
+    <string name="terminal_panes_close_finished">关闭遗留的 Shell</string>
+    <string name="terminal_panes_no_finished">没有可关闭的遗留 Shell</string>
     <plurals name="terminal_panes_finish_title">
-        <item quantity="other">关闭 %1$d 个已结束的终端？</item>
+        <item quantity="other">关闭 %1$d 个遗留的 Shell？</item>
     </plurals>
-    <string name="terminal_panes_finish_detail">这些是已停止的 Agent 留下的终端。关闭后其中的 shell 会结束；Agent 的对话会保留，点「恢复」会新开一个终端。</string>
-    <string name="terminal_panes_confirm_close">关闭终端</string>
+    <string name="terminal_panes_finish_detail">关闭后这些 Shell 会停止。会话仍会保留，恢复会话会打开新标签页。</string>
+    <string name="terminal_panes_confirm_close">关闭 Shell</string>
     <plurals name="terminal_panes_closed">
-        <item quantity="other">已关闭 %1$d 个终端</item>
+        <item quantity="other">已关闭 %1$d 个 Shell</item>
     </plurals>
     <plurals name="terminal_panes_kept">
-        <item quantity="other">%1$d 个终端仍在运行程序或无法确认状态，已保留。</item>
+        <item quantity="other">保留了 %1$d 个 Shell，因为仍有程序运行或无法确认状态。</item>
     </plurals>
-    <string name="terminal_panes_close_failed">没能关闭终端：%1$s</string>
+    <string name="terminal_panes_close_failed">无法关闭 Shell：%1$s</string>
 </resources>

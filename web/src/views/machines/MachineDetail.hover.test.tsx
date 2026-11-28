@@ -136,6 +136,6 @@ describe("MachineDetail load (#12519)", () => {
     // load 1.2 on 4 cores: 0.3 per core, one decimal, as the card and the chip write it
     expect(host.textContent).toContain("1.20");
     expect(host.textContent).toContain("每核 0.3");
-    expect(host.querySelector("[data-testid=load-definition]")?.textContent).toMatch(/^负载 = 正在运行和排队等 CPU 的线程数/);
+    expect(host.querySelector("[data-testid=load-definition]")?.textContent).toMatch(/^负载指过去 1 分钟内正在运行及等待 CPU 的平均线程数/);
   });
 });

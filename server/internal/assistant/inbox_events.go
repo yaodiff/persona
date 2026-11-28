@@ -421,6 +421,13 @@ func (b *inboxBook) file(it *InboxItem, at time.Time, by string) {
 // doneByManager is done_by for an item the manager concluded needs nothing.
 const doneByManager = "manager"
 
+// hasChainEventAt checks which event produced a recorded timestamp.
+func (it *InboxItem) hasChainEventAt(kind string, at time.Time) bool {
+	return slices.ContainsFunc(it.Chain, func(e InboxChainEntry) bool {
+		return e.Kind == kind && e.At.Equal(at)
+	})
+}
+
 // noteSelfReplied records that the user answered in the source itself, not through Persona. Under b.mu.
 func (b *inboxBook) noteSelfReplied(it *InboxItem, at time.Time) {
 	b.chainAdd(it, InboxChainEntry{Kind: ChainSelfReplied, At: at.UTC(),

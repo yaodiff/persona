@@ -126,7 +126,7 @@ describe("ServicesPanel", () => {
     await flush();
     const logDialog = document.body.querySelector('[data-testid="service-logs-dialog"]');
     expect(logDialog?.textContent).toContain("redis ready");
-    expect(logDialog?.textContent).toContain("截断");
+    expect(logDialog?.textContent).toContain("已限制输出长度");
 
     // Close log dialog.
     const closeBtn = [...document.body.querySelectorAll('[role="dialog"] button')].find((b) =>

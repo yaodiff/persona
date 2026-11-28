@@ -10,6 +10,8 @@
   "push_not_page": "{ui}, which the extension opens, isn’t a full page (only extension_page or nav_page can be opened)",
   "open_not_source": "The persona: link the extension opens isn’t this item’s source (only an inbox item’s view can open persona://inbox/<item>/source)",
   "open_not_https": "The extension can only open https links",
+  "open_not_prompt": "The extension can only put one of its own quick prompts in the assistant’s composer",
+  "open_not_settings": "The extension can only prefill ordinary configuration fields of its own settings (no secrets, entry lists, other fields, malformed values or oversized patches)",
   "no_machine": "No such machine",
   "no_item": "This item isn’t in the inbox",
   "not_its_item": "This item didn’t come from this extension’s connector",

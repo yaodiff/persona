@@ -7,7 +7,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, Session } from "../../lib/types";
-import { initI18n } from "../../i18n";
+import { initI18n, t } from "../../i18n";
 
 await initI18n("zh-Hans");
 
@@ -191,7 +191,7 @@ describe("a Persona conversation on the generic session route says its foregroun
     expect(sendFeedback()).toBeNull();
     const statuses = [...host.querySelectorAll('[role="status"]')];
     expect(statuses).toHaveLength(1);
-    expect(statuses[0]?.textContent).toContain("正在读取对话");
+    expect(statuses[0]?.textContent).toContain("正在加载对话");
     expect(host.textContent).not.toContain("处理中…");
     act(() => { transcript.items = cached; transcript.loading = false; root.render(<ChatView mid="hub" sid="c1" />); });
     await flush();
@@ -287,7 +287,246 @@ describe("Agent chats never render duplicate competing Working… timers (#12380
     expect(sendFeedback()).toBeNull();
     const loaders = [...host.querySelectorAll('[role="status"]')];
     expect(loaders).toHaveLength(1);
-    expect(loaders[0]?.textContent).toContain("正在读取对话");
+    expect(loaders[0]?.textContent).toContain("正在加载对话");
     expect(host.textContent).not.toContain("处理中…");
+  });
+});
+
+describe("launch handoff pending message state (#16657)", () => {
+  it("renders an accepted launch handoff bubble as sent, shows Processing only before working, and settles on client_msg_id", async () => {
+    const { getState, putLaunch } = await import("../../lib/store");
+    const launch = {
+      id: "local-16657",
+      machineId: "hub",
+      cwd: "/code",
+      launcher: "agy",
+      text: "Check the broken view",
+      attachments: [],
+      phase: "ready" as const,
+      session: { machine_id: "hub", session_id: "c1", title: "Agent", cwd: "/code", status: "idle" as const, state: "idle" as const, launcher: "agy" },
+      outgoing: { text: "Check the broken view", images: [{ mime: "image/png", data: "iVBORw0KGgo=" }] },
+      uploaded: {},
+      startOpId: "start-16657",
+      startPromptOpId: "start-prompt-16657",
+      messageId: "msg-launch-16657",
+      handoffAt: Date.now(),
+    };
+    putLaunch(launch);
+    try {
+      // Before the hub reports working and before the transcript echoes the first prompt:
+      // POST /messages has already succeeded, so the handed-off bubble is "sent" (not dimmed "sending")
+      // and the inline feedback says "Processing…" rather than "Sending…".
+      captured.session = { machine_id: "hub", session_id: "c1", title: "Agent", cwd: "/code", status: "idle", state: "idle", launcher: "agy" } as Session;
+      transcript.items = [];
+      act(() => root.render(<ChatView mid="hub" sid="c1" />));
+      await flush();
+      const bubble = host.querySelector("[data-user-bubble]");
+      expect(bubble?.getAttribute("data-send-state")).toBe("sent");
+      expect(sendFeedback()?.getAttribute("data-message-feedback")).toBe("processing");
+
+      // Once the session is already working (even before the transcript echoes the prompt):
+      // never show a competing "Sending…" spinner underneath the live work state.
+      captured.session = { ...captured.session, status: "working", state: "working", state_since: "2026-11-13T01:00:01Z" } as Session;
+      act(() => root.render(<ChatView mid="hub" sid="c1" />));
+      await flush();
+      expect(host.querySelector("[data-user-bubble]")?.getAttribute("data-send-state")).toBe("sent");
+      expect(sendFeedback()).toBeNull();
+
+      // Once the transcript item arrives with the matching client_msg_id (even without the attached image in the
+      // transcript item), the pending launch bubble settles immediately with no duplicate bubble.
+      transcript.items = [{
+        id: "u1#0",
+        seq: 1,
+        role: "user",
+        kind: "text",
+        text: "Check the broken view",
+        client_msg_id: "msg-launch-16657",
+        ts: "2026-11-13T01:00:00Z",
+      }];
+      act(() => root.render(<ChatView mid="hub" sid="c1" />));
+      await flush();
+      const bubbles = host.querySelectorAll("[data-user-bubble]");
+      expect(bubbles).toHaveLength(1);
+      expect(bubbles[0]?.hasAttribute("data-send-state")).toBe(false);
+      expect(sendFeedback()).toBeNull();
+      expect(getState().launches[launch.id]?.outgoing).toBeUndefined();
+    } finally {
+      putLaunch({ ...launch, phase: "failed", outgoing: undefined, handoffAt: undefined });
+    }
+  });
+});
+
+describe("foreground Stop and Esc are hidden when only background work remains", () => {
+  const stopBtn = () => host.querySelector<HTMLButtonElement>(`[data-testid="composer-stop"]`);
+  const barInterruptBtn = () => dockBar()?.querySelector<HTMLButtonElement>(`button`);
+  const composerInput = () => host.querySelector<HTMLTextAreaElement>("textarea");
+  const escapeKey = () => act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+
+  it("hides dock interrupt, composer Stop, queue placeholder, and Esc shortcut during background-only state", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: true,
+      background: [{ id: "hub/task-1", kind: "monitor", description: "Timer: 3m", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    expect(dockBar()).not.toBeNull();
+    expect(barInterruptBtn()).toBeNull();
+    expect(stopBtn()).toBeNull();
+    expect(composerInput()?.getAttribute("placeholder")).toBe(t("chat-chatview.agent_placeholder"));
+
+    const callsBefore = fetchMock.mock.calls.length;
+    escapeKey();
+    await flush();
+    expect(fetchMock.mock.calls.slice(callsBefore).some(([url]) => String(url).includes("/interrupt"))).toBe(false);
+  });
+
+  it("keeps dock interrupt, composer Stop, queue placeholder, and Esc shortcut during a foreground turn", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: false,
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    expect(dockBar()).not.toBeNull();
+    expect(barInterruptBtn()).not.toBeNull();
+    expect(stopBtn()).not.toBeNull();
+    expect(composerInput()?.getAttribute("placeholder")).toBe(t("chat-chatview.queue_placeholder"));
+
+    escapeKey();
+    await flush();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/interrupt"))).toBe(true);
+  });
+
+  it("also hides Stop and Esc for background-only runtime agents/workflows where backgroundTurn returns null", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: true,
+      background: [{ id: "hub/task-2", kind: "agent", description: "Subagent", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    expect(barInterruptBtn()).toBeNull();
+    expect(stopBtn()).toBeNull();
+    expect(composerInput()?.getAttribute("placeholder")).toBe(t("chat-chatview.agent_placeholder"));
+
+    const callsBefore = fetchMock.mock.calls.length;
+    escapeKey();
+    await flush();
+    expect(fetchMock.mock.calls.slice(callsBefore).some(([url]) => String(url).includes("/interrupt"))).toBe(false);
+  });
+
+  it("clears stopping state immediately when interrupting transitions into background-only work", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const fg = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: false,
+    } as Session;
+    captured.session = fg;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    act(() => { stopBtn()!.click(); });
+    await flush();
+
+    // State remains "working" because background work continues; stopping lock must clear right away.
+    captured.session = {
+      ...fg,
+      background_working: true,
+      background: [{ id: "hub/task-2", kind: "agent", description: "Subagent", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(stopBtn()).toBeNull();
+
+    // Starting another foreground turn sees an enabled Stop button rather than staying disabled for STOP_SETTLE_MS.
+    captured.session = fg;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(stopBtn()?.disabled).toBe(false);
+  });
+
+  it("does not route new sends into QueuePanel while only background work runs", async () => {
+    let resolveSend!: (r: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>((res) => { resolveSend = res; }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "claude",
+      capabilities: { send: true, interrupt: true, queue_edit: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: true,
+      background: [{ id: "hub/task-2", kind: "agent", description: "Subagent", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    const box = composerInput()!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => {
+      setValue.call(box, "Start next turn");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => {
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(host.querySelector("[data-queue-panel]")).toBeNull();
+    resolveSend(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    await flush();
   });
 });

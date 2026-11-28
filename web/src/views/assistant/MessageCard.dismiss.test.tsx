@@ -71,7 +71,7 @@ describe("dismiss a task-progress reply draft", () => {
     expect(api.mock.calls).toEqual([["/assistant/feed/demo-draft/dismiss", { method: "POST", json: { draft: draft.body!.draft }, headers: { "X-Persona-Manager": "assistant" } }]]);
     expect(needs()).toHaveLength(0);
     expect(host.querySelector("textarea")).toBeNull();
-    expect(toast).toHaveBeenCalledWith("已选择不处理，草稿没有发送", "ok", expect.objectContaining({ label: "撤销" }));
+    expect(toast).toHaveBeenCalledWith("已设为不处理，草稿未发送", "ok", expect.objectContaining({ label: "撤销" }));
     const undo = toast.mock.calls[0][2];
     api.mockResolvedValueOnce({ item: draft });
     await act(async () => undo.run());
@@ -154,7 +154,7 @@ describe("dismiss a task-progress reply draft", () => {
 
   it("renders a persisted dismissal as not sent, without an editor or actions", async () => {
     await act(async () => root.render(<FeedLineView item={dismissed} />));
-    expect(host.textContent).toContain("已选择不处理，草稿没有发送");
+    expect(host.textContent).toContain("已设为不处理，草稿未发送");
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector("button")).toBeNull();
     expect(messageWaits(dismissed)).toBe(false);

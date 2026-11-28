@@ -183,7 +183,7 @@ describe("how a view ends", () => {
     expect(canReconnect("live")).toBe(false);
   });
   it("says why in words", () => {
-    expect(endText({ code: "forbidden" })).toContain("只能看");
+    expect(endText({ code: "forbidden" })).toContain("仅支持查看");
     expect(endText({ unsupported: true })).toContain("不支持");
     expect(endText({ code: "too_many" })).toContain("太多");
     expect(endText({ code: "offline" })).toBe("电脑离线");

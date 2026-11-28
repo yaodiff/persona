@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 const (
@@ -241,6 +243,9 @@ func (c *Conn) send(line []byte) error {
 	if len(bytes.TrimSpace(line)) == 0 {
 		return nil
 	}
+	if c.limit > 0 && int64(len(line)) > c.limit {
+		return fmt.Errorf("bus: outgoing message is %d bytes (limit %d): %w", len(line), c.limit, rpc.ErrMessageTooLarge)
+	}
 	return c.ws.Write(c.ctx, websocket.MessageText, line)
 }
 
@@ -298,11 +303,16 @@ func dial(ctx context.Context, hub, token string, client *http.Client, mode webs
 		CompressionMode: mode,
 	})
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			if errorCode(resp) == CodeTokenRevoked {
-				return nil, ErrRevoked
+		if resp != nil {
+			if resp.Body != nil {
+				defer resp.Body.Close()
 			}
-			return nil, ErrRejected
+			if resp.StatusCode == http.StatusUnauthorized {
+				if errorCode(resp) == CodeTokenRevoked {
+					return nil, ErrRevoked
+				}
+				return nil, ErrRejected
+			}
 		}
 		return nil, err
 	}

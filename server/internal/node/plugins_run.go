@@ -176,7 +176,7 @@ func (ph *pluginHost) programCalls(r *pluginRun) func(context.Context, string, j
 		if !proto.PluginNodeHubMethod(method) {
 			return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method + " (not one a program on a computer may call)"}
 		}
-		return ph.hubCall(ctx, r, proto.PluginNodeHubCall{ID: proto.PluginNodeExtensionID(r.spec.ID), Revision: r.spec.Revision, Method: method, Params: params})
+		return ph.hubCall(ctx, r, proto.PluginNodeHubCall{ID: proto.PluginNodeExtensionID(r.spec.ID), Revision: r.spec.Revision, Method: method, Params: proto.PluginNodeHubCallParams(params)})
 	}
 }
 

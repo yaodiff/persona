@@ -331,7 +331,7 @@ func (e *engine) photoUncite(r *Recording, n int, listed bool) error {
 	case err == nil && minutesPhotos(m)[n]:
 		dropPhotos(m, func(p int) bool { return p == n })
 		m.Version = max(m.Version, r.MinutesVersion) + 1
-		m.Markdown = renderMinutes(m, r.StartedAt, st.Zone())
+		m.Markdown = e.renderMinutes(m, r.StartedAt, st.Zone(), meetingSpeakersOf(r.Conv))
 		if wrote, err := st.putMinutes(r.ID, m); err != nil {
 			return err
 		} else if !wrote {
@@ -556,11 +556,23 @@ func dropUnlistedPhotos(m *Minutes, b photoBook) {
 
 // dropPhotos takes out of m the items citing a photo gone says goes (all four sections), and the overview's bullets
 // and conclusions citing it (an empty topic and group go with them, the overview once no topic is left); the actions
-// are numbered again, each keeping its to-do. Not for a trimmed recording, whose minutes stay as they are.
+// are numbered again, each keeping its to-do, and settled debates remap any outcome.decision index into the remaining
+// decisions (debates cite transcript lines only, so they stay). Not for a trimmed recording, whose minutes stay as they are.
 func dropPhotos(m *Minutes, gone func(n int) bool) {
 	cites := func(n int) bool { return n > 0 && gone(n) }
 	m.Points = slices.DeleteFunc(m.Points, func(x MinutesPoint) bool { return cites(x.Photo) })
-	m.Decisions = slices.DeleteFunc(m.Decisions, func(x MinutesItem) bool { return cites(x.Photo) })
+	var keptDecisions []MinutesItem
+	remap := make([]int, len(m.Decisions))
+	for i, d := range m.Decisions {
+		if cites(d.Photo) {
+			remap[i] = -1
+			continue
+		}
+		remap[i] = len(keptDecisions)
+		keptDecisions = append(keptDecisions, d)
+	}
+	m.Decisions = keptDecisions
+	remapDebateDecisions(m, remap)
 	m.Actions = slices.DeleteFunc(m.Actions, func(x MinutesAction) bool { return cites(x.Photo) })
 	m.Open = slices.DeleteFunc(m.Open, func(x MinutesItem) bool { return cites(x.Photo) })
 	dropOverviewPhotos(m, cites)

@@ -76,6 +76,8 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
         var detail = ""
         /// The interaction Allow / Deny / Approve resolve.
         var interaction: String?
+        /// The exact interaction occurrence those buttons drew; absent from an older hub.
+        var interactionCreatedAt: String?
         var since: Double?
         /// A working item whose turn ended while its background work runs (#2935): `detail` says what runs
         /// ("parity-audit · Verify · 169/185"), and `since` is when its workflow started (#3433). Absent from older hubs.
@@ -114,14 +116,15 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
             }
         }
 
-        init(id: String, title: String, place: String = "", kind: Kind, detail: String = "", interaction: String? = nil, since: Double? = nil,
-             background: Bool = false, progress: Progress? = nil) {
+        init(id: String, title: String, place: String = "", kind: Kind, detail: String = "", interaction: String? = nil,
+             interactionCreatedAt: String? = nil, since: Double? = nil, background: Bool = false, progress: Progress? = nil) {
             self.id = id
             self.title = title
             self.place = place
             self.kind = kind
             self.detail = detail
             self.interaction = interaction
+            self.interactionCreatedAt = interactionCreatedAt
             self.since = since
             self.background = background
             self.progress = progress
@@ -135,6 +138,7 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
             kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .screen
             detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
             interaction = try c.decodeIfPresent(String.self, forKey: .interaction)
+            interactionCreatedAt = try c.decodeIfPresent(String.self, forKey: .interactionCreatedAt)
             since = try c.decodeIfPresent(Double.self, forKey: .since)
             background = (try? c.decodeIfPresent(Bool.self, forKey: .background)) ?? false
             // A bar this app cannot read (a newer hub's shape) drops only the bar.
@@ -197,7 +201,10 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
         if !details {
             // Without names a request reads "A permission request is waiting": no Allow / Deny for something nobody can
             // tell apart, only a tap into the app (#12982, as the hub's forDevice).
-            for i in s.items.indices where s.items[i].kind == .permission || s.items[i].kind == .plan { s.items[i].interaction = nil }
+            for i in s.items.indices where s.items[i].kind == .permission || s.items[i].kind == .plan {
+                s.items[i].interaction = nil
+                s.items[i].interactionCreatedAt = nil
+            }
         }
         if let look { s.look = look }
         (s.left, s.right) = island.sides

@@ -78,11 +78,15 @@ func needItem(l i18n.Lang, s *seat, ix *proto.Interaction, title func(*proto.Ses
 			item.Detail = i18n.T(l, "push.private_card")
 		}
 		item.Interaction, item.Since = ix.ID, fleetview.UnixSeconds(ix.CreatedAt)
+		if !ix.CreatedAt.IsZero() {
+			item.InteractionCreatedAt = ix.CreatedAt.UTC().Format(time.RFC3339Nano)
+		}
 		if len(ix.Fields) > 0 || ix.ToolName == proto.SecretHandoffTool || !decidable(*ix) {
 			// What it asks for (a password) is filled in in the app, or (a hand-off) approved on the card only
 			// (hub/secret_handoff.go), or the card cannot say what approving does (#12982): no Allow / Deny on the
 			// activity, a tap opens the request in the app.
 			item.Interaction = ""
+			item.InteractionCreatedAt = ""
 		}
 	}
 	return item

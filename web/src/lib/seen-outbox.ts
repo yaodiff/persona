@@ -12,7 +12,7 @@
 //
 // Only the hub's own times are compared with each other (its `seen_at`, the machine's `updated_at`): the page's clock
 // only says when to try again and when to give up.
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { runtimeIdentity } from "./runtime-list";
 import { countSides, foldedStateWith } from "./side-fold";
 import type { ListCounts } from "./session-list";
@@ -53,13 +53,17 @@ const expired = (m: SeenMark, now: number) => now - m.markedAt > SEEN_KEEP_MS ||
 
 /** Finished and not seen yet: Unread, or Just finished (seen as far as its state goes, but nobody looked, #9751). */
 export function unseen(s: Session): boolean {
-  const st = stateOf(s);
+  if (s.view) {
+    const reason = s.view.reason;
+    return !s.locallySeen && s.view.phase === "done" && (reason?.kind === "unseen" || reason?.kind === "just_finished" || (reason?.kind === "asks" && reason.unseen === true));
+  }
+  const st = activityOf(s);
   return st === "unread" || (st === "idle" && Boolean(s.work?.just_finished));
 }
 
 /** `s` as seen: no longer Unread, nor Just finished. */
 export function seenCopy(s: Session): Session {
-  return { ...s, state: "idle", ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}) };
+  return { ...s, state: "idle", ...(s.view ? { locallySeen: true } : {}), ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}) };
 }
 
 /** A mark for `s` as the page has it now; only an unseen one (Unread or Just finished) waits for the hub. */
@@ -77,7 +81,7 @@ export function markRecorded(s: Session, m: SeenMark): boolean {
  *  too old: the mark is done with, whatever any list says. */
 export function markEnded(s: Session, m: SeenMark, now: number): boolean {
   const newTurn = timeMs(s.updated_at) > m.updatedBefore + SEEN_SAME_TURN_MS;
-  const st = stateOf(s);
+  const st = activityOf(s);
   return newTurn || st === "working" || st === "needs_you" || expired(m, now);
 }
 

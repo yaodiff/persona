@@ -1,10 +1,10 @@
 {
-  "attachments_too_large_start": "附件加起来太大，一条消息放不下。删几张图片再启动。",
-  "launcher_no_attachments": "这个启动器的第一条消息不能带附件。换一个启动器；或者先只发文字启动，再在会话里发附件。",
-  "launcher_needs_text": "这个启动器需要第一条消息，请填写后再启动。",
-  "attachments_too_large_retry": "附件加起来太大，一条消息放不下。删几张图片再试。",
-  "start_failed": "没启动起来：{error}",
-  "first_message_failed": "第一条消息没送达：{error}",
+  "attachments_too_large_start": "附件总大小超出单条消息上限，请移除部分图片后再启动。",
+  "launcher_no_attachments": "该启动器的首条消息不支持携带附件。请切换其他启动器，或先发送纯文字启动会话，再在会话中发送附件。",
+  "launcher_needs_text": "该启动器需要输入首条消息，请填写后再启动。",
+  "attachments_too_large_retry": "附件总大小超出单条消息上限，请移除部分图片后重试。",
+  "start_failed": "启动失败：{error}",
+  "first_message_failed": "首条消息未能送达：{error}",
   "attachments_failed": "附件处理失败：{error}",
-  "outcome_unknown": "hub 也不确定这个请求的结果"
+  "outcome_unknown": "hub 无法确认此请求的处理结果"
 }

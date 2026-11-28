@@ -36,8 +36,8 @@ describe("parseCookies", () => {
   });
 
   it("explains what is no cookie file", () => {
-    expect(() => parseCookies("{oops")).toThrow("读不懂");
-    expect(() => parseCookies("[]")).toThrow("没有 cookie");
+    expect(() => parseCookies("{oops")).toThrow("无法解析该文件");
+    expect(() => parseCookies("[]")).toThrow("不包含任何 cookie");
     expect(() => parseCookies("hello\nworld")).toThrow("cookies.txt");
   });
 });

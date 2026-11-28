@@ -16,6 +16,14 @@ describe("hubNotice", () => {
     });
   });
 
+  it("does not rebind a retained notification to a same-ID replacement", () => {
+    const at = "2026-01-02T03:04:05.000000001Z";
+    const replacement: Interaction = { id: "ask1", machine_id: "server", session_id: "main", kind: "permission", created_at: "2026-01-02T03:04:05.000000002Z" };
+    expect(hubNotice({ ...ask, interaction_created_at: at }, nobody, [replacement])).toBeUndefined();
+    const original: Interaction = { ...replacement, created_at: at };
+    expect(hubNotice({ ...ask, interaction_created_at: at }, nobody, [original])).toMatchObject({ card: "ask1", created_at: at });
+  });
+
   it("leaves a followed Agent's cards and reminders to the page's own signals", () => {
     const followed = (k: string) => k === "m/a";
     expect(hubNotice({ ...ask, machine_id: "m", session_id: "a" }, followed, [])).toBeUndefined();

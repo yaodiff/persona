@@ -710,13 +710,40 @@ fun AssistantScreen(
             // composer of the page that starts it, here.
             proactiveOpen = false; settingsOpen = false; drawerOpen = false
             if (hasChat && !demo) {
-                latestMain?.let { askMain(it); return@collect }
-                // On a cold start the conversations may still be on their way: the main one takes the cursor when it comes.
-                if (!openedMain) scope.launch {
-                    kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { latestMain }.first { it != null } }
-                        ?.let { main -> if (!openedMain || main == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty())) askMain(main) }
+                latestMain?.let { main ->
+                    persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(main))
+                    askMain(main)
+                    return@collect
                 }
                 if (activeSession != null || newChat != null) newConversation()
+                val shownSession = activeSession?.let { sid ->
+                    activeMachine?.takeIf { it.isNotBlank() }?.let { mid -> SessionKey(mid, sid) }
+                }
+                if (shownSession != null) {
+                    // Active conversation remained hosted (for example while sending); keep the
+                    // pending handoff routed to it instead of parking it on the hidden starter page.
+                    persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(shownSession))
+                    return@collect
+                }
+                // On a cold start the conversations may still be on their way: wait before claiming
+                // the starter composer so a pending assist draft lands in the main chat once ready.
+                if (!openedMain) {
+                    scope.launch {
+                        val arrived = kotlinx.coroutines.withTimeoutOrNull(3_000) {
+                            snapshotFlow { latestMain }.first { it != null }
+                        }
+                        if (arrived != null && (!openedMain || arrived == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty()))) {
+                            persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(arrived))
+                            askMain(arrived)
+                        } else if (latestMain == null && activeSession == null) {
+                            persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Starter)
+                        }
+                    }
+                } else if (latestMain == null && activeSession == null) {
+                    persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Starter)
+                }
+            } else {
+                persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Starter)
             }
             // After the tab's first layout and the saved draft: the text field has to be attached (the old app waited 300 ms).
             kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { draftEditor == null || savedComposer != null }.first { it } }
@@ -945,6 +972,35 @@ fun AssistantScreen(
                                 persona.feature.chat.ForwardPlacements.finishHomePhotoHandoffs(rejected.mapTo(mutableSetOf()) { it.id })
                             }
                         }
+                        val pendingAssist by persona.feature.chat.AssistDraftBus.pending.collectAsStateWithLifecycle()
+                        LaunchedEffect(pendingAssist, active, composer, composer.draftLoaded, draftReady, assistantImageLimits) {
+                            if (active != null && hasChat && !demo) return@LaunchedEffect
+                            val draft = pendingAssist ?: return@LaunchedEffect
+                            if (draft.target != persona.feature.chat.AssistDraftTarget.Starter || !draft.hasUnappliedContent) return@LaunchedEffect
+                            if (!draftReady || !composer.draftLoaded) return@LaunchedEffect
+                            val result = persona.feature.chat.applyAssistDraft(
+                                context = context,
+                                composer = composer,
+                                draft = draft,
+                                bus = persona.feature.chat.AssistDraftBus,
+                                existingContextIds = persona.feature.chat.ForwardPlacements.home.mapTo(mutableSetOf()) { it.id },
+                                onContext = { ref ->
+                                    if (active == null) persona.feature.chat.ForwardPlacements.home =
+                                        persona.feature.chat.ForwardPlacements.home + ref
+                                },
+                                limits = assistantImageLimits,
+                                onPhotoLimit = {
+                                    val message = resources.getString(
+                                        persona.feature.chat.R.string.chat_composer_photo_limit,
+                                        assistantImageLimits.perMessage,
+                                    )
+                                    if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
+                                },
+                            )
+                            if (result.screenshotAdded || result.contextAdded) {
+                                composer.focusRequest++
+                            }
+                        }
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = assistantComposerService,
@@ -1071,7 +1127,7 @@ fun AssistantScreen(
             }
         }
             // The page's own toast (no app feedback), at the top, where the root draws the app's.
-            persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
+            persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
         }
         }
     }

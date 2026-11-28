@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -21,12 +22,13 @@ func TestPendingApprovalReminderPush(t *testing.T) {
 			done := make(chan proto.Resolution, 1)
 			go func() {
 				r, _ := ft.s.waitInteraction(ctx, proto.Interaction{
-					ID:        "ix_remind_once",
-					MachineID: "mac",
-					SessionID: "s1",
-					Kind:      proto.IxPermission,
-					ToolName:  "Bash",
-					ExpiresAt: time.Now().Add(2 * time.Hour).UTC(),
+					ID:           "ix_remind_once",
+					MachineID:    "mac",
+					SessionID:    "s1",
+					Kind:         proto.IxPermission,
+					OutwardWrite: true,
+					ToolName:     "Bash",
+					ExpiresAt:    time.Now().Add(2 * time.Hour).UTC(),
 				})
 				done <- r
 			}()
@@ -58,12 +60,13 @@ func TestPendingApprovalReminderPush(t *testing.T) {
 			done := make(chan proto.Resolution, 1)
 			go func() {
 				r, _ := ft.s.waitInteraction(ctx, proto.Interaction{
-					ID:        "ix_remind_resolved",
-					MachineID: "mac",
-					SessionID: "s1",
-					Kind:      proto.IxPermission,
-					ToolName:  "Bash",
-					ExpiresAt: time.Now().Add(2 * time.Hour).UTC(),
+					ID:           "ix_remind_resolved",
+					MachineID:    "mac",
+					SessionID:    "s1",
+					Kind:         proto.IxPermission,
+					OutwardWrite: true,
+					ToolName:     "Bash",
+					ExpiresAt:    time.Now().Add(2 * time.Hour).UTC(),
 				})
 				done <- r
 			}()
@@ -93,12 +96,13 @@ func TestPendingApprovalReminderPush(t *testing.T) {
 			done := make(chan proto.Resolution, 1)
 			go func() {
 				r, _ := ft.s.waitInteraction(ctx, proto.Interaction{
-					ID:        "ix_remind_short",
-					MachineID: "mac",
-					SessionID: "s1",
-					Kind:      proto.IxPermission,
-					ToolName:  "Bash",
-					ExpiresAt: time.Now().Add(10 * time.Minute).UTC(),
+					ID:           "ix_remind_short",
+					MachineID:    "mac",
+					SessionID:    "s1",
+					Kind:         proto.IxPermission,
+					OutwardWrite: true,
+					ToolName:     "Bash",
+					ExpiresAt:    time.Now().Add(10 * time.Minute).UTC(),
 				})
 				done <- r
 			}()
@@ -130,6 +134,7 @@ func TestPendingApprovalReminderPush(t *testing.T) {
 					SessionID: "s1",
 					Kind:      proto.IxQuestion,
 					ToolName:  "ask_user",
+					ToolInput: json.RawMessage(`{"why_owner":"priority"}`),
 					ExpiresAt: time.Now().Add(2 * time.Hour).UTC(),
 				})
 				done <- r

@@ -1,10 +1,12 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
+	"io"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -14,8 +16,8 @@ import (
 )
 
 // larkGateWithEdit keeps the ordinary gate untouched for ineligible commands. An eligible Claude Code Lark
-// send/reply gets editable_text; after the answer, the original grant is consumed before a new command is classified
-// and granted. That keeps an old Claude unable to execute the original command when the user changed the text.
+// send/reply gets editable_text; when the owner changes the text, larkCheckOutcome skips granting the original call,
+// and applyLarkEdit classifies, validates, and grants only the rebuilt command once.
 func (n *Node) larkGateWithEdit(ctx context.Context, in hookInput, ix proto.Interaction) (any, error) {
 	var a struct {
 		Command string `json:"command"`
@@ -29,19 +31,18 @@ func (n *Node) larkGateWithEdit(ctx context.Context, in hookInput, ix proto.Inte
 		return n.larkGate(ctx, in, ix)
 	}
 	ix.EditableText = original
-	decision, reason, err := n.larkCheck(ctx, in.SessionID, in.Cwd, a.Command, ix)
-	if err != nil || decision == "" {
+	out, err := n.larkCheckOutcome(ctx, in.SessionID, in.Cwd, a.Command, ix)
+	if err != nil || out.decision == "" {
 		return nil, err
 	}
-	edited, _ := n.editedAnswers.LoadAndDelete(ix.ID)
-	editedText, _ := edited.(string)
-	if editedText == "" || editedText == original {
-		return preToolDecision(decision, reason), nil
+	if out.editedText == "" || out.editedText == original || out.decision != "allow" {
+		return preToolDecision(out.decision, out.reason), nil
 	}
-	if decision != "allow" {
-		return preToolDecision(decision, reason), nil
+	card := out.card
+	if card.InteractionID == "" {
+		card.InteractionID = ix.ID
 	}
-	updated, err := n.applyLarkEdit(ctx, cfg, in.SessionID, ix.ID, a.Command, in.Cwd, call, span, editedText)
+	updated, err := n.applyLarkEdit(ctx, cfg, in.SessionID, card, a.Command, in.Cwd, call, span, out.editedText)
 	if err != nil {
 		return preToolDecision("deny", err.Error()), nil
 	}
@@ -50,9 +51,9 @@ func (n *Node) larkGateWithEdit(ctx context.Context, in hookInput, ix proto.Inte
 		return preToolDecision("deny", "edited command input could not be read"), nil
 	}
 	input["command"] = updated
-	out := preToolDecision("allow", reason).(map[string]any)
-	out["hookSpecificOutput"].(map[string]any)["updatedInput"] = input
-	return out, nil
+	hookOut := preToolDecision("allow", out.reason).(map[string]any)
+	hookOut["hookSpecificOutput"].(map[string]any)["updatedInput"] = input
+	return hookOut, nil
 }
 
 type larkBodySpan struct{ start, end int }
@@ -66,7 +67,7 @@ func (n *Node) editableLarkCall(cfg proto.AssistantLark, command, cwd string) (l
 		return larkCall{}, larkBodySpan{}, "", false
 	}
 	c := v.calls[0]
-	if c.CLI || c.Gate < 0 || c.Gate >= len(cfg.Gates) || cfg.Gates[c.Gate].Auth == nil || c.relFile {
+	if c.CLI || c.Gate < 0 || c.Gate >= len(cfg.Gates) || cfg.Gates[c.Gate].Auth == nil || c.relFile || c.fileBody || c.dataInQuery || c.queryUnknown {
 		return larkCall{}, larkBodySpan{}, "", false
 	}
 	if kind, _, _ := larkMessageTarget(c); kind == "" {
@@ -121,7 +122,10 @@ func editableTextFields(body string) (map[string]json.RawMessage, string, bool) 
 		}
 		fields[name] = raw
 	}
-	if _, err := dec.Token(); err != nil || dec.More() {
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, "", false
+	}
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, "", false
 	}
 	var text string
@@ -131,55 +135,135 @@ func editableTextFields(body string) (map[string]json.RawMessage, string, bool) 
 	return fields, text, true
 }
 
-func (n *Node) applyLarkEdit(ctx context.Context, cfg proto.AssistantLark, session, id, command, cwd string, old larkCall, span larkBodySpan, edited string) (string, error) {
-	if err := n.takeOriginalGrant(cfg, session, id, old); err != nil {
-		return "", err
+func (n *Node) applyLarkEdit(ctx context.Context, oldCfg proto.AssistantLark, session string, card proto.LarkLetThrough, command, cwd string, old larkCall, span larkBodySpan, edited string) (string, error) {
+	if old.Gate < 0 || old.Gate >= len(oldCfg.Gates) || oldCfg.Gates[old.Gate].Auth == nil {
+		return "", fmt.Errorf("the original command has no authenticated gate")
 	}
-	_, originalText, ok := editableTextFields(old.Body)
-	if !ok || strings.TrimSpace(edited) == "" {
-		return "", fmt.Errorf("edited text must not be empty")
-	}
-	oldFields, _, _ := editableTextFields(old.Body)
-	oldFields["text"], _ = json.Marshal(edited)
-	body, err := json.Marshal(oldFields)
+	oldFields, originalText, rewrittenBody, err := buildEditedLarkBody(old.Body, edited)
 	if err != nil {
 		return "", err
 	}
 	// Replace the one literal body word, never the route, query, mentions or another occurrence of the same text.
-	// The caller already consumed the original grant, so a parse/validation failure cannot execute the original.
-	updated, ok := editableSplice(command, old, span, string(body))
+	// larkCheckOutcome skipped granting the original call once edited_text differed, so any failure leaves zero grants.
+	updated, ok := editableSplice(command, old, span, string(rewrittenBody))
 	if !ok {
 		return "", fmt.Errorf("the edited command could not be rebuilt")
 	}
 	command = updated
-	v := classifyLarkWith(command, cfg.Gates, cwd, n.larkCLIRisk(cfg), n.larkLoginPATH)
+	gateCmd := oldCfg.Gates[old.Gate].Command
+	freshCfg := n.assistantLark(ctx)
+	freshGate := slices.IndexFunc(freshCfg.Gates, func(g proto.CommandGate) bool { return g.Command == gateCmd && g.Auth != nil })
+	if freshGate < 0 {
+		return "", fmt.Errorf("the edited command has no authenticated gate")
+	}
+	v := classifyLarkWith(command, freshCfg.Gates, cwd, n.larkCLIRisk(freshCfg), n.larkLoginPATH)
 	if v.deny != "" || v.other || v.unparsed || v.unknown || v.unsure || len(v.calls) != 1 {
 		return "", fmt.Errorf("the edited command is no longer one standalone gated call")
 	}
 	c := v.calls[0]
-	if c.Gate != old.Gate || c.Method != old.Method || c.Path != old.Path || c.Query != old.Query || c.CLI || c.relFile {
+	if c.Gate != freshGate || c.Method != old.Method || c.Path != old.Path || c.Query != old.Query || c.CLI || c.relFile {
 		return "", fmt.Errorf("the edited command changed its tool, method, path or query")
 	}
-	if kind, _, _ := larkMessageTarget(c); larkDecision(cfg, c) == "deny" || kind == "" {
+	if kind, _, _ := larkMessageTarget(c); larkDecision(freshCfg, c) == "deny" || kind == "" {
 		return "", fmt.Errorf("the edited text is denied by the same gate")
 	}
-	newFields, newText, ok := editableTextFields(c.Body)
+	if err := verifyEditedLarkBody(oldFields, c.Body, edited); err != nil {
+		return "", err
+	}
+	through := card
+	through.Kind = proto.LarkThroughCard
+	through.EditedFrom = originalText
+	if err := n.grantEdited(freshCfg, session, c, through); err != nil {
+		return "", err
+	}
+	return command, nil
+}
+
+// applyLarkProxyEdit validates the edited text and mints a one-use rewrite grant for a local assistant_environment
+// runtime whose permission response cannot rewrite tool_input. larkCheckOutcome never minted an unedited grant when
+// edited_text differed; when the runtime executes its unmodified original command, gateProxy matches the original
+// method, path, query and exact JSON body once and forwards the rewritten JSON body.
+func (n *Node) applyLarkProxyEdit(ctx context.Context, oldCfg proto.AssistantLark, session string, card proto.LarkLetThrough, old larkCall, edited string) error {
+	if old.Gate < 0 || old.Gate >= len(oldCfg.Gates) || oldCfg.Gates[old.Gate].Auth == nil {
+		return fmt.Errorf("the original command has no authenticated gate")
+	}
+	oldFields, originalText, rewrittenBody, err := buildEditedLarkBody(old.Body, edited)
+	if err != nil {
+		return err
+	}
+	if err := verifyEditedLarkBody(oldFields, string(rewrittenBody), edited); err != nil {
+		return err
+	}
+	gateCmd := oldCfg.Gates[old.Gate].Command
+	freshCfg := n.assistantLark(ctx)
+	freshGate := slices.IndexFunc(freshCfg.Gates, func(g proto.CommandGate) bool { return g.Command == gateCmd && g.Auth != nil })
+	if freshGate < 0 {
+		return fmt.Errorf("the edited command has no authenticated gate")
+	}
+	editedCall := old
+	editedCall.Gate = freshGate
+	editedCall.Body = string(rewrittenBody)
+	if kind, _, _ := larkMessageTarget(editedCall); larkDecision(freshCfg, editedCall) == "deny" || kind == "" {
+		return fmt.Errorf("the edited text is denied by the same gate")
+	}
+	pinnedOriginal := old
+	pinnedOriginal.Gate = freshGate
+	through := card
+	through.Kind = proto.LarkThroughCard
+	through.EditedFrom = originalText
+	return n.grantEditedWithRewrite(freshCfg, session, pinnedOriginal, rewrittenBody, through)
+}
+
+func buildEditedLarkBody(oldBody, edited string) (map[string]json.RawMessage, string, []byte, error) {
+	oldFields, originalText, ok := editableTextFields(oldBody)
+	if !ok || strings.TrimSpace(edited) == "" {
+		return nil, "", nil, fmt.Errorf("edited text must not be empty")
+	}
+	newFields := maps.Clone(oldFields)
+	textJSON, err := json.Marshal(edited)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	newFields["text"] = textJSON
+	rewrittenBody, err := json.Marshal(newFields)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if len(rewrittenBody) > gateBodyMax {
+		return nil, "", nil, fmt.Errorf("the edited body exceeds the maximum allowed size")
+	}
+	return oldFields, originalText, rewrittenBody, nil
+}
+
+func verifyEditedLarkBody(oldFields map[string]json.RawMessage, newBody, edited string) error {
+	newFields, newText, ok := editableTextFields(newBody)
 	if !ok || newText != edited {
-		return "", fmt.Errorf("the edited body does not carry the requested text")
+		return fmt.Errorf("the edited body does not carry the requested text")
+	}
+	if len(newFields) != len(oldFields) {
+		return fmt.Errorf("the edited body changed a field other than text")
 	}
 	for key, before := range oldFields {
 		if key == "text" {
 			continue
 		}
 		after, present := newFields[key]
-		if !present || string(before) != string(after) {
-			return "", fmt.Errorf("the edited body changed a field other than text")
+		if !present || !compactJSONEqual(before, after) {
+			return fmt.Errorf("the edited body changed a field other than text")
 		}
 	}
-	if err := n.grantEdited(cfg, session, c, proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: id, EditedFrom: originalText}); err != nil {
-		return "", err
+	return nil
+}
+
+func compactJSONEqual(a, b json.RawMessage) bool {
+	if bytes.Equal(a, b) {
+		return true
 	}
-	return command, nil
+	var ab, bb bytes.Buffer
+	if json.Compact(&ab, a) != nil || json.Compact(&bb, b) != nil {
+		return false
+	}
+	return bytes.Equal(ab.Bytes(), bb.Bytes())
 }
 
 func editableSplice(command string, old larkCall, span larkBodySpan, body string) (string, bool) {
@@ -203,42 +287,13 @@ func editableSplice(command string, old larkCall, span larkBodySpan, body string
 	return command[:span.start] + shellQuote(body) + command[span.end:], true
 }
 
-func (n *Node) takeOriginalGrant(cfg proto.AssistantLark, session, id string, c larkCall) error {
-	if c.Gate < 0 || c.Gate >= len(cfg.Gates) || cfg.Gates[c.Gate].Auth == nil {
-		return fmt.Errorf("the original command has no authenticated gate")
-	}
-	var body any
-	parsed := json.Unmarshal([]byte(c.Body), &body) == nil
-	p := n.gates()
-	key := gateKey{command: cfg.Gates[c.Gate].Command, session: session, space: p.spaceSession(session), remote: n.isRemoteRuntimeSession(session)}
-	query := gateQueryKey(c.Query)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pruneLocked()
-	for i, g := range p.grants {
-		// The interaction id distinguishes this approval from another outstanding card for the same route and body.
-		if g.through.Kind != proto.LarkThroughCard || g.through.InteractionID != id ||
-			g.command != key.command || g.method != strings.ToUpper(c.Method) || g.path != c.Path || g.query != query {
-			continue
-		}
-		if (key.space || key.remote) && (key.session == "" || g.session != key.session) {
-			continue
-		}
-		if g.session != "" && key.session != "" && g.session != key.session {
-			continue
-		}
-		if g.bodyBound && (!parsed || !reflect.DeepEqual(g.body, body)) {
-			continue
-		}
-		p.grants = slices.Delete(p.grants, i, i+1)
-		return nil
-	}
-	return fmt.Errorf("the original grant could not be retired")
-}
-
 // grantEdited always pins the exact JSON body, including when the edited text contains '$'. The ordinary grant path's
 // dynamic-body wildcard is deliberately not used here.
 func (n *Node) grantEdited(cfg proto.AssistantLark, session string, c larkCall, through proto.LarkLetThrough) error {
+	return n.grantEditedWithRewrite(cfg, session, c, nil, through)
+}
+
+func (n *Node) grantEditedWithRewrite(cfg proto.AssistantLark, session string, c larkCall, rewriteBody []byte, through proto.LarkLetThrough) error {
 	if c.Gate < 0 || c.Gate >= len(cfg.Gates) || cfg.Gates[c.Gate].Auth == nil {
 		return fmt.Errorf("the edited command has no authenticated gate")
 	}
@@ -248,8 +303,12 @@ func (n *Node) grantEdited(cfg proto.AssistantLark, session string, c larkCall, 
 	if err := dec.Decode(&body); err != nil {
 		return err
 	}
-	g := gateGrant{command: cfg.Gates[c.Gate].Command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), body: body, bodyBound: true, bodyUseNumber: true,
-		until: time.Now().Add(gateGrantFor), session: session, through: through}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("unexpected trailing JSON in body")
+	}
+	g := gateGrant{command: cfg.Gates[c.Gate].Command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), account: c.Account,
+		body: body, bodyBound: true, bodyUseNumber: true, rewriteBody: bytes.Clone(rewriteBody), until: time.Now().Add(gateGrantFor), session: session, through: through}
 	p := n.gates()
 	p.mu.Lock()
 	defer p.mu.Unlock()

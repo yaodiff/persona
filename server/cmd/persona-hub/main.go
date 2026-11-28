@@ -37,7 +37,7 @@ func buildInfo() update.Build {
 // usage: the hub's commands without "hub " (persona-hub hub <command> works too: what the edge and older scripts run).
 const usage = `usage:
   persona-hub [run]         run the hub (config ~/.persona/hub.json); behind its edge on Linux and macOS
-  persona-hub switch [--binary <path>] [--prev <path>] [--timeout 8m] | --status
+  persona-hub switch [--binary <path>] [--prev <path>] [--timeout 8m] [--hub-only] | --status
                            have the running edge switch to another binary, or say what serves now (docs/operations/hub-restart.md)
   persona-hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service | --manager-service] [--json]
                     [--lang en|zh-Hans|ja]

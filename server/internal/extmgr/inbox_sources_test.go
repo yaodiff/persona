@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 	"github.com/nwverse/persona/server/internal/subscriptionsui"
 )
@@ -110,20 +111,35 @@ func TestInboxSourcesAskTheAssistant(t *testing.T) {
 	a.on(assistantwire.MethodInboxMutes, func(raw json.RawMessage) (any, error) {
 		return map[string]any{"mutes": []assistantwire.InboxMute{{ID: "m1", Source: "example", Tag: "sender", Value: "a@example.com", Name: "a@example.com"}}}, nil
 	})
+	a.on(assistantwire.MethodInboxUnmute, func(json.RawMessage) (any, error) { return json.RawMessage(`{}`), nil })
 	a.on(assistantwire.MethodInboxTriagePreview, func(raw json.RawMessage) (any, error) {
 		return map[string]any{"verdicts": []assistantwire.InboxTriageVerdict{{Tier: "fyi", Summary: "A note"}}}, nil
 	})
 	b := builtinSources{h}
 	mutes, err := b.Mutes(ctx, "example")
-	if err != nil || len(mutes) != 1 || mutes[0].Name != "a@example.com" || !strings.Contains(string(lastParams(a, assistantwire.MethodInboxMutes)), `"source":"example"`) {
+	if err != nil || len(mutes) != 1 || mutes[0].Name != "a@example.com" {
 		t.Fatalf("mutes: %+v %v", mutes, err)
 	}
-	if err := b.Unmute(ctx, "m1"); err != nil || !strings.Contains(string(lastParams(a, assistantwire.MethodInboxUnmute)), `"id":"m1"`) {
+	if got := string(lastParams(a, assistantwire.MethodInboxMutes)); got != `{"source":"example"}` {
+		t.Errorf("mutes params = %s", got)
+	}
+	if err := b.Unmute(ctx, "m1"); err != nil {
 		t.Fatalf("unmute: %v", err)
 	}
+	if got := string(lastParams(a, assistantwire.MethodInboxUnmute)); got != `{"id":"m1"}` {
+		t.Errorf("unmute params = %s", got)
+	}
 	v, err := h.triagePreview(ctx, subscriptions.TriagePreview{Source: "sub_x", Things: []connector.InboxThing{{Title: "Hello"}}})
-	if err != nil || len(v) != 1 || v[0].Tier != "fyi" || !strings.Contains(string(lastParams(a, assistantwire.MethodInboxTriagePreview)), `"Hello"`) {
+	if err != nil || len(v) != 1 || v[0].Tier != "fyi" {
 		t.Fatalf("triage preview: %+v %v", v, err)
+	}
+	if got := string(lastParams(a, assistantwire.MethodInboxTriagePreview)); got != `{"source":"sub_x","name":"","things":[{"thread":"","kind":"","title":"Hello","at":"0001-01-01T00:00:00Z"}]}` {
+		t.Errorf("triage preview params = %s", got)
+	}
+	refused := &rpc.Error{Code: assistantwire.CodeInboxUnavailable, Message: "the store is down"}
+	a.on(assistantwire.MethodInboxMutes, func(json.RawMessage) (any, error) { return nil, refused })
+	if _, err := b.Mutes(ctx, ""); !errors.Is(err, errInboxAway) || !errors.Is(err, refused) {
+		t.Errorf("mutes error = %v, want inbox unavailable with the original RPC error", err)
 	}
 	h.opts.Assistant = nil
 	if _, err := b.Mutes(ctx, ""); !errors.Is(err, errInboxAway) {
@@ -218,6 +234,13 @@ func TestInboxSourcesAssistantRow(t *testing.T) {
 	}
 	if err := b.SetFeed(ctx, assistantSource, true, true, subscriptions.Actor{}); err != nil || !on || !*b.List(ctx)[0].Inbox {
 		t.Fatalf("switched on: %v %v", err, on)
+	}
+	if err := b.SetFeed(ctx, assistantSource, true, false, subscriptions.Actor{}); err != nil || on {
+		t.Fatalf("switched off: %v %v", err, on)
+	}
+	if got := a.got(assistantwire.MethodInboxPost); len(got) != 4 || string(got[0]) != `{}` ||
+		string(got[1]) != `{"on":true}` || string(got[2]) != `{}` || string(got[3]) != `{"on":false}` {
+		t.Errorf("post params = %s, want reads without on and writes with true and false", got)
 	}
 	if err := b.SetFeed(ctx, assistantSource, false, true, subscriptions.Actor{}); err == nil {
 		t.Error("it has no knowledge-base feed")

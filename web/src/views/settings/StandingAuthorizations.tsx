@@ -15,6 +15,7 @@ interface StandingAuthorization {
   source: string;
   granted_at: string;
   reversible: boolean;
+  messages?: { channel: string; target: string; scenario: string; identity: string };
 }
 
 type Registry = { revision: number; authorizations: StandingAuthorization[] };
@@ -113,20 +114,27 @@ export function StandingAuthorizations({ manager }: { manager: string }) {
       {list.kind === "loading" ? <div className="p-4"><Loading /></div>
         : list.kind === "failed" ? <SettingsHint alert>{t(list.forbidden ? "settings-standing.forbidden" : "settings-standing.load_failed")}</SettingsHint>
         : list.registry.authorizations.length === 0 ? <SettingsHint>{t("settings-standing.empty")}</SettingsHint>
-        : list.registry.authorizations.map(grant => <article key={grant.id} aria-label={grant.directory} className="space-y-3 p-4">
+        : list.registry.authorizations.map(grant => <article key={grant.id} aria-label={grant.messages?.target || grant.directory} className="space-y-3 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <h3 className="min-w-0 flex-1 break-words font-mono text-sm text-ink [overflow-wrap:anywhere]">{grant.directory}</h3>
+            <h3 className="min-w-0 flex-1 break-words font-mono text-sm text-ink [overflow-wrap:anywhere]">{grant.messages ? `${grant.messages.channel} / ${grant.messages.target || t("settings-outbound.all_chats")}` : grant.directory}</h3>
             <Button className="min-h-11" disabled={!!revocation} onClick={() => setRevocation({ grant, status: "confirm" })}>{t("settings-standing.revoke")}</Button>
           </div>
           <dl className="grid min-w-0 grid-cols-1 gap-3 text-sm text-ink sm:grid-cols-2">
-            <Detail label={t("settings-standing.machine")}>{grant.machine_id}</Detail>
-            <Detail label={t("settings-standing.directory")}>{grant.directory}</Detail>
+            {grant.messages ? <>
+              <Detail label={t("settings-outbound.scenario")}>{t(`settings-outbound.${grant.messages.scenario}`)}</Detail>
+              <Detail label={t("settings-outbound.bound_identity")}>{t(`settings-outbound.${grant.messages.identity}`)}</Detail>
+            </> : <>
+              <Detail label={t("settings-standing.machine")}>{grant.machine_id}</Detail>
+              <Detail label={t("settings-standing.directory")}>{grant.directory}</Detail>
+            </>}
             <Detail label={t("settings-standing.actions")}><ul>{grant.actions.map(action => <li key={action}>{actionLabel(action)}</li>)}</ul></Detail>
             <Detail label={t("settings-standing.conditions")}>{grant.conditions?.length ? <ul>{grant.conditions.map((condition, i) => <li key={i}>{conditionLabel(condition)}</li>)}</ul> : t("settings-standing.no_conditions")}</Detail>
             <Detail label={t("settings-standing.quote")} wide>{grant.quote}</Detail>
             <Detail label={t("settings-standing.granted_at")}><time dateTime={grant.granted_at} title={grant.granted_at}>{formatDate(grant.granted_at, { dateStyle: "medium", timeStyle: "short" })}</time></Detail>
             <Detail label={t("settings-standing.source")}>{sourceLabel(grant.source)}</Detail>
-            <Detail label={t("settings-standing.reversible")}>{t(grant.reversible ? "settings-standing.reversible_yes" : "settings-standing.reversible_no")}</Detail>
+            <Detail label={t(grant.messages ? "settings-outbound.revocation" : "settings-standing.reversible")}>
+              {grant.messages ? t("settings-outbound.revoke_only") : t(grant.reversible ? "settings-standing.reversible_yes" : "settings-standing.reversible_no")}
+            </Detail>
           </dl>
         </article>)}
     </Group>
@@ -136,7 +144,9 @@ export function StandingAuthorizations({ manager }: { manager: string }) {
     </>}>
       {revocation && <div className="space-y-3 break-words text-sm text-ink [overflow-wrap:anywhere]">
         <p>{t("settings-standing.confirm_effect")}</p>
-        <p className="font-mono">{revocation.grant.machine_id} · {revocation.grant.directory}</p>
+        <p className="font-mono">{revocation.grant.messages
+          ? `${revocation.grant.messages.channel} / ${revocation.grant.messages.target || t("settings-outbound.all_chats")} / ${t(`settings-outbound.${revocation.grant.messages.scenario}`)} / ${t(`settings-outbound.${revocation.grant.messages.identity}`)}`
+          : `${revocation.grant.machine_id} · ${revocation.grant.directory}`}</p>
         <p>{formatList(revocation.grant.actions.map(actionLabel))}</p>
         <p className="whitespace-pre-wrap text-ink-2">{revocation.grant.quote}</p>
         {revocation.status === "failed" && <p role="alert" className="text-red">{t("settings-standing.delete_failed")}</p>}

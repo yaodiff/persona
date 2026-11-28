@@ -1,12 +1,44 @@
 package lark
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The presses of the bot's one-shot buttons (card_actions.go): one press, one thing. The presses themselves, through the
 // cards and the agents they start, are the assistant's feishu_cards_test.go.
+
+func TestBotRestoreCardDoesNotOverwriteReplacement(t *testing.T) {
+	f := newFakeHub()
+	first := proto.Interaction{ID: "ix_bot_restore_occurrence", MachineID: "mac", SessionID: "s1",
+		Kind: proto.IxPermission, CreatedAt: time.Now().UTC()}
+	replacement := first
+	replacement.CreatedAt = first.CreatedAt.Add(time.Second)
+	f.answerApp(assistantwire.AppInteractions, InteractionsGet, func(json.RawMessage) (any, error) {
+		return map[string]any{"ok": true, "interaction": replacement}, nil
+	})
+	s := newTestService(t, f)
+	c := s.chat()
+	b := c.fbot()
+	b.mu.Lock()
+	c.loadBotLocked(context.Background())
+	c.keepBotCardLocked(first.ID, &botCard{MessageID: "om_replacement", Ix: replacement})
+	b.mu.Unlock()
+	if c.botRestoreCard(context.Background(), first.ID, botCard{MessageID: "om_first", Ix: first}) {
+		t.Fatal("the earlier occurrence restored over a pending replacement")
+	}
+	b.mu.Lock()
+	got := b.cards[first.ID]
+	b.mu.Unlock()
+	if got.MessageID != "om_replacement" || !got.Ix.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("the earlier occurrence replaced the bot-card ledger: %+v", got)
+	}
+}
 
 // pressSlotHeld reports whether message mid's button kind slot is still taken.
 func pressSlotHeld(c core, mid, kind string) bool {

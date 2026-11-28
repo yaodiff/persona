@@ -326,16 +326,19 @@ func TestExtensionCommandUninstallWarnings(t *testing.T) {
 				if err == nil || err.Error() != tt.wantError {
 					t.Fatalf("error = %v, want %q", err, tt.wantError)
 				}
-				if stdout.String() != "" {
+				if strings.Contains(stdout.String(), "Uninstalled") {
 					t.Errorf("failed uninstall printed success: %q", stdout.String())
 				}
 			} else {
 				if err != nil {
 					t.Fatalf("successful uninstall returned an error: %v", err)
 				}
-				if got, want := stdout.String(), "Uninstalled example-extension\n"; got != want {
+				if got, want := stdout.String(), "Uninstalled example-extension\n"; !strings.HasSuffix(got, want) {
 					t.Errorf("stdout = %q, want %q", got, want)
 				}
+			}
+			if got, want := stdout.String(), "PERSONA_HOME: "+home+"\nHub: "+srv.URL+"\n"; !strings.HasPrefix(got, want) {
+				t.Errorf("target = %q, want prefix %q", got, want)
 			}
 			if got := stderr.String(); got != tt.wantStderr {
 				t.Errorf("stderr = %q, want %q", got, tt.wantStderr)

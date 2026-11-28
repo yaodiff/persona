@@ -6,6 +6,7 @@
 // Where no such font is found the terminal keeps its font stack as it was (a browser without `size-adjust` loads the
 // face unscaled: the gaps stay, nothing else changes).
 
+import { loadFontFaces } from "../../../ui/font-faces";
 import { fontLoadQuery, settleWithin, withFamily } from "../../../lib/terminal";
 
 const FAMILY = "PersonaTermCJK";
@@ -75,5 +76,5 @@ const FONT_WAIT_MS = 1500;
 export function terminalFontReady(size: number, stack: string): Promise<void> {
   if (typeof document === "undefined" || !document.fonts?.load) return Promise.resolve();
   const q = fontLoadQuery(size, stack);
-  return settleWithin(document.fonts.load(q.font, q.sample), FONT_WAIT_MS);
+  return settleWithin(loadFontFaces().then(() => document.fonts.load(q.font, q.sample)), FONT_WAIT_MS);
 }

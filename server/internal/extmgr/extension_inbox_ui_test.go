@@ -216,7 +216,7 @@ func TestCheckOpenURL(t *testing.T) {
 		url  string
 	}{{inbox, "lark:F1:1051", "persona://inbox/lark:F1:1051/source"}, {inbox, "x/y z", "persona://inbox/x%2Fy%20z/source"},
 		{inbox, "lark:F1:1051", "https://example.com/a"}, {page, "", "https://example.com/a"}, {page, "", ""}} {
-		if err := checkOpenURL("x", ok.ui, ok.item, ok.url); err != nil {
+		if err := checkOpenURL("x", nil, ok.ui, ok.item, ok.url); err != nil {
 			t.Errorf("%s %s %s: %v", ok.ui.Placement, ok.item, ok.url, err)
 		}
 	}
@@ -227,7 +227,7 @@ func TestCheckOpenURL(t *testing.T) {
 	}{{page, "lark:F1:1051", "persona://inbox/lark:F1:1051/source"}, {inbox, "lark:F1:1051", "persona://inbox/lark:F1:9999/source"},
 		{inbox, "", "persona://inbox//source"}, {inbox, "lark:F1:1051", "persona://inbox/lark:F1:1051/source?x=1"},
 		{inbox, "lark:F1:1051", "persona://settings"}, {inbox, "lark:F1:1051", "http://example.com"}, {inbox, "lark:F1:1051", "javascript:alert(1)"}} {
-		if err := checkOpenURL("x", bad.ui, bad.item, bad.url); err == nil {
+		if err := checkOpenURL("x", nil, bad.ui, bad.item, bad.url); err == nil {
 			t.Errorf("%s %s %s: allowed", bad.ui.Placement, bad.item, bad.url)
 		}
 	}

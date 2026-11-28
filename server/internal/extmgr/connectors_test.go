@@ -217,7 +217,7 @@ func TestConnectorsListTheSameCapabilities(t *testing.T) {
 	want := []string{
 		"mail tools,actions,archive hosts=[] options=false",
 		"github status,tools,actions,events,hosts,inbox,archive,login,options,threads hosts=[github.com] options=true",
-		"larksync status,archive,items hosts=[] options=false",                      // the Lark user sync's outbox (larksync_connector.go)
+		"larksync status,archive,items hosts=[] options=false",                      // the Lark user sync's outbox (internal/modules/lark/larksync)
 		"imessage status,tools,catalog,events,inbox,archive hosts=[] options=false", // catalog: inbox_things (#6317)
 	}
 	if githubport.Factory(moduleswitch.Set{}) == nil { // a build without the GitHub module has no built-in GitHub connector

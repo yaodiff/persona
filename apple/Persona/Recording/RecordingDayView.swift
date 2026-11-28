@@ -106,7 +106,7 @@ struct RecordingDayView: View {
                     .accessibilityIdentifier("day-delete")
             } footer: {
                 // Read once, at the end: not between the header and the recap.
-                Text("Audio stays on this iPhone until 3 days after the day's final recap, 7 days at most. Only the text goes to Knowledge, where it's kept for \(sync.store.days) days; the recap is kept like meeting minutes.")
+                Text("Audio stays on this iPhone until 3 days after the day's final recap, 7 days at most, or the hub's audio retention when shorter. Only the text goes to Knowledge, where it is \(RecordingRetentionText.kept(sync.textRetentionDays)); the recap is kept like meeting minutes.")
             }
         }
         // The recap unfolds when it arrives (Reduce Motion: at once).
@@ -827,7 +827,7 @@ struct RecordingDayTodaySection: View {
                               isOn: Binding(get: { on }, set: { control.set($0) }))
                 // On the one row the section always has: a sheet on the section would be one per row.
                 .sheet(item: Binding(get: { control.asking }, set: { if $0 == nil { control.consentAnswered(agreed: false) } })) { _ in
-                    RecordingDayConsentView(transcriptDays: sync.store.days) { control.consentAnswered(agreed: $0) }
+                    RecordingDayConsentView(textDays: sync.textRetentionDays) { control.consentAnswered(agreed: $0) }
                 }
             }
             if !consent.agreed, recording.offersWrites {

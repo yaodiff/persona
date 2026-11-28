@@ -79,18 +79,18 @@ class FinishedTerminalsShotsTest {
             rule.waitForIdle()
             rule.mainClock.advanceTimeBy(400)
             rule.onNodeWithText("Finished: Release notes").assertExists()
-            rule.onNodeWithText("Terminal · zsh · project").assertExists()
+            rule.onNodeWithText("Shell · zsh · project").assertExists()
             // The Agent opens its terminal, but has no destructive close action.
             rule.onAllNodesWithContentDescription("Close terminal").assertCountEquals(3)
             rule.onNode(hasText("Weather widget") and hasAnyDescendant(hasContentDescription("Close terminal"))).assertDoesNotExist()
             rule.onNodeWithText("vim · ~/project/web").assertExists()
             val suffix = "${s.name.lowercase()}-${if (d) "dark" else "light"}"
             save("terminals-$suffix", rule.onNodeWithTag("shot"))
-            rule.onNodeWithText("Close finished terminals").performClick()
+            rule.onNodeWithText("Close leftover shells").performClick()
             rule.waitForIdle()
-            rule.onNodeWithText("Close 1 finished terminal?").assertExists()
+            rule.onNodeWithText("Close 1 leftover shell?").assertExists()
             rule.onNode(hasText("Finished: Release notes") and hasAnyAncestor(isDialog())).assertExists()
-            rule.onNode(hasText("Terminal · zsh · project") and hasAnyAncestor(isDialog())).assertExists()
+            rule.onNode(hasText("Shell · zsh · project") and hasAnyAncestor(isDialog())).assertExists()
             save("close-finished-$suffix", rule.onNode(isDialog()))
             rule.onNodeWithText("Cancel").performClick()
         }

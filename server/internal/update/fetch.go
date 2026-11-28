@@ -15,7 +15,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // Published is what the publisher put up, as a hub sees it. Nothing is signed (the user's call, docs/operations/hub-update.md
@@ -27,17 +30,27 @@ type Published struct {
 	Source      string
 }
 
-// Check reads latest.json from base (the publisher's dl/).
+// Check reads the full edition's latest.json from base (the publisher's dl/).
 func Check(ctx context.Context, client *http.Client, base string) (*Published, error) {
+	return CheckFeed(ctx, client, base, nodeproto.EditionFull)
+}
+
+// CheckFeed reads edition's own manifest from base (FeedName: latest.json, or the core's core-latest.json, which no
+// full install ever asks for) and takes it only when it says that edition, whatever the source serves under the name.
+func CheckFeed(ctx context.Context, client *http.Client, base string, edition nodeproto.Edition) (*Published, error) {
+	edition = edition.OrFull()
 	if base == "" {
 		return nil, errors.New("this personad has nowhere to look for releases")
 	}
-	data, err := get(ctx, client, strings.TrimSuffix(base, "/")+"/latest.json", 1<<20)
+	data, err := get(ctx, client, strings.TrimSuffix(base, "/")+"/"+FeedName(edition), 1<<20)
 	if err != nil {
 		return nil, err
 	}
 	m, err := ParseManifest(data)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.ValidateEdition(edition); err != nil {
 		return nil, err
 	}
 	return &Published{Manifest: m}, nil
@@ -61,7 +74,14 @@ func get(ctx context.Context, client *http.Client, url string, limit int64) ([]b
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s: response exceeds %d bytes", url, limit)
+	}
+	return data, nil
 }
 
 // Download fetches f from base into dir and unpacks it to dir/<name without .gz>: the .gz must match the manifest's
@@ -71,6 +91,16 @@ func Download(ctx context.Context, client *http.Client, base string, f File, dir
 	if f.Name == "" || filepath.Base(f.Name) != f.Name || strings.ContainsAny(f.Name, `/\`) {
 		return "", errors.New("invalid artifact name")
 	}
+	remotes := artifactNames(f.Name)
+	if f.Served != "" {
+		if filepath.Base(f.Served) != f.Served || strings.ContainsAny(f.Served, `/\`) {
+			return "", errors.New("invalid artifact name")
+		}
+		remotes = []string{f.Served} // an edition's own name: no older name stands in for it
+	}
+	if err := validateDownloadSize(f); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -78,13 +108,15 @@ func Download(ctx context.Context, client *http.Client, base string, f File, dir
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
+			t := time.NewTimer(time.Duration(attempt) * 2 * time.Second)
 			select {
 			case <-ctx.Done():
+				t.Stop()
 				return "", ctx.Err()
-			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			case <-t.C:
 			}
 		}
-		for _, name := range artifactNames(f.Name) {
+		for _, name := range remotes {
 			err = fetchFile(ctx, client, strings.TrimSuffix(base, "/")+"/"+name, gz, f)
 			if !errors.Is(err, errNotFound) {
 				break
@@ -113,6 +145,22 @@ func Download(ctx context.Context, client *http.Client, base string, f File, dir
 	return bin, nil
 }
 
+// DownloadBinary takes the raw bytes from an authenticated Hub package index.
+func DownloadBinary(ctx context.Context, client *http.Client, base string, f File, dir string) (string, error) {
+	if canonical, legacy := canonicalPackage(f.Name); canonical == "" || legacy || f.Size <= 0 ||
+		f.SHA256 == "" || f.SHA256 != f.BinarySHA256 {
+		return "", errors.New("invalid published package")
+	}
+	if limit := unpackedBinaryLimit(); f.Size > limit {
+		return "", fmt.Errorf("%w: %s size %d exceeds %d bytes", errMismatch, f.Name, f.Size, limit)
+	}
+	bin := filepath.Join(dir, f.Name)
+	if err := fetchFile(ctx, client, strings.TrimSuffix(base, "/")+"/"+f.Name, bin, f); err != nil {
+		return "", err
+	}
+	return bin, os.Chmod(bin, 0o755)
+}
+
 var errMismatch = errors.New("the download does not match the release's manifest")
 
 // IsMismatch: err is Download finding that what was served is not what the manifest says (sizes or sha256s; a file
@@ -131,7 +179,42 @@ type shortError struct{ error }
 
 func (e shortError) Unwrap() error { return e.error }
 
+const (
+	defaultMaxDownloadSize   int64 = 512 << 20
+	defaultMaxUnpackedBinary int64 = 512 << 20
+)
+
+var (
+	maxDownloadSizeOverride   atomic.Int64
+	maxUnpackedBinaryOverride atomic.Int64
+)
+
+func downloadSizeLimit() int64 {
+	if v := maxDownloadSizeOverride.Load(); v > 0 {
+		return v
+	}
+	return defaultMaxDownloadSize
+}
+
+func unpackedBinaryLimit() int64 {
+	if v := maxUnpackedBinaryOverride.Load(); v > 0 {
+		return v
+	}
+	return defaultMaxUnpackedBinary
+}
+
+func validateDownloadSize(f File) error {
+	limit := downloadSizeLimit()
+	if f.Size <= 0 || f.Size > limit {
+		return fmt.Errorf("%w: %s invalid size %d (max %d)", errMismatch, f.Name, f.Size, limit)
+	}
+	return nil
+}
+
 func fetchFile(ctx context.Context, client *http.Client, url, path string, f File) error {
+	if err := validateDownloadSize(f); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -180,6 +263,7 @@ func unpack(gz, bin, want string) error {
 	if err != nil {
 		return err
 	}
+	defer zr.Close()
 	tmp := bin + ".part"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
@@ -187,8 +271,15 @@ func unpack(gz, bin, want string) error {
 	}
 	defer os.Remove(tmp)
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(out, h), zr)
+	limit := unpackedBinaryLimit()
+	n, err := io.Copy(io.MultiWriter(out, h), io.LimitReader(zr, limit+1))
 	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && n > limit {
+		err = fmt.Errorf("%w: %s unpacked exceeds %d bytes", errMismatch, filepath.Base(gz), limit)
+	}
+	if cerr := zr.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil && hex.EncodeToString(h.Sum(nil)) != want {
@@ -210,7 +301,12 @@ func CheckBinary(ctx context.Context, bin string, m *Manifest) error {
 	if want := releaseLine(m); got != want {
 		return fmt.Errorf("the new personad says %q, not %q", got, want)
 	}
-	return nil
+	// And it is the release's edition (m.Edition, which Check held to this build's own).
+	edition, ok := nodeproto.ParseEdition(m.Edition)
+	if !ok {
+		return fmt.Errorf("the release names an unknown edition %q", m.Edition)
+	}
+	return CheckEdition(bin, edition, "the new personad")
 }
 
 // versionOf is what bin's `version -v` says, trimmed.

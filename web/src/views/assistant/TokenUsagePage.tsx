@@ -2,10 +2,11 @@
 // dialog (a sheet on a phone; TokenCalendar.tsx). Today's, the last 7 and the last 30 days' tokens; the calendar again
 // (only a picked day's line over it); the last 7 days by the hour; by computer, by agent and by kind over those 7
 // days; the line that says what the count is: input, output, cache write and cache read added up, the same count as
-// today's tokens on the Machines page. Read when it opens and when the tab comes back to the front, never on a timer.
+// today's tokens on the Machines page; under the totals, by project (#16530, TokenProjects.tsx), whose picked project
+// replaces the page. Read when it opens and when the tab comes back to the front, never on a timer.
 // In the calendar's lazy chunk (no route and no chunk of its own: the first screen has no room for either); its strings
 // are the calendar's namespace.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDate, formatNumber, t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { USAGE_COLOR, type UsageKind } from "../../lib/tokens";
@@ -19,9 +20,11 @@ import {
   type UsageDays,
   type UsageHours,
 } from "../../lib/usage-history";
+import { fetchUsageProjects, type UsageProject, type UsageProjects } from "../../lib/usage-projects";
 import { AgentMark } from "../../ui/AgentMark";
 import { Loading } from "../../ui/atoms";
 import TokenCalendar from "./TokenCalendar";
+import { ProjectDetail, ProjectsSection } from "./TokenProjects";
 
 /** What the page reads: a year of days (as many weeks as the page shows), and the last 7 days by the hour. */
 const YEAR = 53 * 7;
@@ -42,10 +45,12 @@ const short = (n: number) => formatNumber(n, { notation: "compact", maximumSigni
 const utc = (date: string) => new Date(`${date}T00:00:00Z`);
 const hourName = (h: number) => formatDate(Date.UTC(2024, 0, 1, h), { hour: "numeric", timeZone: "UTC" });
 
-/** The days and the hours, read when the page opens and when the tab comes back to the front. */
-function useUsage(): { days: UsageDays | null; hours: UsageHours | null; failed: boolean } {
+/** The days, the hours and the projects (null from a hub without them), read when the page opens and when the tab
+ *  comes back to the front. */
+function useUsage(): { days: UsageDays | null; hours: UsageHours | null; projects: UsageProjects | null; failed: boolean } {
   const [days, setDays] = useState<UsageDays | null>(null);
   const [hours, setHours] = useState<UsageHours | null>(null);
+  const [projects, setProjects] = useState<UsageProjects | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
@@ -59,6 +64,7 @@ function useUsage(): { days: UsageDays | null; hours: UsageHours | null; failed:
         () => live && setFailed(true), // keeps what was there
       );
       fetchUsageHours(7).then((h) => live && setHours(h), () => {});
+      fetchUsageProjects().then((p) => live && setProjects(p), () => {});
     };
     read();
     const onVisible = () => document.visibilityState === "visible" && read();
@@ -68,7 +74,7 @@ function useUsage(): { days: UsageDays | null; hours: UsageHours | null; failed:
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
-  return { days, hours, failed };
+  return { days, hours, projects, failed };
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -221,12 +227,29 @@ function Kinds({ total }: { total: UsageHours["total"] }) {
   );
 }
 
-export default function TokenUsage() {
-  const { days, hours, failed } = useUsage();
+/** project: the project to show instead of the page (By project's breakdown, the dialog's title going back), picked
+ *  with onProject. Its range (today, 3 or 7 days) is the list's: the one picked stays. */
+export default function TokenUsage({ project, onProject }: { project?: UsageProject | null; onProject?: (p: UsageProject | null) => void } = {}) {
+  const { days, hours, projects, failed } = useUsage();
+  const [range, setRange] = useState(2); // the last 7 days, as the page's other sections
+  const top = useRef<HTMLDivElement>(null);
+  const shown = useRef(project?.key);
+  useEffect(() => { // into a project or back: from its top (the dialog keeps its scroll otherwise)
+    if (shown.current === project?.key) return;
+    shown.current = project?.key;
+    top.current?.scrollIntoView?.({ block: "start" });
+  }, [project?.key]);
   const machines = (hours?.machines ?? []).filter((m) => dayTotal({ ...m, date: "" }) > 0);
   const agents = (hours?.agents ?? []).filter((a) => dayTotal({ ...a, date: "" }) > 0);
+  if (project) {
+    return (
+      <div ref={top} data-token-usage-page>
+        <ProjectDetail project={project} range={range} onRange={setRange} />
+      </div>
+    );
+  }
   return (
-    <div data-token-usage-page>
+    <div ref={top} data-token-usage-page>
           {days && (
             <>
               <div className="grid grid-cols-3 gap-3 rounded-card bg-surface px-4 py-3 shadow-card">
@@ -243,6 +266,7 @@ export default function TokenUsage() {
                   </div>
                 ))}
               </div>
+              {projects && onProject && <ProjectsSection data={projects} range={range} onRange={setRange} onOpen={onProject} />}
               <Section title={t("tokencalendar.each_day")}>
                 <TokenCalendar days={days} page />
                 <Legend />

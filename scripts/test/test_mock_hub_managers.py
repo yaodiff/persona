@@ -16,6 +16,7 @@ Starts scripts/mock/mock_hub.py on a free port with a HOME of its own (MOCK_EXTE
 
     python3 scripts/test/test_mock_hub_managers.py
 """
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import socket
@@ -44,7 +45,7 @@ class MockHubManagersTests(unittest.TestCase):
         cls.home = tempfile.mkdtemp(prefix="mock-managers-")
         env = {k: v for k, v in os.environ.items() if not k.lower().endswith("_proxy")}
         env.update(HOME=cls.home, PORT=str(cls.port), MOCK_EXTENSIONS="1", MOCK_MANAGER_NAS="1", MOCK_ADD_COMPUTER="1",
-                   MOCK_ADD_COMPUTER_JOIN="0")
+                   MOCK_ADD_COMPUTER_JOIN="0", MOCK_CHANNELS="1")
         cls.proc = subprocess.Popen([sys.executable, str(ROOT / "scripts/mock/mock_hub.py")], env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + 30
@@ -91,6 +92,40 @@ class MockHubManagersTests(unittest.TestCase):
                     self.assertEqual(bool(source["accounts"]), state in ("configured", "empty"))
                     self.assertEqual(source.get("setup"), state if state in ("missing", "disabled", "no_accounts") else None)
         self.call("GET", "/mock/personal-agents?reset=1")
+
+    def test_integrations_conflicts_and_channel_prefs_are_manager_scoped(self):
+        manager, other = "m-3fa21c", "assistant"
+        profile = "/api/v1/assistant"
+        channel = "/api/v1/channels/wechat"
+
+        def put(path, **fields):
+            return self.call("PUT", path, json.dumps(fields).encode(), manager=manager)
+
+        self.assertIs(self.call("GET", profile, manager=manager)[1]["integrations_v2"], False)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            writers = [pool.submit(put, profile, integrations_v2=True, expected_integrations_v2=False) for _ in range(2)]
+        replies = dict(writer.result() for writer in writers)
+        self.assertIs(replies[200]["integrations_v2"], True)
+        self.assertEqual(replies[409]["code"], "configuration_conflict")
+        self.assertIs(self.call("GET", profile, manager=other)[1]["integrations_v2"], False)
+
+        status, detail = put(channel, thread_mode="per_group_and_topic", thread_idle_hours=24)
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["target_override"], {"mode": "groups_and_topics"})
+        self.assertEqual(self.call("GET", channel, manager=other)[1]["thread_mode"], "channel_default")
+        for invalid in ({"thread_mode": "group"}, {"thread_idle_hours": -1}, {"thread_idle_hours": 87601},
+                        {"thread_idle_hours": True}):
+            self.assertEqual(put(channel, **invalid)[0], 400)
+        self.assertEqual(put(profile, integrations_v2=False, expected_integrations_v2=True)[0], 200)
+        detail = self.call("GET", channel, manager=manager)[1]
+        self.assertNotIn("target_override", detail)
+        self.assertEqual((detail["thread_mode"], detail["thread_idle_hours"]), ("per_group_and_topic", 24))
+        self.assertNotIn("thread_idle_hours", put(channel, thread_idle_hours=0)[1])
+
+        builtin = "/api/v1/channels/feishu"
+        for key, value in (("thread_mode", "per_topic"), ("thread_idle_hours", 24)):
+            self.assertNotIn(key, self.call("GET", builtin)[1])
+            self.assertEqual(put(builtin, **{key: value})[0], 400)
 
     def test_a_raw_body_post_is_answered(self):
         image = bytes(range(256)) * 4  # not JSON

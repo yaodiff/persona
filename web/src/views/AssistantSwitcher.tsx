@@ -21,7 +21,7 @@ import { cx, Menu, Spinner, toast, useMenu, useNow, type MenuItem } from "../ui/
 import { Icon, type IconName } from "../ui/icons";
 import { ASSISTANT_MENU_WIDTH } from "../ui/menu-model";
 import { useDisconnect } from "./DisconnectBrowser";
-import { hubMenuItems, useHubs } from "./Hubs";
+import { hubMenuItems, useHubs } from "./hub-menu";
 import { lazyDialog } from "./LazyOverlay";
 import type { ShownCode } from "./ManagerInstall";
 import { setTheme, useTheme, type Theme } from "./theme";

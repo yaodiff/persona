@@ -132,7 +132,8 @@ func isWriteRequest(r *http.Request) bool {
 // authentication (a stranger is not told about the hub's state).
 func (h *Hub) quiesceGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isWriteRequest(r) {
+		// Cancellation only registers intent in memory. The installer owns all writes.
+		if !isWriteRequest(r) || (r.Method == http.MethodPost && r.URL.Path == "/api/v1/hub/update/cancel") {
 			next.ServeHTTP(w, r)
 			return
 		}

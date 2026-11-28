@@ -1,5 +1,6 @@
 import { bindingPermission } from '../core/PhoneSettingsPermissions';
-import { PhoneSectionTitle } from '../design/PhoneStyle';
+import { PhoneSectionTitle, PhoneStyle } from '../design/PhoneStyle';
+import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { Symbols } from '../design/Symbols';
 import { IconActions } from '../design/IconActions';
 import { ButtonStyles } from '../design/Controls';
@@ -20,6 +21,9 @@ import { Colors } from '../design/Colors';
 import { PhoneAppearanceSettings } from './PhoneAppearanceSettings';
 import { DeviceLookPicker } from './DeviceLookPicker';
 import { LicenseNotices } from './LicenseNotices';
+import { LiveViewSettingsCard } from './LiveViewSettingsCard';
+import { Haptics } from '../platform/Haptics';
+import { toastCenter } from '../models/ToastCenter';
 import { common } from '@kit.AbilityKit';
 
 @ComponentV2
@@ -98,7 +102,7 @@ export struct SettingsPage {
     if (!this.appearanceCurrent(owner, revision, scope, generation)) return;
     this.model.setLanguage(['default', 'en-US', 'zh-CN', 'ja-JP'][index]).then(() => {
       if (this.appearanceCurrent(owner, revision, scope, generation) && index === 0 && this.model.language === 'default')
-        this.getUIContext().getPromptAction().showToast({ message: tr('language_after_restart') });
+        toastCenter.info(tr('language_after_restart'));
     });
   }
 
@@ -123,6 +127,7 @@ export struct SettingsPage {
     const current = (): boolean => this.mounted && this.active && this.page === 'appearance' && this.appearanceRevision === revision &&
       this.model === owner && owner.owns(generation, scope) && pairing === owner.pairingRevision();
     const context = this.getUIContext().getHostContext(); if (!context) return;
+    this.model.loadNextSuggestions().catch(() => undefined);
     try { await this.look.initialize(context as common.UIAbilityContext); }
     catch (_) { if (current()) this.look.error = 'device_look_storage_failed'; return; }
     if (!current()) return;
@@ -136,8 +141,16 @@ export struct SettingsPage {
     const sessionTarget = owner.target(target);
     const current = (): boolean => this.mounted && this.active && this.page === page && this.model === owner && revision === this.machineRevision && owner.owns(generation, scope);
     this.management.setAdmission(current);
-    await this.management.load(this.basePage(), owner, page==='model_purpose' ? target.id : ''); if (!current()) return;
     const row = new ManagementRow(target.id, target.title, target.detail, target.data());
+    if (page === 'channel_detail' && !this.channelAllowed(row.id) ||
+        page === 'connector_detail' && !this.connectorAllowed(row.id)) {
+      this.management.selectedId = row.id;
+      this.management.channelDetail = {};
+      this.management.error = '';
+      this.management.loading = false;
+      return;
+    }
+    await this.management.load(this.basePage(), owner, page==='model_purpose' ? target.id : ''); if (!current()) return;
     if (page === 'extension_detail') await this.management.openExtension(owner, row);
     else if (page === 'connector_detail') this.management.openConnector(row);
     else if (page === 'channel_detail') await this.management.openChannel(owner, row);
@@ -605,15 +618,21 @@ export struct SettingsPage {
         ForEach(this.management.modelCatalogRows(),(row:Record<string,Object>)=>{
           ListItem() {
             Button({type:ButtonType.Normal}) {
-              Column({space:4}) {
-                Text(this.purposeLabel(row)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.ink).maxLines(1)
-                if (Wire.text(row,'description').trim()) Text(Wire.text(row,'description').trim()).fontSize(13).fontColor(Colors.secondary)
-                Text(this.purposeSummary(row)).fontSize(15).maxLines(1).fontColor(Colors.secondary)
-                if (this.purposeInheritance(row)) Text(this.purposeInheritance(row)).fontSize(13).fontColor(Colors.secondary)
-                if (Wire.text(row,'status')) Text(Wire.text(row,'status')).fontSize(13).fontColor(Colors.secondary)
-              }.alignItems(HorizontalAlign.Start).width('100%')
-            }.width('100%').padding({left:16,right:16,top:9,bottom:9}).backgroundColor(Colors.card(false))
-              .onClick(()=>this.openPurpose(row)).id('model-purpose-'+Wire.text(row,'id'))
+              Row({space:10}) {
+                Column({space:4}) {
+                  Text(this.purposeLabel(row)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(1)
+                  if (Wire.text(row,'description').trim()) Text(Wire.text(row,'description').trim()).fontSize(13).fontColor(Colors.secondary)
+                  Text(this.purposeSummary(row)).fontSize(15).maxLines(1).fontColor(Colors.link)
+                  if (this.purposeInheritance(row)) Text(this.purposeInheritance(row)).fontSize(13).fontColor(Colors.secondary)
+                  if (Wire.text(row,'status')) Text(Wire.text(row,'status')).fontSize(13).fontColor(Colors.secondary)
+                }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+                SymbolGlyph(Symbols.expand).fontSize('14vp').fontColor([Colors.secondary]).accessibilityLevel('no')
+              }.width('100%')
+            }.width('100%').padding({left:16,right:14,top:11,bottom:11}).backgroundColor(Colors.card(false))
+              .borderRadius(PhoneStyle.cardRadius)
+              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
+              .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+              .onClick(()=>{ Haptics.tap(); this.openPurpose(row); }).id('model-purpose-'+Wire.text(row,'id'))
           }
         },(row:Record<string,Object>)=>Wire.text(row,'id'))
         if (this.management.modelCategories().length) {
@@ -851,7 +870,7 @@ export struct SettingsPage {
         Row({space:10}) {
           Button({type:ButtonType.Normal}) {
             Row({space:7}) { SymbolGlyph(Symbols.plus).fontSize(16).fontColor([Colors.link]); Text(tr('create')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Colors.link) }
-          }.height(38).padding({left:13,right:13}).borderRadius(18).backgroundColor(Colors.surface).bindMenu(this.scheduleCreateMenu).id('schedules.create')
+          }.height(38).padding({left:13,right:13}).borderRadius(Tokens.radiusCapsule).backgroundColor(Colors.surface).bindMenu(this.scheduleCreateMenu).id('schedules.create')
           Blank().layoutWeight(1)
           Button({type:ButtonType.Circle}) { SymbolGlyph(Symbols.refresh).fontSize(16).fontColor([Colors.ink]) }
             .width(38).height(38).padding(0).backgroundColor(Colors.surface).accessibilityText(tr('refresh'))
@@ -863,26 +882,28 @@ export struct SettingsPage {
         ListItem() {
           Column() {
             Row({space:10}) {
-              Stack() { SymbolGlyph(Symbols.calendar).fontSize(18).fontColor([Colors.teal]) }.width(32).height(32).backgroundColor(Colors.control).borderRadius(8)
+              Stack() { SymbolGlyph(Symbols.calendar).fontSize(18).fontColor([Colors.teal]) }.width(32).height(32).backgroundColor(Colors.control).borderRadius(Tokens.radiusControl)
               Column({space:4}) {
                 Text(binding.value.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(2)
                 if (binding.value.detail || Wire.text(binding.value.raw,'last_status'))
                   Text(this.scheduleTime(binding.value.detail) || Wire.text(binding.value.raw,'last_status')).fontSize(13).fontColor(Colors.secondary).maxLines(2)
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
               Toggle({type:ToggleType.Switch,isOn:Wire.bool(binding.value.raw,'enabled')}).selectedColor(Colors.positive)
-                .onChange((enabled:boolean) => this.management.setScheduleEnabled(this.model,binding.value,enabled)).accessibilityText(binding.value.title)
+                .onChange((enabled:boolean) => { Haptics.tap(); this.management.setScheduleEnabled(this.model,binding.value,enabled); }).accessibilityText(binding.value.title)
               Button({type:ButtonType.Circle}) { Image(Symbols.more).width(18).height(18).fillColor(Colors.secondary) }
                 .width(31).height(31).padding(0).backgroundColor(Colors.control).accessibilityText(tr('more')).bindMenu(this.scheduleMenu(binding.value))
                 .id('schedule.menu.' + binding.value.id)
             }.width('100%')
-          }.width('100%').padding(12).backgroundColor(Colors.surface).borderRadius(14)
+          }.width('100%').padding(12).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+            .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
         }.id('schedule.' + binding.value.id)
       }, (binding: BoundRow<ManagementRow>) => binding.key)
       if (this.management.lastRunReceipt['session_id']) ListItem() {
         ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('run_started') }) })
       }.onClick(() => { const target = this.management.scheduleReceiptChat(this.model); if (target) this.onChat(target); }).id('schedule.receipt')
       if (!this.management.rows.length && !this.management.loading && !this.management.error)
-        ListItem() { Text(tr('phone_no_schedules')).fontSize(15).fontColor(Colors.secondary).padding(16).width('100%').backgroundColor(Colors.surface).borderRadius(14) }
+        ListItem() { Text(tr('phone_no_schedules')).fontSize(15).fontColor(Colors.secondary).padding(16).width('100%').backgroundColor(Colors.surface).borderRadius(Tokens.radiusCard) }
       if (this.scheduleRunBindings.length) ListItem() { PhoneSectionTitle({text:tr('phone_history')}) }
       ForEach(this.scheduleRunBindings, (binding: BoundRow<ManagementRow>) => {
         ListItem() {
@@ -892,7 +913,7 @@ export struct SettingsPage {
               Text([Wire.text(binding.value.raw,'status'),this.scheduleTime(Wire.text(binding.value.raw,'at') || Wire.text(binding.value.raw,'due'))].filter((v:string) => !!v).join(' · ')).fontSize(13).fontColor(Colors.secondary)
             }.alignItems(HorizontalAlign.Start).layoutWeight(1)
             SymbolGlyph(Symbols.expand).fontSize(13).fontColor([Colors.secondary])
-          }.padding(13).width('100%').backgroundColor(Colors.surface).borderRadius(12)
+          }.padding(13).width('100%').backgroundColor(Colors.surface).borderRadius(Tokens.radiusCard)
         }.id('schedule.run.' + binding.value.id)
           .onClick(() => { const target = this.management.scheduleRunChat(this.model, binding.value); if (target) this.onChat(target); })
       }, (binding: BoundRow<ManagementRow>) => binding.key)
@@ -904,19 +925,34 @@ export struct SettingsPage {
   }
 
   @Builder triagePage() {
-    List() {
-      ForEach(['enabled', 'auto_continue', 'wake', 'decide', 'reply_reminder'], (key: string) => {
-        if (key !== 'reply_reminder' || Object.keys(this.management.data).includes(key)) ListItem() {
-          Row() {
-            ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr(key) }) }).layoutWeight(1)
-            Toggle({ type: ToggleType.Switch, isOn: Wire.bool(this.management.data, key, key === 'reply_reminder') })
-              .enabled(!this.management.saving && (key === 'enabled' || Wire.bool(this.management.data, 'enabled')))
-              .onChange((value: boolean) => this.saveTriage(key, value)).accessibilityText(tr(key))
-          }
-        }.id('triage.' + key)
-      }, (key: string) => key)
+    List({ space: 12 }) {
+      ListItem() {
+        Column() {
+          ForEach(['enabled', 'auto_continue', 'wake', 'decide', 'reply_reminder'], (key: string, idx: number) => {
+            if (key !== 'reply_reminder' || Object.keys(this.management.data).includes(key)) {
+              Column() {
+                Row({ space: Tokens.inset }) {
+                  Text(tr(key)).fontSize(Tokens.body).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.ink).layoutWeight(1)
+                  Toggle({ type: ToggleType.Switch, isOn: Wire.bool(this.management.data, key, key === 'reply_reminder') })
+                    .selectedColor(Colors.positive)
+                    .enabled(!this.management.saving && (key === 'enabled' || Wire.bool(this.management.data, 'enabled')))
+                    .onChange((value: boolean) => { Haptics.tap(); this.saveTriage(key, value); }).accessibilityText(tr(key))
+                }.width('100%').constraintSize({ minHeight: 54 }).padding({ left: Tokens.page, right: Tokens.page, top: 6, bottom: 6 })
+                if (idx < 4 && (idx < 3 || Object.keys(this.management.data).includes('reply_reminder'))) {
+                  Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+                }
+              }.id('triage.' + key)
+            }
+          }, (key: string) => key)
+        }
+        .width('100%')
+        .backgroundColor(Colors.surface)
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+      }
       if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
-    }.width('100%').height('100%')
+    }.width('100%').height('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: 24 }).backgroundColor(Colors.grouped)
   }
 
   private secretSet(name: string): boolean {
@@ -1099,8 +1135,22 @@ export struct SettingsPage {
     }.width('100%').height('100%')
   }
 
+  private connectorAllowed(id: string): boolean {
+    const normalized = id.trim().toLowerCase();
+    if (!this.model.mailModuleAllowed() && (normalized === 'mail' || normalized.startsWith('mail:'))) return false;
+    if (!this.model.larkModuleAllowed() && ['larksync', 'feishu_bot', 'feishu-bot', 'lark_bot'].includes(normalized)) return false;
+    return true;
+  }
+  private channelAllowed(id: string): boolean {
+    const normalized = id.trim().toLowerCase();
+    if (!this.model.larkModuleAllowed() && ['feishu', 'feishu_bot', 'feishu-bot', 'lark_bot'].includes(normalized)) return false;
+    return true;
+  }
   @Builder connectorDetailPage() {
     List() {
+      if (!this.connectorAllowed(this.management.selectedId)) {
+        ListItem() { Text(tr('read_only')).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset) }
+      } else {
       if (Wire.text(this.selectedConnector()?.raw || {}, 'status')) ListItem() { Text(Wire.text(this.selectedConnector()?.raw || {}, 'status')).padding(Tokens.inset) }
       if (this.selectedConnector() && Wire.text(this.selectedConnector()?.raw || {}, 'account'))
         ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('account'), secondaryText: Wire.text(this.selectedConnector()?.raw || {}, 'account') }) }) }
@@ -1154,6 +1204,7 @@ export struct SettingsPage {
           ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('sign_out')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('sign_out', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('sign_out')).bindTips(tr('sign_out')).onClick(() => this.confirmConnectorLogout()) }
       }
       if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      }
     }.width('100%').height('100%')
   }
 
@@ -1164,7 +1215,7 @@ export struct SettingsPage {
       }
       this.extensionOperationPanel()
       ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
-        ListItem() {
+        if (page !== 'connectors' || this.connectorAllowed(binding.value.id)) ListItem() {
           Column() {
             Row() {
               Button({ type: ButtonType.Normal }) {
@@ -1190,7 +1241,9 @@ export struct SettingsPage {
 
   @Builder channelDetailPage() {
     List() {
-      if (Object.keys(this.management.channelDetail).length > 0) {
+      if (!this.channelAllowed(this.management.selectedId)) {
+        ListItem() { Text(tr('read_only')).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset) }
+      } else if (Object.keys(this.management.channelDetail).length > 0) {
         ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: Wire.text(this.management.channelData(), 'name', this.management.selectedId),
           secondaryText: Wire.text(this.management.channelData(), 'state') }) }) }
         if (Wire.bool(this.management.channelData(), 'read_only')) ListItem() { Text(tr('read_only')).padding(Tokens.inset) }
@@ -1257,7 +1310,7 @@ export struct SettingsPage {
   @Builder channelsPage() {
     List() {
       ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
-        ListItem() {
+        if (this.channelAllowed(binding.value.id)) ListItem() {
           Column() {
             Row() {
               Button({ type: ButtonType.Normal }) {
@@ -1340,113 +1393,267 @@ export struct SettingsPage {
         onAccentSelected: this.appearanceAvatarAction(revision, true),
         onRefresh: this.appearanceRefreshAction(revision) })
     }, (revision: number) => String(revision))
+    ListItem() { PhoneSectionTitle({ text: tr('phone_look_section') }) }
     ListItem() {
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-        Text(tr('language')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-        Select([{ value: tr('system') }, { value: 'English' }, { value: '简体中文' }, { value: '日本語' }]).attributeModifier(SelectStyles.inline)
-          .selected(['default', 'en-US', 'zh-CN', 'ja-JP'].indexOf(this.model.language))
-          .value(this.model.language === 'default' ? tr('system') : this.model.language === 'en-US' ? 'English' : this.model.language === 'zh-CN' ? '简体中文' : '日本語')
-          .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(!this.model.languageChanging && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-          .onSelect(this.appearanceSelector('language', this.appearanceRevision)).id('appearance.language')
-      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
-    }
-    ListItem() {
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-        Text(tr('color_mode')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-        Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).attributeModifier(SelectStyles.inline).selected(this.model.appearance)
-          .value(tr(['system', 'light', 'dark'][this.model.appearance] || 'system'))
-          .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-          .onSelect(this.appearanceSelector('color', this.appearanceRevision)).id('appearance.color-mode')
-      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
-    }
-    ListItem() {
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-        Text(tr('style')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-        Select([{ value: tr('app_style_system') }, { value: tr('app_style_glass') }, { value: tr('app_style_brief') }, { value: tr('app_style_board') }]).attributeModifier(SelectStyles.inline)
-          .selected(['system', 'glass', 'brief', 'board'].indexOf(this.model.style) < 0 ? 0 : ['system', 'glass', 'brief', 'board'].indexOf(this.model.style))
-          .value(tr(['system', 'glass', 'brief', 'board'].includes(this.model.style) ? 'app_style_' + this.model.style : 'app_style_system'))
-          .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-          .onSelect(this.appearanceSelector('style', this.appearanceRevision)).id('appearance.style')
-      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
-    }
-    ListItem() {
-      Row({space:12}) {
-        Text(tr('flow_navigation')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
-        Select([{value:tr('flow_separate')},{value:tr('flow_merged')}]).attributeModifier(SelectStyles.inline)
-          .selected(this.look.phoneNavigation === 'merged' ? 1 : 0).value(tr(this.look.phoneNavigation === 'merged' ? 'flow_merged' : 'flow_separate'))
-          .enabled(this.look.ready && this.appearanceCurrent(this.model,this.appearanceRevision,this.model.scope(),this.model.connectionGeneration()))
-          .onSelect(this.appearanceSelector('phoneNavigation',this.appearanceRevision)).id('appearance.phone-navigation')
-      }.width('100%').constraintSize({minHeight:Tokens.touch}).padding({left:Tokens.page,right:Tokens.page})
+      Column() {
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('language')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+          Select([{ value: tr('system') }, { value: 'English' }, { value: '简体中文' }, { value: '日本語' }]).attributeModifier(SelectStyles.inline)
+            .selected(['default', 'en-US', 'zh-CN', 'ja-JP'].indexOf(this.model.language))
+            .value(this.model.language === 'default' ? tr('system') : this.model.language === 'en-US' ? 'English' : this.model.language === 'zh-CN' ? '简体中文' : '日本語')
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(!this.model.languageChanging && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('language', this.appearanceRevision)).id('appearance.language')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+        Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('color_mode')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+          Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).attributeModifier(SelectStyles.inline).selected(this.model.appearance)
+            .value(tr(['system', 'light', 'dark'][this.model.appearance] || 'system'))
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('color', this.appearanceRevision)).id('appearance.color-mode')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+        Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('style')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+          Select([{ value: tr('app_style_system') }, { value: tr('app_style_glass') }, { value: tr('app_style_brief') }, { value: tr('app_style_board') }]).attributeModifier(SelectStyles.inline)
+            .selected(['system', 'glass', 'brief', 'board'].indexOf(this.model.style) < 0 ? 0 : ['system', 'glass', 'brief', 'board'].indexOf(this.model.style))
+            .value(tr(['system', 'glass', 'brief', 'board'].includes(this.model.style) ? 'app_style_' + this.model.style : 'app_style_system'))
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('style', this.appearanceRevision)).id('appearance.style')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+        Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+        Row({space:12}) {
+          Text(tr('flow_navigation')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+          Select([{value:tr('flow_separate')},{value:tr('flow_merged')}]).attributeModifier(SelectStyles.inline)
+            .selected(this.look.phoneNavigation === 'merged' ? 1 : 0).value(tr(this.look.phoneNavigation === 'merged' ? 'flow_merged' : 'flow_separate'))
+            .enabled(this.look.ready && this.appearanceCurrent(this.model,this.appearanceRevision,this.model.scope(),this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('phoneNavigation',this.appearanceRevision)).id('appearance.phone-navigation')
+        }.width('100%').constraintSize({minHeight:Tokens.touch}).padding({left:Tokens.page,right:Tokens.page})
+      }
+      .width('100%')
+      .clip(true)
+      .backgroundColor(Colors.surface)
+      .borderRadius(PhoneStyle.cardRadius)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
     }
   }
   @Builder appearancePage() {
     List() {
       if (!this.agentLayoutOnly) this.appearanceGeneral()
+      ListItem() { PhoneSectionTitle({ text: tr('agents') }) }
       ListItem() {
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-          Text(tr('agent_density')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-          Select([{ value: tr('agent_density_standard') }, { value: tr('agent_density_compact') }]).attributeModifier(SelectStyles.inline)
-            .selected(this.look.density === 'compact' ? 1 : 0)
-            .value(tr(this.look.density === 'compact' ? 'agent_density_compact' : 'agent_density_standard'))
-            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.look.ready && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-            .onSelect(this.appearanceSelector('density', this.appearanceRevision)).id('appearance.agent-density')
-        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+        Column() {
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+            Text(tr('agent_density')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+            Select([{ value: tr('agent_density_standard') }, { value: tr('agent_density_compact') }]).attributeModifier(SelectStyles.inline)
+              .selected(this.look.density === 'compact' ? 1 : 0)
+              .value(tr(this.look.density === 'compact' ? 'agent_density_compact' : 'agent_density_standard'))
+              .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.look.ready && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+              .onSelect(this.appearanceSelector('density', this.appearanceRevision)).id('appearance.agent-density')
+          }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+          Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+            Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+            if (this.agentWorkspace.isBoundTo(this.model) && !this.agentWorkspace.loading) {
+              Select([{ value: tr('agent_group_state') }, { value: tr('agent_filter_machine') }, { value: tr('agent_group_space') }]).attributeModifier(SelectStyles.inline)
+                .selected(this.agentGroupingIndex(this.agentWorkspace))
+                .value(tr(['agent_group_state', 'agent_filter_machine', 'agent_group_space'][this.agentGroupingIndex(this.agentWorkspace)]))
+                .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+                .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
+            } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
+          }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+          if (this.model.nextSuggestionsValue !== null) {
+            Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+            Row({ space: Tokens.inset }) {
+              Column({ space: Tokens.fine }) {
+                Text(tr('next_suggestions_title'))
+                  .fontSize(Tokens.body)
+                  .maxFontScale(Tokens.interfaceFontMaxScale)
+                  .fontColor(Colors.ink)
+                  .width('100%')
+                Text(tr('next_suggestions_note'))
+                  .fontSize(Tokens.caption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                  .fontColor(Colors.secondary)
+                  .width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({ type: ToggleType.Switch, isOn: this.model.nextSuggestionsValue === true })
+                .selectedColor(Colors.action)
+                .enabled(!this.model.nextSuggestionsSaving && (this.model.connected || this.model.demo))
+                .onChange((value: boolean) => {
+                  if (this.model.nextSuggestionsValue !== null && value !== this.model.nextSuggestionsValue) {
+                    Haptics.selection();
+                    this.model.setNextSuggestions(value).catch(() => undefined);
+                  }
+                })
+                .accessibilityText(tr('next_suggestions_title'))
+                .id('appearance.next-suggestions')
+            }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+          }
+          if (this.model.agentsDisplaySupported) {
+            Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+            Row({ space: Tokens.inset }) {
+              Column({ space: Tokens.fine }) {
+                Text(tr('agents_use_herdr_tab_name'))
+                  .fontSize(Tokens.body)
+                  .maxFontScale(Tokens.interfaceFontMaxScale)
+                  .fontColor(Colors.ink)
+                  .width('100%')
+                Text(tr('agents_use_herdr_tab_name_hint'))
+                  .fontSize(Tokens.caption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                  .fontColor(Colors.secondary)
+                  .width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({ type: ToggleType.Switch, isOn: this.model.useHerdrTabName })
+                .selectedColor(Colors.action)
+                .enabled(!this.model.agentsDisplaySaving && this.model.connected && !this.model.demo)
+                .onChange((value: boolean) => {
+                  if (value !== this.model.useHerdrTabName) {
+                    Haptics.selection();
+                    this.model.setUseHerdrTabName(value);
+                  }
+                })
+                .accessibilityText(tr('agents_use_herdr_tab_name'))
+                .id('appearance.use-herdr-tab-name')
+            }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+          }
+        }
+        .width('100%')
+        .clip(true)
+        .backgroundColor(Colors.surface)
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
       }
-    ListItem() {
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
-        Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
-        if (this.agentWorkspace.isBoundTo(this.model) && !this.agentWorkspace.loading) {
-          Select([{ value: tr('agent_group_state') }, { value: tr('agent_filter_machine') }, { value: tr('agent_group_space') }]).attributeModifier(SelectStyles.inline)
-            .selected(this.agentGroupingIndex(this.agentWorkspace))
-            .value(tr(['agent_group_state', 'agent_filter_machine', 'agent_group_space'][this.agentGroupingIndex(this.agentWorkspace)]))
-            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
-            .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
-        } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
-      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
-    }
-    }.width('100%').height('100%').backgroundColor(Colors.canvas)
+    }.width('100%').height('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: 28 }).backgroundColor(Colors.grouped)
   }
 
   @Builder notificationsPage() {
     List() {
       ListItem() {
-        Row() {
-          ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('message_alerts') }) }).layoutWeight(1)
-          Toggle({ type: ToggleType.Switch, isOn: this.model.alerts && this.notifications.granted })
-            .enabled(!this.notifications.changing && !this.model.demo)
-            .onChange((value: boolean) => this.notifications.setEnabled(this.model, value))
-            .accessibilityText(tr('message_alerts'))
+        Column() {
+          Row({ space: Tokens.inset }) {
+            Text(tr('message_alerts'))
+              .fontSize(Tokens.body)
+              .maxFontScale(Tokens.interfaceFontMaxScale)
+              .fontColor(Colors.ink)
+              .layoutWeight(1)
+            Toggle({ type: ToggleType.Switch, isOn: this.model.alerts && this.notifications.granted })
+              .selectedColor(Colors.positive)
+              .enabled(!this.notifications.changing && !this.model.demo)
+              .onChange((value: boolean) => { Haptics.tap(); this.notifications.setEnabled(this.model, value); })
+              .accessibilityText(tr('message_alerts'))
+              .id('settings.notifications.alerts')
+          }
+          .width('100%')
+          .constraintSize({ minHeight: 54 })
+          .padding({ left: Tokens.page, right: Tokens.page, top: 6, bottom: 6 })
         }
-      }
+        .width('100%')
+        .backgroundColor(Colors.surface)
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
       if (this.notifications.error) ListItem() { Text(trError(this.notifications.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.page) }
-    }.width('100%').height('100%')
+      ListItem() { LiveViewSettingsCard() }
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
   }
 
   @Builder privacyPage() {
-    List() {
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('hub'), secondaryText: this.model.profile.name }) }) }
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('manager'), secondaryText: this.model.profile.manager }) }) }
-      ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('forget_hub')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('forget_hub', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('forget_hub')).bindTips(tr('forget_hub')).onClick(() => this.confirmForget()) }
-      ListItem() { Button({ type: ButtonType.Normal }) { Row({ space: Tokens.inset }) { Text(tr('open_source_licenses')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1); SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(Tokens.meta).fontColor([Colors.secondary]) }.width('100%').constraintSize({ minHeight: Tokens.touch }) }.buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%').padding({ left: Tokens.page, right: Tokens.page }).onClick(() => this.licenseNoticesOpen = true) }
-      if (this.model.pendingCleanupCount > 0) ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup()) }
-    }.width('100%').height('100%')
+    List({ space: 12 }) {
+      ListItem() {
+        Column() {
+          Row({ space: Tokens.inset }) {
+            Text(tr('hub')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+            Text(this.model.profile.name).fontSize(15).fontColor(Colors.secondary).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          }.width('100%').constraintSize({ minHeight: 52 }).padding({ left: Tokens.page, right: Tokens.page })
+          Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+          Row({ space: Tokens.inset }) {
+            Text(tr('manager')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+            Text(this.model.profile.manager).fontSize(15).fontColor(Colors.secondary).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          }.width('100%').constraintSize({ minHeight: 52 }).padding({ left: Tokens.page, right: Tokens.page })
+          Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+          Button({ type: ButtonType.Normal }) {
+            Row({ space: Tokens.inset }) {
+              Text(tr('open_source_licenses')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+              SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(Tokens.meta).fontColor([Colors.secondary])
+            }.width('100%').constraintSize({ minHeight: 52 })
+          }.buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%').padding({ left: Tokens.page, right: Tokens.page }).onClick(() => { Haptics.tap(); this.licenseNoticesOpen = true; })
+        }
+        .width('100%')
+        .clip(true)
+        .backgroundColor(Colors.surface)
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+      }
+      ListItem() {
+        Row({ space: 12 }) {
+          Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('forget_hub')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('forget_hub', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('forget_hub')).bindTips(tr('forget_hub')).onClick(() => { Haptics.attention(); this.confirmForget(); })
+          if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => { Haptics.tap(); this.model.retryCleanup(); })
+        }.width('100%').padding({ left: 4, top: 4 })
+      }
+    }.width('100%').height('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: 24 }).backgroundColor(Colors.grouped)
   }
 
   @Builder licenseNoticesForm() { LicenseNotices() }
 
-  @Builder candidateAddressesHeader() { Text(tr('candidate_addresses')).fontSize(Tokens.meta).padding(Tokens.page) }
+  @Builder candidateAddressesHeader() { PhoneSectionTitle({ text: tr('candidate_addresses') }) }
   @Builder diagnosticsPage() {
-    List() {
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('status'), secondaryText: tr(this.model.connected ? 'online' : 'offline') }) }) }
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('hub'), secondaryText: this.model.profile.hubId }) }) }
-      ListItem() { Text(this.model.profile.baseUrl).copyOption(CopyOptions.LocalDevice).padding(Tokens.page) }
-      if (this.model.profile.addresses.length > 0) ListItemGroup({ header: this.candidateAddressesHeader }) {
-        ForEach(this.model.profile.addresses, (address: string) => { ListItem() { Text(address).copyOption(CopyOptions.LocalDevice).padding(Tokens.page) } }, (address: string) => address)
+    List({ space: 12 }) {
+      ListItem() {
+        Column() {
+          Row({ space: Tokens.inset }) {
+            Text(tr('status')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+            Row({ space: 6 }) {
+              Circle().width(8).height(8).fill(this.model.connected ? Colors.positive : Colors.secondary)
+              Text(tr(this.model.connected ? 'online' : 'offline')).fontSize(15).fontWeight(FontWeight.Medium).fontColor(this.model.connected ? Colors.positive : Colors.secondary)
+            }
+          }.width('100%').constraintSize({ minHeight: 52 }).padding({ left: Tokens.page, right: Tokens.page })
+          Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+          Row({ space: Tokens.inset }) {
+            Text(tr('hub')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+            Text(this.model.profile.hubId).fontSize(14).fontColor(Colors.secondary).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          }.width('100%').constraintSize({ minHeight: 52 }).padding({ left: Tokens.page, right: Tokens.page })
+          Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+          Column({ space: 4 }) {
+            Text(this.model.profile.baseUrl).fontSize(14).fontColor(Colors.link).copyOption(CopyOptions.LocalDevice).width('100%')
+            if (this.model.features.length > 0) {
+              Text(tr('features') + ': ' + this.model.features.join(', ')).fontSize(13).fontColor(Colors.secondary).width('100%')
+            }
+          }.width('100%').padding({ left: Tokens.page, right: Tokens.page, top: 12, bottom: 12 }).alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .clip(true)
+        .backgroundColor(Colors.surface)
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
       }
-      ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('features'), secondaryText: this.model.features.join(', ') }) }) }
+      if (this.model.profile.addresses.length > 0) ListItemGroup({ header: this.candidateAddressesHeader }) {
+        ListItem() {
+          Column() {
+            ForEach(this.model.profile.addresses, (address: string, idx: number) => {
+              Column() {
+                Text(address).fontSize(14).fontColor(Colors.ink).copyOption(CopyOptions.LocalDevice).width('100%').padding({ left: Tokens.page, right: Tokens.page, top: 12, bottom: 12 })
+                if (idx < this.model.profile.addresses.length - 1) Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+              }
+            }, (address: string) => address)
+          }
+          .width('100%')
+          .clip(true)
+          .backgroundColor(Colors.surface)
+          .borderRadius(PhoneStyle.cardRadius)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+          .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+        }
+      }
       if (this.model.error) ListItem() { Text(trError(this.model.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
-      ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => { if (this.model.connected) this.model.refresh(); else this.model.foregrounded(); this.management.load(this.page, this.model); }) }
-    }.width('100%').height('100%')
+      ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => { Haptics.tap(); if (this.model.connected) this.model.refresh(); else this.model.foregrounded(); this.management.load(this.page, this.model); }) }
+    }.width('100%').height('100%').padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: 24 }).backgroundColor(Colors.grouped)
   }
 
   @Builder delegatedPage() {

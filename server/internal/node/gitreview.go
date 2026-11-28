@@ -19,9 +19,10 @@ import (
 )
 
 // git.review: every file that changed in a scope with its hunks, for the web's Review panel (docs/web/review.md,
-// #151). The working tree is compared with HEAD (uncommitted), with where the branch left the default branch
-// (branch), or with a commit (commit); new files Git does not know yet count as added. Read only: no index, no lock
-// (gitCmd), nothing written. The files file.read refuses are listed without their content, as git.show leaves them out.
+// #151). The working tree is compared with HEAD (uncommitted), where the branch left the default branch (branch), or
+// with a commit (commit); turn compares two working-tree checkpoints, or the latest checkpoint with the working tree.
+// New files Git does not know yet count as added. Read only: no index, no lock (gitCmd), nothing written. The files
+// file.read refuses are listed without their content, as git.show leaves them out.
 
 const (
 	maxReviewFiles = 1000
@@ -44,9 +45,9 @@ func (n *Node) gitReview(ctx context.Context, p proto.GitReviewRequest) (*proto.
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	switch p.Scope {
-	case proto.ReviewUncommitted, proto.ReviewBranch, proto.ReviewCommit:
+	case proto.ReviewUncommitted, proto.ReviewBranch, proto.ReviewCommit, proto.ReviewTurn:
 	default:
-		return nil, reviewErr(proto.CodeBadScope, "scope is uncommitted, branch or commit")
+		return nil, reviewErr(proto.CodeBadScope, "scope is uncommitted, branch, commit or turn")
 	}
 	dir, err := n.gitDir(p.Cwd)
 	if err != nil {
@@ -68,7 +69,7 @@ func (n *Node) gitReview(ctx context.Context, p proto.GitReviewRequest) (*proto.
 			res.Head.Branch = strings.TrimSpace(b)
 		}
 	}
-	base, err := reviewBase(ctx, root, p, res)
+	base, target, err := reviewBaseTarget(ctx, root, p, res)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +79,7 @@ func (n *Node) gitReview(ctx context.Context, p proto.GitReviewRequest) (*proto.
 		return nil, err
 	}
 	alone := len(p.Paths) > 0
-	files, err := n.reviewFiles(ctx, root, base, spec)
+	files, err := n.reviewFiles(ctx, root, base, target, p.Scope == proto.ReviewTurn && p.Live, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -91,11 +92,11 @@ func (n *Node) gitReview(ctx context.Context, p proto.GitReviewRequest) (*proto.
 	if alone {
 		page = reviewAlone
 	}
-	if err := n.reviewHunks(ctx, root, base, spec, files, &page); err != nil {
+	if err := n.reviewHunks(ctx, root, base, target, spec, files, &page); err != nil {
 		return nil, err
 	}
 	for i := range files {
-		if files[i].Untracked && !files[i].Refused {
+		if target == "" && files[i].Untracked && !files[i].Refused {
 			n.untrackedHunks(root, &files[i], &page)
 		}
 	}
@@ -112,6 +113,190 @@ func commitInfo(ctx context.Context, root, rev string) (commit, bool) {
 		return commit{}, false
 	}
 	return commit{f[0], f[1], f[2]}, true
+}
+
+func reviewBaseTarget(ctx context.Context, root string, p proto.GitReviewRequest, res *proto.GitReview) (string, string, error) {
+	if p.Scope != proto.ReviewTurn {
+		base, err := reviewBase(ctx, root, p, res)
+		return base, "", err
+	}
+	return reviewTurn(ctx, root, p, res)
+}
+
+// reviewTurn chooses the checkpoints a turn review compares. Without an explicit Target, it shows the latest completed
+// turn: the newest checkpoint against the one before it (or HEAD for the first one). Live asks for the newest
+// checkpoint against the working tree, for the turn now running.
+func reviewTurn(ctx context.Context, root string, p proto.GitReviewRequest, res *proto.GitReview) (string, string, error) {
+	if strings.TrimSpace(p.Session) == "" {
+		return "", "", reviewErr(proto.CodeBadScope, "turn needs a session")
+	}
+	if p.Live && p.Target != "" {
+		return "", "", reviewErr(proto.CodeBadScope, "turn takes a target checkpoint or live, not both")
+	}
+	refs, err := checkpointRefs(ctx, root, p.Session)
+	if err != nil {
+		return "", "", err
+	}
+	res.Session = p.Session
+	byHash := make(map[string]checkpointRef, len(refs))
+	for _, r := range refs {
+		byHash[r.Hash] = r
+	}
+	setBase := func(hash string) (string, error) {
+		if hash == "" {
+			o, err := git(ctx, root, "hash-object", "-t", "tree", "--stdin")
+			res.Base = proto.GitReviewBase{Empty: true}
+			return strings.TrimSpace(o), err
+		}
+		c, ok := commitInfo(ctx, root, hash)
+		if !ok {
+			return "", reviewErr(proto.CodeBadBase, "not a commit of this repository: "+hash)
+		}
+		res.Base.Hash, res.Base.Short, res.Base.Subject = c.hash, c.short, c.subject
+		return c.hash, nil
+	}
+	setTarget := func(ref checkpointRef) (string, error) {
+		c, ok := commitInfo(ctx, root, ref.Hash)
+		if !ok {
+			return "", reviewErr(proto.CodeBadBase, "not a checkpoint of this session: "+ref.Hash)
+		}
+		res.Target = &proto.GitReviewTarget{Hash: c.hash, Short: c.short, Subject: c.subject}
+		res.Turn = ref.Turn
+		return c.hash, nil
+	}
+	headHash := ""
+	if res.Head != nil {
+		headHash = res.Head.Hash
+	}
+	baseAllowed := func(hash string) bool {
+		return hash == "" || strings.HasPrefix(headHash, hash) || byHash[hash].Hash != ""
+	}
+	resolve := func(hash string) (checkpointRef, bool) {
+		if r, ok := byHash[hash]; ok {
+			return r, true
+		}
+		var found checkpointRef
+		matches := 0
+		for _, r := range refs {
+			if strings.HasPrefix(r.Hash, hash) {
+				found, matches = r, matches+1
+			}
+		}
+		return found, matches == 1
+	}
+
+	if p.Base != "" || p.Target != "" {
+		if strings.HasPrefix(p.Base, "-") || strings.ContainsAny(p.Base, " \t\n:") {
+			return "", "", reviewErr(proto.CodeBadBase, "not a checkpoint of this session: "+p.Base)
+		}
+		var targetRef checkpointRef
+		targetParent := ""
+		var baseRef checkpointRef
+		baseIsCheckpoint := false
+		if p.Target != "" {
+			var ok bool
+			targetRef, ok = resolve(p.Target)
+			if !ok {
+				return "", "", reviewErr(proto.CodeBadBase, "not a checkpoint of this session: "+p.Target)
+			}
+			targetParent, _ = checkpointParent(ctx, root, targetRef.Hash)
+		}
+		if p.Base != "" {
+			baseRef, baseIsCheckpoint = resolve(p.Base)
+		}
+		if p.Base != "" && !p.Live && !baseAllowed(p.Base) && !baseIsCheckpoint &&
+			(targetParent == "" || !strings.HasPrefix(targetParent, p.Base)) {
+			return "", "", reviewErr(proto.CodeBadBase, "not a checkpoint of this session: "+p.Base)
+		}
+		baseHash := p.Base
+		if baseIsCheckpoint {
+			baseHash = baseRef.Hash
+		} else if p.Base != "" && targetParent != "" && strings.HasPrefix(targetParent, p.Base) {
+			baseHash = targetParent
+		}
+		if baseHash == "" && p.Target != "" {
+			if previous, ok := checkpointBefore(refs, targetRef.Turn); ok {
+				baseHash = previous.Hash
+			} else if targetParent != "" {
+				baseHash = targetParent
+			}
+		}
+		if p.Base != "" && p.Target == "" && !p.Live && baseIsCheckpoint {
+			next, ok := checkpointAfter(refs, baseRef.Turn)
+			if !ok {
+				return "", "", reviewErr(proto.CodeNoCheckpoint, "no completed checkpoint after "+p.Base+" in this session")
+			}
+			targetRef = next
+		}
+		base, err := setBase(baseHash)
+		if err != nil || (p.Target == "" && !p.Live && targetRef.Turn == 0) {
+			if err != nil {
+				return "", "", err
+			}
+			return "", "", reviewErr(proto.CodeBadScope, "turn needs a target checkpoint or live")
+		}
+		if p.Live {
+			res.Target = &proto.GitReviewTarget{Working: true}
+			if baseIsCheckpoint {
+				res.Turn = baseRef.Turn
+			}
+			return base, "", nil
+		}
+		target, err := setTarget(targetRef)
+		return base, target, err
+	}
+
+	if len(refs) == 0 {
+		return "", "", reviewErr(proto.CodeNoCheckpoint, "the session has no completed turn checkpoint yet")
+	}
+	latest := refs[len(refs)-1]
+	if p.Live {
+		b, err := setBase(latest.Hash)
+		if err != nil {
+			return "", "", err
+		}
+		res.Target = &proto.GitReviewTarget{Working: true}
+		res.Turn = latest.Turn
+		return b, "", nil
+	}
+	base := ""
+	if len(refs) > 1 {
+		base = refs[len(refs)-2].Hash
+	} else if parent, ok := checkpointParent(ctx, root, latest.Hash); ok {
+		base = parent
+	}
+	b, err := setBase(base)
+	if err != nil {
+		return "", "", err
+	}
+	t, err := setTarget(latest)
+	return b, t, err
+}
+
+func checkpointParent(ctx context.Context, root, hash string) (string, bool) {
+	out, err := git(ctx, root, "rev-parse", "--verify", "-q", hash+"^")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(out), true
+}
+
+func checkpointBefore(refs []checkpointRef, turn int64) (checkpointRef, bool) {
+	for i := len(refs) - 1; i >= 0; i-- {
+		if refs[i].Turn < turn {
+			return refs[i], true
+		}
+	}
+	return checkpointRef{}, false
+}
+
+func checkpointAfter(refs []checkpointRef, turn int64) (checkpointRef, bool) {
+	for _, r := range refs {
+		if r.Turn > turn {
+			return r, true
+		}
+	}
+	return checkpointRef{}, false
 }
 
 // reviewBase is the tree the working tree is compared with, written into res.Base. Before the first commit it is the
@@ -196,17 +381,26 @@ func reviewSpec(paths []string) ([]string, error) {
 	return spec, nil
 }
 
-// reviewFiles lists the files that changed (git's raw diff and its line counts) and the new files, in path order,
-// with the ones file.read refuses marked Refused.
-func (n *Node) reviewFiles(ctx context.Context, root, base string, spec []string) ([]proto.GitReviewFile, error) {
-	rawArgs := append([]string{"diff", "-M", "--raw", "-z", "--no-ext-diff", base, "--"}, spec...)
+// reviewFiles lists the files that changed (git's raw diff and its line counts) and, when target is empty, the new
+// files in the working tree, in path order, with the ones file.read refuses marked Refused.
+func (n *Node) reviewFiles(ctx context.Context, root, base, target string, liveTurn bool, spec []string) ([]proto.GitReviewFile, error) {
+	revs := []string{base}
+	if target != "" {
+		revs = append(revs, target)
+	}
+	rawArgs := append([]string{"diff", "-M", "--raw", "-z", "--no-ext-diff"}, revs...)
+	rawArgs = append(rawArgs, "--")
+	rawArgs = append(rawArgs, spec...)
 	raw, err := git(ctx, root, rawArgs...)
 	if err != nil {
 		return nil, err
 	}
 	files := parseRawDiff(raw)
 	counts := map[string][2]int{}
-	if o, err := git(ctx, root, append([]string{"diff", "-M", "--numstat", "-z", "--no-ext-diff", "--no-textconv", base, "--"}, spec...)...); err == nil {
+	numstat := append([]string{"diff", "-M", "--numstat", "-z", "--no-ext-diff", "--no-textconv"}, revs...)
+	numstat = append(numstat, "--")
+	numstat = append(numstat, spec...)
+	if o, err := git(ctx, root, numstat...); err == nil {
 		counts = parseNumstat(o)
 	}
 	seen := map[string]bool{}
@@ -221,16 +415,25 @@ func (n *Node) reviewFiles(ctx context.Context, root, base string, spec []string
 			}
 		}
 	}
-	o, err := git(ctx, root, append([]string{"ls-files", "--others", "--exclude-standard", "-z", "--"}, spec...)...)
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range strings.Split(o, "\x00") {
-		// a folder: another repository inside this one, whose files are its own
-		if p == "" || strings.HasSuffix(p, "/") || seen[p] {
-			continue
+	if liveTurn {
+		var err error
+		files, err = n.keepLiveUntracked(ctx, root, base, files, seen)
+		if err != nil {
+			return nil, err
 		}
-		files = append(files, proto.GitReviewFile{Path: p, Status: "added", Untracked: true})
+	}
+	if target == "" {
+		o, err := git(ctx, root, append([]string{"ls-files", "--others", "--exclude-standard", "-z", "--"}, spec...)...)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range strings.Split(o, "\x00") {
+			// a folder: another repository inside this one, whose files are its own
+			if p == "" || strings.HasSuffix(p, "/") || seen[p] {
+				continue
+			}
+			files = append(files, proto.GitReviewFile{Path: p, Status: "added", Untracked: true})
+		}
 	}
 	refused := map[string]bool{}
 	isRefused := func(p string) bool {
@@ -249,6 +452,106 @@ func (n *Node) reviewFiles(ctx context.Context, root, base string, spec []string
 	}
 	sort.SliceStable(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+// keepLiveUntracked fixes the one asymmetry of a live checkpoint diff: a file the checkpoint captured while it was
+// untracked in the index is reported deleted when the next turn's working tree still has it. If the disk still has the
+// same blob, it is no change; otherwise it is a new untracked file. The path stays in seen so the later untracked scan
+// does not add it twice.
+func (n *Node) keepLiveUntracked(ctx context.Context, root, base string, files []proto.GitReviewFile, seen map[string]bool) ([]proto.GitReviewFile, error) {
+	candidates := make([]int, 0)
+	for i := range files {
+		if files[i].Status == "deleted" && !files[i].Untracked && !files[i].Refused {
+			candidates = append(candidates, i)
+		}
+	}
+	if len(candidates) == 0 {
+		return files, nil
+	}
+	trackedOut, err := git(ctx, root, "ls-files", "-z", "--cached")
+	if err != nil {
+		return nil, err
+	}
+	tracked := map[string]bool{}
+	for _, p := range splitNul(trackedOut) {
+		tracked[p] = true
+	}
+	out := files[:0]
+	for i := range files {
+		f := files[i]
+		keep := true
+		if f.Status == "deleted" && !tracked[f.Path] {
+			if st, err := os.Lstat(filepath.Join(root, filepath.FromSlash(f.Path))); err == nil && !st.IsDir() {
+				same, err := sameWorkingBlob(ctx, root, base, f.Path, st)
+				if err != nil {
+					return nil, err
+				}
+				if same {
+					seen[f.Path] = true
+					keep = false
+				} else {
+					f.Status, f.Untracked, f.Added, f.Deleted, f.Hunks, f.Big = "added", true, 0, 0, nil, false
+					seen[f.Path] = true
+				}
+			}
+		}
+		if keep {
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+func sameWorkingBlob(ctx context.Context, root, base, path string, st os.FileInfo) (bool, error) {
+	blob, ok := checkpointBlob(ctx, root, base, path)
+	if !ok {
+		return false, nil
+	}
+	working, err := workingBlob(ctx, root, path, st)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, nil
+	}
+	return blob == working, nil
+}
+
+func checkpointBlob(ctx context.Context, root, base, path string) (string, bool) {
+	out, err := git(ctx, root, "ls-tree", "-z", base, "--", ":(top,literal)"+path)
+	if err != nil {
+		return "", false
+	}
+	rec := strings.TrimSuffix(out, "\x00")
+	if i := strings.IndexByte(rec, '\t'); i >= 0 {
+		rec = rec[:i]
+	}
+	f := strings.Fields(rec)
+	if len(f) < 3 || f[1] != "blob" {
+		return "", false
+	}
+	return f[2], true
+}
+
+func workingBlob(ctx context.Context, root, path string, st os.FileInfo) (string, error) {
+	if st.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			return "", err
+		}
+		out, err := gitWithEnvInput(ctx, root, nil, strings.NewReader(target), "hash-object", "--stdin", "--path="+path)
+		return strings.TrimSpace(out), err
+	}
+	if !st.Mode().IsRegular() {
+		return "", errors.New("not a regular file")
+	}
+	f, err := os.Open(filepath.Join(root, filepath.FromSlash(path)))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	out, err := gitWithEnvInput(ctx, root, nil, f, "hash-object", "--stdin", "--path="+path)
+	return strings.TrimSpace(out), err
 }
 
 // parseRawDiff reads `git diff --raw -z`: ":srcmode dstmode src dst STATUS\0path\0" ("\0from\0to\0" for a rename or
@@ -332,7 +635,7 @@ type reviewBudget struct {
 // reviewHunks reads the patch of the files Git knows (all but the refused ones) into their hunks. The patch has them
 // in the raw diff's order, a "diff --git" section each; a file over its share, and every file once the page is full,
 // comes without them (Big).
-func (n *Node) reviewHunks(ctx context.Context, root, base string, spec []string, files []proto.GitReviewFile, page *reviewBudget) error {
+func (n *Node) reviewHunks(ctx context.Context, root, base, target string, spec []string, files []proto.GitReviewFile, page *reviewBudget) error {
 	var order []*proto.GitReviewFile // the files the patch has, in its order
 	var exclude []string
 	for i := range files {
@@ -358,7 +661,13 @@ func (n *Node) reviewHunks(ctx context.Context, root, base string, spec []string
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	args := append([]string{"diff", "-M", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-U3", base, "--"}, exclude...)
+	revs := []string{base}
+	if target != "" {
+		revs = append(revs, target)
+	}
+	args := append([]string{"diff", "-M", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-U3"}, revs...)
+	args = append(args, "--")
+	args = append(args, exclude...)
 	cmd := gitCmd(ctx, root, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -52,6 +52,7 @@ EOF
 EOF
   ;;
 "pr create") echo https://github.com/acme/web/pull/43 ;;
+"api user") echo contributor ;;
 "pr merge") ;;
 *) echo "unexpected: $*" >&2; exit 1 ;;
 esac

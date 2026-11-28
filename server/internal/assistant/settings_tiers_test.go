@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -50,6 +51,24 @@ func tierOf(ps modelProfiles, profile, tier string) (ModelTier, bool) {
 		}
 	}
 	return ModelTier{}, false
+}
+
+func TestPresetHostSettingsApproval(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.launcherList = companionLaunchers()
+	s := newTestService(t, f)
+	putTierProfiles(t, s, "economy", map[string]ModelTier{"agy-work": {Launcher: "agy"}}, nil)
+	call := ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "c1",
+		Arguments: json.RawMessage(`{"action":"set","key":"model_profiles.tiers","value":{"tier":"agy-work","host":"herdr","profiles":["economy"]}}`)}
+	out := runSpeedTool11141(t, s, f, call, true)
+	if out.result.IsError || out.card == nil || !strings.Contains(out.card.Summary, "agy · herdr") {
+		t.Fatalf("host edit approval: %+v, card %+v", out.result, out.card)
+	}
+	ps, _ := storedTiers(t, s)
+	tier, ok := tierOf(ps, "economy", "agy-work")
+	if !ok || tier.startHost() != "herdr" {
+		t.Fatalf("saved tier = %+v, want host herdr", tier)
+	}
 }
 
 // A tier's model goes to the agent as --model and its description is in every snapshot: both are checked on save.
@@ -309,16 +328,30 @@ func TestPickerTiers(t *testing.T) {
 	}
 }
 
-// Switching straight to the template made for it keeps the templates and marks it in use: a seed is never lost.
-func TestApplySeededProfileKeepsTheSeed(t *testing.T) {
-	s, _, _ := modelService(t)
-	if _, err := s.applyModelProfile(context.Background(), seededProfile, ProfileActor{Kind: "hub"}); err != nil {
+func TestStoredSeededProfileStaysActive(t *testing.T) {
+	s, _, store := modelService(t)
+	ctx := context.Background()
+	putTierProfiles(t, s, "performance", nil, map[string]ModelTier{"strong": {Launcher: "claude", Model: "test-model"}})
+	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	by := ProfileActor{Kind: "system"}
+	state := modelProfileState{Active: "performance", At: at, By: by,
+		Previous: &modelProfileImage{Profile: "economy", At: at},
+		Events:   []ModelProfileEvent{{Action: "seed", To: "performance", At: at, By: by}}}
+	if err := store.PutSetting(ctx, modelProfileStateKey, state); err != nil {
 		t.Fatal(err)
 	}
-	ps, st := storedTiers(t, s)
-	if len(ps.Profiles) != 2 || st.Active != seededProfile || st.Previous != nil {
-		t.Fatalf("profiles %+v state %+v", ps, st)
+	before, puts := profileStoreSnapshot(store.memStore)
+	v := profilesOf(t, s)
+	if v.Revision != 1 || len(v.Profiles) != 2 || v.Active != "performance" || v.At == nil || !v.At.Equal(at) ||
+		v.By == nil || *v.By != by || len(v.Events) != 1 || v.Events[0].Action != "seed" ||
+		v.Rollback == nil || v.Rollback.To != "economy" {
+		t.Fatalf("stored profiles and state: %+v", v)
 	}
+	tier, err := s.pickTierCandidate(ctx, "strong", tierFacts{})
+	if err != nil || tier.Name != "core" || tier.Tier.Model != "test-model" {
+		t.Fatalf("legacy tier alias: %+v %v", tier, err)
+	}
+	requireProfileStoreUnchanged(t, store.memStore, before, puts)
 }
 
 // Editing or deleting a profile tells the apps, as a switch does.
@@ -351,7 +384,7 @@ func TestGoldenAssistantSnapshotTiers(t *testing.T) {
 		}}}))
 }
 
-// A model saved before tiers were held to the model id rule blocks nothing: the templates leave it out, a switch and
+// A model saved before tiers were held to the model id rule blocks nothing: capturing leaves it out, a switch and
 // an edit of something else pass over it, and a tier edit checks only the tier it edits.
 func TestLegacyTierModelBlocksNothing(t *testing.T) {
 	s, _, st := modelService(t)
@@ -361,10 +394,9 @@ func TestLegacyTierModelBlocksNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, p := range profilesOf(t, s).Profiles {
-		if p.Tiers["core"].Model != "" || p.Tiers["dev"].Model != "" {
-			t.Fatalf("a template copied a model that is no model id: %+v", p.Tiers)
-		}
+	_, _, tiers, err := s.captureModels(ctx)
+	if err != nil || len(tiers) != 2 || tiers["core"].Model != "" || tiers["dev"].Model != "" {
+		t.Fatalf("unexpected captured tiers: %+v, %v", tiers, err)
 	}
 	old := map[string]ModelTier{"strong": {Launcher: "claude", Model: "old+model"}, "standard": {Launcher: "claude", Model: "old+model"}}
 	storeProfiles(t, st, ModelProfile{ID: "economy", Name: "Economy", Tiers: old}, ModelProfile{ID: "performance", Name: "Performance"})
@@ -393,39 +425,29 @@ func TestLegacyTierModelBlocksNothing(t *testing.T) {
 	}
 }
 
-// Templates never saved are made again when the user approves: a configuration changed since the card is a conflict,
-// not a save of something the card did not show.
-func TestTierCardOnUnsavedTemplates(t *testing.T) {
+func TestProfileSettingsRequireSavedProfiles(t *testing.T) {
+	s, f, store := modelService(t)
 	ctx := context.Background()
-	f := newFakeHub().withMachine()
-	f.launcherList = []proto.Launcher{{Name: "claude"}}
-	s := newTestService(t, f)
-	record := func(model string) {
-		if err := s.store().PutSetting(ctx, modelRecordKey("agent.new"), modelRecord{Revision: 1, Binding: ModelBinding{Provider: "launcher.claude", Model: model}}); err != nil {
-			t.Error(err)
+	before, puts := profileStoreSnapshot(store.memStore)
+	for _, get := range []func(context.Context) (string, error){s.getModelTiers, s.getModelProfileBindings} {
+		if _, err := get(ctx); !errors.Is(err, errModelProfileEmpty) {
+			t.Fatalf("reading profile settings: %v", err)
 		}
 	}
-	record("model-a")
-	go func() {
-		q, ok := awaitCard(s)
-		if !ok {
-			t.Error("no card on the phone")
-			return
+	for _, set := range []struct {
+		apply func(context.Context, json.RawMessage) (*ownChange, error)
+		value string
+	}{
+		{s.setModelTiers, `{"tier":"dev","launcher":"missing"}`},
+		{s.setModelProfileBindings, `{"profile":"performance","purposes":{"agent.new":{}}}`},
+	} {
+		if _, err := set.apply(ctx, json.RawMessage(set.value)); !errors.Is(err, errModelProfileEmpty) {
+			t.Fatalf("writing profile settings: %v", err)
 		}
-		record("model-b")
-		allow := true
-		raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
-		if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
-			t.Error(err)
-		}
-	}()
-	r := s.Tool(ctx, ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "c1",
-		Arguments: json.RawMessage(`{"action":"set","key":"model_profiles.tiers","value":{"tier":"dev","description":"Everyday"}}`)})
-	if out := r.Content[0].Text; !strings.Contains(out, "changed after the card") {
-		t.Fatalf("approved over a changed configuration: %s", out)
 	}
-	if ps, _ := storedTiers(t, s); len(ps.Profiles) != 0 {
-		t.Fatalf("saved: %+v", ps)
+	requireProfileStoreUnchanged(t, store.memStore, before, puts)
+	if f.eventTypes() != "" {
+		t.Fatal("empty profile settings published a change")
 	}
 }
 

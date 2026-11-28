@@ -58,7 +58,7 @@ if (!before && !counts.todo) {
 }
 const SEGMENTS = ["待办", "机器", "仓库", "项目", "状态"];
 // the complete list's quick filters (lib/agent-filter.ts), the paged list's chips too on a hub with sessions_quick_filters
-const QUICK = ["全部", "需要你", "完成未看", "工作中", "后台等待中", "飞书群", "终端"];
+const QUICK = ["全部", "需要你", "完成未看", "工作中", "后台等待中", "飞书群", "在标签页中"];
 
 const browser = await chromium.launch({ channel, headless: true });
 try {
@@ -128,7 +128,7 @@ try {
     const pagedChips = await chipNames();
     check(pagedChips[0] === "全部" && pagedChips.every((name) => QUICK.includes(name)), `${theme}: the paged list's chips are the complete list's quick filters`, pagedChips.join(" / "));
     const pagedMenu = await listMenu("paged-menu");
-    check(pagedMenu.includes("已归档的 Agent") && !pagedMenu.includes("状态优先") && !pagedMenu.includes("最近更新"), `${theme}: the paged list's ⋯ has archives and no activity sort`, pagedMenu.join(" / "));
+    check(pagedMenu.includes("已归档会话") && !pagedMenu.includes("状态优先") && !pagedMenu.includes("最近更新"), `${theme}: the paged list's ⋯ has archives and no activity sort`, pagedMenu.join(" / "));
     const sections = () => paged.locator("[data-session-group]").evaluateAll((els) => els.map((el) => ({
       key: el.getAttribute("data-session-group") ?? "",
       name: el.querySelector("button[aria-expanded]")?.querySelector("span")?.textContent ?? el.querySelector("button[aria-expanded]")?.textContent ?? "",
@@ -158,6 +158,25 @@ try {
     await load();
     await paged.waitFor({ timeout: 20_000 });
     check(true, `${theme}: unpinned, the paged list again`);
+
+    // The fixture includes an ended session with a saved terminal reference. The Agents count and rows omit it.
+    const tabPage = await hubGet("/sessions?agents_only=1&roots=1&pane_source=terminal&summary=1&limit=50");
+    const tabChip = paged.getByRole("radio", { name: /^在标签页中 \d+$/ });
+    const tabCount = Number((await tabChip.getAttribute("aria-label")).split(" ").at(-1));
+    await bar.getByRole("radio", { name: /^按机器/ }).click();
+    await tabChip.click();
+    await paged.locator("[data-session-group]").last().waitFor();
+    for (const group of await paged.locator('[data-session-group][data-group-open="false"]').all()) {
+      await group.getByRole("button", { expanded: false }).first().click();
+    }
+    const expectedTabRows = tabPage.sessions.map((s) => `/s/${encodeURIComponent(s.machine_id)}/${encodeURIComponent(s.session_id)}`).sort();
+    await page.waitForFunction((expected) => {
+      const rows = Array.from(document.querySelectorAll('aside [data-paged-sessions="runtime"] [data-session-row] a'), (a) => new URL(a.href).pathname).sort();
+      return JSON.stringify(rows) === JSON.stringify(expected);
+    }, expectedTabRows, { timeout: 10_000 });
+    check(tabCount === expectedTabRows.length && tabPage.sessions.every((s) => s.state !== "offline"), `${theme}: In a tab counts exactly its listed Agents`, String(tabCount));
+    await shot("in-a-tab");
+    await paged.getByRole("radio", { name: "全部", exact: true }).click();
 
     // By machine and By state stay paged; By repository takes the complete list
     for (const [label, name] of [["机器", "paged-machine"], ["状态", "paged-state"]]) {

@@ -9,6 +9,7 @@ import {
   nudgeLabel, pairBot, pairingLeft, testBot, unpairBot, updateBot,
   type BotCredentials, type FeishuBotStatus,
 } from "../../../lib/feishu-bot";
+import { useStore } from "../../../lib/store";
 import { ago } from "../../../lib/format";
 import { documentPage, visiblePoll } from "../../../lib/visible-poll";
 import { Button, copyText, cx, IconButton, Spinner, toast } from "../../../ui/atoms";
@@ -16,6 +17,7 @@ import { Icon } from "../../../ui/icons";
 import { BindSteps } from "../Channels";
 import { FEATURES, LarkReadSection, SOURCE_REPORT_DELAYS, STEPS, TopicGroups, useBot } from "../FeishuBot";
 import { LarkSyncSection } from "../LarkSyncSection";
+import { FeishuGroupAccess } from "./FeishuGroupAccess";
 import { Disclosure } from "../ProviderFields";
 import { Group, Row, settingsInputClass, Switch } from "../SettingsParts";
 
@@ -330,6 +332,7 @@ export function FeishuBotConnectionPanel({
 export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
   const { status, saving, run } = ctl;
   const fullReplyDetail = useId();
+  const machines = useStore((s) => s.machines);
   if (!status?.has_secret) return null;
 
   const features = status.features ?? DEFAULT_FEATURES;
@@ -347,13 +350,15 @@ export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
           save={(topic_chats) => run(t("settings-feishubot.save_failed"), () => updateBot({ topic_chats }))}
         />
       )}
+      {status.owner && <FeishuGroupAccess status={status} saving={saving} />}
 
       <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
-        {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card" && f.key !== "topic_cot" && f.key !== "read_group") || features[f.key] !== undefined).map((f) => {
+        {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card" && f.key !== "topic_cot" && f.key !== "dm_cot" && f.key !== "cot_answer" && f.key !== "read_group") || features[f.key] !== undefined).map((f) => {
           const off =
             (f.key === "all_cards" && !features.cards) ||
             (f.key === "only_conclusions" && (features.reports === false || (features.report_steps === false && !features.only_conclusions))) ||
-            (f.key === "report_steps" && features.reports === false);
+            (f.key === "report_steps" && features.reports === false) ||
+            (f.key === "cot_answer" && !features.dm_cot && features.topic_cot === false);
           return (
             <div key={f.key} className={cx("flex items-start gap-3 px-4 py-2.5", off && "opacity-50")}>
               <Icon name={f.icon} size={15} className="mt-0.5 shrink-0 text-accent" />
@@ -432,7 +437,7 @@ export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
         <Group title={t("settings-feishubot.agents")}>
           {agents.map((a) => (
             <Row key={a.session_id} label={a.title}>
-              <span className="max-w-[160px] truncate">{a.machine_id}</span>
+              <span className="max-w-[160px] truncate">{machines.find((m) => m.id === a.machine_id)?.name || a.machine_id}</span>
             </Row>
           ))}
         </Group>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,8 @@ type runtimeRegistry struct {
 	mu     sync.Mutex
 	serial int
 	conns  map[int]*runtimeConn
+	// Only a node-directed start can bind protected command input to a session.
+	inputBindings map[string]*runtimeInputBinding
 	// owner: session id -> the runtime listing it (the newest connection wins when two list the same id).
 	owner map[string]*runtimeConn
 	// watching: sessions the hub watches -> the last seq pushed for each, so a runtime that reconnects is asked to
@@ -755,10 +758,20 @@ func (b *runtimeRegistry) beginWatchLocked(h *runtimeConn, id string, since int)
 // yet (with the sequence and generation of each attempt), and the sessions it now runs that another runtime started
 // for the hub lately, which it has not been told of yet (runtime.driven).
 func (b *runtimeRegistry) setSessions(h *runtimeConn, list []proto.Session) (map[string]runtimeWatchAttempt, []string) {
+	return b.setSessionList(h, list, nil, nil)
+}
+
+func (b *runtimeRegistry) setSessionList(h *runtimeConn, list []proto.Session, agyPaneBackground map[string][]proto.BackgroundTask, waits map[runtimeInputKey]runtimeInputReport) (map[string]runtimeWatchAttempt, []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	h.mu.Lock()
 	h.sessions = list
+	h.sessionsListed = true
+	h.agyPaneBackground = agyPaneBackground
+	h.inputWaits = b.reconcileInputs(h, list, waits)
+	if h.hello.Runtime == agyRuntimeID && h.daemon == "" {
+		h.agyPreviews = nextAgyPreviews(h.agyPreviews, list)
+	}
 	rt := h.hello.Runtime
 	agent := h.hello.Agent
 	if agent == "" {
@@ -802,6 +815,52 @@ func (b *runtimeRegistry) setSessions(h *runtimeConn, list []proto.Session) (map
 	return rewatch, driven
 }
 
+// assistantRuntimeByPrefix returns the newest ready assistant runtime whose runtime id prefixes id ("<runtime>-...").
+func (b *runtimeRegistry) assistantRuntimeByPrefix(id string) (*runtimeConn, bool) {
+	if b == nil || id == "" {
+		return nil, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var best *runtimeConn
+	for _, h := range b.conns {
+		h.mu.Lock()
+		ok := h.ready && h.hello.Caps.Assistant && h.hello.Runtime != "" && strings.HasPrefix(id, h.hello.Runtime+"-")
+		h.mu.Unlock()
+		if ok && (best == nil || h.serial > best.serial) {
+			best = h
+		}
+	}
+	return best, best != nil
+}
+
+// unlistedAssistantRuntime reports a ready assistant runtime that has not yet pushed its first runtime.sessions list.
+func (b *runtimeRegistry) unlistedAssistantRuntime() (string, bool) {
+	if b == nil {
+		return "", false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var first *runtimeConn
+	var label string
+	for _, h := range b.conns {
+		h.mu.Lock()
+		pending := h.ready && h.hello.Caps.Assistant && !h.sessionsListed
+		name := h.hello.Name
+		if name == "" {
+			name = h.hello.Runtime
+		}
+		h.mu.Unlock()
+		if pending && (first == nil || h.serial < first.serial) {
+			first, label = h, name
+		}
+	}
+	if first == nil {
+		return "", false
+	}
+	return label, true
+}
+
 func (b *runtimeRegistry) ownerOf(id string) *runtimeConn {
 	if b == nil || id == "" {
 		return nil
@@ -833,6 +892,10 @@ func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 				row := h.sessions[i]
 				if compact := b.compactions[row.SessionID]; compact != nil {
 					row.Compaction = compact.state
+					if compact.silent && compact.state != nil && compact.state.State == proto.CompactionRunning &&
+						row.Status == proto.StatusWorking && compact.prevStatus != "" {
+						row.Status = compact.prevStatus
+					}
 				}
 				dst = append(dst, row)
 			}
@@ -840,6 +903,48 @@ func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 		h.mu.Unlock()
 	}
 	return b.appendAway(dst)
+}
+
+func (b *runtimeRegistry) wasStarted(id string) bool {
+	if b == nil || id == "" {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.started[id]
+	return ok
+}
+
+func (b *runtimeRegistry) agySnapshots() []agyRuntimeSnapshot {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []agyRuntimeSnapshot
+	for _, h := range b.conns {
+		if h.peer != nil {
+			select {
+			case <-h.peer.Done():
+				continue
+			default:
+			}
+		}
+		h.mu.Lock()
+		agent := h.hello.Agent
+		if agent == "" {
+			agent = h.hello.Runtime
+		}
+		if h.ready && agent == agyAgent {
+			for i := range h.sessions {
+				if b.owner[h.sessions[i].SessionID] == h {
+					out = append(out, agyRuntimeSnapshot{host: h, row: h.sessions[i]})
+				}
+			}
+		}
+		h.mu.Unlock()
+	}
+	return out
 }
 
 // launcherOwners maps each launcher name the runtimes offer to the one connection that answers for it: the one
@@ -1066,4 +1171,51 @@ func (b *runtimeRegistry) rowOf(id string) (proto.Session, *runtimeConn, bool) {
 	}
 	s, ok := h.row(id)
 	return s, h, ok
+}
+
+// unlistedRuntimeByPrefix reports a ready runtime matching id's "<runtime>-" prefix that has not pushed its first
+// runtime.sessions list yet.
+func (b *runtimeRegistry) unlistedRuntimeByPrefix(id string) (string, bool) {
+	if b == nil || id == "" {
+		return "", false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var first *runtimeConn
+	var label string
+	for _, h := range b.conns {
+		h.mu.Lock()
+		pending := h.ready && !h.sessionsListed && h.hello.Runtime != "" && strings.HasPrefix(id, h.hello.Runtime+"-")
+		name := h.hello.Name
+		if name == "" {
+			name = h.hello.Runtime
+		}
+		h.mu.Unlock()
+		if pending && (first == nil || h.serial < first.serial) {
+			first, label = h, name
+		}
+	}
+	if first == nil {
+		return "", false
+	}
+	return label, true
+}
+
+// hasListedRuntimePrefix reports whether any ready connected runtime using id's "<runtime>-" prefix has already
+// pushed its initial runtime.sessions list.
+func (b *runtimeRegistry) hasListedRuntimePrefix(id string) bool {
+	if b == nil || id == "" {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, h := range b.conns {
+		h.mu.Lock()
+		listed := h.ready && h.sessionsListed && h.hello.Runtime != "" && strings.HasPrefix(id, h.hello.Runtime+"-")
+		h.mu.Unlock()
+		if listed {
+			return true
+		}
+	}
+	return false
 }

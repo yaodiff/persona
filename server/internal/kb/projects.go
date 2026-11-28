@@ -332,8 +332,9 @@ func (e *Engine) knownProjects() []prompts.KnownProject {
 	return out
 }
 
-// evolveProject merges a mention into its project (creating it), links the chat and its people, and logs the update.
-func (e *Engine) evolveProject(name, kind string, aliases []string, myRole string, c *Chat, update string, now time.Time) string {
+// evolveProject merges a mention into its project (creating it), links the chat and its people when link says so, and
+// logs the update.
+func (e *Engine) evolveProject(name, kind string, aliases []string, myRole string, c *Chat, link bool, update string, now time.Time) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return ""
@@ -363,7 +364,7 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 		if strings.TrimSpace(update) != "" || myRole != "" {
 			e.logf("project %s: %v: skipped compression detail", p.Slug, ErrReferenceOnly)
 		}
-		if !slices.Contains(p.Chats, c.ID) {
+		if link && !slices.Contains(p.Chats, c.ID) {
 			p.Chats = append(p.Chats, c.ID)
 			if err := e.Store.PutProject(p); err != nil {
 				e.logf("project %s: %v", p.Slug, err)
@@ -380,9 +381,12 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 	if myRole != "" {
 		p.MyRole = oneLine(myRole)
 	}
-	p.Chats = addUnique(p.Chats, c.ID)
-	people := e.externalPeople(c.People)
-	p.People = addUnique(p.People, people...)
+	var people []string
+	if link {
+		p.Chats = addUnique(p.Chats, c.ID)
+		people = e.externalPeople(c.People)
+		p.People = addUnique(p.People, people...)
+	}
 	if strings.TrimSpace(update) != "" {
 		if err := e.Store.AppendLog(p.Slug, now, c.Name, update); err != nil {
 			e.logf("project %s: %v", p.Slug, err)
@@ -405,4 +409,10 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 		})
 	}
 	return p.Slug
+}
+
+// heldOffProjects reports whether the user holds chat c to no project (Chat.HeldOffProjects, its projects still
+// locked): compression then links it to none of the projects it mentions.
+func heldOffProjects(c *Chat) bool {
+	return c.HeldOffProjects && taggingFieldLocked(&c.Tagging, "projects")
 }

@@ -124,14 +124,14 @@ describe("extension entry lists", () => {
     act(() => typeInto(input, "placeholder-secret-5678"));
     await act(async () => button("保存", document.body).click());
     await flush();
-    expect(setExtensionSecret).toHaveBeenCalledWith("example-entries", "entry_saved", "placeholder-secret-5678");
+    expect(setExtensionSecret).toHaveBeenCalledWith("example-entries", "entry_saved", "placeholder-secret-5678", expect.objectContaining({ managerId: "assistant" }));
     expect(setExtensionConfig).not.toHaveBeenCalled();
     expect(host.textContent).not.toContain("placeholder-secret-5678");
   });
 
   it("confirms removal and omits an emptied optional list only when the settings are saved", async () => {
     await open();
-    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="移除One"]')!.click());
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="移除 One"]')!.click());
     expect(document.body.textContent).toContain("保存时将删除此条目及其已保存的密钥");
     expect(entries()).toHaveLength(1);
     act(() => button("移除条目", document.body).click());
@@ -148,7 +148,7 @@ describe("extension entry lists", () => {
     next.form!.fields![0].min_items = 0;
     hub.detail = next;
     await open();
-    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="移除One"]')!.click());
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="移除 One"]')!.click());
     act(() => button("移除条目", document.body).click());
     await act(async () => button("保存").click());
     await flush();
@@ -160,7 +160,7 @@ describe("extension entry lists", () => {
     next.form!.fields![0].min_items = 1;
     hub.detail = next;
     await open();
-    const remove = host.querySelector<HTMLButtonElement>('button[aria-label="移除One"]')!;
+    const remove = host.querySelector<HTMLButtonElement>('button[aria-label="移除 One"]')!;
     expect(remove.disabled).toBe(false);
     act(() => remove.click());
     act(() => button("移除条目", document.body).click());

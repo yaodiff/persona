@@ -81,11 +81,7 @@ func TestModelRetryProcessRestart(t *testing.T) {
 		}
 		for _, outcome := range []string{"pending", "delivered", "unknown", "sending"} {
 			t.Run(name+"/"+outcome, func(t *testing.T) {
-				url, done, err := dbtest.Own(t.Context(), os.Getenv(dbtest.Env))
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer done()
+				dsn := newMigratedDatabase(t, db.AllSets)
 				dir := t.TempDir()
 				turn := strconv.FormatInt(time.Now().UnixNano(), 10)
 				first := "seed-crash"
@@ -95,7 +91,7 @@ func TestModelRetryProcessRestart(t *testing.T) {
 				for _, phase := range []string{first, "recover", "recover", "stop", "cancelled"} {
 					ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 					cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestModelRetryProcessHelper$", "-test.v")
-					cmd.Env = append(os.Environ(), dbtest.Env+"="+url, "PERSONA_RETRY_PHASE="+phase, "PERSONA_RETRY_EFFECTS="+filepath.Join(dir, "effects"), "PERSONA_RETRY_MAIN="+name, "PERSONA_RETRY_TURN="+turn, "PERSONA_RETRY_OUTCOME="+outcome)
+					cmd.Env = append(os.Environ(), "PERSONA_RETRY_DSN="+dsn, "PERSONA_RETRY_PHASE="+phase, "PERSONA_RETRY_EFFECTS="+filepath.Join(dir, "effects"), "PERSONA_RETRY_MAIN="+name, "PERSONA_RETRY_TURN="+turn, "PERSONA_RETRY_OUTCOME="+outcome)
 					out, err := cmd.CombinedOutput()
 					cancel()
 					if phase == "seed-crash" {
@@ -118,7 +114,7 @@ func TestModelRetryProcessHelper(t *testing.T) {
 		t.Skip("subprocess helper")
 	}
 	ctx := context.Background()
-	database, err := db.Open(ctx, os.Getenv(dbtest.Env), db.AllSets)
+	database, err := db.Open(ctx, os.Getenv("PERSONA_RETRY_DSN"), db.AllSets)
 	if err != nil {
 		t.Fatal(err)
 	}

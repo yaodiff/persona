@@ -16,6 +16,7 @@ import persona.core.contracts.api.LarkMember
 import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.MailTransport
 import persona.core.contracts.api.OutboxMessage
+import persona.core.contracts.generated.InboxStoredSources
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 
@@ -171,6 +172,8 @@ data class InboxSnapshot(
     val machines: Map<String, String> = emptyMap(),
     /** How triage stands: new items waiting outside the list (#1773); null from an older hub. */
     val triage: InboxTriage? = null,
+    /** Every retained built-in source, including completed history; null from an old or mixed-version hub (unknown). */
+    val storedSources: InboxStoredSources? = null,
     /** How many refreshes have succeeded. A new count says the records are the hub's whole list, even when it is empty. */
     val refreshes: Int = 0,
 )

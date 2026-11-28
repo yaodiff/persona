@@ -89,6 +89,116 @@ func TestAcceptGuardRefusesInconclusiveResult(t *testing.T) {
 	}
 }
 
+func testContractReviewTask(t *testing.T, mode, value, evidence string, v2 bool) (*Service, Todo, []ReviewCheck) {
+	t.Helper()
+	s, f := newQuietService(t)
+	if v2 {
+		setSettings(t, s, func(v *Settings) { v.TodosV2 = new(true) })
+	}
+	f.judge = `{"verdict":"done","reason":"The analysis is complete."}`
+	const criterion = "Evaluate the hypothesis and record the observations"
+	task := map[string]any{
+		"title": "Evaluate the hypothesis", "prompt": criterion, "machine": "box", "cwd": "/code/app",
+		"readonly": true, "role": "worker", "why": "The data is on this machine", "done_when": []string{criterion},
+	}
+	if mode != "" {
+		task[mode] = value
+	}
+	if _, err := runJSON(t, s, "conv1", "task_plan", map[string]any{"tasks": []any{task}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the agent link", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, evidence, 0)
+	waitFor(t, "wait for review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	return s, todo, []ReviewCheck{{Criterion: criterion, Met: true, Evidence: evidence}}
+}
+
+func TestAcceptGuardAcceptsStructuredResearch(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, value, evidence string
+		v2                          bool
+	}{
+		{"inconclusive research", "work_mode", "research", "The first experiment was inconclusive. The repeat showed the alternative hypothesis does not hold (不成立).", false},
+		{"quoted scope wording", "completion_mode", "ready", "The report documents the sample's existing status.\n## 未处理\n- Pending sample records were counted.", true},
+		{"research declared in scope", "", "", "The comparison was inconclusive.", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, todo, checks := testContractReviewTask(t, tc.mode, tc.value, tc.evidence, tc.v2)
+			if tc.mode == "" {
+				if _, err := runJSON(t, s, "conv1", "task_scope", map[string]any{
+					"todo_id": todo.ID, "work_mode": "research",
+					"change": "Declare the current work as research", "why": "The evaluation is the deliverable",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			review := func(fields map[string]any) (string, error) {
+				fields["verdict"] = reviewAccepted
+				return s.runTool(t.Context(), "server", "conv1", "task_review", reviewRaw(t, todo.ID, fields))
+			}
+			if _, err := review(map[string]any{}); err == nil || !strings.Contains(err.Error(), "has no check") {
+				t.Fatalf("accepted without required checks: %v", err)
+			}
+			if tc.mode != "completion_mode" {
+				res, err := review(map[string]any{"checks": checks})
+				if cur := todoNow(s, todo.ID); err != nil || cur.DoneAt == nil || cur.Supervision.State != reviewAccepted {
+					t.Fatalf("structured research acceptance: %s, %v", res, err)
+				}
+				return
+			}
+			const deferred = "Revisit the sample when the next data set is available."
+			if _, err := review(map[string]any{"checks": checks, "deferred_scope": deferred}); err == nil ||
+				!strings.Contains(err.Error(), "deferred scope has no owner action") {
+				t.Fatalf("accepted with unhandled deferred scope: %v", err)
+			}
+			unrelated := createRequestAndPiece(t, s, "conv1", deferred, "", "", nil)
+			if _, err := review(map[string]any{"checks": checks, "deferred_scope": deferred, "follow_up_todo_id": unrelated.ID}); err == nil ||
+				!strings.Contains(err.Error(), "must be open and linked") {
+				t.Fatalf("accepted with an unrelated follow-up: %v", err)
+			}
+			followUp := createRequestAndPiece(t, s, "conv1", deferred, "", todo.ID, nil)
+			res, err := review(map[string]any{"checks": checks, "deferred_scope": deferred, "follow_up_todo_id": followUp.ID})
+			cur := todoNow(s, todo.ID)
+			if err != nil || cur.DoneAt == nil || cur.Supervision.State != reviewAccepted {
+				t.Fatalf("structured research acceptance: %s, %v", res, err)
+			}
+			if saved := triageLatestReview(cur.Supervision); saved.DeferredScope != deferred || saved.FollowUpTodoID != followUp.ID {
+				t.Fatalf("accepted review lost its linked handoff: %+v", saved)
+			}
+		})
+	}
+}
+
+func TestAcceptGuardStructuredContractKeepsOpenDecision(t *testing.T) {
+	s, todo, checks := testContractReviewTask(t, "work_mode", "research", "The available samples were analyzed.", false)
+	wait := reviewRaw(t, todo.ID, map[string]any{
+		"verdict": reviewNeedsUser, "why_owner": "only_owner_knows",
+		"reason": "Is there another sample?", "recommend": "Use the current samples",
+		"options": []DecisionOption{
+			{Label: "Use the current samples", LeadsTo: "Keep the report"},
+			{Label: "Add another sample", LeadsTo: "Include it in the analysis"},
+		},
+		"cost_of_waiting": "The report remains open.",
+	})
+	if _, err := s.runTool(t.Context(), "server", "conv1", "task_review", wait); err != nil {
+		t.Fatal(err)
+	}
+	if ask, ok := s.askCopy(todo.ID); !ok || !decisionOpen(&ask, todoNow(s, todo.ID)) {
+		t.Fatalf("review did not raise an open owner decision: %+v", ask)
+	}
+	raw := reviewRaw(t, todo.ID, map[string]any{"verdict": reviewAccepted, "checks": checks})
+	if _, err := s.runTool(t.Context(), "server", "conv1", "task_review", raw); err == nil ||
+		!strings.Contains(err.Error(), "owner request is still open") {
+		t.Fatalf("accepted with an open owner request: %v", err)
+	}
+	cur := todoNow(s, todo.ID)
+	if ask, ok := s.askCopy(todo.ID); !ok || !decisionOpen(&ask, cur) {
+		t.Fatalf("owner decision did not remain open: %+v, %+v", cur.Supervision, ask)
+	}
+}
+
 // An explicit non-done closeout status in the agent's report refuses the bare accept, while a report whose status is
 // done (or that has no status line) does not.
 func TestAcceptGuardRefusesNonDoneCloseout(t *testing.T) {

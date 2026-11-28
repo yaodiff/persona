@@ -408,7 +408,7 @@ struct TodosView: View {
         }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
-                Task { do { try await store.delete(id: todo.id) } catch { AppModel.shared.show(error) } }
+                Task { do { try await store.delete(id: todo.id) } catch { TodoStore.reportWriteFailure(error) } }
             } label: {
                 Label("Delete", systemImage: Theme.Icon.delete)
             }

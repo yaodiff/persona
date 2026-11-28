@@ -159,7 +159,7 @@ describe("SubagentPanel", () => {
       const moreBtn = host.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')!;
       act(() => moreBtn.click());
       const items = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-      expect(items.map((el) => el.textContent?.trim())).toEqual(["定位到调用处", "在独立页面打开"]);
+      expect(items.map((el) => el.textContent?.trim())).toEqual(["定位到调用处", "在独立页面中打开"]);
 
       // Clicking "定位到调用处" calls jumpToCall("tool-1")
       act(() => items[0]!.click());
@@ -169,7 +169,7 @@ describe("SubagentPanel", () => {
       hasCallAnswer = false;
       act(() => moreBtn.click());
       const itemsNoCall = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-      expect(itemsNoCall.map((el) => el.textContent?.trim())).toEqual(["在独立页面打开"]);
+      expect(itemsNoCall.map((el) => el.textContent?.trim())).toEqual(["在独立页面中打开"]);
 
       // Clicking "在独立页面打开" navigates to ?standalone=1 and closes panel
       act(() => itemsNoCall[0]!.click());

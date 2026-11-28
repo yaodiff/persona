@@ -4,6 +4,7 @@ import { Wire } from '../models/Wire';
 import { Colors } from '../design/Colors';
 import { tr } from '../design/Strings';
 import { Tokens } from '../design/Tokens';
+import { Haptics } from '../platform/Haptics';
 
 @ComponentV2
 export struct SessionComposerModeChip {
@@ -32,6 +33,7 @@ export struct SessionComposerModeChip {
   }
   private begin():void {
     if (!this.eligible() || this.modes.saving) return;
+    Haptics.selection();
     this.owner=this.stamp(); this.opened=true; this.onMenu(true); this.modes.load(this.model,!!this.modes.error);
   }
   private change(field:string,value:string):void {

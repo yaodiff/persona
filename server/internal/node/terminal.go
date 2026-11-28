@@ -52,16 +52,26 @@ var termMinGap = 30 * time.Millisecond
 // outgrows a whole screen, refresh (control streams of a host that can redraw) asks for a whole frame to replace it:
 // a slow link carries the latest screen, not every step on the way there.
 type frameGate struct {
-	mu      sync.Mutex
-	idle    *sync.Cond
-	send    func(host.Frame)
-	refresh func() // optional: ask the host for a whole frame of the screen as it is now
-	last    time.Time
-	busy    bool // a send is being written
-	pending *host.Frame
-	timer   *time.Timer
-	whole   int  // bytes of the last whole frame: what a screen costs on the wire
-	asked   bool // refresh asked, no whole frame since
+	mu       sync.Mutex
+	idle     *sync.Cond
+	send     func(host.Frame)
+	refresh  func() // optional: ask the host for a whole frame of the screen as it is now
+	minGap   time.Duration
+	last     time.Time
+	busy     bool // a send is being written
+	closed   bool // stream ended: reject further puts, arm no timers
+	pending  *host.Frame
+	timer    *time.Timer
+	timerGen uint64
+	whole    int  // bytes of the last whole frame: what a screen costs on the wire
+	asked    bool // refresh asked, no whole frame since
+}
+
+func (g *frameGate) gap() time.Duration {
+	if g.minGap > 0 {
+		return g.minGap
+	}
+	return termMinGap
 }
 
 // gateBudget: waiting diffs past this (or past a whole screen, when that is larger) ask for a whole frame instead.
@@ -70,6 +80,9 @@ const gateBudget = 16 << 10
 func (g *frameGate) put(f host.Frame) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.closed {
+		return
+	}
 	if f.Full {
 		g.whole, g.asked = len(f.Data), false
 	}
@@ -78,9 +91,9 @@ func (g *frameGate) put(f host.Frame) {
 			g.pending = &f
 			return
 		}
-		if wait := termMinGap - time.Since(g.last); wait > 0 {
+		if wait := g.gap() - time.Since(g.last); wait > 0 {
 			g.pending = &f
-			g.timer = time.AfterFunc(wait, g.flush)
+			g.armLocked(wait)
 			return
 		}
 		g.start(f)
@@ -98,13 +111,51 @@ func (g *frameGate) put(f host.Frame) {
 	}
 }
 
+// armLocked schedules one rate-limit timer if none is armed and the gate is still open. Called with g.mu held.
+func (g *frameGate) armLocked(wait time.Duration) {
+	if g.timer != nil || g.closed {
+		return
+	}
+	g.timerGen++
+	gen := g.timerGen
+	g.timer = time.AfterFunc(wait, func() { g.onTimer(gen) })
+}
+
+// stopTimerLocked cancels any armed timer and invalidates callbacks from earlier generations. Called with g.mu held.
+func (g *frameGate) stopTimerLocked() {
+	g.timerGen++
+	if g.timer != nil {
+		g.timer.Stop()
+		g.timer = nil
+	}
+}
+
+func (g *frameGate) onTimer(gen uint64) {
+	g.mu.Lock()
+	if g.closed || g.timerGen != gen {
+		g.mu.Unlock()
+		return
+	}
+	g.timer = nil
+	if g.busy || g.pending == nil {
+		g.mu.Unlock()
+		return
+	}
+	f := *g.pending
+	g.pending, g.busy, g.last = nil, true, time.Now()
+	g.mu.Unlock()
+	g.deliver(f, false)
+}
+
 // start sends f on a goroutine of its own and keeps sending what waited meanwhile. Called with g.mu held.
 func (g *frameGate) start(f host.Frame) {
 	g.busy, g.last = true, time.Now()
-	go g.deliver(f)
+	go g.deliver(f, false)
 }
 
-func (g *frameGate) deliver(f host.Frame) {
+// deliver sends f and drains queued frames. When drain is true (or the gate is closed), it sends all buffered
+// frames immediately without arming a rate-limit timer.
+func (g *frameGate) deliver(f host.Frame, drain bool) {
 	for {
 		g.send(f)
 		g.mu.Lock()
@@ -112,12 +163,12 @@ func (g *frameGate) deliver(f host.Frame) {
 			g.done()
 			return
 		}
-		if wait := termMinGap - time.Since(g.last); wait > 0 {
-			if g.timer == nil {
-				g.timer = time.AfterFunc(wait, g.flush)
+		if !drain && !g.closed {
+			if wait := g.gap() - time.Since(g.last); wait > 0 {
+				g.armLocked(wait)
+				g.done()
+				return
 			}
-			g.done()
-			return
 		}
 		f, g.pending, g.last = *g.pending, nil, time.Now()
 		g.mu.Unlock()
@@ -133,28 +184,46 @@ func (g *frameGate) done() {
 	g.mu.Unlock()
 }
 
-// flush sends what is held: when the gap is up, and when the stream ends (it waits for a send under way, so the last
-// frame is out before the caller goes on to say the stream ended).
+// flush sends what is held now, waiting for any send under way without leaving a timer armed.
 func (g *frameGate) flush() {
+	g.drain(false, true)
+}
+
+// close ends the gate: further puts are ignored, any timer is stopped, any send under way completes, and
+// already-buffered frames are sent before close returns.
+func (g *frameGate) close() {
+	g.drain(true, true)
+}
+
+// discard ends the gate without sending buffered frames, waiting for any send under way to finish.
+func (g *frameGate) discard() {
+	g.drain(true, false)
+}
+
+func (g *frameGate) drain(closeGate, sendPending bool) {
 	g.mu.Lock()
+	if closeGate {
+		g.closed = true
+		if !sendPending {
+			g.pending = nil
+		}
+	}
+	g.stopTimerLocked()
 	if g.idle == nil {
 		g.idle = sync.NewCond(&g.mu)
 	}
 	for g.busy {
 		g.idle.Wait()
 	}
-	if g.timer != nil {
-		g.timer.Stop()
-		g.timer = nil
-	}
-	if g.pending == nil {
+	g.stopTimerLocked()
+	if !sendPending || g.pending == nil {
 		g.mu.Unlock()
 		return
 	}
 	f := *g.pending
 	g.pending, g.busy, g.last = nil, true, time.Now()
 	g.mu.Unlock()
-	g.deliver(f)
+	g.deliver(f, true)
 }
 
 func joinFrameData(a, b string) string {
@@ -349,7 +418,7 @@ func (n *Node) terminalControl(ctx context.Context, id string, ctlr host.Control
 	s := &termStream{cancel: cancel, lease: time.Now(), leaseFor: termLease, home: home}
 	epoch := strconv.FormatInt(time.Now().UnixNano(), 36)
 	frames, replay := 0, 0
-	gate := &frameGate{send: func(f host.Frame) {
+	gate := &frameGate{minGap: termMinGap, send: func(f host.Frame) {
 		if s.isLeaving() {
 			return
 		}
@@ -380,6 +449,7 @@ func (n *Node) terminalControl(ctx context.Context, id string, ctlr host.Control
 	// the host (herdr: controlWait).
 	c, err := ctlr.Control(context.WithoutCancel(sctx), pane, p.Cols, p.Rows, p.Takeover, gate.put)
 	if err != nil {
+		gate.discard()
 		cancel()
 		if handedOver { // the control before let go at the phone's size for this one, which did not come
 			go giveBack(ctlr, pane, home)
@@ -441,7 +511,7 @@ func (n *Node) controlLoop(ctx context.Context, id string, s *termStream, gate *
 	for why == nil {
 		select {
 		case <-ctx.Done():
-			gate.flush()
+			gate.close()
 			s.letGo(c)
 			return
 		case <-c.Done():
@@ -452,7 +522,7 @@ func (n *Node) controlLoop(ctx context.Context, id string, s *termStream, gate *
 			}
 		}
 	}
-	gate.flush()
+	gate.close()
 	s.letGo(c)
 	n.mu.Lock()
 	mine := n.terms[id] == s
@@ -606,7 +676,7 @@ func (n *Node) observeOnce(ctx context.Context, id string) (int, error) {
 	}()
 	epoch := strconv.FormatInt(time.Now().UnixNano(), 36)
 	frames, replay := 0, 0
-	gate := &frameGate{send: func(f host.Frame) {
+	gate := &frameGate{minGap: termMinGap, send: func(f host.Frame) {
 		frames++
 		if f.Full {
 			replay = 0
@@ -622,7 +692,7 @@ func (n *Node) observeOnce(ctx context.Context, id string) (int, error) {
 		}
 	}}
 	err = st.Observe(octx, ref, cols, rows, gate.put)
-	gate.flush() // waits for a send under way, then sends what is held
+	gate.close() // stops future puts and timers, waits for any send under way, and drains what is held
 	gate.mu.Lock()
 	sent := frames
 	gate.mu.Unlock()

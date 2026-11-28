@@ -73,7 +73,7 @@ describe("ChildSessionCard: the two lines", () => {
     const h = html();
     expect(h).toContain('data-child-card="running"');
     expect(h).toContain('data-tool-use="child:kid"');
-    expect(h).toContain(">子智能体<");
+    expect(h).toContain(">子 Agent<");
     expect(h).toContain(">Review the session handling<");
     expect(h).toContain('data-task-status="running"');
     expect(h).toContain(">Codex<");
@@ -106,7 +106,7 @@ describe("ChildSessionCard: the two lines", () => {
     upsertSession(kid({ title: "" }));
     const h = html({ lineStyle: "assistant" });
     expect(h).not.toContain(">Codex<");
-    expect(h).toContain(">子智能体任务<");
+    expect(h).toContain(">子 Agent 任务<");
     upsertSession(kid({ title: "x".repeat(200) }));
     expect(html()).toContain(`>${"x".repeat(95)}…<`);
   });
@@ -225,7 +225,7 @@ describe("ChildSessionCard: opened in place", () => {
     await flush();
     expect(host.querySelector("[data-child-card]")?.getAttribute("data-tool-use")).toBe("child:box/remote-kid");
     const btn = host.querySelector<HTMLButtonElement>("[data-subagent-view-full]");
-    expect(btn?.textContent).toBe("查看完整");
+    expect(btn?.textContent).toBe("查看完整内容");
     act(() => btn!.click());
     expect(getPanel()).toEqual({ kind: "subagent", mid: "box", sid: "remote-kid", parentMid: "mac", parentSid: "p", from: "card" });
     closePanel();

@@ -404,7 +404,12 @@ func (s *Service) makeTitle(ctx context.Context, started time.Time, first, reply
 	for {
 		cctx, cancel := context.WithTimeout(ctx, titleCallTimeout)
 		input := prompts.RenderSessionTitleInput(prompts.SessionTitleInput{SessionTitle: titlePrompt, First: first, Reply: reply, Retry: retry, Source: hint})
-		r, err := model.Chat(cctx, ai.Request{System: system, Messages: []ai.Message{{Role: ai.RoleUser, Content: input}}, MaxTokens: room})
+		r, err := model.Chat(cctx, ai.Request{
+			System:          system,
+			Messages:        []ai.Message{{Role: ai.RoleUser, Content: input}},
+			MaxTokens:       room,
+			DisableThinking: true,
+		})
 		cancel()
 		switch {
 		case err != nil && ai.Transient(err) && !failed && ctx.Err() == nil:
@@ -422,15 +427,22 @@ func (s *Service) makeTitle(ctx context.Context, started time.Time, first, reply
 		case r.Truncated:
 			return fallback(false)
 		}
-		kind, topic, ok := parseTitleMax(r.Text, max)
-		if ok {
+		// A relay that surfaces the model's reasoning as text can answer with a cut-off monologue line (title_guard.go).
+		// It is never accepted as the topic, not even with a known kind prefix; it spends the same one format retry.
+		cleaned := stripTitleThinking(r.Text)
+		leaked := titleReplyIsThinkingLeak(cleaned)
+		kind, topic, ok := parseTitleMax(cleaned, max)
+		if ok && !leaked {
 			return day + " | " + kind + " | " + topic, true
 		}
 		if misformed {
-			if kind != "" { // a known kind and a topic that is still too long: cut it
+			if kind != "" && !leaked { // a known kind and a topic that is still too long: cut it
 				return day + " | " + kind + " | " + cutRunes(topic, max), true
 			}
 			return fallback(true)
+		}
+		if leaked {
+			s.logf("title: dropped thinking leakage %q (asking once more)", cutRunes(oneLine(r.Text), 80))
 		}
 		misformed, retry = true, cutRunes(oneLine(r.Text), 60)
 	}

@@ -211,7 +211,7 @@ describe("a Persona conversation's own approval card (#4883)", () => {
     // the tray starts closed, and the card is there anyway
     expect(host.querySelector("[data-tray-list]")).toBeNull();
     expect(card()).not.toBeNull();
-    expect(tray()?.contains(card())).toBe(false);
+    expect(host.querySelector("[data-decision-pager]")?.contains(card())).toBe(true);
     expect(card()?.textContent).toContain(t("chat-interactions.permission_kicker"));
     expect(card()?.textContent).toContain("ssh vps");
     expect(button(t("chat-interactions.allow"))).toBeDefined();
@@ -285,7 +285,7 @@ describe("a Persona conversation's own approval card (#4883)", () => {
 
   it("labels the next-unanswered entry in all three languages", () => {
     expect(enTasks.next_unanswered).toBe("Next waiting for your answer");
-    expect(zhTasks.next_unanswered).toBe("下一条等你回复");
+    expect(zhTasks.next_unanswered).toBe("下一条待你回复");
     expect(jaTasks.next_unanswered).toBe("次の回答待ち");
   });
 
@@ -304,43 +304,68 @@ describe("a Persona conversation's own approval card (#4883)", () => {
   });
 
   it("says it waits for the user's approval, in every language", () => {
-    expect(zh.permission_kicker).toBe("在等你批准");
+    expect(zh.permission_kicker).toBe("等待你的批准");
     expect(en.permission_kicker).toBe("Waiting for your approval");
     expect(ja.permission_kicker).toBe("承認を待っています");
   });
 });
 
-// An approval the chat's own turn waits on is never folded behind a capsule (#11794): the chat cannot go on until it is
-// answered, so it stands open above Needs you / In progress, every one of them, and Needs you does not count it again.
+// An approval the chat's own turn waits on starts in the visible decision pager. Needs you does not need a second copy.
 // A worker's or side session's card does not hold the turn and stays folded in the stack and behind Needs you.
 describe("cards the chat's own turn waits on", () => {
-  const above = () => host.querySelector("[data-turn-asks]");
-  const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-
-  it("stand open above the capsules, all of them, outside Needs you", async () => {
+  it("keeps an unavailable skip outside the answers and hand-back available without Skip", async () => {
     Object.assign(getState(), { interactions: [bash, question], answered: {} });
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
     await flush();
-    // both are drawn at once: no position chip, no "N pending" line folds the second away
+    const disabledSkip = card(bash.id)?.querySelector<HTMLButtonElement>("[data-decision-actions] button[disabled]");
+    expect(disabledSkip).not.toBeNull();
+    expect(disabledSkip?.hasAttribute("data-card-answer")).toBe(false);
+    expect(card(bash.id)?.querySelector(`[aria-label="${t("chat-interactions.hand_back")}"]`)).not.toBeNull();
+    act(() => above()!.querySelector<HTMLButtonElement>(`[aria-label="${t("assistant-tasks.next_decision")}"]`)!.click());
+    expect(card(question.id)?.querySelector(`[aria-label="${t("chat-interactions.hand_back")}"]`)).not.toBeNull();
+  });
+
+  it("hands an approval back from the pager when Skip is unavailable", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    const handBack = card(bash.id)?.querySelector<HTMLButtonElement>(`[aria-label="${t("chat-interactions.hand_back")}"]`);
+    expect(handBack).not.toBeNull();
+    act(() => handBack!.click());
+    await flush();
+    expect(resolves()).toHaveLength(1);
+    expect(JSON.parse(String((resolves()[0][1] as RequestInit).body))).toEqual({ dismiss: true });
+  });
+
+  const above = () => host.querySelector("[data-decision-pager]");
+  const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("opens above the capsules and pages between requests without opening Needs you", async () => {
+    Object.assign(getState(), { interactions: [bash, question], answered: {} });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
     expect(above()?.contains(card(bash.id))).toBe(true);
+    expect(card(question.id)).toBeNull();
+    const next = above()!.querySelector<HTMLButtonElement>(`[aria-label="${t("assistant-tasks.next_decision")}"]`)!;
+    act(() => next.click());
     expect(above()?.contains(card(question.id))).toBe(true);
+    expect(card(bash.id)).toBeNull();
     expect(host.querySelector("[data-chat-cards-position]")).toBeNull();
     expect(host.querySelector("[data-chat-cards-fold]")).toBeNull();
     // above the capsules, and the tray is closed
     const needs = host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!;
     expect(before(above()!, needs)).toBe(true);
-    expect(tray()?.contains(above())).toBe(false);
+    expect(tray()?.contains(above())).toBe(true);
     expect(host.querySelector("[data-tray-list]")).toBeNull();
     // the cards give up their height and scroll in their own box; the capsules under them never shrink out of view
-    expect(above()?.className).toContain("overflow-y-auto");
-    expect(tray()?.classList.contains("shrink-0")).toBe(true);
+    expect(above()?.querySelector("[data-scroll-box]")?.className).toContain("overflow-y-auto");
     // answerable in place, and not counted or listed behind the capsule as well
-    expect(card(bash.id)!.querySelector("button")).not.toBeNull();
+    expect(card(question.id)!.querySelector("button")).not.toBeNull();
     expect(needs.textContent).toBe(t("assistant-tasks.tray_needs_you"));
     expect(nextOwn()).toBeNull();
     act(() => needs.click());
     expect(host.querySelector(`[data-own-ask="${bash.id}"]`)).toBeNull();
-    expect(host.querySelectorAll(`[data-card="${bash.id}"]`)).toHaveLength(1);
+    expect(above()).toBeNull();
+    expect(host.querySelectorAll(`[data-card="${bash.id}"]`)).toHaveLength(0);
   });
 
   it("leave the other cards folded as before", async () => {
@@ -363,5 +388,57 @@ describe("cards the chat's own turn waits on", () => {
     expect(host.querySelector(`[data-own-ask="${workerBash.id}"]`)).not.toBeNull();
     expect(host.querySelector(`[data-own-ask="${workerQuestion.id}"]`)).not.toBeNull();
     expect(host.querySelector(`[data-own-ask="${bash.id}"]`)).toBeNull();
+  });
+});
+
+describe("background supervisor interactions in main chat", () => {
+  const bgBash = {
+    id: "ix_bg_bash",
+    machine_id: "m1",
+    session_id: "bg1",
+    session_title: "assistant",
+    kind: "permission",
+    tool_name: "ATS",
+    tool_input: { command: "ats GET /tasks/task_75", description: "Read ATS task" },
+    created_at: "2020-01-01T00:00:00Z",
+  } as Interaction;
+
+  it("surfaces a background supervisor permission card above the main chat composer and resolves Allow", async () => {
+    upsertSession({ machine_id: "hub", session_id: "c1", title: "Persona", status: "idle", state: "idle", assistant: true, agent: "claude" } as Session);
+    upsertSession({ machine_id: "m1", session_id: "bg1", title: "assistant", status: "working", state: "needs_you", assistant: true, agent: "claude" } as Session);
+    Object.assign(getState(), {
+      assistant: { machine_id: "hub", main: "c1", background_supervisor: "bg1", conversations: [] },
+      interactions: [bgBash],
+      answered: {},
+    });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    const bgCard = card(bgBash.id);
+    expect(bgCard).not.toBeNull();
+    expect(bgCard!.textContent).toContain(t("assistant-conversations.background_supervisor"));
+    expect(button(t("chat-interactions.allow"))).toBeDefined();
+    act(() => button(t("chat-interactions.allow"))!.click());
+    await flush();
+    const resolveCalls = fetcher.mock.calls.filter(([url]) => String(url).endsWith(`/interactions/${bgBash.id}/resolve`));
+    expect(resolveCalls).toHaveLength(1);
+    expect(JSON.parse(String((resolveCalls[0][1] as RequestInit).body))).toMatchObject({ allow: true });
+  });
+
+  it("does not surface supervisor-held delegating permission cards or leak cards into non-main chats", async () => {
+    const heldBgBash = { ...bgBash, id: "ix_bg_held", delegating: true } as Interaction;
+    upsertSession({ machine_id: "hub", session_id: "other", title: "Other", status: "idle", state: "idle", assistant: true, agent: "claude" } as Session);
+    Object.assign(getState(), {
+      assistant: { machine_id: "hub", main: "c1", background_supervisor: "bg1", conversations: [] },
+      interactions: [heldBgBash],
+      answered: {},
+    });
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(card(heldBgBash.id)).toBeNull();
+
+    Object.assign(getState(), { interactions: [bgBash], answered: {} });
+    act(() => root.render(<ChatView mid="hub" sid="other" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(card(bgBash.id)).toBeNull();
   });
 });

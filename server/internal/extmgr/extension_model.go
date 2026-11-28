@@ -157,6 +157,9 @@ func (h *Manager) switchExtension(w http.ResponseWriter, r *http.Request, p *ext
 			writeExtensionChangeError(w, r, http.StatusConflict, "read_only", err)
 			return nil, false
 		}
+		if len(p.Full.Items("text_lookup")) > 0 {
+			h.textLookupChanged()
+		}
 		return nil, true
 	}
 	cur := ps.reg.Snapshot(id)

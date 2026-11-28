@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="shortcuts_widget_label">Agents</string>
     <string name="shortcuts_widget_description">あなたの対応待ち・作業中・完了したエージェント</string>
+    <string name="shortcuts_ask_widget_description">Personaとのメインチャットを開いてすぐに入力</string>
+    <string name="shortcuts_ask_widget_subtitle">メインチャット</string>
     <string name="shortcuts_approve_title">最初の保留中を承認</string>
     <string name="shortcuts_loading">対応待ちを確認しています…</string>
     <string name="shortcuts_not_paired">まだペアリングされていません。Personaを開いて、ハブのペアリング用QRコードをスキャンしてください。</string>
@@ -41,4 +44,37 @@
     <string name="shortcuts_new_todo_label">新しいToDo</string>
     <string name="shortcuts_new_todo_title">PersonaでToDoを作成</string>
     <string name="shortcuts_open_session">%1$sを開く</string>
+    <string name="shortcuts_main_chat_widget_label">Persona チャット</string>
+    <string name="shortcuts_main_chat_widget_description">メインチャットの状況、要対応事項、クイック質問</string>
+    <string name="shortcuts_main_chat_status_needs_you">要対応 · %1$d</string>
+    <string name="shortcuts_main_chat_status_thinking">考え中</string>
+    <string name="shortcuts_main_chat_unpaired_hint">Personaを開いてハブに接続</string>
+    <string name="shortcuts_main_chat_idle_greeting">いつでも話しかけてください。</string>
+    <string name="shortcuts_main_chat_working_fallback">リクエストを処理しています…</string>
+    <string name="shortcuts_main_chat_ask_hint">Personaに質問…</string>
+    <string name="shortcuts_main_chat_pending_plan">プランの承認待ち</string>
+    <string name="shortcuts_main_chat_pending_permission">承認を待っています</string>
+    <string name="shortcuts_main_chat_pending_question">質問があります</string>
+    <string name="shortcuts_main_chat_pending_screen">ターミナルで対応が必要です</string>
+    <string name="shortcuts_main_chat_pending_default">要対応</string>
+    <string name="shortcuts_main_chat_todo_needs_you">要対応</string>
+    <string name="shortcuts_main_chat_todo_review">確認待ち</string>
+    <string name="shortcuts_main_chat_todo_stuck">停止中</string>
+    <string name="shortcuts_main_chat_todo_working">進行中</string>
+    <string name="shortcuts_main_chat_todo_planned">未開始</string>
+    <string name="shortcuts_widget_configure_title">会話を選択</string>
+    <string name="shortcuts_widget_configure_search_hint">会話を検索…</string>
+    <string name="shortcuts_widget_configure_section_main">メインチャット</string>
+    <string name="shortcuts_widget_configure_section_directions">常駐の方向性</string>
+    <string name="shortcuts_widget_configure_section_others">その他の会話</string>
+    <string name="shortcuts_widget_configure_main_chat">メインチャット</string>
+    <string name="shortcuts_widget_configure_main_chat_subtitle">常にメインの Persona 会話を表示します</string>
+    <string name="shortcuts_widget_configure_untitled">無題の会話</string>
+    <string name="shortcuts_widget_configure_selected">選択中</string>
+    <string name="shortcuts_widget_configure_offline_notice">オフラインです。キャッシュ済みの会話を表示しています。</string>
+    <string name="shortcuts_widget_configure_unpaired_notice">未ペアリングです。メインチャットを選んで後から接続できます。</string>
+    <string name="shortcuts_widget_configure_no_matches">一致する会話がありません</string>
+    <string name="shortcuts_widget_configure_no_matches_hint">別のキーワードを試すか検索をクリアしてください。</string>
+    <string name="shortcuts_widget_binding_missing_hint">この会話はアーカイブまたは削除されました。タップして再選択してください。</string>
+    <string name="shortcuts_widget_binding_missing_short">利用不可 · タップで再選択</string>
 </resources>

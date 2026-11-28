@@ -133,5 +133,7 @@
   "market_unread": "マーケットを読み込めると、ここに拡張機能が表示されます。",
   "token_create_hint": "トークンがない場合はGitHubで作成できます。名前・用途・1年の有効期限は入力済みで、権限は不要です。Generate tokenを押し、コピーして上に貼り付けてください。",
   "token_create": "GitHubで作成",
-  "for_manager": "アシスタント「{name}」の分だけを変更します（アシスタントごとに拡張機能があります）。"
+  "for_manager": "アシスタント「{name}」の分だけを変更します（アシスタントごとに拡張機能があります）。",
+  "newer_incompatible_title": "新しいバージョン {version} は現在の Persona に対応していません",
+  "newer_incompatible_inline": "新しいバージョン {version} は非対応：{reason}"
 }

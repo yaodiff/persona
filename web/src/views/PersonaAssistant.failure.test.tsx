@@ -69,8 +69,8 @@ describe("PersonaAssistant 主对话 hub 读失败 (#5174)", () => {
     });
     await flush();
 
-    expect(host.textContent).not.toContain("有什么要我做的？");
-    expect(host.textContent).toContain("没读到主对话：HTTP 503: Service Unavailable");
+    expect(host.textContent).not.toContain("有什么我可以帮你的？");
+    expect(host.textContent).toContain("无法加载主对话：HTTP 503: Service Unavailable");
     const retryBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("重试"));
     expect(retryBtn).toBeDefined();
   });
@@ -120,6 +120,6 @@ describe("PersonaAssistant 主对话 hub 读失败 (#5174)", () => {
     });
     await flush();
 
-    expect(host.textContent).toContain("有什么要我做的？");
+    expect(host.textContent).toContain("有什么我可以帮你的？");
   });
 });

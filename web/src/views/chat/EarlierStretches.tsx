@@ -156,30 +156,38 @@ export default memo(function EarlierStretches({
   lastSplit.current = split;
 
   const expandOther = useCallback(
-    async (s: string, fold: Item) => {
-      if (!fold.fold) return;
+    async (s: string, fold: Item): Promise<boolean> => {
+      if (!fold.fold) return true;
       const g = gen.current;
       let from = fold.seq;
       const out: Item[] = [];
+      let complete = false;
       for (let n = 0; n < 20; n++) {
         const p = await (callbacks.current.loadFoldPage ?? defaultLoadFoldPage)({ mid, sid: s, fromSeq: from, throughSeq: fold.fold.through_seq });
-        if (g !== gen.current) return;
-        out.push(...(p.items ?? []));
-        if (!p.more || !p.items?.length) break;
-        from = p.items[p.items.length - 1].seq + 1;
+        if (g !== gen.current) return false;
+        const batch = p.items ?? [];
+        out.push(...batch);
+        if (!p.more || !batch.length) {
+          complete = !p.more;
+          break;
+        }
+        from = batch[batch.length - 1].seq + 1;
       }
       const scoped = out.filter((i) => insideFold(i, fold));
-      setState((st) => {
-        const base = st.scope === scope ? st.stores : NO_STORES;
-        const cur = base[s];
-        return cur ? { scope, stores: { ...base, [s]: { ...cur, items: mergeItems(cur.items, scoped) } } } : st;
-      });
+      if (scoped.length) {
+        setState((st) => {
+          const base = st.scope === scope ? st.stores : NO_STORES;
+          const cur = base[s];
+          return cur ? { scope, stores: { ...base, [s]: { ...cur, items: mergeItems(cur.items, scoped) } } } : st;
+        });
+      }
+      return complete && scoped.length > 0;
     },
     [mid, scope],
   );
   // one function per session, the same while the conversation is (a stretch's lines keep their memo)
   const folds = useMemo(() => {
-    const out = new Map<string, (fold: Item) => Promise<void>>();
+    const out = new Map<string, (fold: Item) => Promise<boolean>>();
     for (const w of windows) if (w.sid !== sid && !out.has(w.sid)) out.set(w.sid, (fold) => expandOther(w.sid, fold));
     return out;
   }, [windows, sid, expandOther]);

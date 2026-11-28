@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/botport"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -63,8 +63,8 @@ const (
 	botHandoffKeyPrefix = "ho:"
 )
 
-// BotHandoffPolicy is who the bot answers without asking first, and who it never answers.
-type BotHandoffPolicy struct {
+// botHandoffPolicy is who the bot answers without asking first, and who it never answers.
+type botHandoffPolicy struct {
 	Off          bool     `json:"off,omitempty"`           // refuse every handoff
 	DirectChats  []string `json:"direct_chats,omitempty"`  // the bot answers without asking first
 	BlockedChats []string `json:"blocked_chats,omitempty"` // never; wins over everything
@@ -89,6 +89,9 @@ func (s FeishuBotSettings) handoffView() *botHandoffView {
 // handoffDelivery says how a handoff for chatID is answered: direct, or confirm (the owner approves first). A refusal
 // is the error code (handoff_off, chat_blocked); delivery is then "".
 func (s FeishuBotSettings) handoffDelivery(chatID string) (delivery assistantwire.FeishuHandoffDelivery, refusal string) {
+	if s.groupChatBlocked(chatID) {
+		return "", "chat_blocked"
+	}
 	h := s.Handoff
 	if h != nil && slices.Contains(h.BlockedChats, chatID) {
 		return "", "chat_blocked"
@@ -178,7 +181,7 @@ func (h *Manager) setHandoffPolicy(ctx context.Context, raw json.RawMessage, app
 		return err
 	}
 	before := b.set.Handoff
-	next := BotHandoffPolicy{}
+	next := botHandoffPolicy{}
 	if before != nil {
 		next = *before
 		next.DirectChats, next.BlockedChats = slices.Clone(before.DirectChats), slices.Clone(before.BlockedChats)
@@ -212,7 +215,7 @@ func (h *Manager) setHandoffPolicy(ctx context.Context, raw json.RawMessage, app
 	return nil
 }
 
-func handoffPolicyEqual(a, b *BotHandoffPolicy) bool {
+func handoffPolicyEqual(a, b *botHandoffPolicy) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
@@ -276,7 +279,7 @@ type botHandoffError struct {
 
 func (e *botHandoffError) Error() string { return e.err.Error() }
 
-var botHandoffRefPattern = regexp.MustCompile(`^[A-Za-z0-9:._-]+$`)
+var botHandoffRefPattern = lazyre.New(`^[A-Za-z0-9:._-]+$`)
 
 // handoffInvalid refuses one field of a handoff.
 func handoffInvalid(field string) *botHandoffError {

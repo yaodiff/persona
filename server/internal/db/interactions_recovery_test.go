@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"slices"
 	"testing"
 	"time"
 
@@ -62,7 +61,7 @@ func TestInteractionStartupKeepsNewAndReclaimedCards(t *testing.T) {
 	defer pool.Close()
 	restarting := &DB{pool: pool}
 	kept, cancelled, err := restarting.ExpireStaleInteractions(ctx)
-	if err != nil || called != 1 || len(kept) != 1 || kept[0].ID != "already-resumable" || !slices.Equal(cancelled, []string{"stale"}) {
+	if err != nil || called != 1 || len(kept) != 1 || kept[0].ID != "already-resumable" || len(cancelled) != 1 || cancelled[0].ID != "stale" {
 		t.Fatalf("restart kept=%+v cancelled=%v concurrent updates=%d err=%v", kept, cancelled, called, err)
 	}
 	for _, id := range []string{"already-resumable", "reclaimed", "new-review", "new-question"} {

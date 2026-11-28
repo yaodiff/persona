@@ -289,3 +289,30 @@ struct InboxPolicyModelTests {
         #expect(toasts.map(\.message) == ["规则没加载出来：坏了"])
     }
 }
+
+extension InboxPolicyModelTests {
+    @Test func aRuleSaveFromAnEarlierVisitCannotRollBackAnItemWithTheSameID() async throws {
+        let original = try Self.item("overlap"), current = try Self.item("overlap", tier: "action", status: "action")
+        let hub = FakeHub()
+        let inbox = Inbox([original])
+        var visit: UInt64 = 1
+        var dependencies = deps(hub, inbox)
+        dependencies.currentVisit = { visit }
+        hub.on("GET", "/api/v1/inbox/policies", json: #"{"policies":[]}"#)
+        hub.on("POST", "/api/v1/inbox/policies") { _ in
+            // Simulate visiting another hub and returning before the original write fails.
+            visit += 2
+            inbox.items = [current]
+            throw URLError(.timedOut)
+        }
+        let option = try #require(original.mutes?.first)
+        let sheet = InboxPolicyModel(target: .init(item: original, option: option), deps: dependencies)
+        await sheet.load()
+        sheet.tier = .noise
+        #expect(!(await sheet.save()))
+        #expect(inbox.items == [current] && inbox.toasts.isEmpty)
+        #expect(!sheet.canSave)
+        #expect(!(await sheet.save()))
+        #expect(hub.sent("POST", "/api/v1/inbox/policies").count == 1)
+    }
+}

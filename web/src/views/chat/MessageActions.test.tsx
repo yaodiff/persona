@@ -59,8 +59,8 @@ describe("moreActions", () => {
   it("branches off at the reply it is on", () => {
     const got: string[] = [];
     const [fork] = moreActions("u1#0", (id) => got.push(id));
-    expect(fork?.label).toBe("开启一个新会话");
-    expect(moreActions("u1#0", () => {}, true)[0]?.label).toBe("开启一个新对话");
+    expect(fork?.label).toBe("开启新会话");
+    expect(moreActions("u1#0", () => {}, true)[0]?.label).toBe("开启新对话");
     fork?.onSelect();
     expect(got).toEqual(["u1#0"]);
   });
@@ -85,10 +85,10 @@ describe("rewindActions", () => {
   const run = async () => {};
   it("has the two choices, the second a danger that asks again", () => {
     const [rewind] = rewindActions("u1#0", "继续", { block: "", run });
-    expect(rewind.label).toBe("回退到这里");
+    expect(rewind.label).toBe("回退至此处");
     expect(rewind.disabled).toBe(false);
     const [conv, code] = rewind.children as { label: string; danger?: boolean; confirm?: string; inline?: boolean }[];
-    expect([conv.label, code.label]).toEqual(["只回退对话", "回退代码和对话"]);
+    expect([conv.label, code.label]).toEqual(["仅回退对话", "回退代码和对话"]);
     expect(conv.danger).toBeUndefined();
     expect(conv.confirm).toBeUndefined();
     expect(code.danger).toBe(true);

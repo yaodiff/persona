@@ -102,6 +102,56 @@ func TestTypedAnswerResolvesTheCard(t *testing.T) {
 	}
 }
 
+func TestTypedAnswerUsesOnlyTheDisplayedOccurrence(t *testing.T) {
+	needsLarkLayer(t)
+	first := qCard("ix_occurrence", false, "first yes", "first no")
+	first.CreatedAt = time.Date(2026, 11, 24, 10, 0, 0, 123456789, time.UTC)
+	replacement := qCard("ix_occurrence", false, "replacement yes", "replacement no")
+	replacement.CreatedAt = first.CreatedAt.Add(time.Second)
+
+	s, f, _, _, resolves := textAnswerBot(t, nil, replacement)
+	seedCard(s, first)
+	if !botAnswer(t, s, f, "om_stale", "2", "oa_stale", "", "") {
+		t.Fatal("the typed answer was not consumed")
+	}
+	if len(*resolves) != 0 {
+		t.Fatalf("an answer constructed from the first question resolved its replacement: %+v", *resolves)
+	}
+
+	s, f, _, _, resolves = textAnswerBot(t, nil, first)
+	seedCard(s, first)
+	if !botAnswer(t, s, f, "om_current", "2", "oa_current", "", "") || len(*resolves) != 1 {
+		t.Fatalf("the current occurrence was not answered: %+v", *resolves)
+	}
+	if got := (*resolves)[0]["created_at"]; got != first.CreatedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("typed resolve occurrence = %v, want %s", got, first.CreatedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestTypedAnswerEndedLookupKeepsReplacementLedger(t *testing.T) {
+	needsLarkLayer(t)
+	first := qCard("ix_ended_occurrence", false, "first yes", "first no")
+	first.CreatedAt = time.Date(2026, 11, 25, 2, 0, 0, 123456789, time.UTC)
+	replacement := qCard(first.ID, false, "replacement yes", "replacement no")
+	replacement.CreatedAt = first.CreatedAt.Add(time.Second)
+
+	s, f, _, _, _ := textAnswerBot(t, nil)
+	seedCard(s, first)
+	f.answerAppBlocking(AppInteractions, InteractionsGet, func(json.RawMessage) (any, error) {
+		// The old occurrence's lookup returns ended, but its replacement arrives
+		// before the old answer's optimistic ledger cleanup runs.
+		seedCard(s, replacement)
+		return map[string]any{"ok": false, "status": "cancelled"}, nil
+	})
+	if !botAnswer(t, s, f, "om_ended_stale", "2", "oa_ended_stale", "", "") {
+		t.Fatal("the old occurrence's typed answer was not consumed")
+	}
+	got, ok := chatCard(s, first.ID)
+	if !ok || got.MessageID != "om_"+first.ID || !got.Ix.CreatedAt.Equal(replacement.CreatedAt) {
+		t.Fatalf("the old occurrence's ended lookup removed its replacement: ok=%v card=%+v", ok, got)
+	}
+}
+
 // Non-options/no-action/plan/form messages stay for the agent; over-elsewhere handled and swallowed; failed resolve keeps waiting.
 func TestTypedAnswerGuards(t *testing.T) {
 	needsLarkLayer(t) // the chat is the lark module's

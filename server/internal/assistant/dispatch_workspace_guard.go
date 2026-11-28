@@ -1,10 +1,32 @@
 package assistant
 
 import (
+	"context"
 	"path"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func (s *Service) autoTaskUsesAssistantWorkspace(ctx context.Context, t *PlanTask) bool {
+	existing := ""
+	if t.Workspace != nil && t.Workspace.Mode == workspaceExisting {
+		existing = t.Workspace.Existing
+	}
+	for _, dir := range []string{t.Cwd, existing} {
+		if assistantWorkspace(Device{}, dir) {
+			return true
+		}
+	}
+	for _, d := range s.devices(ctx) {
+		for _, dir := range []string{t.Cwd, existing} {
+			if assistantWorkspace(d, proto.ExpandHome(dir, d.Home)) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // The node resolves arbitrary aliases. The hub also knows custom state roots
 // from node metadata and must reject those before publishing a plan.

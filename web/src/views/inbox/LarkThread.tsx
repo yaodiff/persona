@@ -9,7 +9,8 @@ import { defaultManager, ItemManager, ownerHeaders, useItemManager, withManager 
 import { createContext, memo, use, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, ApiError, enc, errorText, getToken } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
-import { clock } from "../../lib/format";
+import { clock, safeWebURL } from "../../lib/format";
+import { isSameOriginBlobURL, MEDIA_CTRL_CHARS, safeApiPath } from "../../lib/safe-media-url";
 import { comparePosition, isDone, mergeMessages, withToken, type InboxItem, type LarkMessage, type LarkPage, type LarkPart } from "../../lib/inbox";
 import { cardText, emojiLabel, partRuns } from "../../lib/inbox-page";
 import { LARK_ATTACHMENT_REPLY_FEATURE, LARK_ATTACHMENTS_FEATURE, routeAllowed, type LarkAttachment } from "../../lib/lark-attachments";
@@ -656,7 +657,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   }, [ol, manager]);
 
   // the gallery's addresses as the messages draw theirs (with the chat's manager), so the one opened is found in it
-  const images = useMemo(() => chatImages(page?.messages ?? [], (u) => safeURL(u, manager)), [page, manager]);
+  const images = useMemo(() => chatImages(page?.messages ?? [], (u) => safeImageURL(u, manager)), [page, manager]);
   const tools = useMemo<ChatTools>(() => ({
     feed,
     group: Boolean(chat.group),
@@ -1153,7 +1154,7 @@ function QuoteLine({ m, display, className = "" }: { m: LarkMessage; display: La
   const q = m.reply_to;
   const manager = useItemManager();
   if (!q) return null;
-  const src = safeURL(q.parts?.find((p) => p.kind === "image")?.url, manager);
+  const src = safeImageURL(q.parts?.find((p) => p.kind === "image")?.url, manager);
   return (
     <p className={`flex items-center gap-1.5 border-l-2 border-line-strong pl-2 text-[12px] text-ink-3 ${className}`}>
       <span className="min-w-0 flex-1 truncate">
@@ -1456,24 +1457,50 @@ function ThreadPanel({ root, thread, setThread, translateTo, attachments, readOn
   );
 }
 
+/** Validates a hub `/api/` media path or safe http(s) URL before rendering or opening in a new tab. */
+export function safeMediaURL(src?: string): string | undefined {
+  const trimmed = src?.trim();
+  if (!trimmed || MEDIA_CTRL_CHARS.test(trimmed)) return undefined;
+  return safeApiPath(trimmed) ?? safeWebURL(trimmed);
+}
+
 /** A picture of the hub's (a relative /api/ URL with the token) at full size in a tab of its own. */
 export function openMedia(src: string) {
-  window.open(src, "_blank", "noopener,noreferrer");
+  const safe = safeMediaURL(src);
+  if (!safe) return;
+  window.open(safe, "_blank", "noopener,noreferrer");
+}
+
+function safeImageURL(u?: string, manager?: string) {
+  const trimmed = u?.trim();
+  if (!trimmed || MEDIA_CTRL_CHARS.test(trimmed)) return undefined;
+  if (trimmed.startsWith("/api/")) return safeApiPath(trimmed) ? withToken(withManager(trimmed, manager)) : undefined;
+  return safeWebURL(trimmed);
 }
 
 function safeURL(u?: string, manager?: string) {
-  if (!u) return undefined;
-  if (u.startsWith("/api/")) return withToken(withManager(u, manager));
-  return /^(https?:|mailto:)/i.test(u) ? u : undefined;
+  const media = safeImageURL(u, manager);
+  if (media) return media;
+  const trimmed = u?.trim();
+  if (!trimmed || MEDIA_CTRL_CHARS.test(trimmed) || !/^mailto:/i.test(trimmed)) return undefined;
+  const rest = trimmed.slice("mailto:".length);
+  if (!rest || /^[\\/]/.test(rest)) return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "mailto:" && !parsed.username && !parsed.password && Boolean(parsed.pathname || parsed.search) ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function LinkText({ url, children }: { url?: string; children: ReactNode }) {
   const manager = useItemManager();
   const safe = safeURL(url, manager);
-  if (!safe) return <>{children}</>;
+  const href = safe ? linkHref(safe) : undefined;
+  if (!safe || !href) return <>{children}</>;
   return (
     <a
-      href={linkHref(safe)}
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => clickLink(e, safe, typeof children === "string" ? children : undefined, manager)}
@@ -1545,7 +1572,7 @@ function Block({ p, mid }: { p: LarkPart; mid?: string }) {
   switch (p.kind) {
     case "image": {
       // a picture this page is sending shows its own preview
-      const src = p.url?.startsWith("blob:") ? p.url : safeURL(p.url, manager);
+      const src = p.url && isSameOriginBlobURL(p.url) ? p.url : safeImageURL(p.url, manager);
       return src ? (
         <button type="button" onClick={() => (tools ? tools.openImage(src) : openMedia(src))} aria-label={t("inbox-larkthread.open_image")} className="w-fit">
           <img src={src} alt={t("inbox-larkthread.image")} decoding="async" style={pictureBox(meta)} className="max-h-64 max-w-[min(280px,100%)] rounded-[8px] object-contain shadow-hairline" />
@@ -1553,7 +1580,7 @@ function Block({ p, mid }: { p: LarkPart; mid?: string }) {
       ) : <span className="text-ink-3">{t("inbox-larkthread.image_placeholder")}</span>;
     }
     case "emotion": {
-      const src = safeURL(p.url, manager);
+      const src = safeImageURL(p.url, manager);
       return src ? <img src={src} alt={p.text || t("inbox-larkthread.sticker")} decoding="async" className="size-20 object-contain" /> : <span>{emojiLabel(p.refId ?? "", p.text)}</span>;
     }
     case "file":

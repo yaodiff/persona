@@ -15,6 +15,7 @@ import (
 // on success, so a successful Report has exactly its old card/feed/push behavior.
 func (r *runner) StartReport(ctx context.Context, task modapi.BriefTaskInfo, now time.Time) string {
 	run := &modapi.BriefRun{Facts: r.FactsAt(ctx, now, task.ID), Label: task.Label, FallbackOnly: true}
+	run.Facts.Contributions = task.Contributions
 	r.SetTaskRun(task.ID, run)
 	if !run.Facts.NorthStar.HasStore || r.prompts == nil {
 		return ""
@@ -75,6 +76,8 @@ func (r *runner) fallbackRun(ctx context.Context, scheduled modapi.BriefSchedule
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		if err := r.feed.AppendOnce(fctx, "feed_brief_fallback_"+id, scheduled.SessionID, modapi.FeedKindBrief, scheduled.RefID, body); err != nil {
 			r.logf("briefing fallback feed %s: %v", task.ID, err)
+		} else {
+			r.supervisionBriefed(fctx, run.Facts)
 		}
 		cancel()
 	}

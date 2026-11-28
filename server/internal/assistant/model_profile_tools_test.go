@@ -337,7 +337,8 @@ func TestModelProfileMCPSharedRestrictions(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, puts := profileStoreSnapshot(st.memStore)
-	tools := []string{"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback", "model_profile_capture"}
+	tools := []string{"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
+		"model_profile_capture", "model_profile_deactivate", "model_profile_clear"}
 	for _, tt := range []struct {
 		name, session    string
 		assistant, guest bool

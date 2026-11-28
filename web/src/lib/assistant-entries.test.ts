@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/entries/cases.json";
-import { assistantEntries, decisionLaterKey, needsYouBySupervisor, type NeedsYouItem } from "./assistant-entries";
+import { assistantEntries, decisionLaterKey, needsYouBySupervisor, taskRequestRouting, type NeedsYouItem } from "./assistant-entries";
 import { triageTodos } from "./todo-triage";
 import { makeSessionLookup } from "./todos";
 import type { FeedItem, TaskPlan } from "./feed";
@@ -18,6 +18,128 @@ it("keeps an Agent interaction on a verifying task under its original conversati
   ]);
 });
 
+it("does not rehome a conversation request when a task agent shares its session id", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const todo: Todo = {
+    id: "task", title: "Task", origin: "conversation", created_at: at, updated_at: at,
+    agents: [{ machine_id: "hub", session_id: "shared", linked_at: at }],
+  };
+  const request: Interaction = {
+    id: "own", kind: "question", machine_id: "hub", session_id: "shared",
+    folded_under: "shared", folded_under_machine_id: "other", created_at: at,
+  };
+  const { asksOf } = taskRequestRouting([todo], [request], makeSessionLookup([]), "shared", "hub");
+  expect(asksOf.get("hub/shared")).toBeUndefined();
+  expect(asksOf.get("other/shared")).toEqual([request]);
+});
+
+describe("steps carried by an open request", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const view = { section: "needs_you" as const, phase: "needs_you" as const, rank: 0 };
+  const parent: Todo = {
+    id: "request", title: "Prepare the release", origin: "direction", created_at: at, updated_at: at, agents: [],
+    view: { ...view, reason: "verify", steps: { done: 0, total: 1 } },
+  };
+  const verifyingParent: Todo = {
+    ...parent, supervision: { state: "user_check", supervisor: "direction" },
+    ask: { verdict: "Please verify the request", asked_at: at },
+  };
+  const verification: Todo = {
+    ...parent, id: "verify", title: "Review the result", part_of: parent.id,
+    supervision: { state: "user_check", supervisor: "worker-supervisor" }, ask: { verdict: "Please verify", asked_at: at },
+    view: { ...view, reason: "verify" },
+  };
+  const interaction: Interaction = { id: "confirm", kind: "permission", machine_id: "box", session_id: "worker", created_at: at };
+  const confirmation: Todo = {
+    ...parent, id: "confirm", title: "Allow the change", part_of: parent.id,
+    agents: [{ machine_id: "box", session_id: "worker", linked_at: at }], view: { ...view, reason: "agent_asks" },
+  };
+  const entries = (todos: Todo[], interactions: Interaction[] = [], deferred?: Record<string, unknown>) => assistantEntries({
+    conversation: "direction", main: "main", todos, sessions: [], interactions, plans: {}, feed: [], now: Date.parse(at), deferred,
+  });
+
+  it("keeps a verification and a live confirmation under the same counted parent", () => {
+    const result = entries([{ ...parent, view: { ...view, reason: "verify", steps: { done: 0, total: 2 } } }, verification, confirmation], [interaction]);
+    expect(result.needsYou).toHaveLength(1);
+    expect(result.needsYou[0]).toMatchObject({
+      key: "task:request", countsOpen: true,
+      steps: [{ todo: { id: "confirm" }, asks: [interaction] }, { todo: { id: "verify" } }],
+    });
+    expect(result.running).toEqual([]);
+  });
+
+  it.each(["deferred", "dismissed"])("keeps a step independently actionable when the parent's verification is %s", (hiddenBy) => {
+    const visible = entries([verifyingParent, verification]);
+    expect(visible.needsYou).toMatchObject([{ key: "task:request", steps: [{ key: "task:verify" }] }]);
+    expect(visible.running).toEqual([]);
+
+    const request = hiddenBy === "dismissed" ?
+      { ...verifyingParent, decision_review: { review_at: at, dismissal_id: "dismissed" } } : verifyingParent;
+    const deferred = hiddenBy === "deferred" ? { [decisionLaterKey(request)]: true } : undefined;
+    const result = entries([request, verification], [], deferred);
+    expect(result.needsYou).toMatchObject([{ key: "task:verify", todo: { ask: verification.ask } }]);
+    expect(result.running).toEqual([]);
+  });
+
+  it("keeps a live permission independent of a quiet parent with a visible verification", () => {
+    const request = { ...verifyingParent, quiet: true };
+    const result = entries([request, confirmation], [interaction]);
+    expect(result.needsYou).toMatchObject([{ key: "task:confirm", asks: [interaction] }, { key: "task:request" }]);
+    expect(result.needsYou[1]).not.toHaveProperty("steps");
+    expect(result.running).toEqual([]);
+  });
+
+  it("keeps an owner-decision to-do independent of its open parent", () => {
+    const ownerDecision: Todo = {
+      ...verification, id: "todo_od_release", title: "Choose the release",
+      supervision: { state: "needs_user", supervisor: "direction" },
+      ask: { verdict: "Please choose", asked_at: at, outcome: "decide" },
+      view: { ...view, reason: "owner_decides" },
+    };
+    const result = entries([parent, verification, ownerDecision]);
+    expect(result.needsYou).toHaveLength(2);
+    expect(result.needsYou.find((item) => item.key === "task:request")).toMatchObject({ steps: [{ key: "task:verify" }] });
+    expect(result.needsYou.find((item) => item.key === "task:todo_od_release")).toMatchObject({ todo: { ask: ownerDecision.ask } });
+    expect(result.running).toEqual([]);
+  });
+
+  it("removes an empty parent row when all of its carried steps are hidden", () => {
+    expect(entries([parent, verification]).needsYou).toMatchObject([{ key: "task:request", steps: [{ key: "task:verify" }] }]);
+    const result = entries([parent, verification], [], { [decisionLaterKey(verification)]: true });
+    expect(result.needsYou).toEqual([]);
+    expect(result.running).toEqual([]);
+  });
+
+  it("keeps a carried verification visible in its supervisor's tray when its open parent belongs to another conversation", () => {
+    const otherParent: Todo = { ...parent, origin: "other-conversation" };
+    const step: Todo = {
+      ...verification, origin: "direction",
+      supervision: { state: "user_check", supervisor: "direction" },
+    };
+    const result = entries([otherParent, step]);
+    expect(result.needsYou).toMatchObject([{ key: "task:verify", todo: { ask: step.ask } }]);
+    expect(result.running).toEqual([]);
+  });
+
+  it("keeps a verification step visible when its open parent is quiet", () => {
+    const quietParent: Todo = { ...parent, quiet: true };
+    const result = entries([quietParent, verification]);
+    expect(result.needsYou).toMatchObject([{ key: "task:verify", todo: { ask: verification.ask } }]);
+    expect(result.running.map((item) => item.key)).toEqual(["task:request"]);
+  });
+
+  it("places a parent carrying a direction user_check step in Main's own Needs you group", () => {
+    const mainEntries = assistantEntries({
+      conversation: "main", main: "main", todos: [parent, verification],
+      sessions: [], interactions: [], plans: {}, feed: [], now: Date.parse(at),
+    });
+    expect(mainEntries.needsYou).toMatchObject([{ key: "task:request", steps: [{ key: "task:verify" }] }]);
+    expect(needsYouBySupervisor(mainEntries.needsYou, "main", true)).toEqual([
+      { supervisor: "main", items: mainEntries.needsYou },
+    ]);
+  });
+});
+
 // Android reads the same fixture (AssistantEntriesFixtureTest): the two entries split the same input the same way.
 describe("the Assistant's Needs you and In progress entries (spec/fixtures/entries)", () => {
   for (const c of fixture.cases) {
@@ -28,8 +150,10 @@ describe("the Assistant's Needs you and In progress entries (spec/fixtures/entri
       // entries the other clients put it in: the rest of the split is theirs
       const review = (c.expected as { web_review?: string[] }).web_review ?? [];
       const parked = (c.expected as { web_parked?: string[] }).web_parked ?? [];
-      const shared = (keys: string[]) => keys.filter((key) => !review.includes(key) && !parked.includes(key));
+      const verify = (c.expected as { web_verify?: string[] }).web_verify ?? [];
+      const shared = (keys: string[]) => keys.filter((key) => !review.includes(key) && !parked.includes(key) && !verify.includes(key));
       expect(got.needsYou.map((item) => item.key)).toEqual(shared(c.expected.needs_you));
+      expect(got.verify.map((item) => item.key)).toEqual(verify);
       expect(got.running.map((item) => item.key)).toEqual(shared(c.expected.running));
       expect(got.shelved.map((item) => item.key)).toEqual(shared(c.expected.shelved));
       expect(got.review.map((item) => item.key)).toEqual(review);
@@ -48,7 +172,7 @@ describe("the Assistant's Needs you and In progress entries (spec/fixtures/entri
           ...(work.workflow?.phase ? { phase: work.workflow.phase, progress: `${work.workflow.agents_done}/${work.workflow.agents_started}+` } : {}) } : null).toEqual(expected);
       }
       // one entry each: nothing is in both, and no agent of a listed task shows on its own
-      const keys = [...got.needsYou, ...got.running, ...got.shelved, ...got.review, ...got.parked, ...got.finished].map((item) => item.key);
+      const keys = [...got.needsYou, ...got.verify, ...got.running, ...got.shelved, ...got.review, ...got.parked, ...got.finished].map((item) => item.key);
       expect(new Set(keys).size).toBe(keys.length);
       const taskAgents = new Set(input.todos.filter((todo) => !todo.done_at && keys.includes(`task:${todo.id}`))
         .flatMap((todo) => (todo.agents ?? []).filter((a) => !a.released_at).map((a) => `agent:${a.machine_id}/${a.session_id}`)));

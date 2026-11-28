@@ -158,6 +158,8 @@ type memoryExtensionEntry struct {
 	// a standing entry goes to a standing channel (memoryExtensionBatch.standingOnly); the others come in by relevance
 	// (their subjects or text) in a recall, a hand-off or the Inbox.
 	Standing bool
+	// Rank is the extension's importance rank (0..1000), used to order recall and entity-triggered matches.
+	Rank int
 }
 
 // memoryExtensionBatch is what a source hands over at once. Tagged says the extension that wrote the entries sets

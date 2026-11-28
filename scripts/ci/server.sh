@@ -69,13 +69,14 @@ if [ "$lane" = all ] || [ "$lane" = core-node ]; then
   # out, the binaries build without their subcommands and the extension host registers no such extension. The modules'
   # own tests do not depend on the tags: they run in the shards.
   if [ -d server/internal/modules/volc ] || [ -d server/internal/modules/voice ]; then
-    ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_without_volc persona_without_voice; do go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
+    ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_without_volc persona_without_voice; do go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription|Orphan|ModulesOff" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
   fi
   if [ -d server/internal/modules/lark ]; then
     # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries
     # build, the extension host has no bot client (internal/botport) and no lark-cli adapter or connector
-    # (internal/cliport), and their tests skip; the rest of the extension host and the assistant's Feishu paths still pass.
-    ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_without_lark; do go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/larkhost/... ./internal/cliport/... ./internal/cliwire/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m -run "Lark|Feishu|Bot|Card|Connector|Inbox|Builtin|SelfSettings|Golden" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
+    # (internal/cliport), and their tests skip; the knowledge base's Lark import (internal/assistant/kblark) skips its
+    # runs; the rest of the extension host and the assistant's Feishu paths still pass.
+    ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_without_lark; do go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/larkhost/... ./internal/cliport/... ./internal/cliwire/... ./internal/assistant/kblark/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m -run "Lark|Feishu|Bot|Card|Connector|Inbox|Builtin|SelfSettings|Golden" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden|KBLark" ./internal/assistant/ || exit 1; done'
   fi
 fi
 if [ "$lane" = all ] || [ "$lane" = core-node ]; then
@@ -90,6 +91,13 @@ fi
 
 if [ "$lane" = all ] || [ "$lane" = other ]; then
   ci_run 'Non-root extension container isolation' 420 python3 scripts/ci/extension-container.py
+fi
+if [ "$lane" = all ] || [ "$lane" = core-other ]; then
+  # The core edition installs from its packages (#16239, docs/operations/core-install.md): this machine's packages of
+  # both editions built as a release builds them, the document's commands run in a clean container against a disposable
+  # Postgres, the install stays core-only through an update check and a second installer run, and the full edition
+  # installs from the same directory unchanged.
+  ci_run 'Core-only install from packages' 900 python3 scripts/ci/core-install.py --timeout 840
 fi
 
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/persona-ci-db.XXXXXX")"

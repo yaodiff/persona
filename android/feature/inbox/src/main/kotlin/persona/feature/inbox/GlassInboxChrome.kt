@@ -54,6 +54,7 @@ internal data class InboxSourceOption(
 @Composable
 internal fun GlassInboxFilterStrip(
     sources: List<InboxSourceOption>,
+    kinds: List<Pair<String, String>>,
     activeSource: String,
     activeKind: String,
     onSelectSource: (String) -> Unit,
@@ -63,13 +64,6 @@ internal fun GlassInboxFilterStrip(
 ) {
     val palette = PersonaTheme.palette
     val allActive = activeSource.isEmpty() && activeKind.isEmpty()
-    val kinds = listOf(
-        "mention" to stringResource(R.string.inbox_mention_me),
-        "dm" to stringResource(R.string.inbox_kind_dm),
-        "group" to stringResource(R.string.inbox_kind_group),
-        "mail" to stringResource(R.string.inbox_source_mail),
-        "agent" to stringResource(R.string.inbox_kind_agent),
-    )
     Row(
         modifier
             .fillMaxWidth()

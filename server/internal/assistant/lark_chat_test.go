@@ -73,6 +73,18 @@ func keepChatCard(s *Service, id string, c *botCard) {
 	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) { b.KeepCard(id, c) })
 }
 
+// updateChatCard changes a card and its persisted ref through the module's production write path.
+func updateChatCard(s *Service, id string, update func(*botCard)) {
+	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) {
+		card, ok := b.Card(id)
+		if !ok {
+			return
+		}
+		update(&card)
+		b.KeepCard(id, &card)
+	})
+}
+
 // chatCardRef is the card asking interaction id as the chat's state keeps it.
 func chatCardRef(s *Service, id string) (botCardRef, bool) {
 	var ref botCardRef

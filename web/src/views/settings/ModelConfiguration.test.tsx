@@ -184,7 +184,7 @@ describe.each([
 
   it("opens help on hover and click, dismisses with Escape or outside click, without opening the editor", async () => {
     await render();
-    const help = host.querySelector<HTMLButtonElement>(`button[aria-label="${use.name}的执行形态说明"]`)!;
+    const help = host.querySelector<HTMLButtonElement>(`button[aria-label="${use.name} 的执行形态说明"]`)!;
     const details = () => document.getElementById(help.getAttribute("aria-controls")!);
     await act(async () => help.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     expect(help.getAttribute("aria-expanded")).toBe("true");

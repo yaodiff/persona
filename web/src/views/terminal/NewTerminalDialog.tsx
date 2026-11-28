@@ -24,7 +24,7 @@ export function NewTerminalDialog({ open, onClose, onOpened }: { open: boolean; 
     setPending(true); setError("");
     try {
       const result = await api<{ terminal: string }>(`/machines/${enc(mid)}/panes`, { method: "POST", json: at });
-      navigate({ name: "terminal", mid, id: result.terminal, view: "terminals" });
+      navigate({ name: "terminal", mid, id: result.terminal });
       onClose(); onOpened?.();
     } catch (e) { setError(t("terminal-terminalpage.new_failed", { error: errorText(e) })); }
     finally { setPending(false); }

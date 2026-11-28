@@ -160,6 +160,13 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
+		if aa, ok := a.(connector.ApprovalActions); ok {
+			act, summary, grant, err := aa.DescribeWithApproval(p.context(ctx), p.Name, p.Args, p.ApprovalProtocol)
+			if p.ApprovalProtocol == "" {
+				grant = nil
+			}
+			return DescribeResult{Action: act, Summary: summary, AutoConfirm: grant}, err
+		}
 		act, summary, err := a.Describe(p.context(ctx), p.Name, p.Args)
 		return DescribeResult{Action: act, Summary: summary}, err
 	case MThread:
@@ -311,8 +318,23 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 		if p.RequestID == "" {
 			return nil, errors.New("actions.do without a request_id")
 		}
+		if (p.ApprovalMode == "") != (p.ApprovalToken == "") {
+			return nil, errors.New("actions.do requires approval_mode and approval_token together")
+		}
+		if p.ApprovalMode != "" && p.ApprovalMode != connector.ApprovalModeAutoConfirm {
+			return nil, fmt.Errorf("actions.do: unsupported approval_mode %q", p.ApprovalMode)
+		}
 		return s.once.do(p.RequestID, func() (CallResult, error) {
-			done, err := connector.Write(p.context(ctx), a, p.Name, p.Args)
+			var done connector.DoResult
+			var err error
+			if p.ApprovalMode != "" {
+				done, err = connector.WriteWithApproval(p.context(ctx), a, p.Name, p.Args, connector.AutoConfirmApproval{
+					Mode:  p.ApprovalMode,
+					Token: p.ApprovalToken,
+				})
+			} else {
+				done, err = connector.Write(p.context(ctx), a, p.Name, p.Args)
+			}
 			return CallResult{Text: done.Text, MessageRef: done.MessageRef}, err
 		})
 	case MRecallCan:

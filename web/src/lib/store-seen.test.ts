@@ -8,7 +8,7 @@ import { api } from "./api";
 import { connect, getSession, getState, markSeen, reset, upsertSession, viewSession as openView } from "./store";
 import { runtimeIdentity, runtimeSessions } from "./runtime-list";
 import { heldCounts, heldSeen, SEEN_CONFIRM_MS, SEEN_SETTLE_MS } from "./seen-outbox";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import type { Session } from "./types";
 
 vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), api: vi.fn() }));
@@ -75,7 +75,7 @@ function online(rows: Session[] = [unread()]) {
   sock().push({ type: "sessions", machine_id: "mac", sessions: rows });
   return sock();
 }
-const shown = () => stateOf(getSession("mac", "s1")!);
+const shown = () => activityOf(getSession("mac", "s1")!);
 const ID = runtimeIdentity(unread());
 
 describe("viewing a chat marks it seen", () => {
@@ -137,7 +137,7 @@ describe("viewing a chat marks it seen", () => {
     const before = { ...unread(), waiting: false };
     s.push({ type: "sessions", machine_id: "mac", sessions: [unread({ state: "idle", seen_at: "2026-01-01T00:00:01Z" })] });
     vi.advanceTimersByTime(1_500);
-    expect(stateOf(heldSeen(before, getState().seen[ID], Date.now()))).toBe("idle");
+    expect(activityOf(heldSeen(before, getState().seen[ID], Date.now()))).toBe("idle");
     // the hub's counts read with that row still count it Unread: shown without it
     const counts = { total: 3, revision: "r", state: { unread: 2, idle: 1 }, machine: {}, project: {}, group: {} };
     expect(heldCounts(counts, [before], getState().seen, Date.now()).state).toEqual({ unread: 1, idle: 2 });
@@ -190,7 +190,7 @@ describe("viewing a chat marks it seen", () => {
     // the list's first page lands with the row still unread after the look
     viewSession("mac", "s1");
     (runtimeSessions as unknown as { publish: (p: object) => void }).publish({ rows: [listed], loaded: true });
-    expect(stateOf(getState().sessionSummaries[0])).toBe("idle");
+    expect(activityOf(getState().sessionSummaries[0])).toBe("idle");
     expect(s.seen().length).toBe(1);
   });
 });
@@ -200,6 +200,6 @@ describe("mark all as seen", () => {
     const s = online([unread(), unread({ session_id: "s2" })]);
     markSeen(getState().sessions.mac);
     s.push({ type: "sessions", machine_id: "mac", sessions: [unread(), unread({ session_id: "s2" })] });
-    expect(getState().sessions.mac.map(stateOf)).toEqual(["idle", "idle"]);
+    expect(getState().sessions.mac.map(activityOf)).toEqual(["idle", "idle"]);
   });
 });

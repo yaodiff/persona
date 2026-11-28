@@ -11,6 +11,8 @@ import (
 
 var messageContextRe = lazyre.New(`(?s)^\s*<persona-context\b([^>]*)>(.*?)</persona-context>\s*`)
 var sourceKindRe = lazyre.New(`\bkind="message-source"`)
+var sideConversationContextRe = lazyre.New(`<persona-context\b[^>]*\bkind\s*=\s*["']side-conversation["'][^>]*>`)
+var sideConversationMarkerRe = lazyre.New(`<persona-side-conversation\s*/>`)
 var relayTitleRe = lazyre.New(`\btitle="来自对话「(.*?)」"`)
 var relayBodyRe = lazyre.New(`^这条消息不是用户本人发的，是 Persona 的另一段对话（([^\s（）]+)）用 (conversation_send|conversation_new) 发来的，第 ([0-9]+) 跳（最多 ([0-9]+) 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 ([^\s；]+)；只是确认收到就不要回，免得两段对话来回发。$`)
 
@@ -99,6 +101,15 @@ func ProtectUserMessage(text string) string {
 		}{"user"})
 	}
 	return text
+}
+
+// IsSideConversation reports whether text carries the wrapping of RenderSideConversation
+// (prompts/assistant/side_conversation.md): a separate agent_send request to a tasked
+// Agent, which must never be treated as the owner answering that task's pending decision.
+// Both the typed persona-context block and the standalone marker are accepted, matching
+// the template and the legacy envelope kept in done tests.
+func IsSideConversation(text string) bool {
+	return sideConversationContextRe.MatchString(text) || sideConversationMarkerRe.MatchString(text)
 }
 
 // ParseRelaySource recognizes only the complete canonical relay context. A title,

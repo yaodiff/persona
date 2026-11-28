@@ -333,7 +333,7 @@ func TestTheDesktopLauncherIsOfferedWhereTheAppKeepsSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, added := n.withDesktopLauncher([]proto.Launcher{{Name: "claude"}})
-	if !added || len(list) != 2 || list[1] != (proto.Launcher{Name: "claude-desktop", Source: "claude_desktop", Agent: "claude"}) {
+	if !added || len(list) != 2 || list[1] != (proto.Launcher{Name: "claude-desktop", Source: "claude_desktop", Agent: "claude", DisplayName: "Claude Desktop"}) {
 		t.Fatalf("list %+v", list)
 	}
 	if !n.knownLauncher(context.Background(), "claude-desktop") {

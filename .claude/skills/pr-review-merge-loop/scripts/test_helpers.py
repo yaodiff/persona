@@ -339,6 +339,66 @@ class HelperTests(unittest.TestCase):
                                              "pr-review-r09-123-01234567.scope", 0.1)
             self.assertTrue(calls)
 
+    def test_interactive_transcript_rejects_final_malformed_results_without_polling(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        marker = "PR_REVIEW_RESULT_0123456789abcdef01234567"
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        schema = '{"type":"object","properties":{"findings":{"type":"array"}},"required":["findings"]}'
+        cases = [
+            ("Explanation before the marker\n" + marker + '\n{"findings":[]}\n' + marker,
+             "only its marked JSON"),
+            (marker + '\n{"findings":[]}\n' + marker + "\n" + marker, "markers are not unique"),
+            (marker + '\n{"other":[]}\n' + marker, "does not match"),
+            (marker + '\nnot JSON\n' + marker, "invalid marked JSON"),
+        ]
+        with tempfile.TemporaryDirectory(prefix="review-transcript-final-test-") as root:
+            path = Path(root) / (session_id + ".jsonl")
+            for text, error in cases:
+                with self.subTest(error):
+                    record = {"type": "assistant", "sessionId": session_id,
+                              "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": text}]}}
+                    path.write_text(json.dumps(record) + "\n")
+                    command = unittest.mock.Mock()
+                    with patch.dict(module["wait_transcript"].__globals__, {
+                            "command": command, "scope_running": unittest.mock.Mock(return_value=True)}), \
+                            patch.object(module["time"], "sleep") as sleep:
+                        with self.assertRaisesRegex(RuntimeError, error):
+                            module["wait_transcript"](path, marker, schema, "w3:p1",
+                                                     "pr-review-r00-123-01234567.scope", 7200)
+                    command.assert_not_called()
+                    sleep.assert_not_called()
+
+            duplicate = {"type": "assistant", "sessionId": session_id,
+                         "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text":
+                             marker + '\n{"findings":[]}\n' + marker}]}}
+            path.write_text(json.dumps(duplicate) + "\n" + json.dumps(duplicate) + "\n")
+            with patch.dict(module["wait_transcript"].__globals__, {"command": unittest.mock.Mock()}), \
+                    patch.object(module["time"], "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, "result is not unique"):
+                    module["wait_transcript"](path, marker, schema, "w3:p1",
+                                             "pr-review-r00-123-01234567.scope", 7200)
+            sleep.assert_not_called()
+
+    def test_interactive_transcript_waits_for_unfinished_tool_use_message(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        marker = "PR_REVIEW_RESULT_0123456789abcdef01234567"
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        schema = '{"type":"object","properties":{"findings":{"type":"array"}},"required":["findings"]}'
+        with tempfile.TemporaryDirectory(prefix="review-transcript-progress-test-") as root:
+            path = Path(root) / (session_id + ".jsonl")
+            partial = {"type": "assistant", "sessionId": session_id,
+                       "message": {"stop_reason": "tool_use", "content": [{"type": "text", "text": marker}]}}
+            path.write_text(json.dumps(partial) + "\n")
+            command = unittest.mock.Mock(return_value={"agents": [{"pane_id": "w3:p1", "agent_status": "working"}]})
+            with patch.dict(module["wait_transcript"].__globals__, {
+                    "command": command, "scope_running": unittest.mock.Mock(return_value=True)}), \
+                    patch.object(module["time"], "sleep", return_value=None), \
+                    patch.object(module["time"], "monotonic", side_effect=[0, 0, 1, 1.1]):
+                with self.assertRaisesRegex(TimeoutError, "complete marked result"):
+                    module["wait_transcript"](path, marker, schema, "w3:p1",
+                                             "pr-review-r00-123-01234567.scope", 1)
+            command.assert_called()
+
     def test_interactive_slot_waits_for_release_and_refills(self):
         module = runpy.run_path(str(HERE / "herdr_review.py"))
         import fcntl

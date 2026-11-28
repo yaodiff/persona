@@ -83,19 +83,23 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
     /// core conclusions, and the points and decisions grouped by topic. Read on its own and cleaned as the contract's
     /// "Clients" says (`Overview.clean`); nil when there is none or nothing usable is left, and then the page is as before.
     var overview: Overview?
+    /// Real disagreements raised in the meeting (#16728, docs/assistant/meeting-minutes.md "Disagreements (#16728)"). Read
+    /// on its own with `try?` and cleaned as the contract's "Clients" says (`Debate.clean`); nil when none survives, and
+    /// then the minutes look exactly as before.
+    var debates: [Debate]?
     /// The hub's own Markdown of these minutes: what Copy and Share send in the summary card's layout (`shareText`).
     var markdown: String?
 
     init(title: String? = nil, when: String? = nil, start: Date? = nil, end: Date? = nil, place: String? = nil, attendees: [String] = [],
          points: [Item] = [], decisions: [Item] = [], actions: [Item] = [], openQuestions: [Item] = [], overview: Overview? = nil,
-         markdown: String? = nil) {
+         debates: [Debate]? = nil, markdown: String? = nil) {
         self.title = title; self.when = when; self.start = start; self.end = end; self.place = place; self.attendees = attendees
         self.points = points; self.decisions = decisions; self.actions = actions; self.openQuestions = openQuestions
-        self.overview = overview; self.markdown = markdown
+        self.overview = overview; self.debates = debates?.isEmpty == true ? nil : debates; self.markdown = markdown
     }
 
     enum CodingKeys: String, CodingKey {
-        case version, title, when, start, end, attendees, points, decisions, actions, overview, markdown
+        case version, title, when, start, end, attendees, points, decisions, actions, overview, debates, markdown
         case place = "where", openQuestions = "open"
     }
 
@@ -113,8 +117,10 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
         decisions = try c.decodeIfPresent([Item].self, forKey: .decisions) ?? []
         actions = try c.decodeIfPresent([Item].self, forKey: .actions) ?? []
         openQuestions = try c.decodeIfPresent([Item].self, forKey: .openQuestions) ?? []
-        // Apart from the fields above: an overview of any shape, however broken, never costs the minutes their lists.
+        // Apart from the fields above: an overview or debates block of any shape, however broken, never costs the minutes their lists.
         overview = Overview.clean(try? c.decodeIfPresent(JSONValue.self, forKey: .overview))
+        let cleanedDebates = Debate.clean(try? c.decodeIfPresent(JSONValue.self, forKey: .debates), decisionsCount: decisions.count)
+        debates = cleanedDebates.isEmpty ? nil : cleanedDebates
         markdown = (try? c.decodeIfPresent(String.self, forKey: .markdown)).flatMap { $0 }
     }
 
@@ -132,10 +138,11 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
         try c.encode(actions, forKey: .actions)
         try c.encode(openQuestions, forKey: .openQuestions)
         try c.encodeIfPresent(overview, forKey: .overview)
+        if let debates, !debates.isEmpty { try c.encode(debates, forKey: .debates) }
         try c.encodeIfPresent(markdown, forKey: .markdown)
     }
 
-    var isEmpty: Bool { points.isEmpty && decisions.isEmpty && actions.isEmpty && openQuestions.isEmpty }
+    var isEmpty: Bool { points.isEmpty && decisions.isEmpty && actions.isEmpty && openQuestions.isEmpty && (debates?.isEmpty ?? true) }
 
     /// When the meeting was, as the recording page's header writes dates (#4875); the hub's `when` from a hub without
     /// `start` / `end`.
@@ -181,6 +188,25 @@ nonisolated struct RecordingMinutes: Codable, Hashable, Sendable {
         section(String(localized: "Key Points"), points)
         section(String(localized: "Decisions"), decisions)
         section(String(localized: "Action Items"), actions)
+        if let debates, !debates.isEmpty {
+            out += ["", "## " + String(localized: "Disagreements")]
+            for debate in debates {
+                var heading = "### " + debate.question
+                if let status = debate.status { heading += " (" + status.label + ")" }
+                out += ["", heading]
+                for position in debate.positions {
+                    var row = "- " + position.stance
+                    if let who = position.who, !who.isEmpty { row += " (" + who + ")" }
+                    if let at = position.at { row += " [" + RecordingFormat.clock(at) + "]" }
+                    out.append(row)
+                }
+                if debate.status == .settled, let outcome = debate.outcome {
+                    var row = "- " + String(localized: "Outcome: \(outcome.text)")
+                    if let at = outcome.at { row += " [" + RecordingFormat.clock(at) + "]" }
+                    out.append(row)
+                }
+            }
+        }
         section(String(localized: "Open Questions"), openQuestions)
         return out.joined(separator: "\n")
     }
@@ -359,6 +385,102 @@ nonisolated extension RecordingMinutes {
     }
 }
 
+// MARK: Disagreements (#16728)
+
+nonisolated extension RecordingMinutes {
+    /// A real disagreement in a meeting's minutes (docs/assistant/meeting-minutes.md "Disagreements (#16728)"): the
+    /// question in dispute, two to four cited positions, and whether it was settled (`open` or `settled`, else nil for
+    /// an unknown value, which clients show with no status word). Compiled for watchOS 10+ as well as iOS.
+    nonisolated struct Debate: Codable, Hashable, Sendable {
+        /// Whether the disagreement is still open or was settled. An unknown wire value decodes as `nil` on `Debate`.
+        nonisolated enum Status: String, Codable, Hashable, Sendable {
+            case open, settled
+
+            /// Localized label for the status: never reuses the wording of "Open Questions".
+            var label: String {
+                switch self {
+                case .open: String(localized: "still disagreed")
+                case .settled: String(localized: "settled")
+                }
+            }
+        }
+
+        /// One side's stance, citing the transcript line where its holder said it (`at`).
+        nonisolated struct Position: Codable, Hashable, Sendable {
+            var stance: String
+            var at: Double?
+            var who: String?
+
+            init(stance: String, at: Double? = nil, who: String? = nil) {
+                self.stance = stance; self.at = at; self.who = who
+            }
+        }
+
+        /// How a `settled` disagreement was resolved, optionally linked by the hub to an index in `decisions`.
+        /// Clients never match decisions by time.
+        nonisolated struct Outcome: Codable, Hashable, Sendable {
+            var text: String
+            var at: Double?
+            var decision: Int?
+
+            init(text: String, at: Double? = nil, decision: Int? = nil) {
+                self.text = text; self.at = at; self.decision = decision
+            }
+        }
+
+        var question: String
+        var topic: String?
+        var status: Status?
+        var at: Double?
+        var positions: [Position]
+        var outcome: Outcome?
+
+        init(question: String, topic: String? = nil, status: Status? = nil, at: Double? = nil, positions: [Position],
+             outcome: Outcome? = nil) {
+            self.question = question; self.topic = topic; self.status = status; self.at = at
+            self.positions = positions; self.outcome = outcome
+        }
+
+        private static func nonNegative(_ value: JSONValue?) -> Double? {
+            guard case .number(let n)? = value, n.isFinite, n >= 0 else { return nil }
+            return n
+        }
+
+        /// The contract's cleaning ("Clients"): missing/null/non-array `debates` means none; non-object entries, blank
+        /// questions, non-array positions, positions without a non-blank stance, and debates with fewer than two valid
+        /// positions are dropped; unknown/missing/wrong-typed status becomes nil; `outcome` is kept only for `settled`
+        /// with a non-blank `text`, and `outcome.decision` only when a non-negative integer `< decisionsCount`.
+        /// Unknown keys at every level are ignored.
+        static func clean(_ value: JSONValue?, decisionsCount: Int) -> [Debate] {
+            guard case .array(let entries)? = value else { return [] }
+            return entries.compactMap { entry in
+                guard case .object(let d) = entry,
+                      let question = Overview.words(d["question"]),
+                      case .array(let rawPositions)? = d["positions"] else { return nil }
+                let positions: [Position] = rawPositions.compactMap { raw in
+                    guard case .object(let p) = raw, let stance = Overview.words(p["stance"]) else { return nil }
+                    return Position(stance: stance, at: nonNegative(p["at"]), who: Overview.words(p["who"]))
+                }
+                guard positions.count >= 2 else { return nil }
+                let status: Status? = if case .string(let s)? = d["status"] { Status(rawValue: s) } else { nil }
+                let outcome: Outcome? = {
+                    guard status == .settled, case .object(let o)? = d["outcome"], let text = Overview.words(o["text"]) else {
+                        return nil
+                    }
+                    let decision: Int? = {
+                        guard case .number(let n)? = o["decision"], n.isFinite, n >= 0, n.rounded() == n,
+                              let idx = Int(exactly: n), idx < decisionsCount else { return nil }
+                        return idx
+                    }()
+                    return Outcome(text: text, at: nonNegative(o["at"]), decision: decision)
+                }()
+                return Debate(question: question, topic: Overview.words(d["topic"]), status: status,
+                              at: nonNegative(d["at"]), positions: positions, outcome: outcome)
+            }
+        }
+    }
+}
+
 /// The Summary of a recording's minutes on iPhone (#5026, docs/apple/recording.md「Minutes」): which view the page shows,
 /// which cards the Summary has and in what order, its header's lines, and the transcript lines each item opens to. Worked
 /// out once per change of the minutes or the transcript, so the page's `body` only arranges them
@@ -459,11 +581,42 @@ nonisolated enum RecordingMinutesCards {
         /// The summary card (#6563), when the minutes carry an overview with a bullet left: the page shows it, its topic
         /// cards, then the Action Items and Open Questions of `cards`, instead of the four cards. Nil: as before.
         var overview: Overview? = nil
+        /// Real disagreements (#16728), precomputed for both the summary-card layout and the legacy cards; empty when
+        /// there are none, and then both layouts look identical to before.
+        var debates: [Debate] = []
 
         /// The action items shown that can still become to-dos: what Add All sends.
         var addable: [String] {
             guard offered else { return [] }
             return cards.first { $0.kind == .actions }?.items.compactMap { $0.added ? nil : $0.action } ?? []
+        }
+    }
+
+    /// A settled disagreement's outcome, with its own time / transcript context and the hub-linked decision when
+    /// `outcome.decision` names one (never matched by time on the client).
+    nonisolated struct DebateOutcome: Hashable, Sendable {
+        var item: Item
+        var decisionIndex: Int?
+        var decisionText: String?
+        var decisionLabel: String?
+        var decisionAt: Double?
+    }
+
+    /// One disagreement card, worked out once when the minutes or transcript change (docs/apple/performance.md P4).
+    nonisolated struct Debate: Identifiable, Hashable, Sendable {
+        /// `debate-<index>`, by place: rewritten minutes replace them all.
+        var id: String
+        var question: String
+        var topic: String?
+        var status: RecordingMinutes.Debate.Status?
+        /// Precomputed localized label (`still disagreed` / `settled`); nil when `status` is unknown.
+        var statusLabel: String?
+        var positions: [Item]
+        var outcome: DebateOutcome?
+
+        /// What the card says: rewritten minutes that change it reset its opened transcript lines.
+        var says: [String] {
+            [question, statusLabel ?? ""] + positions.map(\.text) + (outcome.map { [$0.item.text] } ?? [])
         }
     }
 
@@ -575,6 +728,37 @@ nonisolated enum RecordingMinutesCards {
                         conclusions: conclusions, groups: groups)
     }
 
+    /// Disagreements (#16728) prepared for the cards: positions as items with transcript context, precomputed status
+    /// labels (omitted when unknown), and settled outcomes linked only through `outcome.decision` (never matched by time).
+    static func debates(_ minutes: RecordingMinutes, sentences: [RecordingSentence], before: Int, after: Int) -> [Debate] {
+        guard let raw = minutes.debates, !raw.isEmpty else { return [] }
+        return raw.enumerated().map { d, debate in
+            let id = "debate-\(d)"
+            let positions = debate.positions.enumerated().map { p, pos in
+                Item(id: "\(id)-pos-\(p)", text: pos.stance, at: pos.at, byline: pos.who,
+                     context: context(at: pos.at, in: sentences, before: before, after: after))
+            }
+            let outcome: DebateOutcome? = {
+                guard debate.status == .settled, let o = debate.outcome else { return nil }
+                let item = Item(id: "\(id)-outcome", text: o.text, at: o.at, byline: nil,
+                                context: context(at: o.at, in: sentences, before: before, after: after))
+                let linked: RecordingMinutes.Item? = o.decision.flatMap { idx in
+                    minutes.decisions.indices.contains(idx) ? minutes.decisions[idx] : nil
+                }
+                let decisionText = linked.flatMap {
+                    let t = $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return t.isEmpty ? nil : t
+                }
+                return DebateOutcome(item: item, decisionIndex: decisionText == nil ? nil : o.decision,
+                                     decisionText: decisionText,
+                                     decisionLabel: decisionText.map { String(localized: "Decision: \($0)") },
+                                     decisionAt: decisionText == nil ? nil : linked?.at)
+            }()
+            return Debate(id: id, question: debate.question, topic: debate.topic, status: debate.status,
+                          statusLabel: debate.status?.label, positions: positions, outcome: outcome)
+        }
+    }
+
     static func summary(_ minutes: RecordingMinutes, sentences: [RecordingSentence], shown: Shown = Shown(),
                         before: Int = Theme.Recording.contextBefore, after: Int = Theme.Recording.contextAfter) -> Summary {
         let facts = [minutes.whenLine, minutes.place].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
@@ -593,7 +777,8 @@ nonisolated enum RecordingMinutesCards {
         return Summary(title: minutes.title?.isEmpty == false ? minutes.title : nil, facts: facts.isEmpty ? nil : facts,
                        attendees: minutes.attendees.isEmpty ? nil : ListFormatter.localizedString(byJoining: minutes.attendees),
                        cards: cards, offered: minutes.version != nil,
-                       overview: overview(minutes, sentences: sentences, shown: shown, before: before, after: after))
+                       overview: overview(minutes, sentences: sentences, shown: shown, before: before, after: after),
+                       debates: debates(minutes, sentences: sentences, before: before, after: after))
     }
 
     /// The line said at `seconds` with `before` lines before it and `after` after it, as far as the transcript goes.

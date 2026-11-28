@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -53,13 +56,14 @@ type rolloutCache struct {
 	older    []rolloutFile  // rollouts in day directories before the window and archived ones, listed once a minute
 	olderAt  time.Time
 	// misses are the ids rolloutPath globbed for and found nowhere: a thread with no rollout (an app-server thread that
-	// never wrote one, an App chat whose rollout Codex compressed to .jsonl.zst or deleted) was globbed across all of
+	// never wrote one, an App chat whose rollout Codex deleted) was globbed across all of
 	// history every second. A miss holds while the directories a new rollout appears in (missDirs) are unchanged; when
 	// they changed, while no rollout name in them has the thread's id (recentNames). A rollout put into an older day
 	// directory is seen when rollouts lists the older days again (a minute), which lets that thread's miss go.
 	misses map[string]rolloutMiss
 	// hits are the paths rolloutPath found for an id with that missLook's stamp. Their file and header are checked again
-	// on every call; a recentNames look without the id or the next older-day relist keeps the hit from going stale.
+	// on every call; a recentNames look without the id or the next older-day relist keeps the hit from going stale. A
+	// rollout Codex compressed to .jsonl.zst (#17768) is a hit, not a miss.
 	hits map[string]rolloutHit
 	// recentNames are the rollout names in missDirs when their missStamp was recentStamp ("\n" after each name): listed
 	// again only when a directory changes.
@@ -77,7 +81,7 @@ var rolloutCaches = struct {
 	byHome map[string]*rolloutCache
 }{byHome: map[string]*rolloutCache{}}
 
-var rolloutIDRe = lazyre.New(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})*\.jsonl$`)
+var rolloutIDRe = lazyre.New(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})*\.jsonl(?:\.zst)?$`)
 
 // rolloutFile is a rollout's path and the thread id its name ends in.
 type rolloutFile struct {
@@ -89,6 +93,7 @@ type rolloutFile struct {
 // what rolloutIDRe captures, without a regular expression. rollouts reads it for every rollout on disk once a minute,
 // where rolloutIDRe took most of each refresh's CPU time.
 func rolloutID(path string) string {
+	path = strings.TrimSuffix(path, ".zst")
 	const ext, idLen = ".jsonl", 36
 	if len(path) < idLen+len(ext) || !strings.HasSuffix(path, ext) {
 		return ""
@@ -213,7 +218,7 @@ func rolloutsIn(home string, pass *codexListPass) ([]codexRollout, bool) {
 		day := now.AddDate(0, 0, -d)
 		dir := filepath.Join(home, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"))
 		recent[dir] = true
-		paths, _ := filepath.Glob(filepath.Join(dir, "rollout-*.jsonl"))
+		paths, _ := filepath.Glob(filepath.Join(dir, "rollout-*.jsonl*"))
 		for _, p := range paths {
 			if id := rolloutID(p); id != "" {
 				files = append(files, rolloutFile{path: p, id: id})
@@ -222,8 +227,8 @@ func rolloutsIn(home string, pass *codexListPass) ([]codexRollout, bool) {
 	}
 	if now.Sub(c.olderAt) > time.Minute {
 		look := newMissLook(home) // before listing: a rollout written meanwhile moves a directory past this stamp
-		all, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl"))
-		archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl"))
+		all, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl*"))
+		archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl*"))
 		all = append(all, archived...)
 		c.older = c.older[:0]
 		for _, p := range all {
@@ -292,9 +297,9 @@ func rolloutSegments(home string) []codexRollout {
 // allRolloutPaths is every rollout file of a home on disk, whenever it was written, archived ones too: what a token
 // usage backfill reaching further back than rollouts' two weeks reads.
 func allRolloutPaths(home string) []string {
-	paths, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl"))
-	archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl"))
-	return append(paths, archived...)
+	paths, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl*"))
+	archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl*"))
+	return slices.DeleteFunc(append(paths, archived...), func(path string) bool { return rolloutID(path) == "" })
 }
 
 // pruneMetas keeps the session_meta of the rollouts just listed (recent and older), so a deleted or moved rollout
@@ -311,6 +316,17 @@ func (c *rolloutCache) pruneMetas(recent []rolloutFile) {
 	c.metas = metas
 }
 
+func codexRolloutReader(f *os.File) (io.Reader, func(), error) {
+	if !strings.HasSuffix(f.Name(), ".zst") {
+		return f, func() {}, nil
+	}
+	decoder, err := zstd.NewReader(f)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return decoder, decoder.Close, nil
+}
+
 // readRolloutMeta reads a rollout's first line (session_meta, tens of KB of instructions); whole says that line was all
 // written, and only then is what it says worth keeping. Codex 0.167 creates the file empty and writes the line 8–19 ms
 // later: a meta read in between and kept left the thread without a directory for good, and a start in that directory
@@ -321,7 +337,12 @@ func readRolloutMeta(path string) (m rolloutMeta, whole bool) {
 		return rolloutMeta{}, false
 	}
 	defer f.Close()
-	r := bufio.NewReaderSize(f, 256<<10)
+	reader, closeReader, err := codexRolloutReader(f)
+	if err != nil {
+		return rolloutMeta{}, false
+	}
+	defer closeReader()
+	r := bufio.NewReaderSize(reader, 256<<10)
 	line, err := r.ReadBytes('\n')
 	whole = err == nil
 	var l struct {
@@ -499,14 +520,14 @@ func rolloutPathIn(home, id string, pass *codexListPass) string {
 	if pass.homeUnavailable(home) {
 		return ""
 	}
-	matches, _ := rolloutGlob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+"*.jsonl"))
-	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadIDIn(home, path, pass) != id })
+	matches, _ := rolloutGlob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+"*.jsonl*"))
+	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutID(path) == "" || rolloutThreadIDIn(home, path, pass) != id })
 	if pass.homeUnavailable(home) {
 		return ""
 	}
 	if len(matches) == 0 {
-		matches, _ = rolloutGlob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+"*.jsonl"))
-		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadIDIn(home, path, pass) != id })
+		matches, _ = rolloutGlob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+"*.jsonl*"))
+		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutID(path) == "" || rolloutThreadIDIn(home, path, pass) != id })
 		if pass.homeUnavailable(home) {
 			return ""
 		}
@@ -604,8 +625,8 @@ func relistedSinceIn(home string, at time.Time, pass *codexListPass) (bool, bool
 }
 
 // keepHit records the paths found for id as of the look, under the same settled and relist safeguards as a miss. A hit
-// and a miss for one id cannot coexist. The older-day listing lets every hit go: it may name a continuation the hit did
-// not have, and the next lookup reads the current set once.
+// and a miss for one id cannot coexist. The older-day listing lets a hit go when it names a rollout of the thread the
+// hit does not have (a continuation in another old day directory), and the next lookup reads the current set once.
 func (l *missLook) keepHit(id string, paths []string) {
 	if !l.settled() {
 		return
@@ -683,7 +704,7 @@ func (l *missLook) recentNames() string {
 	if !ok {
 		var paths []string
 		for _, dir := range l.dirs {
-			found, _ := rolloutGlob(filepath.Join(dir, "rollout-*.jsonl"))
+			found, _ := rolloutGlob(filepath.Join(dir, "rollout-*.jsonl*"))
 			paths = append(paths, found...)
 		}
 		names = rolloutNames(paths)
@@ -712,11 +733,12 @@ func rolloutNames(paths []string) string {
 // relistMisses checks the misses against every rollout on disk (all, listed after look was taken). A thread whose id
 // is in no name has no rollout anywhere: its miss holds, from now on for look's stamp when look is settled. One whose
 // id is in a name is let go, to be globbed (and the rollout's header read) at its next look, and so is one not asked
-// about for missKeptFor. Every hit is let go too: this listing may name a continuation it did not have. Into a new map
-// for the misses: deleting from a map never gives its memory back.
+// about for missKeptFor. A hit is let go when this listing names a rollout of its thread it does not have (a
+// continuation in another old day directory, a copy), and kept otherwise (relistHits). Into new maps: deleting from a
+// map never gives its memory back.
 func (c *rolloutCache) relistMisses(all []string, look *missLook) {
 	c.relistedAt = look.at
-	clear(c.hits)
+	c.relistHits(all)
 	if len(c.misses) == 0 {
 		return
 	}
@@ -733,6 +755,32 @@ func (c *rolloutCache) relistMisses(all []string, look *missLook) {
 		}
 	}
 	c.misses = kept
+}
+
+// relistHits keeps the hits whose thread the listing (all) names in exactly the paths the hit has. Threads whose
+// rollout Codex compressed (.jsonl.zst, #17768) are hits outside the window, hundreds of them on a long-used computer;
+// letting every hit go each minute globbed each of them across all of history again (#17809), as the misses did before
+// relistMisses kept them (528 threads, 14 s of CPU every minute).
+func (c *rolloutCache) relistHits(all []string) {
+	if len(c.hits) == 0 {
+		return
+	}
+	listed := make(map[string][]string, len(c.hits))
+	for _, p := range all {
+		if id := rolloutID(p); id != "" {
+			if _, ok := c.hits[id]; ok {
+				listed[id] = append(listed[id], p)
+			}
+		}
+	}
+	kept := make(map[string]rolloutHit, len(c.hits))
+	for id, h := range c.hits {
+		paths := listed[id]
+		if len(paths) == len(h.paths) && !slices.ContainsFunc(paths, func(p string) bool { return !slices.Contains(h.paths, p) }) {
+			kept[id] = h
+		}
+	}
+	c.hits = kept
 }
 
 // missDirs are the directories a new rollout appears in: the day directories of the window, where a thread's rollout

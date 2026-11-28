@@ -3,41 +3,133 @@ package assistant
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The switch for automatic supervision messages (Settings.AutoSupervisionMessages, docs/assistant/unified-entry.md).
+// The switch for automatic supervision messages (Settings.AutoSupervisionMode, docs/assistant/unified-entry.md).
 //
 // It stops only the messages the assistant sends on its own, the ones that wake the main, a leader or the background
 // supervisor conversation (Tool == superviseTool, and a task leader Agent's supervision message). What it never
 // touches: the task ledger and every task's state, the owner's own questions and acceptance (task_review and the
-// owner's cards), permission cards and the answers to them, and the safety checks. With it off nothing is sent, queued
-// or scheduled; what was gathered or queued is withdrawn once, and turning it back on takes only events that happen
-// afterwards: it does not replay what was withdrawn.
+// owner's cards), permission cards and the answers to them, and the safety checks.
+//
+// It has three modes. all (the default) sends every supervision message. off sends none: nothing is sent, queued or
+// scheduled, and what was gathered or queued is withdrawn once. outcomes sends only the one-shot wake-ups a supervisor
+// has to act on (a task that finished, stopped, failed, reported done, blocked or a question, or needs a decision) and
+// drops the routine checks made while a task runs (supervisionSignalAllowed); switching to it withdraws only what it
+// drops. Switching back to all, or from off to either, takes only events that happen afterwards: it does not replay
+// what was withdrawn.
 
-// errSupervisionSuppressed is what a delivery step answers when the switch is off at the moment of sending. It is a
-// third outcome, neither a delivery nor a failure: nothing was sent, nothing is retried, the owner is not pushed and
-// no receipt, dedup record or acceptance is written for it.
+// The modes of Settings.AutoSupervisionMode.
+const (
+	supervisionModeAll      = "all"
+	supervisionModeOutcomes = "outcomes"
+	supervisionModeOff      = "off"
+)
+
+// supervisionModes are the values Settings.AutoSupervisionMode accepts, in the settings page's order.
+var supervisionModes = []string{supervisionModeAll, supervisionModeOutcomes, supervisionModeOff}
+
+// errSupervisionSuppressed is what a delivery step answers when the mode drops the message at the moment of sending.
+// It is a third outcome, neither a delivery nor a failure: nothing was sent, nothing is retried, the owner is not
+// pushed and no receipt, dedup record or acceptance is written for it.
 var errSupervisionSuppressed = errors.New("automatic supervision messages are off: the message was suppressed")
 
 // relaySuppressed reports whether err is the suppressed outcome.
 func relaySuppressed(err error) bool { return errors.Is(err, errSupervisionSuppressed) }
 
-// autoSupervisionOf is the switch in v: unset is on, so every assistant that never saw it behaves as before.
-func autoSupervisionOf(v Settings) bool {
-	return v.AutoSupervisionMessages == nil || *v.AutoSupervisionMessages
+// supervisionModeOf is the mode in v. Unset (or a value this hub does not know) falls back to the older switch,
+// AutoSupervisionMessages: unset or true is all, false is off, so every assistant that never saw the mode behaves as
+// before.
+func supervisionModeOf(v Settings) string {
+	if slices.Contains(supervisionModes, v.AutoSupervisionMode) {
+		return v.AutoSupervisionMode
+	}
+	if v.AutoSupervisionMessages != nil && !*v.AutoSupervisionMessages {
+		return supervisionModeOff
+	}
+	return supervisionModeAll
 }
 
-// autoSupervisionOn reports whether automatic supervision messages are on. A settings read that fails serves the last
-// good ones (settings), and none at all reads as on.
-func (s *Service) autoSupervisionOn(ctx context.Context) bool {
-	if s.storeAccessor() == nil {
-		return true // a Service that was never set up has no settings to turn anything off
+// autoSupervisionOf reports whether v sends any automatic supervision message (a mode other than off); it is what the
+// older boolean auto_supervision_messages reads.
+func autoSupervisionOf(v Settings) bool { return supervisionModeOf(v) != supervisionModeOff }
+
+// supervisionSignalAllowed reports whether mode sends g. all sends every signal and off none. outcomes sends a task's
+// terminal handoff, stop, failure, an explicit report of done, blocked or a question, and every signal that waits on a
+// decision or the owner's attention; it drops the periodic and routine checks made while a task runs (stalled, no
+// progress, estimates, review nudges, the retry that started it, schedule checks, the parked summary, PR and Inbox side
+// signals). A kind this switch does not list is sent: a new wake-up is never lost to a mode that predates it.
+func supervisionSignalAllowed(mode string, g superviseSignal) bool {
+	switch mode {
+	case supervisionModeOff:
+		return false
+	case supervisionModeOutcomes:
+	default:
+		return true
 	}
-	return autoSupervisionOf(s.settings(ctx))
+	switch g.Kind {
+	case sigReport:
+		return g.Report == upReportDone || g.Report == upReportBlocked || g.Report == upReportQuestion
+	case sigCheck:
+		return g.Report == checkDecidedReport
+	case sigStalled, sigNoProgress, sigLeaderStuck, sigEstimateDue, sigOverdue, sigReviewNudge, sigStarted,
+		sigParkedSummary, sigPRConflict, sigDraftPR, sigPREvent, sigInbox:
+		return false
+	}
+	return true
+}
+
+// supervisionSignalsAllowed reports whether mode sends a message made of list: off none, all every one, outcomes one
+// with at least one signal it sends. A message with no signals to judge (an empty list) is sent unless off.
+func supervisionSignalsAllowed(mode string, list []superviseSignal) bool {
+	switch mode {
+	case supervisionModeOff:
+		return false
+	case supervisionModeOutcomes:
+		return len(list) == 0 || slices.ContainsFunc(list, func(g superviseSignal) bool { return supervisionSignalAllowed(mode, g) })
+	}
+	return true
+}
+
+// supervisionRelayAllowed reports whether mode sends msg. A message that is not a supervision message is always sent;
+// a supervision message is judged by the signals it carries, and one queued before messages carried them (legacy text
+// only) is dropped only by off.
+func supervisionRelayAllowed(mode string, msg relayMsg) bool {
+	if msg.Tool != superviseTool {
+		return true
+	}
+	if mode == supervisionModeOff {
+		return false
+	}
+	signals, structured := decodeDigestSignals(msg.Signals)
+	if !structured {
+		return true
+	}
+	return supervisionSignalsAllowed(mode, signals)
+}
+
+// supervisionMode is the assistant's mode. A settings read that fails serves the last good ones (settings), and a
+// Service that was never set up reads as all.
+func (s *Service) supervisionMode(ctx context.Context) string {
+	if s.storeAccessor() == nil {
+		return supervisionModeAll // a Service that was never set up has no settings to turn anything off
+	}
+	return supervisionModeOf(s.settings(ctx))
+}
+
+// autoSupervisionOn reports whether any automatic supervision message is sent (the mode is not off).
+func (s *Service) autoSupervisionOn(ctx context.Context) bool {
+	return s.supervisionMode(ctx) != supervisionModeOff
+}
+
+// supervisionAllowed reports whether the assistant's mode sends g now.
+func (s *Service) supervisionAllowed(ctx context.Context, g superviseSignal) bool {
+	return supervisionSignalAllowed(s.supervisionMode(ctx), g)
 }
 
 // supervisionWithdrawn is what one withdrawal took out.
@@ -53,28 +145,45 @@ func (w supervisionWithdrawn) any() bool { return w.Queued+w.Pending+w.Deferred 
 // waiting in its queue while the switch is off.
 const nodeCancelEvery = 20 * time.Second
 
-// supervisionOff is the switch's memory-only state in superviseBook.
+// supervisionModeOff is the switch's memory-only state in superviseBook.
 type supervisionOff struct {
-	mu     sync.Mutex
-	was    bool                 // the last sync found it off
-	unsave bool                 // a withdrawal changed the relay queue but its write failed: write again
-	cancel map[string]time.Time // machine|session → when the node was last asked to cancel its waiting supervision input
+	mu      sync.Mutex
+	was     bool                 // the last sync found it off
+	routine bool                 // the last sync found it in outcomes: its first withdrawal is logged
+	unsave  bool                 // a withdrawal changed the relay queue but its write failed: write again
+	cancel  map[string]time.Time // machine|session → when the node was last asked to cancel its waiting supervision input
 }
 
-// syncAutoSupervision applies the switch: off withdraws what automatic supervision holds (idempotent, cheap when
-// there is nothing), on forgets the off state. The saved settings change goes through settingsChanged, a restart
-// and the watch's tick come here too, so a switch left off is applied on whichever happens first. It reports the switch.
+// syncAutoSupervision applies the mode: off withdraws what automatic supervision holds, outcomes withdraws only the
+// routine signals it drops (both idempotent, cheap when there is nothing), all forgets both. The saved settings change
+// goes through settingsChanged, a restart and the watch's tick come here too, so a mode left on off or outcomes is
+// applied on whichever happens first. It reports whether any supervision message is sent (the mode is not off).
 func (s *Service) syncAutoSupervision(ctx context.Context) bool {
 	off := &s.supervise.off
-	if s.autoSupervisionOn(ctx) {
+	switch s.supervisionMode(ctx) {
+	case supervisionModeAll:
 		off.mu.Lock()
-		off.was = false
+		off.was, off.routine = false, false
 		off.mu.Unlock()
+		return true
+	case supervisionModeOutcomes:
+		off.mu.Lock()
+		first := !off.routine
+		off.was, off.routine = false, true
+		off.mu.Unlock()
+		w := s.withdrawRoutineSupervision(ctx)
+		if first || w.any() {
+			s.logf("supervise: automatic supervision messages are outcomes only: withdrew %d queued message(s), %d gathered signal(s)",
+				w.Queued, w.Pending)
+		}
+		if w.Queued > 0 {
+			s.publish(ctx)
+		}
 		return true
 	}
 	off.mu.Lock()
 	first := !off.was
-	off.was = true
+	off.was, off.routine = true, false
 	off.mu.Unlock()
 	w := s.withdrawSupervision(ctx, first)
 	if first || w.any() {
@@ -88,6 +197,105 @@ func (s *Service) syncAutoSupervision(ctx context.Context) bool {
 		s.publish(ctx)
 	}
 	return false
+}
+
+// withdrawRoutineSupervision is outcomes' withdrawal: it takes out only the signals outcomes drops, from the gathered
+// signals, the durable outbox and the supervision messages in the relay queues. A queued message made only of them
+// leaves the queue (a send in flight keeps its head, marked withdrawn with nothing to replay, as withdrawSupervision
+// does); a message that carries an outcome too stays as it is, so no outcome wake-up is lost, and a withdrawn head keeps
+// only the outcome signals it would replay. Failed starts held for the cooldown are outcomes and stay, and the nodes
+// are not asked to cancel anything: what they hold may be an outcome.
+func (s *Service) withdrawRoutineSupervision(ctx context.Context) supervisionWithdrawn {
+	var out supervisionWithdrawn
+	routine := func(g superviseSignal) bool { return !supervisionSignalAllowed(supervisionModeOutcomes, g) }
+	b := &s.supervise
+	b.mu.Lock()
+	b.init()
+	for id, g := range b.pending {
+		if routine(g) {
+			delete(b.pending, id)
+			out.Pending++
+		}
+	}
+	b.mu.Unlock()
+
+	var emptied []string // conversations with no supervision message left in their queue
+	r := &s.relays
+	r.mu.Lock()
+	if s.relayLocked(ctx) {
+		changed := false
+		for id, g := range r.st.SupervisePending {
+			if routine(g) {
+				delete(r.st.SupervisePending, id)
+				out.Pending++
+				changed = true
+			}
+		}
+		if changed && len(r.st.SupervisePending) == 0 {
+			r.st.SupervisePending = nil
+		}
+		for to, queue := range r.st.Queue {
+			kept := make([]relayMsg, 0, len(queue))
+			removed, left := false, false
+			for i, m := range queue {
+				if m.Tool != superviseTool {
+					kept = append(kept, m)
+					continue
+				}
+				signals, structured := decodeDigestSignals(m.Signals)
+				if m.Withdrawn {
+					// Nothing of it is sent again; only what it would replay if the original never landed is checked.
+					if structured && slices.ContainsFunc(signals, routine) {
+						m.Signals = encodeDigestSignals(slices.DeleteFunc(signals, routine))
+						changed = true
+					}
+					kept, left = append(kept, m), true
+					continue
+				}
+				if !structured || len(signals) == 0 || slices.ContainsFunc(signals, func(g superviseSignal) bool { return !routine(g) }) {
+					kept, left = append(kept, m), true // legacy text, nothing to judge, or an outcome among its signals
+					continue
+				}
+				if i == 0 && r.draining[to] || !m.DoubtedAt.IsZero() {
+					// A send in flight (or whose answer was lost) still owns its outcome: keep the head, nothing to replay.
+					m.Withdrawn, m.Signals = true, encodeDigestSignals([]superviseSignal{})
+					kept, left = append(kept, m), true
+					changed = true
+					continue
+				}
+				out.Queued++
+				removed, changed = true, true
+			}
+			if removed && !left {
+				emptied = append(emptied, to)
+			}
+			if len(kept) == 0 {
+				delete(r.st.Queue, to)
+			} else {
+				r.st.Queue[to] = kept
+			}
+		}
+		off := &s.supervise.off
+		off.mu.Lock()
+		unsaved := off.unsave
+		off.mu.Unlock()
+		if changed || unsaved {
+			err := s.saveRelayLocked()
+			off.mu.Lock()
+			off.unsave = err != nil
+			off.mu.Unlock()
+		}
+	}
+	r.mu.Unlock()
+
+	if len(emptied) > 0 {
+		b.mu.Lock()
+		for _, to := range emptied {
+			b.setQueuedLocked(to, nil)
+		}
+		b.mu.Unlock()
+	}
+	return out
 }
 
 // withdrawSupervision takes out of every place the switch must empty: the gathered signals and their timer, the durable

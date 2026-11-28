@@ -378,9 +378,9 @@ extension APIClient {
             }
             stream.onFailure = { [weak self] _ in self?.error = String(localized: "Couldn't Load This Page") }
             stream.onLegacy = { [weak self] in Task { await self?.load() } }
-            stream.resolveHostConfirmation = { [weak self] id in
+            stream.resolveHostConfirmation = { [weak self] interaction in
                 guard let self, let api = self.deps.api() else { throw ExtensionStreamJSON.Failure.unsupported }
-                _ = try await api.resolve(id, Resolution(allow: true))
+                _ = try await api.resolve(interaction.id, Resolution(allow: true), occurrence: interaction.createdAtWire)
             }
         }
         #endif

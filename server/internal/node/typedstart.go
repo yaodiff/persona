@@ -11,8 +11,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // A start types its command into a fresh pane a moment after the tab is made, often before the shell's line editor
@@ -32,13 +32,10 @@ const terminalNotReady = proto.CodeTerminalNotReady
 // startScriptPrefix names the files a start writes in the node's directory.
 const startScriptPrefix = "agent-start-"
 
-var startScriptTitleRe = lazyre.New(`^(?:\.|source)\s+['"]?(?:[^'"\s]*[/\\])?agent-start-\d+\.sh['"]?(?:\s+&&\s+true\s+\S+)?$`)
-
 // isStartScriptTitle reports whether title is the shell's terminal title for Persona's own sourced agent-start-*.sh
 // command (typedstart.go), which must never stand as a session's display title.
 func isStartScriptTitle(title string) bool {
-	t := strings.TrimSpace(title)
-	return t != "" && startScriptTitleRe.MatchString(t)
+	return transcript.IsStartScriptTitle(title)
 }
 
 // startScript is the start file at path that runs cmd: it removes itself, then runs cmd.

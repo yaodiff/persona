@@ -153,6 +153,10 @@ func TestProviderEnv(t *testing.T) {
 				"ANTHROPIC_DEFAULT_HAIKU_MODEL": "h", "ANTHROPIC_SMALL_FAST_MODEL": "sf", "ANTHROPIC_DEFAULT_FABLE_MODEL": "big[1m]"}},
 		{"tiers explicit", with(func(l *proto.ManagedLauncher) { l.SonnetModel = "s"; l.FableModel = "f" }), "", "", false,
 			want{"ANTHROPIC_DEFAULT_SONNET_MODEL": "s", "ANTHROPIC_DEFAULT_FABLE_MODEL": "f"}},
+		{"blank gateway aliases inherit", with(func(l *proto.ManagedLauncher) {
+			l.SonnetModel = "standard"
+			l.Env = "ANTHROPIC_DEFAULT_SONNET_MODEL=\nANTHROPIC_DEFAULT_OPUS_MODEL=\nANTHROPIC_DEFAULT_FABLE_MODEL="
+		}), "", "", false, want{"ANTHROPIC_DEFAULT_SONNET_MODEL": "standard", "ANTHROPIC_DEFAULT_OPUS_MODEL": "big[1m]", "ANTHROPIC_DEFAULT_FABLE_MODEL": "big[1m]"}},
 		{"subagent force", with(func(l *proto.ManagedLauncher) { l.SubagentModel = "sub"; l.SubagentForce = true }), "", "", false,
 			want{"CLAUDE_CODE_SUBAGENT_MODEL": "sub", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"}},
 		{"no subagent force", base, "", "", false, want{"CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "-"}},
@@ -203,6 +207,30 @@ func TestProviderEnv(t *testing.T) {
 			if !ok || gv != v {
 				t.Errorf("%s: %s=%q (set %v), want %q", c.name, k, gv, ok, v)
 			}
+		}
+	}
+}
+
+func TestProviderEnvBlankGatewayAliasesUseLauncherFallback(t *testing.T) {
+	const gw = "https://gw.example.com"
+	l := proto.ManagedLauncher{
+		Name: "gateway", Kind: "api", BaseURL: gw, Model: "vendor/main",
+		OpusModel: "vendor/opus", SonnetModel: "vendor/sonnet", HaikuModel: "vendor/haiku",
+		FableModel: "vendor/fable", SubagentModel: "vendor/subagent",
+		Env: "ANTHROPIC_DEFAULT_OPUS_MODEL=\nANTHROPIC_DEFAULT_SONNET_MODEL=\nANTHROPIC_DEFAULT_HAIKU_MODEL=\n" +
+			"ANTHROPIC_DEFAULT_FABLE_MODEL=\nCLAUDE_CODE_SUBAGENT_MODEL=",
+	}
+	want := map[string]string{
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":   "vendor/opus",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL": "vendor/sonnet",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "vendor/haiku",
+		"ANTHROPIC_DEFAULT_FABLE_MODEL":  "vendor/fable",
+		"CLAUDE_CODE_SUBAGENT_MODEL":     "vendor/subagent",
+	}
+	env := providerEnv(l, "", "", false)
+	for key, value := range want {
+		if env[key] != value {
+			t.Errorf("%s=%q, want the launcher alias %q", key, env[key], value)
 		}
 	}
 }

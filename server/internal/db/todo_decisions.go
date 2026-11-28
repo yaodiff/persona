@@ -53,7 +53,16 @@ type TodoDecisionRow struct {
 
 // ListTodoDecisions returns a todo's decisions, oldest first: only those in effect, or all of them with all.
 func (d *DB) ListTodoDecisions(ctx context.Context, todoID string, all bool) ([]TodoDecisionRow, error) {
-	rows, err := d.pool.Query(ctx, `SELECT d.id, d.todo_id, d.question, d.choice, d.reason, d.source, d.source_machine,
+	return listTodoDecisions(ctx, d.pool, todoID, all)
+}
+
+// ListTodoDecisionsTx reads the decisions in the caller's transaction.
+func ListTodoDecisionsTx(ctx context.Context, tx pgx.Tx, todoID string) ([]TodoDecisionRow, error) {
+	return listTodoDecisions(ctx, tx, todoID, false)
+}
+
+func listTodoDecisions(ctx context.Context, q rowQuerier, todoID string, all bool) ([]TodoDecisionRow, error) {
+	rows, err := q.Query(ctx, `SELECT d.id, d.todo_id, d.question, d.choice, d.reason, d.source, d.source_machine,
 			d.source_session, d.source_message, COALESCE(d.supersedes_id, ''),
 			COALESCE((SELECT n.id FROM todo_decisions n WHERE n.supersedes_id = d.id ORDER BY n.created_at DESC, n.id DESC LIMIT 1), ''),
 			d.created_at
@@ -104,50 +113,52 @@ func (d *DB) TodoDecisionsSince(ctx context.Context, since time.Time) ([]TodoDec
 // InsertTodoDecision writes a decision. ErrTodoNotFound when the todo is gone, ErrDecisionSupersede when SupersedesID
 // is not an earlier decision of the same todo. A card's answer already written (same todo, interaction and question)
 // is not written again: inserted is false then.
-func (d *DB) InsertTodoDecision(ctx context.Context, r TodoDecisionRow) (inserted bool, err error) {
-	conn, err := d.pool.Acquire(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer conn.Release()
-	if r.Source == DecisionReported {
-		return false, errors.New("a report is written by ReportConcern")
-	}
-	err = pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
-		var one int
-		err := tx.QueryRow(ctx, `SELECT 1 FROM todos WHERE id = $1 FOR UPDATE`, r.TodoID).Scan(&one)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrTodoNotFound
-		}
-		if err != nil {
-			return err
-		}
-		if r.SupersedesID != "" {
-			if err := checkSupersede(ctx, tx, r.TodoID, r.SupersedesID, r.ID, r.CreatedAt); err != nil {
-				return err
-			}
-		}
-		tag, err := tx.Exec(ctx, `INSERT INTO todo_decisions (id, todo_id, question, choice, reason, source, source_machine,
-				source_session, source_message, supersedes_id, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11)
-			ON CONFLICT (todo_id, source_message, question) WHERE source_message <> '' DO NOTHING`,
-			r.ID, r.TodoID, r.Question, r.Choice, r.Reason, r.Source, r.SourceMachine, r.SourceSession, r.SourceMessage,
-			r.SupersedesID, r.CreatedAt)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return nil
-		}
-		inserted = true
-		_, err = tx.Exec(ctx, `UPDATE todos SET updated_at = $2 WHERE id = $1`, r.TodoID, r.CreatedAt)
+func (d *DB) InsertTodoDecision(ctx context.Context, r TodoDecisionRow) (bool, error) {
+	var inserted bool
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		var err error
+		inserted, err = InsertTodoDecisionTx(ctx, tx, r)
 		return err
 	})
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23503" { // the todo was deleted between the check and the insert
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 		return false, ErrTodoNotFound
 	}
-	return inserted, err
+	return inserted && err == nil, err
+}
+
+// InsertTodoDecisionTx writes a decision as part of the caller's transaction.
+func InsertTodoDecisionTx(ctx context.Context, tx pgx.Tx, r TodoDecisionRow) (bool, error) {
+	if r.Source == DecisionReported {
+		return false, errors.New("a report is written by ReportConcern")
+	}
+	var one int
+	err := tx.QueryRow(ctx, `SELECT 1 FROM todos WHERE id = $1 FOR UPDATE`, r.TodoID).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrTodoNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if r.SupersedesID != "" {
+		if err := checkSupersede(ctx, tx, r.TodoID, r.SupersedesID, r.ID, r.CreatedAt); err != nil {
+			return false, err
+		}
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO todo_decisions (id, todo_id, question, choice, reason, source, source_machine,
+			source_session, source_message, supersedes_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11)
+		ON CONFLICT (todo_id, source_message, question) WHERE source_message <> '' DO NOTHING`,
+		r.ID, r.TodoID, r.Question, r.Choice, r.Reason, r.Source, r.SourceMachine, r.SourceSession, r.SourceMessage,
+		r.SupersedesID, r.CreatedAt)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	_, err = tx.Exec(ctx, `UPDATE todos SET updated_at = $2 WHERE id = $1`, r.TodoID, r.CreatedAt)
+	return err == nil, err
 }
 
 // ReportConcern writes r, the report of a concern's outcome to the owner (Source DecisionReported), and closes the

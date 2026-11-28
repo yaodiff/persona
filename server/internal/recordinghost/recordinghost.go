@@ -105,6 +105,7 @@ type Host interface {
 	KBWake()
 	KBReadOnly(ctx context.Context) bool
 	KBConnected() bool
+	SpeakerTurnsImport() bool
 
 	Setting(ctx context.Context, key string, out any) (bool, error)
 	PutSetting(ctx context.Context, key string, v any) error

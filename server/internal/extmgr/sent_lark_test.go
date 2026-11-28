@@ -61,9 +61,11 @@ func TestRecordNodeSentWritesARow(t *testing.T) {
 		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughRule, Rule: &proto.LarkRule{Method: "POST", Path: "/conversations", Body: map[string]any{"type": "p2p"}, Action: "allow"}}})
 	send(proto.LarkSent{Method: "DELETE", Path: "/messages/om_3",
 		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughRule, Rule: &proto.LarkRule{Method: "*", Path: "**", Action: "allow"}}})
+	send(proto.LarkSent{Method: "GET", Path: "/links/open",
+		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: "ix_get"}})
 
 	rows := st.all()
-	if len(rows) != 4 {
+	if len(rows) != 5 {
 		t.Fatalf("rows %+v", rows)
 	}
 	r := rows[0]
@@ -101,6 +103,9 @@ func TestRecordNodeSentWritesARow(t *testing.T) {
 	}
 	if rule, _ := objectOf(t, rows[3].LetThrough)["rule"].(map[string]any); rule["action"] != "*" || rule["match"] != nil {
 		t.Fatalf("a rule for any call: %s", rows[3].LetThrough)
+	}
+	if rows[4].Action != "GET /links/open" {
+		t.Fatalf("the side-effecting GET was not recorded: %+v", rows[4])
 	}
 }
 

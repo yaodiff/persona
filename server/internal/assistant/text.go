@@ -14,6 +14,7 @@ import (
 
 // Formatting for tool results and the hub's logs, the same the hub writes with (one copy, internal/textfmt).
 var (
+	clipMarkdown  = textfmt.ClipMarkdown
 	clip          = textfmt.Clip
 	oneLine       = textfmt.OneLine
 	firstLine     = textfmt.FirstLine

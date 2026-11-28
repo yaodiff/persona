@@ -40,10 +40,12 @@ type usageKey struct {
 	model    string
 	launcher string
 	agent    string
+	dir      string // where its session started (usage_dirs.go); "" while the manager does not keep it
 }
 
 type usageFile struct {
 	session string // its session or thread id (usageAdapter.session)
+	dir     string // where that session started, as a bucket names it (usage_dirs.go); "" when not kept
 	off     int64
 	parser  tokenuse.Parser
 	// The request of the file's latest record that was not More: skip, it was not counted (before the window, after
@@ -69,6 +71,11 @@ type usageMeter struct {
 	step  int64
 	until time.Time
 	seen  map[uint64]struct{}
+	// With a manager that keeps directories (usage.features): fileDir names where a file's session started, recordDir
+	// where a database row's did, and dirs has what they resolved to for the reports. nil: buckets have no directory.
+	fileDir   func(usagePath) string
+	recordDir func(q usageQuery, session string) string
+	dirs      *usageDirs
 }
 
 func newUsageMeter() *usageMeter {
@@ -117,6 +124,14 @@ func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		st, _ := n.state.get(session)
 		return st.Launcher
 	}
+	if keeps, temps := n.usageKeepsDirs(ctx); keeps {
+		dirs := newUsageDirs(n.home)
+		dirs.temps = temps
+		go dirs.run(ctx)
+		n.usageDirs.p.Store(dirs)
+		defer n.usageDirs.p.CompareAndSwap(dirs, nil)
+		n.meterDirs(m, dirs)
+	}
 	queries := n.usageQueries()
 	t := time.NewTicker(usageEvery)
 	defer t.Stop()
@@ -131,7 +146,7 @@ func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		}
 		for _, q := range queries {
 			for _, r := range q.poll(ctx, n, cutoff) {
-				m.add(&usageFile{}, r, cutoff)
+				m.add(&usageFile{dir: m.dirOfRecord(q, r)}, r, cutoff)
 			}
 		}
 		m.prune(cutoff)
@@ -160,11 +175,13 @@ func newUsageFile(f usagePath, off int64) *usageFile {
 func (m *usageMeter) scan(f usagePath, cutoff time.Time) {
 	uf := m.files[f.path]
 	if uf == nil {
-		uf = newUsageFile(f, startOffset(f.path, f.st.Size(), cutoff))
+		uf = m.newFile(f, startOffset(f.path, f.st.Size(), cutoff))
 		m.files[f.path] = uf
 	}
-	if f.st.Size() < uf.off { // rewritten
+	if f.st.Size() < uf.off { // rewritten: read again, its session's start directory kept
+		dir := uf.dir
 		*uf = *newUsageFile(f, 0)
+		uf.dir = dir
 	}
 	if f.st.Size() == uf.off {
 		return
@@ -226,7 +243,7 @@ func (m *usageMeter) add(uf *usageFile, r tokenuse.Record, cutoff time.Time) {
 	if m.launcherOf != nil && session != "" {
 		launcher = m.launcherOf(session)
 	}
-	uf.skip, uf.at = false, usageKey{minute, model, launcher, r.Agent}
+	uf.skip, uf.at = false, usageKey{minute, model, launcher, r.Agent, uf.dir}
 	m.addTo(uf.at, r.Tokens, true)
 }
 
@@ -234,7 +251,7 @@ func (m *usageMeter) add(uf *usageFile, r tokenuse.Record, cutoff time.Time) {
 func (m *usageMeter) addTo(k usageKey, t tokenuse.Tokens, request bool) {
 	b := m.buckets[k]
 	if b == nil {
-		b = &proto.UsageBucket{Minute: k.minute, Model: k.model, Launcher: k.launcher, Agent: k.agent}
+		b = &proto.UsageBucket{Minute: k.minute, Model: k.model, Launcher: k.launcher, Agent: k.agent, Dir: k.dir}
 		m.buckets[k] = b
 	}
 	b.Input += t.Input
@@ -282,7 +299,11 @@ func (m *usageMeter) report(now time.Time) (map[string]any, bool) {
 	}
 	m.dirty = map[usageKey]bool{}
 	m.sent, m.sentAt = true, now
-	return map[string]any{"buckets": list, "full": full, "launchers": true}, true
+	params := map[string]any{"buckets": list, "full": full, "launchers": true}
+	if dirs := m.dirs.take(full); len(dirs) > 0 {
+		params["dirs"] = dirs
+	}
+	return params, true
 }
 
 // startOffset finds where in a big file the window starts: lines are written in time order, so step back from the

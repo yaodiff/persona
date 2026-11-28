@@ -40,7 +40,7 @@ struct ApproveFirstIntent: AppIntent {
                 let hint = String(localized: "This session can't be approved from here. Open the app to check it.")
                 return .result(value: hint, dialog: IntentSupport.dialog(hint))
             }
-            try await api.resolve(first.id, resolution)
+            try await api.resolve(first.id, resolution, occurrence: first.createdAtWire)
             let text = Self.doneText(for: first)
             return .result(value: text, dialog: IntentSupport.dialog(text))
         } catch {

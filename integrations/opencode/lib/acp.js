@@ -295,8 +295,18 @@ export class OpencodeAcpClient extends EventEmitter {
     })
   }
 
-  async call(method, params, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+  async call(method, params, timeoutMs = DEFAULT_RPC_TIMEOUT_MS, signal) {
+    if (signal?.aborted) {
+      const err = new Error('opencode acp call aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     await this.ensureStarted()
+    if (signal?.aborted) {
+      const err = new Error('opencode acp call aborted')
+      err.name = 'AbortError'
+      throw err
+    }
     return this._callRaw(method, params, timeoutMs)
   }
 
@@ -333,8 +343,8 @@ export class OpencodeAcpClient extends EventEmitter {
     return this.call('session/set_config_option', { sessionId, configId, value }, timeoutMs)
   }
 
-  async prompt(sessionId, prompt, timeoutMs = 0) {
-    return this.call('session/prompt', { sessionId, prompt }, timeoutMs)
+  async prompt(sessionId, prompt, timeoutMs = 0, signal) {
+    return this.call('session/prompt', { sessionId, prompt }, timeoutMs, signal)
   }
 
   cancel(sessionId) {

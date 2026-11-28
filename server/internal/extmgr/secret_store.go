@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // StoreSecret relays metadata/ciphertext only. In particular a provider's error text is never forwarded:
@@ -25,12 +27,13 @@ func (h *Manager) StoreSecret(ctx context.Context, expected extension.SecretProv
 	in.Contribution = prov.Contribution
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	err = hp.proc.Call(cctx, "secrets.store", in, &out)
+	out, err = buswire.Call(cctx, hp.proc, extwire.SecretStoreMethod, in)
 	if in.Phase == "commit" {
-		// An uncertain reply may still follow a successful write. Invalidate cached launcher values
-		// for every spelling of this provider's references, including title-based references.
-		ps.kept.forgetProvider(prov.Extension)
-		ps.forgetSecretWords(prov.Extension)
+		// An uncertain reply may still follow a successful write. Every kept launcher value of this provider, for
+		// every spelling of its references (title-based ones too), is asked for again at its next use, and still
+		// answers while the provider cannot be asked (secret_kept.go).
+		ps.keptProviderStored(ctx, prov.Extension)
+		ps.staleWords(ctx, prov.Extension)
 		action := "secret_stored"
 		if err != nil {
 			action = "secret_store_failed"

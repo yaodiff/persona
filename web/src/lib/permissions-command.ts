@@ -6,7 +6,7 @@
 // says before it is picked; a Persona conversation's Full access takes effect with its next message.
 import { t } from "../i18n";
 import { hasModes, listedModesOf } from "./session-actions";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import type { Session } from "./types";
 
 export const PERMISSIONS_COMMAND = "/permissions";
@@ -21,7 +21,7 @@ export const isPermissionsCommand = (draft: string) => draft.trim().toLowerCase(
  *  an agent with modes or listed `capabilities.permission_modes` while it runs (read-only sources and offline sessions have none). */
 export function canPickPermissions(s: Session | undefined, assistant?: boolean): boolean {
   if (!s) return false;
-  return Boolean(assistant || s.assistant) || ((hasModes(s) || Boolean(listedModesOf(s))) && stateOf(s) !== "offline");
+  return Boolean(assistant || s.assistant) || ((hasModes(s) || Boolean(listedModesOf(s))) && activityOf(s) !== "offline");
 }
 
 // ── opening the picker from the composer ─────────────────────────────────────

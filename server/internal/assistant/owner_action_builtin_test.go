@@ -448,25 +448,18 @@ func TestOwnerBuiltinCommittedSaveWithReadbackConflictIsCompleted(t *testing.T) 
 	}
 }
 
-func TestOwnerBuiltinUnseededProfileEditSaves(t *testing.T) {
-	s, _, _, _ := ownerBuiltinService(t)
-	// No modelProfilesKey: preparation, fresh validation and apply each build
-	// built-in templates independently. Generated UpdatedAt must not cause a
-	// false exact-image conflict when every decision-relevant value is equal.
-	book, ok := newOwnerActionBook(s.store())
-	if !ok {
-		t.Fatal("missing owner-action book")
-	}
+func TestOwnerBuiltinRejectsEditingAnEmptyProfileCatalog(t *testing.T) {
+	s, _, st, _ := ownerBuiltinService(t)
 	items := []map[string]any{ownerBuiltinInput("persona_settings", map[string]any{"action": "set", "key": modelProfileBindingsKey, "value": map[string]any{
 		"profile": "performance", "purposes": map[string]any{"agent.new": map[string]any{"provider": "launcher.gw", "model": "first-save"}}}})}
-	batch, _, _ := prepareOwnerBuiltins(t, s, book, items, true)
-	if result := callOwnerBuiltin(t, s, batch.Items[0]); result.IsError {
-		t.Fatalf("first save of an unpersisted built-in profile failed: %+v", result)
+	args := json.RawMessage(managedJSON(t, map[string]any{"items": items}))
+	before, puts := profileStoreSnapshot(st.memStore)
+	if _, err := s.toolOwnerActionPrepare(context.Background(), "server", "main", args); !errors.Is(err, errModelProfileEmpty) {
+		t.Fatalf("empty catalog approval: %v", err)
 	}
-	view := profilesOf(t, s)
-	performance := managedProfile(t, s, "performance")
-	if view.Revision != 2 || performance.Purposes["agent.new"].Model != "first-save" {
-		t.Fatalf("unseeded profile save: revision=%d profile=%+v", view.Revision, performance)
+	requireProfileStoreUnchanged(t, st.memStore, before, puts)
+	if len(s.pendingInteractions()) != 0 {
+		t.Fatal("an edit of the empty catalog opened a confirmation card")
 	}
 }
 

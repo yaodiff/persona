@@ -117,7 +117,7 @@ describe("the request", () => {
   it("tells whether the files went back", () => {
     const res = { prompt: "x", restore: "conversation" as const, code_restored: false, input_cleared: true };
     expect(rewindDone(res, "conversation").text).toBe("已回退对话");
-    expect(rewindDone(res, "code_and_conversation").text).toContain("没有代码改动");
+    expect(rewindDone(res, "code_and_conversation").text).toContain("无代码改动");
     expect(rewindDone({ ...res, restore: "code_and_conversation", code_restored: true }, "code_and_conversation").text).toBe("已回退代码和对话");
   });
 });

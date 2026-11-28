@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:sessionService="persona.android.assist.PersonaVoiceInteractionSessionService"
+    android:recognitionService="persona.android.assist.PersonaRecognitionService"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="true"
+    android:usesAssistData="true"
+    android:usesAssistScreenshots="true"
+    android:usesAssistStructureScreenContent="true"
+    tools:targetApi="37" />

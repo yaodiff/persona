@@ -432,7 +432,7 @@ func TestParseReviewFindings(t *testing.T) {
 // The run is on the ledger in Postgres: a manager started again on the same database knows the running review, its
 // reviewer and copy, and its tick ends it from the reviewer's answer.
 func TestAutoReviewSurvivesRestart(t *testing.T) {
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

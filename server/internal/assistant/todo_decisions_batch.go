@@ -1,11 +1,13 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -47,8 +49,38 @@ type batchDecisionResponse struct {
 	Failed    int                   `json:"failed"`
 }
 
-// todoDecisionsBatchRoute registers POST /api/v1/todos/decisions/batch (#15698).
+// decisionGroup is one same-cause cluster returned by GET /api/v1/todos/decisions/groups (#16433).
+type decisionGroup struct {
+	Key       string   `json:"key"`
+	CauseKind string   `json:"cause_kind"`
+	Label     string   `json:"label"`
+	URL       string   `json:"url,omitempty"`
+	TodoIDs   []string `json:"todo_ids"`
+	Count     int      `json:"count"`
+}
+
+// decisionGroupsResponse is the answer of GET /api/v1/todos/decisions/groups (#16433).
+type decisionGroupsResponse struct {
+	Groups       []decisionGroup `json:"groups"`
+	TotalPending int             `json:"total_pending"`
+}
+
+// todoDecisionsBatchRoute registers POST /api/v1/todos/decisions/batch (#15698)
+// and GET /api/v1/todos/decisions/groups (#16433).
 func (s *Service) todoDecisionsBatchRoute() {
+	s.handle("GET /api/v1/todos/decisions/groups", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		if !s.settings(ctx).todosV2On() {
+			apierr.WriteCode(w, http.StatusConflict, "todos_v2_disabled", errors.New("todos_v2 must be enabled to group pending decisions"))
+			return
+		}
+		if err := s.ensureTodosLoaded(ctx); err != nil {
+			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
+			return
+		}
+		res := s.pendingDecisionGroups(ctx, r.Header.Get(RoleHeader) == roleExtension)
+		apierr.WriteJSON(w, res)
+	})
 	s.handle("POST /api/v1/todos/decisions/batch", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
@@ -219,4 +251,253 @@ func batchDecisionErrStatus(err error) int {
 
 func (s *Service) batchDecisionErrText(ctx context.Context, err error) string {
 	return i18n.Localize(err, s.requestCtxLang(ctx))
+}
+
+type pendingDecisionEntry struct {
+	todo     Todo
+	ask      *todoAsk
+	blockers []db.TodoBlockerRow
+}
+
+func (s *Service) pendingDecisionGroups(ctx context.Context, isExtension bool) decisionGroupsResponse {
+	s.todos.mu.RLock()
+	openTodos := make([]Todo, 0, len(s.todos.todos))
+	titlesByID := make(map[string]string, len(s.todos.todos))
+	for _, t := range s.todos.todos {
+		titlesByID[t.ID] = strings.TrimSpace(t.Title)
+		if t.DoneAt == nil {
+			openTodos = append(openTodos, copyTodoLocked(t))
+		}
+	}
+	s.todos.mu.RUnlock()
+
+	asks := s.todoAsks(ctx)
+	pending := make([]pendingDecisionEntry, 0, len(asks))
+	for _, t := range openTodos {
+		ask, hasAsk := asks[t.ID]
+		needsUser := t.Supervision != nil && t.Supervision.State == reviewNeedsUser
+		if !hasAsk && !needsUser {
+			continue
+		}
+		var askPtr *todoAsk
+		if hasAsk {
+			a := ask
+			askPtr = &a
+		}
+		pending = append(pending, pendingDecisionEntry{todo: t, ask: askPtr})
+	}
+
+	if isExtension && len(pending) > 0 {
+		ids := make([]string, len(pending))
+		for i := range pending {
+			ids[i] = pending[i].todo.ID
+		}
+		hidden := s.todosHidden(ctx, ids, nil)
+		filtered := pending[:0]
+		for _, p := range pending {
+			if !hidden[p.todo.ID] {
+				filtered = append(filtered, p)
+			}
+		}
+		pending = filtered
+	}
+
+	if len(pending) == 0 {
+		return decisionGroupsResponse{Groups: []decisionGroup{}, TotalPending: 0}
+	}
+
+	// Deterministic order before counting/grouping.
+	slices.SortFunc(pending, func(a, b pendingDecisionEntry) int {
+		return strings.Compare(a.todo.ID, b.todo.ID)
+	})
+
+	blockersByTodo := map[string][]db.TodoBlockerRow{}
+	if bst := s.todoBlockerDB(); bst != nil {
+		if rows, err := bst.ListActiveTodoBlockers(ctx); err == nil {
+			for _, row := range rows {
+				if strings.TrimSpace(row.TargetRef) == "" {
+					continue
+				}
+				blockersByTodo[row.TodoID] = append(blockersByTodo[row.TodoID], row)
+			}
+		}
+	}
+	for i := range pending {
+		rows := blockersByTodo[pending[i].todo.ID]
+		slices.SortFunc(rows, func(a, b db.TodoBlockerRow) int {
+			return cmp.Or(
+				strings.Compare(normalizeDecisionCauseRef(a.TargetRef), normalizeDecisionCauseRef(b.TargetRef)),
+				strings.Compare(a.ID, b.ID),
+			)
+		})
+		pending[i].blockers = rows
+	}
+
+	blockerCounts := map[string]int{}
+	blockerKind := map[string]string{}
+	prCounts := map[string]int{}
+	parentCounts := map[string]int{}
+	fallbackCounts := map[string]int{}
+
+	for _, p := range pending {
+		seenRef := map[string]bool{}
+		for _, b := range p.blockers {
+			ref := normalizeDecisionCauseRef(b.TargetRef)
+			if ref == "" || seenRef[ref] {
+				continue
+			}
+			seenRef[ref] = true
+			blockerCounts[ref]++
+			if _, ok := blockerKind[ref]; !ok {
+				blockerKind[ref] = strings.TrimSpace(b.Kind)
+			}
+		}
+		if pr := normalizeDecisionCauseRef(p.todo.PRURL); pr != "" {
+			prCounts[pr]++
+		}
+		if parent := strings.TrimSpace(p.todo.PartOf); parent != "" {
+			parentCounts[parent]++
+		}
+		if fk, _ := decisionFallbackKey(p); fk != "" {
+			fallbackCounts[fk]++
+		}
+	}
+
+	byKey := map[string]*decisionGroup{}
+	addToGroup := func(key, causeKind, label, url, todoID string) {
+		g, ok := byKey[key]
+		if !ok {
+			g = &decisionGroup{
+				Key:       key,
+				CauseKind: causeKind,
+				Label:     label,
+				URL:       url,
+			}
+			byKey[key] = g
+		}
+		g.TodoIDs = append(g.TodoIDs, todoID)
+	}
+
+	for _, p := range pending {
+		// 1. Shared active persistent blocker target_ref (2+ pending decisions sharing same ref).
+		bestRef, bestCount := "", 0
+		for _, b := range p.blockers {
+			ref := normalizeDecisionCauseRef(b.TargetRef)
+			if c := blockerCounts[ref]; c >= 2 {
+				if c > bestCount || (c == bestCount && (bestRef == "" || ref < bestRef)) {
+					bestRef, bestCount = ref, c
+				}
+			}
+		}
+		if bestRef != "" {
+			label := bestRef
+			if k := blockerKind[bestRef]; k != "" {
+				label = k + ": " + bestRef
+			}
+			url := ""
+			if isHTTPURL(bestRef) {
+				url = bestRef
+			}
+			addToGroup("blocker:"+bestRef, "shared_blocker", label, url, p.todo.ID)
+			continue
+		}
+
+		// 2. Shared PRURL.
+		if pr := normalizeDecisionCauseRef(p.todo.PRURL); pr != "" && prCounts[pr] >= 2 {
+			url := ""
+			if isHTTPURL(pr) {
+				url = pr
+			}
+			addToGroup("pr:"+pr, "shared_pr", pr, url, p.todo.ID)
+			continue
+		}
+
+		// 3. Shared PartOf parent goal.
+		if parent := strings.TrimSpace(p.todo.PartOf); parent != "" && parentCounts[parent] >= 2 {
+			label := titlesByID[parent]
+			if label == "" {
+				label = parent
+			}
+			addToGroup("parent:"+parent, "shared_parent", label, "", p.todo.ID)
+			continue
+		}
+
+		// 4. Fallback: same direction_id (or project) + normalized ask reason, else singleton.
+		if fk, reasonLabel := decisionFallbackKey(p); fk != "" && fallbackCounts[fk] >= 2 {
+			addToGroup("cause:"+fk, "shared_cause", reasonLabel, "", p.todo.ID)
+			continue
+		}
+
+		label := strings.TrimSpace(p.todo.Title)
+		if label == "" {
+			label = p.todo.ID
+		}
+		url := normalizeDecisionCauseRef(p.todo.PRURL)
+		if url == "" && p.ask != nil {
+			url = normalizeDecisionCauseRef(p.ask.Link)
+		}
+		if !isHTTPURL(url) {
+			url = ""
+		}
+		addToGroup("todo:"+p.todo.ID, "singleton", label, url, p.todo.ID)
+	}
+
+	groups := make([]decisionGroup, 0, len(byKey))
+	for _, g := range byKey {
+		slices.Sort(g.TodoIDs)
+		g.Count = len(g.TodoIDs)
+		groups = append(groups, *g)
+	}
+	slices.SortFunc(groups, func(a, b decisionGroup) int {
+		return cmp.Or(
+			cmp.Compare(b.Count, a.Count),
+			strings.Compare(a.Key, b.Key),
+		)
+	})
+	return decisionGroupsResponse{
+		Groups:       groups,
+		TotalPending: len(pending),
+	}
+}
+
+func normalizeDecisionCauseRef(raw string) string {
+	s := strings.TrimSpace(raw)
+	if isHTTPURL(s) {
+		s = strings.TrimRight(s, "/")
+	}
+	return s
+}
+
+func isHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+func decisionFallbackKey(p pendingDecisionEntry) (string, string) {
+	scope := strings.TrimSpace(p.todo.DirectionID)
+	if scope == "" {
+		scope = strings.TrimSpace(p.todo.Project)
+	}
+	if scope == "" {
+		return "", ""
+	}
+	reason := ""
+	if p.ask != nil {
+		reason = strings.TrimSpace(p.ask.Question)
+		if reason == "" {
+			reason = strings.TrimSpace(p.ask.Verdict)
+		}
+	}
+	if reason == "" && p.todo.Supervision != nil {
+		for i := len(p.todo.Supervision.Reviews) - 1; i >= 0; i-- {
+			if r := strings.TrimSpace(p.todo.Supervision.Reviews[i].Reason); r != "" {
+				reason = r
+				break
+			}
+		}
+	}
+	norm := strings.ToLower(strings.Join(strings.Fields(reason), " "))
+	if norm == "" {
+		return "", ""
+	}
+	return scope + "|" + norm, reason
 }

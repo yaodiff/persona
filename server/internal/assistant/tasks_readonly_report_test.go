@@ -121,7 +121,7 @@ func TestReadonlyReportKeepsOtherApprovals(t *testing.T) {
 						todo := onlyTodo(s)
 						agent := todo.Agents[0]
 						ix := proto.Interaction{ID: "other-approval", MachineID: agent.MachineID, SessionID: agent.SessionID,
-							Kind: proto.IxPermission, ToolName: toolName}
+							Kind: proto.IxPermission, OutwardWrite: true, ToolName: toolName}
 						switch name {
 						case "other machine":
 							ix.MachineID = "other"
@@ -193,7 +193,7 @@ func TestReadonlyWorkerReportReachesLeader(t *testing.T) {
 			agent := worker.Agents[0]
 			args := json.RawMessage(`{"kind":"done","text":"Inspection complete; no files changed."}`)
 			assertReadonlyReportAllowed(t, s, proto.Interaction{ID: "worker-report", MachineID: agent.MachineID,
-				SessionID: agent.SessionID, Kind: proto.IxPermission, ToolName: toolName, ToolInput: args, Resumable: true})
+				SessionID: agent.SessionID, Kind: proto.IxPermission, OutwardWrite: true, ToolName: toolName, ToolInput: args, Resumable: true})
 			res := s.mcpCall(context.Background(), agent.MachineID, agent.SessionID, "report_to_supervisor", args, false)
 			if res.IsError || !strings.Contains(res.Content[0].Text, "Sent to your supervisor") {
 				t.Fatalf("worker report failed: %+v", res)
@@ -211,7 +211,7 @@ func TestReadonlyWorkerReportReachesLeader(t *testing.T) {
 
 func TestReadonlyTaskReportAfterRestart(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestReadonlyTaskReportAfterRestart(t *testing.T) {
 
 func TestReadonlyLeaderReportAfterRestart(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestReadonlyLeaderReportAfterRestart(t *testing.T) {
 				t.Fatalf("worker lost its persisted leader binding: %+v", todo)
 			}
 			ix := proto.Interaction{ID: "leader-report-" + toolName, SessionID: agent.SessionID,
-				Kind: proto.IxPermission, ToolName: toolName, Resumable: true}
+				Kind: proto.IxPermission, OutwardWrite: true, ToolName: toolName, Resumable: true}
 			params, _ := json.Marshal(map[string]any{"interaction": ix})
 			callCtx, cancel := context.WithTimeout(ctx, time.Second)
 			defer cancel()

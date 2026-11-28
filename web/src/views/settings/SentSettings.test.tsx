@@ -129,10 +129,10 @@ describe("设置 › 以你的名义发出", () => {
     const links = [...host.querySelectorAll("a")].map((a) => a.getAttribute("href"));
     expect(links).toEqual(["/s/mac/s1", "/persona/c1", "/s/mac/s9"]);
     const rows = (id: number) => rowOf(`Subject ${id}`)!.parentElement!.textContent ?? "";
-    expect(rows(3)).toContain("扩展自述");
+    expect(rows(3)).toContain("扩展上报");
     expect(rows(3)).toContain("chatext");
     expect(rows(3)).not.toContain("打开对话");
-    expect(rows(4)).toContain("扩展自述");
+    expect(rows(4)).toContain("扩展上报");
     expect(rows(4)).toContain("打开对话");
     expect(rows(5)).toContain("无对话");
     expect(rows(1)).not.toContain("无对话");
@@ -173,7 +173,7 @@ describe("设置 › 以你的名义发出", () => {
     await loaded([row(9), row(8)], 8);
     await click(button("加载更早"));
     await refuse(reads()[1], new ApiError(500, "boom", { error: "boom", code: "internal" }));
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("服务暂时出错");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("服务出现异常");
     expect(rowOf("Subject 9")).toBeDefined();
     await click(button("加载更早"));
     expect(reads()[2].path).toBe("/connectors/sent?before=8");
@@ -231,7 +231,7 @@ describe("设置 › 以你的名义发出", () => {
     await loaded([row(9)]);
     await click(chip("飞书"));
     await answer(reads()[1], { items: [], next: null });
-    expect(text()).toContain("飞书 还没有记录");
+    expect(text()).toContain("暂无 飞书 的发送记录");
     expect(chip("飞书")).toBeDefined(); // the chips stay
     await click(button("显示全部"));
     expect(reads()[2].path).toBe("/connectors/sent");
@@ -241,8 +241,8 @@ describe("设置 › 以你的名义发出", () => {
 
   it("explains an empty ledger: what is recorded, what is not (lark-cli), and for how long", async () => {
     await loaded([]);
-    expect(text()).toContain("还没有记录到以你名义发出的内容");
-    expect(text()).toContain("会记：");
+    expect(text()).toContain("暂无以你名义发出的记录");
+    expect(text()).toContain("记录范围：");
     expect(text()).toContain("lark-cli");
     expect(text()).toContain("90 天");
     expect(host.querySelector("[aria-pressed]")).toBeNull(); // nothing to filter yet
@@ -251,7 +251,7 @@ describe("设置 › 以你的名义发出", () => {
   it("no database: says so (not that the hub is down)", async () => {
     await render();
     await refuse(reads()[0], new ApiError(503, "no database: there is no ledger", { error: "no database: there is no ledger", code: "no_database" }));
-    expect(text()).toContain("这台 hub 没有数据库");
+    expect(text()).toContain("当前 hub 未启用数据库");
     expect(text()).not.toContain("暂时无法响应");
     expect(button("重试")).toBeUndefined();
   });
@@ -259,7 +259,7 @@ describe("设置 › 以你的名义发出", () => {
   it("no full access: says which devices can read it", async () => {
     await render();
     await refuse(reads()[0], new ApiError(403, "only a device with full rights", { error: "only a device with full rights", code: "forbidden" }));
-    expect(text()).toContain("只有拥有完整权限的设备才能看这个列表");
+    expect(text()).toContain("仅具有完整访问权限的设备可查看此列表");
   });
 
   it("an older hub (404, no code): says to update the hub", async () => {
@@ -271,7 +271,7 @@ describe("设置 › 以你的名义发出", () => {
   it("another failure shows the error with Retry, which reads again", async () => {
     await render();
     await refuse(reads()[0], new ApiError(500, "boom", { error: "boom", code: "internal" }));
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("服务暂时出错");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("服务出现异常");
     await click(button("重试"));
     expect(reads()).toHaveLength(2);
     await answer(reads()[1], { items: [row(3)], next: null });
@@ -302,7 +302,7 @@ describe("设置 › 以你的名义发出", () => {
     expect(dialog.textContent).toContain("msg-123");
     expect(dialog.textContent).toContain("Third line with words"); // past the row's two lines
     expect(dialog.querySelector("a")?.getAttribute("href")).toBe("/s/mac/s1");
-    expect(dialog.textContent).not.toContain("已截断");
+    expect(dialog.textContent).not.toContain("处截断");
     await click(button("复制正文"));
     expect(copied).toEqual(["First\nSecond\nThird line with words"]);
     await click(button("完成"));
@@ -332,18 +332,18 @@ describe("设置 › 以你的名义发出", () => {
   it("notes that a text of exactly 4000 characters was cut, and one of 3999 was not", async () => {
     await loaded([row(2, { text: "y".repeat(4000) }), row(3, { text: "z".repeat(3999) })]);
     await click(rowOf("Subject 2"));
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("在 4,000 个字处被截断");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("在第 4,000 个字符处截断");
     await click(button("完成"));
     await act(async () => void (await new Promise((r) => setTimeout(r, 300))));
     await click(rowOf("Subject 3"));
-    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("被截断");
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("处截断");
   });
 
   it("a send with no text says so in the details and offers no copy", async () => {
     await loaded([row(2, { text: "", summary: "mail_send to ann@example.com", origin: {}, target: { arg_keys: ["body"] } })]);
     await click(rowOf("mail_send to ann@example.com"));
     const dialog = document.querySelector('[role="dialog"]')!;
-    expect(dialog.textContent).toContain("没有记下正文");
+    expect(dialog.textContent).toContain("未记录正文");
     expect(dialog.textContent).toContain("arg_keys");
     expect(dialog.textContent).toContain("无对话");
     expect(button("复制正文")).toBeUndefined();
@@ -398,7 +398,7 @@ describe("设置 › 以你的名义发出", () => {
     await loaded([row(9)]);
     await click(chip("飞书"));
     await refuse(reads()[1], new ApiError(500, "boom", { error: "boom", code: "internal" }));
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("服务暂时出错");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("服务出现异常");
     expect(chip("全部")).toBeDefined();
     await click(chip("全部"));
     expect(reads()[2].path).toBe("/connectors/sent");
@@ -458,7 +458,7 @@ describe("recall", () => {
     await click(button("撤回消息"));
     const before = reads().length;
     await refuse(recalls()[0], new ApiError(409, "too old", { error: "too old", code: "too_old" }));
-    expect(text()).toContain("太久");
+    expect(text()).toContain("发送时间过长");
     expect(reads().length).toBe(before + 1);
   });
 });

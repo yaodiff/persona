@@ -39,9 +39,12 @@ const (
 
 // HistoryState is how far a chat's import got, kept in history/state/<chat id>.json so a run goes on after a restart.
 type HistoryState struct {
-	Source string `json:"source,omitempty"` // the chat's source, so forgetting it finds the file (ForgetSource)
-	Mode   string `json:"mode"`
-	Cursor string `json:"cursor,omitempty"` // the source's position to read on from (backwards)
+	// Connector and SourceID identify the original conversation even when two raw IDs normalize to the same filename.
+	Connector string `json:"connector,omitempty"`
+	SourceID  string `json:"source_id,omitempty"`
+	Source    string `json:"source,omitempty"` // the chat's source, so forgetting it finds the file (ForgetSource)
+	Mode      string `json:"mode"`
+	Cursor    string `json:"cursor,omitempty"` // the source's position to read on from (backwards)
 	// Read and Written: messages read from the source, and lines that went into the day files (Written counts only
 	// what was new: a page read twice adds nothing).
 	Read      int       `json:"read"`
@@ -317,7 +320,13 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 		if c.Source == "" {
 			return 0, fmt.Errorf("history: %s is a new chat without its source", id)
 		}
-		cur = &Chat{ID: id, Source: c.Source, SourceID: c.SourceID, Kind: c.Kind, Name: c.Name, Created: time.Now().UTC()}
+		cur = &Chat{ID: id, Source: c.Source, SourceID: c.SourceID, Connector: c.Connector, Kind: c.Kind, Name: c.Name, Created: time.Now().UTC()}
+	}
+	// An existing archive owns this path. A normalized ID alone cannot establish
+	// that a differently named conversation or another connector owns its contents.
+	if c.SourceID != "" && (cur.SourceID != c.SourceID || cur.Source != c.Source ||
+		c.Connector != "" && cur.Connector != "" && cur.Connector != c.Connector) {
+		return 0, errors.New("history: archived conversation identity changed")
 	}
 	if added, err = e.Store.mergeMessages(cur, lines, selecting, usual); err != nil {
 		return added, err

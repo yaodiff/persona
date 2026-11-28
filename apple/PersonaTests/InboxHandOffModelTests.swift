@@ -711,3 +711,37 @@ struct InboxHandOffDeliveryTests {
         #expect(result.error?.contains("Finish the draft on the computer first") == true)
     }
 }
+
+extension InboxHandOffDeliveryTests {
+    @Test func aQueuedHandOffFilesOnItsSourcePairingAfterSwitchingToTheAgentsHub() async throws {
+        let source = FakeHub(url: "https://inbox.example"), destination = FakeHub(url: "https://agent.example")
+        let path = "/api/v1/inbox/same-id/done"
+        source.on("POST", path, json: #"{"ok":true}"#)
+        destination.on("POST", path, json: #"{"ok":true}"#)
+        let first = PairedHub(id: "source", config: source.client.config, group: "")
+        let second = PairedHub(id: "destination", config: destination.client.config, group: "g2")
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        model.registry = HubRegistry(hubs: [first, second])
+        model.hubGroup = "g2"
+        model.linkHooksForTests = (transport: try #require(source.client.transport), socket: { SyncSocket() })
+        model.buildLinks()
+        defer { for link in model.links { link.live.disconnect() } }
+        try #require(model.link("g2")).transportForTests = destination.client.transport
+        var message = PendingMessage(text: "Pass it on", images: [])
+        message.inboxHandOff = .init(itemID: "same-id", manager: "owner", sourceGroup: "", sourcePairing: "source")
+        let restored = try JSON.decoder.decode(PendingMessage.self, from: JSON.encoder.encode(message))
+        let target = SessionKey(group: "g2", machineID: "m", sessionID: "agent")
+        #expect(model.completeInboxHandOff(target, restored))
+        let deadline = ContinuousClock.now + .seconds(3)
+        while source.sent("POST", path).isEmpty && destination.sent("POST", path).isEmpty && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(source.sent("POST", path).map { $0.headers[APIClient.managerHeader] } == ["owner"])
+        #expect(destination.sent("POST", path).isEmpty)
+
+        let legacy = try JSON.decoder.decode(PendingMessage.InboxHandOff.self, from: Data(#"{"itemID":"same-id","filed":false}"#.utf8))
+        #expect(legacy.filingGroup(in: model.registry, destination: "g2") == nil)
+        #expect(legacy.filingGroup(in: HubRegistry(hubs: [second]), destination: "g2") == "g2")
+        #expect(restored.inboxHandOff?.filingGroup(in: HubRegistry(hubs: [second]), destination: "g2") == nil)
+    }
+}

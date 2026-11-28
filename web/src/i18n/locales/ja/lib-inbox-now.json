@@ -1,6 +1,7 @@
 {
   "confirm_reply": "返信の確認待ち",
   "confirm_agent": "Agentの開始待ち",
+  "confirm_handoff": "引き継ぎの確認待ち",
   "decide": "あなたの判断待ち",
   "queued": "AIの順番待ち",
   "looking": "AIが確認中",

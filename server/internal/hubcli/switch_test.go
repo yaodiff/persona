@@ -1,6 +1,7 @@
 package hubcli
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"os"
@@ -15,7 +16,7 @@ import (
 
 // fakeEdge answers on the hub's control socket as an edge whose active slot runs slot ("": nothing serves), and sends
 // the binary each switch asks for.
-func fakeEdge(t *testing.T, slot string) <-chan string {
+func fakeEdge(t *testing.T, slot string, result ...hubedge.Msg) <-chan string {
 	t.Helper()
 	root, err := os.MkdirTemp("", "psw") // short: a unix socket's path has a length limit
 	if err != nil {
@@ -44,6 +45,9 @@ func fakeEdge(t *testing.T, slot string) <-chan string {
 				if m.T == hubedge.MsgSwitch {
 					asked <- m.Binary
 					r = hubedge.Msg{T: hubedge.MsgDone, OK: true, Version: "v2", Build: 2}
+					if len(result) > 0 {
+						r = result[0]
+					}
 				}
 				_ = json.NewEncoder(c).Encode(r)
 			}
@@ -51,6 +55,35 @@ func fakeEdge(t *testing.T, slot string) <-chan string {
 		}
 	}()
 	return asked
+}
+
+func TestSwitchSyncsLocalNodeOnlyAfterSuccessfulTakeover(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		ok   bool
+		sync bool
+	}{
+		{name: "default", ok: true, sync: true},
+		{name: "operator opt-out", ok: true, args: []string{"--hub-only"}},
+		{name: "status", ok: true, args: []string{"--status"}},
+		{name: "failed takeover"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeEdge(t, "/bin/personad", hubedge.Msg{T: hubedge.MsgDone, OK: tc.ok, Version: "v2", Build: 2, Reason: "failed"})
+			calls := 0
+			err := runHubSwitchWith(tc.args, func(_ context.Context, version string, build int64) error {
+				calls++
+				if version != "v2" || build != 2 {
+					t.Fatalf("reloaded for %s build %d", version, build)
+				}
+				return nil
+			})
+			if (err == nil) != tc.ok || (calls == 1) != tc.sync {
+				t.Fatalf("switch error %v, local reload requests %d", err, calls)
+			}
+		})
+	}
 }
 
 // Without --binary, a switch goes on with the program the edge's active slot runs, whichever program asks for it

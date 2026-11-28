@@ -158,7 +158,7 @@ func (s *Service) nameAgentNow(ctx context.Context, machine, sid string) (agentN
 	// An automatic name from now on, whatever it was. The background's change count is its own: this neither spends
 	// nor resets it. Its failures and their cooldown are over, since the model just named this session.
 	r.Manual, r.Requested = false, true
-	r.NamedAt, r.NamedOutput = time.Now(), current.OutputTokens
+	r.NamedAt, r.NamedOutput = time.Now(), int(current.OutputTokensValue())
 	r.Failures, r.LastFailure, r.NextAttempt = 0, "", time.Time{}
 	err := s.putAgentNameLocked(ctx, key, r)
 	b.mu.Unlock()

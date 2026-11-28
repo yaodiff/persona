@@ -1,5 +1,6 @@
 import type { FeedItem } from "./feed";
 import type { ChatLine } from "./turns";
+import { timeOrNaN as time } from "./times";
 
 export type QuietRound = Extract<ChatLine, { kind: "supervision" }> & { completedSilent: true };
 export interface BackgroundActivityRound {
@@ -8,7 +9,6 @@ export interface BackgroundActivityRound {
 }
 
 const ROUND_FEED: ReadonlySet<FeedItem["kind"]> = new Set(["task", "routed", "answered"]);
-const time = (value: string | undefined) => value ? Date.parse(value) : NaN;
 
 /** Feed written during a completed silent round: [its first input, the next real input). Other cards never move. */
 function inRound(item: FeedItem, line: QuietRound): boolean {

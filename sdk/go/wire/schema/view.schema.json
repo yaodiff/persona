@@ -403,7 +403,9 @@
         "truncated": {"type": "boolean"},
         "load": {"$ref": "#/$defs/Action"},
         "line_url": {"type": "string", "maxLength": 4096, "x-since": 5,
-          "description": "An https link to lines of this file on its site, {start} and {end} standing for the lines (…/blob/<sha>/a.go#L{start}-L{end})."}
+          "description": "An https link to lines of this file on its site, {start} and {end} standing for the lines (…/blob/<sha>/a.go#L{start}-L{end})."},
+        "navigate": {"$ref": "#/$defs/Action", "x-since": 13,
+          "description": "Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7 for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word, intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app leaves it out."}
       },
       "required": ["type", "text"]
     },
@@ -1154,7 +1156,7 @@
         "confirm": {"type": "string", "description": "Ask the user first, in these words."},
         "submit": {"type": "boolean", "description": "Send the page's fields as values."},
         "reply": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "Assistant only: send this text back to the same conversation. The hub reads it from the saved view, not from the client."},
-        "open": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the app."},
+        "open": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Assistant only, except that a full extension page may open persona://session/<machine>/<session> or persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the app."},
         "pop": {"type": "boolean", "description": "Assistant only: return one page within the card."},
         "push": {"$ref": "#/$defs/Push", "x-since": 3,
           "description": "Open a page on top of this one instead of calling ui.action (an app of UI version 3; an older one calls ui.action with id)."},

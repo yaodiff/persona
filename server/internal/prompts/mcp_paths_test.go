@@ -25,7 +25,7 @@ func TestRecordingToolDescriptionsRespectRetention(t *testing.T) {
 					t.Errorf("description promises expired material: %q", stale)
 				}
 			}
-			for _, want := range []string{"recording_days", "minutes_days", "forever by default"} {
+			for _, want := range []string{"recording_text_days", "minutes_days", "forever by default"} {
 				if !strings.Contains(description, want) {
 					t.Errorf("description does not explain retention %q: %s", want, description)
 				}

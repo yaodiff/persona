@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -45,9 +47,28 @@ func (s *Service) startTaskSuccessor(ctx context.Context, t Todo, last proto.Ses
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 	defer cancel()
 	sctx = context.WithValue(sctx, placementTaskKey{}, t.ID)
-	prompt := prompts.RenderTaskSuccessor(prompts.TaskSuccessor{Previous: agentLabel(last), PreviousID: last.SessionID,
-		LastReply: clip(last.LastText, 2000), Files: prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale)), Text: text})
-	prompt = s.withTodoDecisions(sctx, t.ID, prompt)
+	agent := last.Agent
+	if agent == "" {
+		agent = s.launcherAgent(sctx, last.MachineID, last.Launcher)
+	}
+	successor := prompts.TaskSuccessor{Previous: agentLabel(last), PreviousID: last.SessionID,
+		LastReply: clip(last.LastText, 2000), Files: prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale))}
+	prompt := ""
+	if agent == agentprompt.Antigravity {
+		if ordered, ok := agentprompt.WorkflowCommand(text); ok {
+			successor.Text = ""
+			context := strings.TrimSpace(prompts.RenderTaskSuccessor(successor))
+			if decisions := s.todoHandoffDecisionsContext(sctx, t.ID); decisions != "" {
+				context = strings.TrimSpace(context + "\n\n" + decisions)
+			}
+			prompt = agentprompt.WithContext(agent, ordered, context)
+		}
+	}
+	if prompt == "" {
+		successor.Text = text
+		prompt = prompts.RenderTaskSuccessor(successor)
+		prompt = s.withTodoDecisions(sctx, t.ID, prompt)
+	}
 	params := map[string]any{"cwd": last.Cwd, "launcher": last.Launcher, "model": "", "effort": "", "tab_name": t.Title,
 		"prompt": prompt}
 	if last.PermissionMode != "" {

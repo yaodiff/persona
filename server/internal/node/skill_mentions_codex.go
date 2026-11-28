@@ -92,7 +92,7 @@ func (n *Node) probeCodexSkills(ctx context.Context, launcher, cwd string, param
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, shell, "-ic", codexShell(n.launcherCommand(launcher)), "persona")
+	cmd := exec.CommandContext(ctx, shell, shellFlag(shell), codexShell(n.launcherCommand(launcher)), "persona")
 	cmd.Dir, cmd.Env = cwd, os.Environ()
 	cmd.SysProcAttr = osproc.SessionGroupAttr()
 	cmd.Cancel = func() error { return osproc.StopGroup(cmd.Process.Pid, true) }

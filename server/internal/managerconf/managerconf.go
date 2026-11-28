@@ -37,7 +37,7 @@ func DefaultFile(home string) string { return filepath.Join(DefaultDir(home), Fi
 // ("assistant.owner": the hub keeps assistant.external). A section added here later is moved by the next start
 // (Marker lists what was).
 var Moved = []string{
-	"lark", "lark_gate", "connector_gate", "github", "imessage", "google", "microsoft", "bots",
+	"lark", "lark_gate", "connector_gate", "connector_auto_confirm", "github", "imessage", "google", "microsoft", "bots",
 	"extensions", "plugins", "trusted_extension_markets", "extension_market", "extension_runtime", "ui_page_sessions", "usage", "sent_ledger_days", "sent_recall_hours",
 	"agents", "kb", "ai", "inbox", "hook_timeout_minutes",
 	"assistant.owner", "assistant.notes", "assistant.machine", "assistant.launcher", "assistant.memory_dreaming",
@@ -435,9 +435,9 @@ func In(raw []byte) []string {
 	return out
 }
 
-// Sections reads the Moved sections of the manager.json at file as a JSON object (missing file: none), for a
+// Sections reads Moved and explicitly requested manager-only keys at file as a JSON object, for a
 // manager's configuration struct to unmarshal; identity and the marker are left out.
-func Sections(file string) ([]byte, error) {
+func Sections(file string, local ...string) ([]byte, error) {
 	b, err := readConfig(file)
 	if err != nil {
 		return nil, err
@@ -458,7 +458,7 @@ func Sections(file string) ([]byte, error) {
 			}
 		}
 	}
-	return Only(o, Moved), nil
+	return Only(o, append(slices.Clone(Moved), local...)), nil
 }
 
 // Only is o with only the keys in keys (a dotted one: that key of the section), compact.

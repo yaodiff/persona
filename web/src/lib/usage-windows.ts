@@ -12,6 +12,12 @@ export interface UsageWindow {
   resets_at?: string;
   /** An allowance a provider keeps for one model next to the plan's own (#2595); absent for the plan's window. */
   model?: string;
+  /** Optional group heading from a usage extension; windows sharing a group render together under one heading. */
+  group?: string;
+  /** Optional row display name from a usage extension. */
+  title?: string;
+  /** Optional short remark under the window row from a usage extension. */
+  note?: string;
   /** Where scheduling stops using this window's account, 0-100; it can differ per account and per window. Absent
    *  when the hub (older, or no such rule) does not say: nothing is drawn then (#13173). */
   protect_percent?: number;
@@ -36,6 +42,8 @@ export interface UsageAccount {
   stale_at?: string;
   /** Where the numbers came from (#2595): an agent's files on one of the computers, and/or account-pool gateways by name. */
   local?: boolean;
+  /** Present only for values read from a saved Codex session. Older hubs omit the field. */
+  reading_source?: "rollout";
   sources?: string[];
   /** The computers (by name) that read it (#1907); an older hub only says `local`. */
   machines?: string[];
@@ -241,12 +249,24 @@ export function sourceNames(a: UsageAccount): string[] {
   return [...machines, ...(a.sources ?? [])];
 }
 
-export const windowKey = (w: UsageWindow) => `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
+export const windowKey = (w: UsageWindow) =>
+  w.group || w.title
+    ? `${w.label}:${w.window_minutes}:${w.model ?? ""}:${w.group ?? ""}:${w.title ?? ""}`
+    : `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
 
 /** The usage provider ID shared by older node samples, gateways and visibility settings. */
 export function canonicalUsageProvider(provider: string): string {
   const id = provider.trim().toLowerCase();
   return id === "agy" ? "antigravity" : id;
+}
+
+export function isHistoricalCodexReading(a: UsageAccount): boolean {
+  return a.reading_source === "rollout" && a.stale === true && canonicalUsageProvider(a.provider) === "codex";
+}
+
+/** The hub's public Codex row ID survives quota resets. Saved session readings can describe an unidentified source. */
+export function canAliasUsageAccount(a: UsageAccount): boolean {
+  return Boolean(a.id) && canonicalUsageProvider(a.provider) === "codex" && a.reading_source !== "rollout";
 }
 
 /** The sidebar takes the two accounts with lowest headroom `h = r - R`, with stale accounts last. Rank whole
@@ -426,9 +446,10 @@ export type SidebarUsageItem =
  *  when pinned IDs match at least one live pinnable account or window, show those matched items in pinned order;
  *  otherwise fall back to the default automatic ranking (`topAccounts(live)` followed by live balance accounts). */
 export function selectSidebarUsageItems(
-  live: UsageAccount[],
+  readings: UsageAccount[],
   pinnedIds: readonly string[],
 ): { items: SidebarUsageItem[]; custom: boolean } {
+  const live = readings.filter((a) => !isHistoricalCodexReading(a));
   if (pinnedIds.length > 0) {
     const byId = new Map(live.map((a) => [a.id, a]));
     const items: SidebarUsageItem[] = [];
@@ -478,6 +499,7 @@ export interface UnconnectedProvider {
   id: string;
   title: string;
   agent: string;
+  base_url?: string;
 }
 
 const emptyAccounts: UsageAccount[] = [];

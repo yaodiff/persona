@@ -72,6 +72,8 @@ export struct PhoneDefaultPermissionSection {
           if (this.form.notice) Text(tr(this.form.notice)).fontSize(Tokens.caption).fontColor(Colors.danger)
             .width('100%').padding({left:20,right:20,bottom:8}).id('settings.default_permission_error')
         }.width('100%').clip(true).alignItems(HorizontalAlign.Start).backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.settingsGroupRadius)
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.settingsGroupRadius})
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
         Text(tr('phone_default_permission_footer')).fontSize(Tokens.caption).maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
           .lineHeight(PhoneStyle.settingsExampleLineHeight(15.67,22,this.environment.fontScale)).fontColor(PhoneStyle.settingsSecondary)
           .width('100%').padding({left:20,right:20,top:9,bottom:5}).id('settings.default_permission_footer')

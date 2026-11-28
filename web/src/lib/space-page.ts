@@ -1,7 +1,7 @@
 // The page of one space (`/space/<machine>/<space name>`, docs/web/web.md "Space page", iOS SpaceView): what is computed from the
 // store, kept apart so it can be tested. A space is found by its name on the machine, like the pins, mutes and the
 // todos it hangs on: herdr gives a workspace a new id when it restarts, the name stays.
-import { byAttention, stateOf } from "./format";
+import { byAttention, activityOf } from "./format";
 import { findTodoForSpace, type Todo } from "./todos";
 import type { Session } from "./types";
 import { byTime } from "./times";
@@ -26,14 +26,14 @@ const RECENT_LIMIT = 20;
 
 export function spaceView(sessions: readonly Session[], mid: string, space?: string): SpaceView {
   const mine = sessions.filter((s) => s.machine_id === mid && !s.assistant && (space === undefined || (s.space_id && spaceNameOf(s) === space)));
-  const live = mine.filter((s) => stateOf(s) !== "offline").sort(byAttention);
+  const live = mine.filter((s) => activityOf(s) !== "offline").sort(byAttention);
   const recent = mine
-    .filter((s) => stateOf(s) === "offline")
+    .filter((s) => activityOf(s) === "offline")
     .sort((a, b) => byTime(b.updated_at, a.updated_at) || a.session_id.localeCompare(b.session_id))
     .slice(0, RECENT_LIMIT);
   const counts = { needs: 0, working: 0, unread: 0 };
   for (const s of live) {
-    const st = stateOf(s);
+    const st = activityOf(s);
     if (st === "needs_you") counts.needs++;
     else if (st === "working") counts.working++;
     else if (st === "unread") counts.unread++;

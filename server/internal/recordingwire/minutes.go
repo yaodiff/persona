@@ -46,7 +46,9 @@ type Minutes struct {
 	// Overview is the same minutes as one summary card (#6563, minutes_overview.go): only when every point and
 	// decision is a bullet of one of its topics. Minutes from before it, or from an older hub, have none.
 	Overview *MinutesOverview `json:"overview,omitempty"`
-	Partial  bool             `json:"partial,omitempty"` // the transcript's end was not read
+	// Debates are the real disagreements of the meeting (#16728, minutes_debates.go): omitted when there is none.
+	Debates []MinutesDebate `json:"debates,omitempty"`
+	Partial bool            `json:"partial,omitempty"` // the transcript's end was not read
 	// Language is what they are written in, their Markdown's headings too (language.go): an i18n code (zh-Hans, en,
 	// ja); minutes written before it was kept have none, and are Chinese.
 	Language string `json:"language,omitempty"`

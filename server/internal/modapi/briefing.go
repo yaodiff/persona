@@ -3,6 +3,9 @@ package modapi
 import (
 	"context"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // FeedKindBrief is the chat feed item kind for a routine briefing's fixed facts.
@@ -48,6 +51,8 @@ type TodoPort interface {
 	OpenProgressTodos(ctx context.Context) []BriefTodoProgress
 	TodoTitle(id string) (string, bool)
 	StalePRFollowups(ctx context.Context, at time.Time, lang string) []BriefPRFollowup
+	DeferredSupervision(ctx context.Context, at time.Time) []BriefDeferredSupervision
+	SupervisionBriefed(ctx context.Context, ids []string, at time.Time)
 }
 
 // InboxPort reads open follow-up Inbox signals for the model-only briefing sections.
@@ -55,8 +60,9 @@ type InboxPort interface {
 	FollowingSignals(ctx context.Context) []BriefInboxSignal
 }
 
-// LaterPort reads questions Agents left to wait for the next briefing.
+// LaterPort reads deferred questions and marks a question handled when its button is pressed.
 type LaterPort interface {
+	Handle(ctx context.Context, id string) (bool, error)
 	Rows(ctx context.Context, lang, web string, now time.Time, limit int) ([]BriefBoardRow, int)
 }
 
@@ -90,11 +96,19 @@ type DeliveryPort interface {
 	MarkListed(f *BriefSnapshot)
 }
 
-// PromptPort renders briefing prompts, counts runes, formats plain board rows, strips context tags and translates i18n keys.
+// BriefCardPage pairs a physical card with its own plain-text substitute.
+type BriefCardPage struct {
+	Card     *assistantwire.BotCard
+	Fallback string
+}
+
+// PromptPort renders briefing prompts, counts runes, formats board rows and stages, strips context tags and translates i18n keys.
 type PromptPort interface {
 	RenderBriefFacts(BriefFacts) string
 	RenderNorthStarFacts(lines []string) string
 	BriefDayRunes(day *BriefDay) int
+	BoardRowMarkdown(lang string, n int, row BriefBoardRow) string
+	OpenStageBar(lang, stage string) string
 	BoardRowPlain(lang string, n int, row BriefBoardRow) string
 	Translate(lang, key string, args map[string]any) string
 	StripContext(text string) string
@@ -102,9 +116,11 @@ type PromptPort interface {
 
 // ScheduleFactsRunner is the briefing module's runtime lifecycle for scheduled routines with facts or reports.
 type ScheduleFactsRunner interface {
+	// RenderCards builds the delivery pages, complete plain notification and IDs with visible Accept buttons.
+	RenderCards(f *BriefSnapshot, label, answer, header, openLabel, openURL string) ([]BriefCardPage, string, []string)
 	Start(ctx context.Context, task BriefTaskInfo, now time.Time) string
 	StartReport(ctx context.Context, task BriefTaskInfo, now time.Time) string
-	Sent(taskID, session string, retried bool)
+	Sent(BriefScheduleRun)
 	HasSession(session string) bool
 	IsFailure(session, asked string, cut bool) bool
 	Claim(session, asked, turn string, cut bool) (run *BriefRun, claimed bool)
@@ -135,6 +151,9 @@ type ScheduleFactsRunner interface {
 // BriefFacts are the facts of a morning or evening routine's run, as the model is given them (assistant/routine_facts):
 // the lines are ready to read; the totals count more than the lines when the lists were cut.
 type BriefFacts struct {
+	DeferredSupervisionHeading string
+	DeferredSupervision        []string
+
 	NorthStar                                                        []string
 	ConfirmationSummary                                              string
 	Confirmations                                                    []string
@@ -460,8 +479,22 @@ type BriefPRFollowup struct {
 	Note           string     `json:"note,omitempty"`
 }
 
+// BriefSupervisionDecisionID identifies one persisted supervision verdict.
+type BriefSupervisionDecisionID string
+
+// BriefDeferredSupervision is a saved signal the supervisor can review in a briefing.
+type BriefDeferredSupervision struct {
+	ID     BriefSupervisionDecisionID `json:"id"`
+	TodoID wireids.TodoID             `json:"todo_id"`
+	Title  string                     `json:"title"`
+	Reason string                     `json:"reason"`
+}
+
 // BriefSnapshot is what one run of a routine with facts on says, as it was when the run started.
 type BriefSnapshot struct {
+	DeferredSupervision []BriefDeferredSupervision
+
+	Contributions     []RoutineContribution
 	At                time.Time
 	NorthStar         BriefNorthStar
 	NorthStarLines    []string
@@ -507,13 +540,14 @@ type BriefRun struct {
 
 // BriefTaskInfo is the narrow slice of a scheduled Task the briefing needs.
 type BriefTaskInfo struct {
-	ID           string
-	Label        string
-	Facts        bool
-	Report       bool
-	SessionID    string
-	RunSessionID string
-	MachineID    string
+	Contributions []RoutineContribution
+	ID            string
+	Label         string
+	Facts         bool
+	Report        bool
+	SessionID     string
+	RunSessionID  string
+	MachineID     string
 }
 
 // BriefScheduleRun is the narrow slice of a ScheduleRun the briefing needs.
@@ -548,6 +582,9 @@ type BriefFallbackSend struct {
 
 // BriefBody is a `brief` item's JSON body.
 type BriefBody struct {
+	DeferredSupervision []BriefDeferredSupervision `json:"deferred_supervision,omitempty"`
+
+	Contributions    []RoutineContribution  `json:"contributions,omitempty"`
 	NorthStar        BriefBodyNorthStar     `json:"north_star"`
 	Confirmations    BriefConfirmations     `json:"confirmations"`
 	Title            string                 `json:"title"`

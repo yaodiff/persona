@@ -37,6 +37,9 @@ extension EnvironmentValues {
     /// The page was pushed by `detailPresentation` (regular width), not risen as a sheet: no stack of its own (it is
     /// in the chat's), and its close goes back.
     @Entry var detailPushed = false
+    /// The stack the chat is in takes a task's detail as a value on its path (`TaskDetailRoute`, #13156): the Sidebar
+    /// layout's page in regular width, where a page pushed by view stayed in front of every root the sidebar picked.
+    @Entry var taskDetailByValue = false
 }
 
 extension View {

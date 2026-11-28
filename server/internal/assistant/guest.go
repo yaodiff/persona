@@ -22,7 +22,9 @@ import (
 // and only Persona's MCP server (node/assistant_guest.go), and here it is listed and may call only the connector tools
 // it was given: none of the assistant's own (agents, mail, the knowledge base, conversations…), the phone's, Cua's or
 // ego's. It gets no live snapshot either. Which conversations are guests, with their tools, is kept in the assistant's
-// store (assistant.guests); a node's call it cannot tell about (the store unreadable) is refused.
+// store (assistant.guests); a node's call it cannot tell about (the store unreadable) is refused. A group guest
+// (bot_group, bot_guest.go) is a third kind the hub starts itself: one per chat and thread, listing the reply tool and
+// the connector tools the owner named.
 
 const guestsKey = "assistant.guests"
 
@@ -51,6 +53,8 @@ type guestConv struct {
 	Recording string `json:"recording,omitempty"`
 	// Handoff is the proxy reply this guest answers (guestKindBotHandoff); its one tool posts the reply.
 	Handoff string `json:"handoff,omitempty"`
+	// Group is the chat and thread this guest answers (guestKindBotGroup), the key the module keeps.
+	Group string `json:"group,omitempty"`
 }
 
 // guestKindMeeting is a meeting's room conversation (docs/assistant/meeting-minutes.md "The room conversation").
@@ -58,6 +62,10 @@ const guestKindMeeting = "meeting"
 
 // guestKindBotHandoff is a proxy reply's guest (bot_handoff.go): one hub-owned tool, kept for guestKeep like any guest.
 const guestKindBotHandoff = "bot_handoff"
+
+// guestKindBotGroup is a non-owner's @bot the group access policy let through (bot_guest.go): the reply tool plus the
+// read-only connector tools the owner listed, kept for guestKeep like any guest.
+const guestKindBotGroup = "bot_group"
 
 type guestBook struct {
 	mu     sync.Mutex
@@ -108,6 +116,11 @@ func (s *Service) guestSetRoom(ctx context.Context, machine, id, recording strin
 // guestSetHandoff notes that conversation id on machine answers handoff (before the node starts it).
 func (s *Service) guestSetHandoff(ctx context.Context, machine, id, handoff string, tools []string) error {
 	return s.guestPut(ctx, id, &guestConv{MachineID: machine, Tools: slices.Clone(tools), Kind: guestKindBotHandoff, Handoff: handoff})
+}
+
+// guestSetGroup notes that conversation id on machine answers group, the module's chat and thread key.
+func (s *Service) guestSetGroup(ctx context.Context, machine, id, group string, tools []string) error {
+	return s.guestPut(ctx, id, &guestConv{MachineID: machine, Tools: slices.Clone(tools), Kind: guestKindBotGroup, Group: group})
 }
 
 // guestDrop forgets guest id (a room deleted).
@@ -291,4 +304,23 @@ func (s *Service) handoffOf(ctx context.Context, machine, session string) (strin
 		return "", false, nil
 	}
 	return g.Handoff, true, nil
+}
+
+// groupGuestOf is the chat and thread machine's conversation session answers; false when it is none; an error when
+// that cannot be told.
+func (s *Service) groupGuestOf(ctx context.Context, machine, session string) (string, bool, error) {
+	if session == "" {
+		return "", false, nil
+	}
+	b := &s.guests
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := s.guestsLocked(ctx); err != nil {
+		return "", false, err
+	}
+	g := b.m[session]
+	if g == nil || g.Kind != guestKindBotGroup || !s.sameMachine(g.MachineID, machine) {
+		return "", false, nil
+	}
+	return g.Group, true, nil
 }

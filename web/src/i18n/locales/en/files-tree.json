@@ -1,6 +1,8 @@
 {
   "tree": "Files",
   "treeView": "Tree view",
+  "showTree": "Show file tree",
+  "hideTree": "Hide file tree",
   "loading": "Loading",
   "emptyFolder": "Empty folder",
   "hiddenOnly": "Only hidden files",

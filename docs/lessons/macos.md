@@ -416,3 +416,31 @@ the same cause. Recheck scrolling, folding and layout separately with synthetic 
   `AXIsProcessTrusted()` read granted in a plain child and missing in a disclaimed one.
 - A cold Homebrew ffmpeg puts out its first frame after 34–37 ms (it loads many libraries; a minimal build takes
   9–16 ms). A process started earlier and left waiting takes 6–7 ms.
+
+## An Electron frameless window keeps macOS's rounded corners, and a page capture hides them (2026-11-26, #16301)
+
+- Electron (45) creates every window with `NSWindowStyleMaskTitled`: `frame: false` only hides the title bar, and
+  `transparent: true` changes nothing there. Only `roundedCorners: false` takes the titled style away. macOS rounds all
+  four corners of a titled window, so the notch island's top corners stood off the top of the screen although its CSS
+  drew them square: AppKit read `_cornerRadius` 16.0 for its panel on macOS 27.0.1 (frame view
+  `NativeWidgetMacNSWindowTitledFrame`), and 0.0 with `roundedCorners: false` (`…BorderlessFrame`).
+- `webContents.capturePage()` images the page alone, so the island's screenshots in two PRs never showed the window's
+  shape. `CGWindowListCreateImage` of the process's own window came back fully transparent from a session without
+  Screen Recording permission. What worked: read the window from inside the process, with a throw-away N-API addon
+  given `getNativeWindowHandle()` (`[[view window] styleMask]`, the private `_cornerRadius` getters behind
+  `respondsToSelector:`).
+- A `type: "panel"` window stays non-activating without the titled style: Electron's `ElectronNSPanel` adds
+  `NSWindowStyleMaskNonactivatingPanel` to every style mask it reports or is given (0x82 read back after the change).
+
+## Electron transparent: true + vibrancy drops to opaque gray under macOS Stage Manager (2026-11-28)
+
+- Under macOS 26 Stage Manager, an Electron `BrowserWindow` configured with both `transparent: true` and `vibrancy`
+  (`"hud"` / `"popover"`, even with `visualEffectState: "active"`, `backgroundThrottling: false`, and zero web DOM
+  updates) drops out of behind-window vibrancy ~700 ms after Stage Manager brings the window back onto the stage:
+  frosted blue areas snap to opaque dark gray (`#1D1E21`) for ~400 ms (`939–1205 ms` from activate) before
+  recovering. Both `"active"` and `"followWindow"` hit this when `transparent: true` is set.
+- Leaving `transparent` at its default (`false`) while enabling `vibrancy` (`"hud"` dark / `"popover"` light),
+  `visualEffectState: "active"`, and `backgroundColor: "#00000000"` yields identical behind-window frosted tinting
+  with zero gray dropout across Stage Manager switches (`DIPS = 0` in dark, light, and runtime Default -> Glass
+  toggles), while `[data-desktop-glass="1"]` suppresses redundant CSS `backdrop-filter` across the document (`<main>`, split panel `<aside>`, and overlays) so Chromium
+  never needs `transparent: true` to composite cleanly.

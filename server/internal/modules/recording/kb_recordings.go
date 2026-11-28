@@ -25,6 +25,9 @@ const codeRecordingDeleted = "recording_deleted"
 // maxTitleBody is the most a rename's body may be (#8877): a title of 200 characters with room for JSON escaping.
 const maxTitleBody = 4 << 10
 
+// maxPhoneDays is the longest days GET /api/v1/recordings says: phones take 1–365 there (#16412).
+const maxPhoneDays = 365
+
 func (s *Recordings) recordingRoutes(engine func(http.ResponseWriter, *http.Request) *kb.Engine) {
 	s.handle("PUT /api/v1/recordings/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var u recordingwire.RecordingUpload
@@ -184,7 +187,16 @@ func (s *Recordings) recordingRoutes(engine func(http.ResponseWriter, *http.Requ
 			slices.SortStableFunc(kept, func(a, b recordingwire.RecordingState) int { return b.StartedAt.Compare(a.StartedAt) })
 			slices.Sort(deleted)
 		}
-		apierr.WriteJSON(w, map[string]any{"days": e.RecordingDays(), "recordings": kept, "deleted": deleted})
+		// days is the audio window: the phone deletes its own copies (audio and text) older than it. Phones take only
+		// 1–365 there, so forever and longer windows are said as 365; audio_days is the window itself (0: forever)
+		// and text_days how long the knowledge base keeps the text (0: forever, #16412).
+		audio := e.AudioDays()
+		days := audio
+		if days <= 0 || days > maxPhoneDays {
+			days = maxPhoneDays
+		}
+		apierr.WriteJSON(w, map[string]any{"days": days, "audio_days": audio, "text_days": e.RecordingDays(),
+			"recordings": kept, "deleted": deleted})
 	})
 	s.minutesRoutes(engine)
 	s.meetingRoutes()

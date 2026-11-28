@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -33,59 +34,50 @@ func (s *Service) kbRequest(ctx context.Context, method string, params json.RawM
 	}
 	switch method {
 	case assistantwire.MethodKBOwner:
-		if err := kbDecodeParams(method, params, &struct{}{}); err != nil {
-			return nil, true, err
-		}
-		out, err := s.kbOwner(ctx)
-		return out, true, kbError(err)
+		return handleAssistantRequest(ctx, assistantwire.KBOwnerMethod, func(out any) error {
+			return kbDecodeParams(method, params, out)
+		}, func(ctx context.Context, _ buswire.None) (assistantwire.KBOwner, error) {
+			out, err := s.kbOwner(ctx)
+			return out, kbError(err)
+		})
 	case assistantwire.MethodKBContext:
-		var p struct {
-			ChatID string `json:"chat_id"`
-		}
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		return assistantwire.KBContextResult{Context: s.kbChatContext(ctx, p.ChatID)}, true, nil
+		return handleAssistantRequest(ctx, assistantwire.KBContextMethod, decode, func(ctx context.Context, p assistantwire.KBContextParams) (assistantwire.KBContextResult, error) {
+			return assistantwire.KBContextResult{Context: s.kbChatContext(ctx, string(p.ChatID))}, nil
+		})
 	case assistantwire.MethodKBProjects:
-		var p struct {
-			MachineID string `json:"machine_id"`
-			Cwd       string `json:"cwd"`
-		}
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		out := []assistantwire.KBProject{}
-		if e, _ := s.kbGet(ctx); e != nil {
-			for _, pr := range e.ProjectsForDir(p.MachineID, p.Cwd) {
-				out = append(out, assistantwire.KBProject{Slug: pr.Slug, Name: pr.Name})
+		return handleAssistantRequest(ctx, assistantwire.KBProjectsMethod, decode, func(ctx context.Context, p assistantwire.KBProjectsParams) (assistantwire.KBProjectsResult, error) {
+			out := assistantwire.KBProjectsResult{Projects: []assistantwire.KBProject{}}
+			if e, _ := s.kbGet(ctx); e != nil {
+				for _, pr := range e.ProjectsForDir(string(p.MachineID), p.Cwd) {
+					out.Projects = append(out.Projects, assistantwire.KBProject{Slug: pr.Slug, Name: pr.Name})
+				}
 			}
-		}
-		return map[string]any{"projects": out}, true, nil
+			return out, nil
+		})
 	case assistantwire.MethodKBForget:
-		var p assistantwire.KBForget
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		f, err := s.kbForget(ctx, p.Source, p.ArchiveSources...)
-		return f, true, kbError(err)
-	case assistantwire.MethodKBPostsPut, assistantwire.MethodKBPostsComments, assistantwire.MethodKBPostsPending, assistantwire.MethodKBArchivedChats:
-		var p assistantwire.KBPosts
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		switch method {
-		case assistantwire.MethodKBPostsPut:
-			st, err := s.kbPutPosts(ctx, p)
-			return map[string]any{"statuses": st}, true, err
-		case assistantwire.MethodKBPostsComments:
-			return map[string]any{}, true, s.kbPutComments(ctx, p)
-		case assistantwire.MethodKBPostsPending:
-			ps, err := s.kbPendingPosts(ctx, p)
-			return map[string]any{"posts": ps}, true, err
-		default:
-			cs, err := s.kbArchivedChats(ctx, p)
-			return map[string]any{"chats": cs}, true, err
-		}
+		return handleAssistantRequest(ctx, assistantwire.KBForgetMethod, decode, func(ctx context.Context, p assistantwire.KBForget) (assistantwire.KBForgotten, error) {
+			out, err := s.kbForget(ctx, p.Source, p.ArchiveSources...)
+			return out, kbError(err)
+		})
+	case assistantwire.MethodKBPostsPut:
+		return handleAssistantRequest(ctx, assistantwire.KBPostsPutMethod, decode, func(ctx context.Context, p assistantwire.KBPosts) (assistantwire.KBPostsPutResult, error) {
+			statuses, err := s.kbPutPosts(ctx, p)
+			return assistantwire.KBPostsPutResult{Statuses: statuses}, err
+		})
+	case assistantwire.MethodKBPostsComments:
+		return handleAssistantRequest(ctx, assistantwire.KBPostsCommentsMethod, decode, func(ctx context.Context, p assistantwire.KBPosts) (assistantwire.KBPostsCommentsAck, error) {
+			return assistantwire.KBPostsCommentsAck{}, s.kbPutComments(ctx, p)
+		})
+	case assistantwire.MethodKBPostsPending:
+		return handleAssistantRequest(ctx, assistantwire.KBPostsPendingMethod, decode, func(ctx context.Context, p assistantwire.KBPosts) (assistantwire.KBPostsPendingResult, error) {
+			posts, err := s.kbPendingPosts(ctx, p)
+			return assistantwire.KBPostsPendingResult{Posts: posts}, err
+		})
+	case assistantwire.MethodKBArchivedChats:
+		return handleAssistantRequest(ctx, assistantwire.KBArchivedChatsMethod, decode, func(ctx context.Context, p assistantwire.KBPosts) (assistantwire.KBArchivedChatsResult, error) {
+			chats, err := s.kbArchivedChats(ctx, p)
+			return assistantwire.KBArchivedChatsResult{Chats: chats}, err
+		})
 	}
 	return nil, false, nil
 }

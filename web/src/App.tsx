@@ -32,12 +32,13 @@ import type { Session } from "./lib/types";
 import { useTabLookup } from "./lib/tab-lookup";
 import { ConnectionPill } from "./views/ConnectionPill";
 import { NARROW, useKeyboardFrame, useMedia } from "./lib/viewport";
+import { usePhoneNavMode } from "./lib/phone-nav";
 import { connect, disconnect, getState, reset, subscribe, type State, useHubUnreachable, useStore } from "./lib/store";
 import { watchRoster } from "./lib/managers";
 import { t } from "./i18n";
 import { Button, Collapse, cx, EASE, IconButton, Loading, Spinner, Toasts } from "./ui/atoms";
 import { focusables, trapTabIn } from "./ui/overlay";
-import { Empty } from "./views/session/files/parts";
+import { Empty } from "./views/session/files/empty";
 import { AgentsPage } from "./views/AgentsPage";
 import { ChatView } from "./views/chat/ChatView";
 import { preloadCloseout } from "./views/chat/closeout-chunks";
@@ -55,6 +56,9 @@ import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
+import { useMacChromeMode } from "./lib/mac-chrome";
+import { useSidebarTransition, type SidebarMode } from "./lib/sidebar-transition";
+import { MacBayTools, MacMainContour, type MacContourDriver } from "./views/MacChrome";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
 import { SidebarResize } from "./views/SidebarResize";
@@ -64,6 +68,7 @@ import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
+import { TextLookupHost } from "./text-lookup/host";
 import { openStartPage } from "./lib/start-page";
 import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
@@ -121,6 +126,8 @@ const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette),
 // wide screen loads too; Shell loads it once the screen is narrow. A load that fails leaves the toasts at the bottom of
 // the page until the next toast tries again.
 const ToastLift = lazyPage(() => import("./ui/toast-lift").then((m) => m.ToastLift));
+// the phone tab bar (lib/phone-nav.ts) loads only where it is drawn: a narrow screen that chose it
+const PhoneTabBar = lazyPage(() => import("./views/PhoneTabBar").then((m) => m.PhoneTabBar));
 function PhoneToasts(props: ToastLiftProps) {
   return (
     <OverlayBoundary open onClose={() => {}}>
@@ -327,6 +334,8 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   if (route.name !== "session") return undefined;
   // A compact card, explicit standalone page ("Open as page"), or message link opens this conversation directly.
   const exact = (): PageTarget => ({ link: "exact", to: "", mid: route.mid, sid: route.sid });
+  // An outbox refusal names the pane to open, even when its chat normally redirects to Assistant or a parent.
+  if (route.standalone && route.view === "term") return exact();
   // Deep link to an embedded subagent (`<parent>@<agent>`): open its parent session + subagent detail panel (#14323).
   const sub = splitSubagentLink(route.sid);
   if (sub) {
@@ -448,6 +457,7 @@ function Shell() {
 
   // ── the sidebar: a column on a wide screen, a drawer over the page on a narrow one (#1996) ──
   const narrow = useMedia(NARROW);
+  const phoneNav = usePhoneNavMode();
   // the toasts' placement, in before the first toast in practice
   useEffect(() => {
     if (narrow) void ToastLift.preload().catch(() => {});
@@ -461,10 +471,33 @@ function Shell() {
   const drawerBox = useRef<HTMLDivElement>(null);
   const sidebarId = useId();
   const scrim = useRef<HTMLDivElement>(null);
-  const mainBox = useRef<HTMLElement>(null);
+  const mainBox = useRef<HTMLElement | null>(null);
+  const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
+  const setMainRef = useCallback((el: HTMLElement | null) => {
+    mainBox.current = el;
+    setMainEl(el);
+  }, []);
   const a11y = drawerA11y(narrow, drawer);
   // folded to its icons on a wide screen (⌘⌥B, kept in this browser); a narrow screen keeps the full drawer
   const rail = !narrow && sidebarRail(layout);
+  const macChrome = useMacChromeMode();
+  const macWindowed = macChrome === "windowed" && !narrow;
+  const sidebarMode: SidebarMode = rail ? "rail" : sidebarShown(layout) ? "expanded" : "hidden";
+  const macBay = macWindowed ? sidebarMode : undefined;
+  const fullLayerRef = useRef<HTMLDivElement>(null);
+  const railLayerRef = useRef<HTMLDivElement>(null);
+  const contourDriverRef = useRef<MacContourDriver>(null);
+  const { animating: sidebarAnimating, leaving: leavingSidebar } = useSidebarTransition({
+    shellRef: shell,
+    columnRef: drawerBox,
+    mainEl,
+    fullLayerRef,
+    railLayerRef,
+    contourDriverRef,
+    mode: sidebarMode,
+    narrow,
+    macWindowed,
+  });
   useEffect(() => {
     if (!narrow) setDrawer(false);
   }, [narrow]);
@@ -587,7 +620,7 @@ function Shell() {
       // Health's existing data stays in the default panel without its module (including a core-only build), rather
       // than depending on the optional Space Conversations extension or opening an editable new-conversation home.
       const archive = healthReadOnly(route.slug);
-      main = route.sid || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
+      main = route.sid || route.fresh || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
       break;
     }
     case "track-new":
@@ -660,7 +693,14 @@ function Shell() {
 
   return (
     // #root is 100dvh (index.html); with a soft keyboard up (iOS) the shell is only the part above it (lib/viewport.ts)
-    <div ref={shell} data-app-shell data-sidebar-hidden={!sidebarShown(layout) || undefined} className="flex h-full overflow-hidden bg-page">
+    <div
+      ref={shell}
+      data-app-shell
+      data-sidebar-hidden={!sidebarShown(layout) || undefined}
+      data-mac-chrome={macChrome}
+      data-mac-bay={macBay}
+      className="flex h-full overflow-hidden bg-page"
+    >
       {/* wide: a fixed column; narrow: a drawer over the page, clear of a landscape notch and the home indicator */}
       <div
         ref={drawerBox}
@@ -675,12 +715,48 @@ function Shell() {
           drawer ? "translate-x-0 shadow-overlay" : "-translate-x-full",
           // ⌘⌥B folds it to the rail, ⌘⇧↵ hides it, on a wide screen; unfolded, its right edge drags (SidebarResize)
           rail ? "lg:w-14" : "lg:w-[var(--sidebar-w,284px)]",
-          !sidebarShown(layout) && "lg:hidden",
+          !sidebarShown(layout) && !sidebarAnimating && "lg:hidden",
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
-        {!narrow && !rail && <SidebarResize column={sidebarId} />}
+        {(narrow || sidebarMode === "expanded" || leavingSidebar === "expanded") && (
+          <div
+            key="full"
+            ref={fullLayerRef}
+            inert={leavingSidebar === "expanded" || undefined}
+            aria-hidden={leavingSidebar === "expanded" || undefined}
+            className={cx(
+              "h-full",
+              leavingSidebar === "expanded"
+                ? "pointer-events-none absolute inset-y-0 left-0 overflow-hidden"
+                : sidebarAnimating
+                  ? "overflow-hidden"
+                  : "w-full",
+            )}
+            style={leavingSidebar === "expanded" || (sidebarAnimating && sidebarMode === "expanded") ? { width: "var(--sidebar-w, 284px)" } : undefined}
+          >
+            <Sidebar active={narrow ? drawer : sidebarMode === "expanded" || leavingSidebar === "expanded"} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} hideCollapse={macWindowed} />
+          </div>
+        )}
+        {!narrow && (sidebarMode === "rail" || leavingSidebar === "rail") && (
+          <div
+            key="rail"
+            ref={railLayerRef}
+            inert={leavingSidebar === "rail" || undefined}
+            aria-hidden={leavingSidebar === "rail" || undefined}
+            className={cx(
+              "h-full",
+              leavingSidebar === "rail"
+                ? "pointer-events-none absolute inset-y-0 left-0 w-14 overflow-hidden"
+                : sidebarAnimating
+                  ? "w-14 overflow-hidden"
+                  : "w-full",
+            )}
+          >
+            <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} hideCollapse={macWindowed} />
+          </div>
+        )}
+        {!narrow && !rail && sidebarShown(layout) && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
       <div
@@ -689,7 +765,8 @@ function Shell() {
         className={cx("fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 lg:hidden", drawer ? "opacity-100 starting:opacity-0" : "pointer-events-none opacity-0", !scrimShown && "hidden")}
         onClick={close}
       />
-      <main ref={mainBox} inert={a11y.modal || undefined} className="relative flex min-w-0 flex-1 flex-col">
+      <main ref={setMainRef} inert={a11y.modal || undefined} className="relative flex min-w-0 flex-1 flex-col">
+        {macChrome !== undefined && <MacMainContour mainEl={mainEl} bay={macBay} animating={macWindowed && sidebarAnimating} contourRef={contourDriverRef} />}
         {/* dropped after loading: which phase, and a click explains with "Retry now" (views/ConnectionPill.tsx). A strip
             over the page that pushes it down while it shows, never a layer over its header, its fields or its title
             (web usability audit item 87); its details open over the page. */}
@@ -701,7 +778,10 @@ function Shell() {
         <div className="relative min-h-0 flex-1">
           <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}><PerAssistant route={route}>{main}</PerAssistant></Suspense></PageBoundary>
         </div>
+        {/* Settings › Advanced › Appearance › Phone navigation: Tab bar puts the four main places along the bottom (#16761) */}
+        {narrow && phoneNav === "tabs" && <Suspense fallback={null}><PhoneTabBar route={route} /></Suspense>}
       </main>
+      {macBay && <MacBayTools bay={macBay} onSearch={() => openPalette("jump")} />}
       <SidebarRowHoverHost />
       <SidePanelHost />
       {paletteOpened && (
@@ -728,6 +808,7 @@ function Shell() {
       <AttentionSignals label={title} pane={pane} />
       {/* the counts for the desktop app's island at the MacBook notch (#7669), only in a desktop app that has it */}
       {window.personaDesktop?.setIslandState && <DesktopIslandSignals />}
+      <TextLookupHost />
     </div>
   );
 }

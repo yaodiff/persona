@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func newLarkEditRig(t *testing.T, answer func(proto.Interaction) proto.Resolution, user ...proto.LarkRule) *spaceRig {
@@ -33,12 +34,18 @@ func newLarkEditRig(t *testing.T, answer func(proto.Interaction) proto.Resolutio
 // only path that may declare editable_text; the shared larkCheck used by Codex and the runtimes is tested separately.
 func runLarkEditHook(t *testing.T, r *spaceRig, cwd, command string, extra map[string]any) map[string]any {
 	t.Helper()
+	return runLarkEditHookForToolUse(t, r, cwd, command, "toolu_lark_edit", extra)
+}
+
+// runLarkEditHookForToolUse lets a detached retry arrive as a fresh runtime tool call.
+func runLarkEditHookForToolUse(t *testing.T, r *spaceRig, cwd, command, toolUseID string, extra map[string]any) map[string]any {
+	t.Helper()
 	input := map[string]any{"command": command}
 	for key, value := range extra {
 		input[key] = value
 	}
 	raw, err := json.Marshal(hookInput{HookEventName: "PreToolUse", SessionID: testThread, ToolName: "Bash",
-		ToolUseID: "toolu_lark_edit", Cwd: cwd, ToolInput: mustRaw(input)})
+		ToolUseID: toolUseID, Cwd: cwd, ToolInput: mustRaw(input)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +80,26 @@ func editedAllow(ix proto.Interaction, text string) proto.Resolution {
 		res.EditedText = text
 	}
 	return res
+}
+
+func TestLarkEditGrantKeepsTheApprovedAgentAccount(t *testing.T) {
+	n := &Node{}
+	gate := proxiedGate("http://example.invalid")
+	gate.PathPrefix = "/agent/v1"
+	cfg := proto.AssistantLark{Gates: []proto.CommandGate{gate}}
+	call := larkCall{Gate: 0, Method: http.MethodPost, Path: "/conversations/F1/messages", Body: `{"text":"edited"}`, Account: "2"}
+	if err := n.grantEdited(cfg, testThread, call, proto.LarkLetThrough{Kind: proto.LarkThroughCard}); err != nil {
+		t.Fatal(err)
+	}
+	p := n.gates()
+	t.Cleanup(p.close)
+	key := gateKey{command: gate.Command, session: testThread}
+	if _, ok := p.take(key, http.MethodPost, call.Path, "", "", []byte(call.Body), true); ok {
+		t.Fatal("an edited added-account grant was taken by the primary account")
+	}
+	if _, ok := p.take(key, http.MethodPost, call.Path, "", "2", []byte(call.Body), true); !ok {
+		t.Fatal("the edited added-account request lost its grant")
+	}
 }
 
 func TestLarkEditHookRetiresOriginalAndGrantsOnlyEditedCallOnce(t *testing.T) {
@@ -168,10 +195,39 @@ func TestLarkEditHookRetiresOriginalAndGrantsOnlyEditedCallOnce(t *testing.T) {
 }
 
 func TestLarkEditAcceptsStaticShellQuoting(t *testing.T) {
-	tests := []struct{ name, body, command string }{
-		{name: "double quoted JSON", body: `{"text":"hello"}`, command: `ex POST /conversations/F1/messages "{\"text\":\"hello\"}"`},
-		{name: "single quote and Unicode in the original", body: `{"text":"it's 雪😀"}`,
-			command: `ex POST /conversations/F1/messages ` + shellQuote(`{"text":"it's 雪😀"}`)},
+	tests := []struct {
+		name, body, wantText, command string
+	}{
+		{
+			name:     "double quoted JSON",
+			body:     `{"text":"hello"}`,
+			wantText: "hello",
+			command:  `ex POST /conversations/F1/messages "{\"text\":\"hello\"}"`,
+		},
+		{
+			name:     "double quoted JSON with escaped newline and quotes",
+			body:     `{"text":"line1\nline2 \"hi\""}`,
+			wantText: "line1\nline2 \"hi\"",
+			command:  `ex POST /conversations/F1/messages "{\"text\":\"line1\\nline2 \\\"hi\\\"\"}"`,
+		},
+		{
+			name:     "double quoted JSON with literal backslash-n",
+			body:     `{"text":"line1\nline2"}`,
+			wantText: "line1\nline2",
+			command:  `ex POST /conversations/F1/messages "{\"text\":\"line1\nline2\"}"`,
+		},
+		{
+			name:     "single quote and Unicode in the original",
+			body:     `{"text":"it's 雪😀"}`,
+			wantText: "it's 雪😀",
+			command:  `ex POST /conversations/F1/messages ` + shellQuote(`{"text":"it's 雪😀"}`),
+		},
+		{
+			name:     "shellQuote with apostrophe, newline, quotes, backslash, dollar, and Chinese",
+			body:     `{"text":"it's \"quoted\"\n第二行 C:\\tmp $5 😀"}`,
+			wantText: "it's \"quoted\"\n第二行 C:\\tmp $5 😀",
+			command:  `ex POST /conversations/F1/messages ` + shellQuote(`{"text":"it's \"quoted\"\n第二行 C:\\tmp $5 😀"}`),
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,6 +236,10 @@ func TestLarkEditAcceptsStaticShellQuoting(t *testing.T) {
 			spec := runLarkEditHook(t, r, cwd, tc.command, nil)
 			if spec["permissionDecision"] != "allow" {
 				t.Fatalf("static shell quoting was refused: %#v", spec)
+			}
+			card := r.hub.lastCreated(t)
+			if card.EditableText != tc.wantText {
+				t.Fatalf("card.EditableText = %q, want %q", card.EditableText, tc.wantText)
 			}
 			updated, _ := spec["updatedInput"].(map[string]any)
 			command, _ := updated["command"].(string)
@@ -221,6 +281,43 @@ func TestLarkEditRetiresTheGrantOfItsOwnCard(t *testing.T) {
 	}
 	if ownOriginal || !otherOriginal || !edited {
 		t.Fatalf("grants after edit: own original %v, other card %v, edited %v; grants %+v", ownOriginal, otherOriginal, edited, p.grants)
+	}
+}
+
+func TestLarkEditHookRetiresDetachedContinuationGrantByApprovalID(t *testing.T) {
+	const origID = "ix_detached_claude_orig"
+	r := newLarkEditRig(t, func(ix proto.Interaction) proto.Resolution {
+		return proto.Resolution{Allow: boolp(true), ApprovalID: origID, EditedText: "edited after detach"}
+	})
+	cwd := t.TempDir()
+	base := r.processIn(cwd, testThread)
+	spec := runLarkEditHook(t, r, cwd, `ex POST /conversations/F1/messages '{"text":"original"}'`, nil)
+	if spec["permissionDecision"] != "allow" {
+		t.Fatalf("detached edited Allow = %#v", spec)
+	}
+	updated, _ := spec["updatedInput"].(map[string]any)
+	command, _ := updated["command"].(string)
+	v := classifyLark(command, r.n.larkCfg.Gates, cwd, r.n.larkCLIRisk(r.n.larkCfg))
+	if len(v.calls) != 1 {
+		t.Fatalf("updated command = %q (%+v)", command, v)
+	}
+	url := base + "/api/v1/conversations/F1/messages"
+	if code, _ := send(t, http.MethodPost, url, `{"text":"original"}`); code != http.StatusForbidden {
+		t.Fatalf("original body after detached edit = %d, want 403", code)
+	}
+	if code, _ := send(t, http.MethodPost, url, v.calls[0].Body); code != http.StatusOK {
+		t.Fatalf("detached edited body = %d, want 200", code)
+	}
+	waitFor(t, "detached edited sent report", func() bool {
+		r.hub.mu.Lock()
+		defer r.hub.mu.Unlock()
+		return len(r.hub.larkSent) == 1
+	})
+	r.hub.mu.Lock()
+	report := r.hub.larkSent[0]
+	r.hub.mu.Unlock()
+	if report.Text != "edited after detach" || report.LetThrough.EditedFrom != "original" || report.LetThrough.InteractionID != origID {
+		t.Fatalf("detached sent report = %#v, want InteractionID=%q EditedFrom=original", report, origID)
 	}
 }
 
@@ -386,6 +483,8 @@ func TestEditableTextFieldsRejectsAmbiguousJSON(t *testing.T) {
 		`{"text":"one","mentions":[],"mentions":[]}`,
 		`["text"]`,
 		`{"text":"one"} {"text":"two"}`,
+		`{"text":"hi"}}`,
+		`{"text":"hi"}]`,
 		`{"text":null}`,
 		`{"text":" "}`,
 		`{"content":{"text":"nested"}}`,
@@ -395,4 +494,222 @@ func TestEditableTextFieldsRejectsAmbiguousJSON(t *testing.T) {
 			t.Errorf("ambiguous or non-text body accepted: %s", body)
 		}
 	}
+}
+
+func TestLarkEditAppliesHotReloadedRulesAndGateReorderWithoutLeakingOriginalGrant(t *testing.T) {
+	prevCLI := larkContextFromCLI
+	larkContextFromCLI = func(context.Context, *Node, proto.AssistantLark, larkCall) larkCardContext {
+		return larkCardContext{}
+	}
+	t.Cleanup(func() { larkContextFromCLI = prevCLI })
+
+	t.Run("hot-reloaded deny rule during wait refuses edit with literal dollar and leaves zero grants", func(t *testing.T) {
+		var r *spaceRig
+		r = newLarkEditRig(t, func(ix proto.Interaction) proto.Resolution {
+			// Simulate a config refresh adding a deny rule while the card waits on the phone.
+			r.n.mu.Lock()
+			r.n.larkCfg.Gates[0].Rules = append([]proto.LarkRule{
+				{Method: http.MethodPost, Path: "/conversations/*/messages", Body: map[string]any{"text": "hot-blocked"}, Action: "deny"},
+			}, r.n.larkCfg.Gates[0].Rules...)
+			r.n.mu.Unlock()
+			return editedAllow(ix, "hot-blocked")
+		})
+		cwd := t.TempDir()
+		base := r.processIn(cwd, testThread)
+		spec := runLarkEditHook(t, r, cwd, `ex POST /conversations/F1/messages '{"text":"price $5"}'`, nil)
+		if spec["permissionDecision"] != "deny" || spec["updatedInput"] != nil {
+			t.Fatalf("hot-reloaded deny edit = %#v, want deny without updatedInput", spec)
+		}
+		p := r.n.gates()
+		p.mu.Lock()
+		grants := len(p.grants)
+		p.mu.Unlock()
+		if grants != 0 {
+			t.Fatalf("%d grant(s) leaked after hot-reloaded deny edit", grants)
+		}
+		if code, _ := send(t, http.MethodPost, base+"/api/v1/conversations/F1/messages", `{"text":"price $5"}`); code != http.StatusForbidden {
+			t.Fatalf("original literal-dollar body = %d, want 403", code)
+		}
+		if code, _ := send(t, http.MethodPost, base+"/api/v1/conversations/F1/messages", `{"text":"arbitrary"}`); code != http.StatusForbidden {
+			t.Fatalf("wildcard body = %d, want 403", code)
+		}
+	})
+
+	t.Run("hot-reloaded gate reorder during wait resolves gate by command name", func(t *testing.T) {
+		var r *spaceRig
+		r = newLarkEditRig(t, func(ix proto.Interaction) proto.Resolution {
+			// Reorder Gates so "ex" moves from index 0 to index 1 while the card waits.
+			other := proxiedGate(r.api.URL)
+			other.Command = "othercmd"
+			r.n.mu.Lock()
+			r.n.larkCfg.Gates = []proto.CommandGate{other, r.n.larkCfg.Gates[0]}
+			r.n.mu.Unlock()
+			return editedAllow(ix, "reordered ok")
+		})
+		cwd := t.TempDir()
+		base := r.processIn(cwd, testThread)
+		spec := runLarkEditHook(t, r, cwd, `ex POST /conversations/F1/messages '{"text":"before"}'`, nil)
+		if spec["permissionDecision"] != "allow" {
+			t.Fatalf("reordered gate edit = %#v, want allow", spec)
+		}
+		updated, _ := spec["updatedInput"].(map[string]any)
+		cmd, _ := updated["command"].(string)
+		v := classifyLark(cmd, r.n.larkCfg.Gates, cwd, r.n.larkCLIRisk(r.n.larkCfg))
+		if len(v.calls) != 1 || v.calls[0].Gate != 1 {
+			t.Fatalf("reordered updated command = %q (%+v)", cmd, v)
+		}
+		url := base + "/api/v1/conversations/F1/messages"
+		if code, _ := send(t, http.MethodPost, url, `{"text":"before"}`); code != http.StatusForbidden {
+			t.Fatalf("unedited original body = %d, want 403", code)
+		}
+		if code, _ := send(t, http.MethodPost, url, v.calls[0].Body); code != http.StatusOK {
+			t.Fatalf("reordered edited call = %d, want 200", code)
+		}
+	})
+}
+
+func TestLarkEditExecutionWordEscapesAndFailClosedQuoting(t *testing.T) {
+	parseLastWord := func(t *testing.T, cmd string) *syntax.Word {
+		t.Helper()
+		tree, _ := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+		if tree == nil || len(tree.Stmts) == 0 {
+			t.Fatalf("parser produced no statements for %q", cmd)
+		}
+		call, ok := tree.Stmts[0].Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			t.Fatalf("parser produced no call args for %q", cmd)
+		}
+		return call.Args[len(call.Args)-1]
+	}
+
+	t.Run("static POSIX escapes outside and inside double quotes", func(t *testing.T) {
+		cases := []struct {
+			name string
+			cmd  string
+			want string
+		}{
+			{
+				name: "double-quoted special escapes",
+				cmd:  `echo "\" \\ \$ \` + "`" + ` "`,
+				want: `" \ $ ` + "`" + ` `,
+			},
+			{
+				name: "double-quoted preserved backslashes",
+				cmd:  `echo "\n\t\r\'\a"`,
+				want: `\n\t\r\'\a`,
+			},
+			{
+				name: "double-quoted line continuation",
+				cmd:  "echo \"line1\\\nline2\"",
+				want: "line1line2",
+			},
+			{
+				name: "unquoted line continuation",
+				cmd:  "echo foo\\\nbar",
+				want: "foobar",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				got, dyn := executionWord(parseLastWord(t, tc.cmd))
+				if dyn || got != tc.want {
+					t.Fatalf("executionWord(%q) = (%q, %v), want (%q, false)", tc.cmd, got, dyn, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("ANSI-C, locale, nested quotes, and dangling trailing backslash fail closed as dynamic", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			cmd  string
+		}{
+			{name: "ANSI-C single quote command", cmd: `$'l\x61rk-cli'`},
+			{name: "ANSI-C single quote body", cmd: `ex $'{"text":"hi"}'`},
+			{name: "locale double quote", cmd: `ex $"{\"text\":\"hi\"}"`},
+			{name: "dangling backslash at EOF on command", cmd: `lark-c\li\`},
+			{name: "dangling backslash at EOF on arg", cmd: `echo hi\`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, dyn := executionWord(parseLastWord(t, tc.cmd))
+				if !dyn {
+					t.Fatalf("executionWord(%q) reported dynamic=false, want true", tc.cmd)
+				}
+			})
+		}
+
+		// Unclosed double quote ending in backslash and programmatically nested quote nodes fail closed as dynamic.
+		for _, tc := range []struct {
+			name string
+			part syntax.WordPart
+		}{
+			{name: "unclosed double quote ending in backslash", part: &syntax.Lit{Value: `foo\`}},
+			{name: "nested SglQuoted inside DblQuoted", part: &syntax.SglQuoted{Value: "x"}},
+			{name: "nested DblQuoted inside DblQuoted", part: &syntax.DblQuoted{Parts: []syntax.WordPart{&syntax.Lit{Value: "x"}}}},
+		} {
+			w := &syntax.Word{Parts: []syntax.WordPart{&syntax.DblQuoted{Parts: []syntax.WordPart{tc.part}}}}
+			if _, dyn := executionWord(w); !dyn {
+				t.Fatalf("%s reported dynamic=false, want true", tc.name)
+			}
+		}
+	})
+
+	t.Run("shellCommandUnknown, larkCheckOutcome bypass, classifyLark, and editableLarkCall fail closed", func(t *testing.T) {
+		for _, cmd := range []string{
+			`$'l\x61rk-cli' im +messages-send --text hi`,
+			`$"lark-cli" im +messages-send --text hi`,
+			`lark-c\li\`,
+		} {
+			if !shellCommandUnknown(cmd, false, 0) {
+				t.Errorf("shellCommandUnknown(%q) = false, want true", cmd)
+			}
+		}
+
+		r := newLarkEditRig(t, func(proto.Interaction) proto.Resolution {
+			return proto.Resolution{Allow: boolp(false), Message: "blocked"}
+		})
+		cwd := t.TempDir()
+		r.n.mu.Lock()
+		r.n.procs[testThread] = &assistantProc{id: testThread, agent: "claude", cwd: cwd}
+		r.n.mu.Unlock()
+		r.n.persistModes(testThread, proto.ModeBypass, "")
+
+		for _, cmd := range []string{
+			`$'l\x61rk-cli' im +messages-send --text hi`,
+			`$"lark-cli" im +messages-send --text hi`,
+			`lark-c\li\`,
+		} {
+			out, err := r.n.larkCheckOutcome(context.Background(), testThread, cwd, cmd, proto.Interaction{
+				SessionID: testThread, Cwd: cwd, ToolName: "Bash",
+			})
+			if err != nil {
+				t.Fatalf("larkCheckOutcome(%q): %v", cmd, err)
+			}
+			if out.decision != "deny" {
+				t.Fatalf("larkCheckOutcome(%q) in bypass = %+v, want confirmation/deny (must not auto-allow)", cmd, out)
+			}
+		}
+
+		for _, cmd := range []string{
+			`echo hi\`,
+			`echo "foo\`,
+			`lark-c\li\`,
+		} {
+			v := classifyLark(cmd, r.n.larkCfg.Gates, cwd, r.n.larkCLIRisk(r.n.larkCfg))
+			if !v.unparsed || !v.other {
+				t.Errorf("classifyLark(%q) = %+v, want unparsed=true other=true", cmd, v)
+			}
+		}
+
+		for _, cmd := range []string{
+			`ex POST /conversations/F1/messages $'{"text":"hi"}'`,
+			`ex POST /conversations/F1/messages $"{\"text\":\"hi\"}"`,
+			`ex POST /conversations/F1/messages hi\`,
+			`ex POST /conversations/F1/messages "foo\`,
+		} {
+			if _, _, _, ok := r.n.editableLarkCall(r.n.larkCfg, cmd, cwd); ok {
+				t.Errorf("editableLarkCall(%q) = true, want false", cmd)
+			}
+		}
+	})
 }

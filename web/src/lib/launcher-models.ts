@@ -36,11 +36,6 @@ export interface AgentModel {
   aliases?: string[];
 }
 
-/** Whether this catalog row natively offers Codex's Fast tier. */
-export function modelSupportsFast(m: AgentModel | undefined): boolean {
-  return Boolean(m?.service_tiers?.some((tier) => tier.id === "priority"));
-}
-
 export interface LauncherModels {
   /** What the launcher runs: claude, codex, traex, a runtime's agent. */
   agent: string;
@@ -50,6 +45,8 @@ export interface LauncherModels {
   locked?: string;
   /** The node accepts a model when starting the native omp launcher on the queried host (#11964). */
   supports_start_model?: boolean;
+  /** This launcher's Codex start on the queried host accepts a native service tier. */
+  supports_start_service_tier?: boolean;
 }
 
 /** What "Model configuration" runs when a launcher picker is left alone (GET /machines/{mid}/launchers's `default`, #2455):
@@ -88,6 +85,9 @@ export interface MachineLaunchers {
    *  why in the request's language (shown off, not hidden). For "New agent" (#8109): the Persona-managed providers its
    *  own-service rule leaves out on this computer, with why; absent when there are none, or from an older hub. */
   unavailable?: UnavailableLauncher[];
+  /** "New agent" only (#17650): the Orca chat a start that keeps the default opens as, while the computer's "Start new
+   *  Agents as Orca chats" is on and its Orca offers that chat; absent otherwise and from an older hub (lib/orca-chat.ts). */
+  default_opens?: import("./orca-chat").DefaultOpens;
 }
 
 /** One of MachineLaunchers.unavailable: a launcher of the computer or a Model provider that can't run assistant chats here
@@ -167,9 +167,9 @@ export const takesTypedModel = (agent: string) =>
 export const terminalOmp = (agent: string, launcher?: Pick<Launcher, "source">) =>
   agent === "omp" && (!launcher?.source || launcher.source === "zshrc" || launcher.source === "path" || launcher.source === "builtin");
 
-/** Only the plain omp command on herdr can advertise a typed model for a new terminal session (#11964). */
+/** Only the plain omp command on herdr or Orca can advertise a typed model for a new terminal session (#11964). */
 export function nativeOmpStart(agent: string, launcher: Pick<Launcher, "name" | "source"> | undefined, host: string | undefined): boolean {
-  return terminalOmp(agent, launcher) && launcher?.name === "omp" && host === "herdr";
+  return terminalOmp(agent, launcher) && launcher?.name === "omp" && (host === "herdr" || host === "orca");
 }
 
 /** omp's start capability belongs to the terminal host, including when another launcher's destination is a desktop app. */
@@ -234,13 +234,13 @@ export function listedModes(l: Pick<Launcher, "permission_modes"> | undefined): 
 }
 
 /** How a start takes a thinking effort: `any` (Claude Code, Antigravity: its model's levels, all of them while its list
- *  doesn't say), `listed` (Codex and launchers that list permission modes, `listedModes`: only the levels its model
+ *  doesn't say), `listed` (Codex, TRAE CLI and launchers that list permission modes: only the levels its model
  *  reports, #8261, #13764), `none` (the rest keep their own). */
 export type EffortRule = "any" | "listed" | "none";
 
 export function effortRule(agent: string, l?: Pick<Launcher, "permission_modes">): EffortRule {
   if (agent === "claude" || agent === "agy") return "any";
-  return agent === "codex" || listedModes(l) ? "listed" : "none";
+  return agent === "codex" || agent === "traex" || listedModes(l) ? "listed" : "none";
 }
 
 /** Claude Code and Antigravity start with a thinking effort, and Codex or a launcher that lists its modes starts with
@@ -314,7 +314,7 @@ export function effortChoices(list: LauncherModels | null | undefined, model: st
   const m = (id ? listedModel(list.models, id) : undefined) ?? (id ? undefined : defaultModel(list.models));
   // a typed ID (listed as typed before, or not at all): what it takes is not known
   const raw = m && !m.custom ? (m.efforts ?? []) : unknown;
-  return list.agent === "codex" ? raw.filter((e) => CODEX_LEVELS.has(e)) : raw;
+  return list.agent === "codex" || list.agent === "traex" ? raw.filter((e) => CODEX_LEVELS.has(e)) : raw;
 }
 
 /** The effort kept when the choices change: one they no longer offer goes back to "Launcher default". */

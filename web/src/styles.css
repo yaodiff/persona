@@ -33,8 +33,13 @@
     border-radius: var(--radius-card);
   }
 
-  [data-app-shell] > main {
+  [data-app-shell] > main,
+  [data-app-shell] > aside {
     background: var(--page);
+  }
+
+  /* not the aside: its resize handle sits in the gutter outside it; its content div clips the corners below */
+  [data-app-shell] > main {
     overflow: clip;
   }
 
@@ -71,7 +76,17 @@
 }
 [data-sidebar-rows] {
   --sidebar-group-bg: var(--canvas);
+}
+[data-sidebar-rows],
+[data-sidebar-scroller] {
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
+}
+/* Fade overflowing sidebar row text before the overlay ⋯ button so "..." and "⋯" never read as six dots. */
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]):hover > :is(a, div) .truncate,
+[data-sidebar-rows] .group\/row:has(> button[aria-haspopup="menu"]) > :is(a, div)[aria-current="page"] .truncate {
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
 }
 
 /* Assistant trays (#4656): an open one lets the dock (ChatView's DOCK_MAX) take most of what is visible, the chat above
@@ -254,7 +269,7 @@
    an icon and a short word (#4316). */
 @theme { --breakpoint-xs: 340px; }
 /* The task cards' type scale by role (docs/design/task-cards.md §4.1): the card and row title, the meta line, the chip / label, and secondary meta. The sizes the cards already used, now named; iOS Theme.Font bodyStrong / caption / label. */
-@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-label: 12px; --text-submeta: 11.5px; }
+@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-tree-row: 12.5px; --text-label: 12px; --text-submeta: 11.5px; }
 @theme inline {
   --color-page: var(--page);
   --color-canvas: var(--canvas);
@@ -284,7 +299,6 @@
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
   --color-ai-tint: var(--ai-tint);
-  --color-source-terminal: var(--source-terminal);
   --color-source-desktop: var(--source-desktop);
   --color-tooltip-bg: var(--tooltip-bg);
   --color-tooltip-fg: var(--tooltip-fg);
@@ -354,9 +368,9 @@ body {
 ::highlight(persona-comment-flash) { background-color: color-mix(in srgb, var(--accent) 36%, transparent); }
 /* The chat's trace (aligned with cindy's defaults, #1963): tool rows and their chevrons, the work group's rail, thought
    text, diff counts and the running status bar's accent. */
-:root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --status-accent: var(--accent-ink); --tool-hover: #ececec; }
-.dark { --tool-ink: #a3a3a3; --tool-rail: #404040; --thinking-ink: #737373; --diff-add-fg: #7ee787; --diff-del-fg: #ff7b72; --diff-add-bg: #2ea04326; --diff-del-bg: #f8514926; --diff-add-word: #2ea04366; --diff-del-word: #f8514966; --status-accent: var(--accent-ink); --tool-hover: #333436; }
-@theme inline { --color-tool-ink: var(--tool-ink); --color-tool-rail: var(--tool-rail); --color-thinking-ink: var(--thinking-ink); --color-diff-add-fg: var(--diff-add-fg); --color-diff-del-fg: var(--diff-del-fg); --color-diff-add-bg: var(--diff-add-bg); --color-diff-del-bg: var(--diff-del-bg); --color-diff-add-word: var(--diff-add-word); --color-diff-del-word: var(--diff-del-word); --color-status-accent: var(--status-accent); --color-tool-hover: var(--tool-hover); }
+:root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --tool-hover: #ececec; }
+.dark { --tool-ink: #a3a3a3; --tool-rail: #404040; --thinking-ink: #737373; --diff-add-fg: #7ee787; --diff-del-fg: #ff7b72; --diff-add-bg: #2ea04326; --diff-del-bg: #f8514926; --diff-add-word: #2ea04366; --diff-del-word: #f8514966; --tool-hover: #333436; }
+@theme inline { --color-tool-ink: var(--tool-ink); --color-tool-rail: var(--tool-rail); --color-thinking-ink: var(--thinking-ink); --color-diff-add-fg: var(--diff-add-fg); --color-diff-del-fg: var(--diff-del-fg); --color-diff-add-bg: var(--diff-add-bg); --color-diff-del-bg: var(--diff-del-bg); --color-diff-add-word: var(--diff-add-word); --color-diff-del-word: var(--diff-del-word); --color-tool-hover: var(--tool-hover); }
 /* The least a sidebar agent row's title keeps behind a tab's or an agent's name (Sidebar ROW_TITLE_MIN): about 4.5
    characters of its 13px text, at the page's text size. */
 :root { --row-title-min: calc(13px * 4.5 * var(--text-scale, 1)); }
@@ -382,6 +396,11 @@ body {
    teal is under 3:1 on a light card, so the legend always writes the numbers. Same values as the apps' UsageColor. */
 :root { --usage-input: #2a78d6; --usage-output: #eb6834; --usage-cache-write: #6250d6; --usage-cache-read: #1baf7a; }
 .dark { --usage-input: #3987e5; --usage-output: #d95926; --usage-cache-write: #9085e9; --usage-cache-read: #199e70; }
+/* Token usage by project (#16530): development projects take the accent, non-development ones (folders, the home
+   folder, the assistant) this cyan, apart from the kinds' teal; at least 3:1 on a card in both schemes. Same values as
+   the apps' UsageColor.projectOther. */
+:root { --project-other: #0f7f8f; }
+.dark { --project-other: #4bbfcc; }
 /* The user's own messages: iOS Agents' pale blue (apple/Shared/Design/Styles/Glass.swift, ColorSpec.blue, #2672);
    a message relayed from another conversation and a tool's inline detail keep the neutral gray. */
 @theme inline { --color-user-bubble: var(--user-bubble); --color-neutral-bubble: var(--neutral-bubble); --color-status-waiting: var(--status-waiting); }
@@ -446,6 +465,14 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
   }
 }
 @utility scrollbar-none { scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
+/* Subtle thin scrollbar for sidebars and directory trees: transparent track, muted thumb. */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  &::-webkit-scrollbar { width: 6px; height: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 9999px; }
+}
 /* Conversation chrome: retain the native hit strip and drag behavior, with no opaque track or layout shift.
    Only enhanced browsers fade the thumb; forced colors and unsupported browsers keep the native bar. */
 :root { --chat-scrollbar-fade: 220ms; }
@@ -713,6 +740,243 @@ select:not([multiple], [size], .appearance-none) {
 .range::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--accent) var(--fill, 0%), var(--hover-2) var(--fill, 0%)); }
 .range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--hover-2); }
 .range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--accent); }
+
+/* ── macOS unified titlebar + 44 px co-linear Apple G2 control bay (#16607) ────────────────────────────────── */
+/* Hub Admin's sidebar under the same titlebar takes the expanded sidebar's inset and drag strip (#16992). */
+@media (width >= 64rem) {
+  [data-app-shell][data-mac-chrome="windowed"] {
+    position: relative;
+  }
+  [data-app-shell] [data-mac-bay-tools],
+  [data-app-shell] [data-mac-bay-tools] * {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root],
+  [data-admin-shell][data-mac-chrome="windowed"] [data-admin-sidebar] {
+    position: relative;
+    padding-top: 38px;
+  }
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root]::before,
+  [data-admin-shell][data-mac-chrome="windowed"] [data-admin-sidebar]::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 44px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-sidebar-rail] {
+    padding-top: 50px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-sidebar-rail] > * {
+    -webkit-app-region: no-drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-rail-top-controls] {
+    display: none;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-sidebar-root] {
+    position: relative;
+    padding-top: 38px;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-sidebar-rail] {
+    padding-top: 50px;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] [data-rail-top-controls] {
+    display: none;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main,
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main {
+    border: 0;
+    border-radius: 0;
+  }
+  [data-app-shell][data-sidebar-animating="1"] [data-sidebar-column] {
+    display: block;
+    overflow: hidden;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) {
+    height: 45px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child {
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside :is(header.h-14, header[data-terminal-header]) :is(button, a, input, select, [role="button"], [data-chat-title]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside [data-subagent-panel] > header > :first-child :is(button, a, input, select, [role="button"]),
+  [data-app-shell][data-mac-chrome="windowed"] [role="separator"] {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  [data-app-shell][data-sidebar-animating="1"][data-mac-chrome="windowed"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: var(--mac-header-inset, 1rem);
+  }
+  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 146px;
+  }
+  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 200px;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"]) > main > .min-h-0 > * > :not(:first-child) :is(header.h-14, header[data-terminal-header]) {
+    padding-left: 1rem;
+  }
+}
+
+/* ── Opt-in Frosted Glass surface style (Settings › Advanced › Appearance, #16607, #16776, #17012) ───────── */
+:root[data-surface-style="liquid-glass"] {
+  --glass-t: 0.75;
+  --glass-blur: calc(6px + var(--glass-t) * 20px);
+  --glass-sat: calc(105% + var(--glass-t) * 35%);
+  --canvas: rgba(244, 245, 248, calc(1 - var(--glass-t)));
+  --page: rgba(247, 247, 249, calc(1 - var(--glass-t) * 0.06));
+  --glass-main-border: rgba(15, 23, 42, 0.08);
+  --glass-main-shadow: 0 2px 12px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(15, 23, 42, 0.03);
+  --glass-sidebar-shadow: 0 1px 1px rgba(255, 255, 255, calc(var(--glass-t) * 0.36));
+}
+:root.dark[data-surface-style="liquid-glass"] {
+  --canvas: rgba(14, 15, 18, calc(1 - var(--glass-t)));
+  --page: rgba(17, 17, 19, calc(1 - var(--glass-t) * 0.06));
+  --glass-main-border: rgba(255, 255, 255, 0.065);
+  --glass-main-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  --glass-sidebar-shadow: 0 1px 2px rgba(0, 0, 0, calc(var(--glass-t) * 0.30));
+}
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"],
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body {
+  background: transparent;
+}
+/* Over native NSVisualEffectView, disable Chromium CSS backdrop-filter across the document (main, split panel <aside>, portals, and arbitrary utilities) to prevent vibrancy alpha-clearing ghosting and double-compositing focus flashes (electron#39529). */
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] [class*="backdrop-"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+  background:
+    radial-gradient(circle at 16% 18%, rgba(56, 189, 248, 0.24), transparent 45%),
+    radial-gradient(circle at 86% 14%, rgba(167, 139, 250, 0.20), transparent 46%),
+    linear-gradient(135deg, #e5eaf4 0%, #edf1f8 55%, #e2e8f4 100%);
+}
+:root.dark[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+  background:
+    radial-gradient(circle at 16% 18%, rgba(56, 189, 248, 0.22), transparent 45%),
+    radial-gradient(circle at 86% 14%, rgba(167, 139, 250, 0.20), transparent 46%),
+    linear-gradient(135deg, #0b1120 0%, #141c2f 55%, #0e1526 100%);
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell] :is([data-sidebar-root], [data-sidebar-rail], [data-sidebar-sticky]) {
+  background: transparent;
+}
+:root[data-surface-style="liquid-glass"] [data-sidebar-column] {
+  text-shadow: var(--glass-sidebar-shadow);
+}
+/* Flat, pure alpha-modulated tonal washes for controls on the frosted sidebar & top-left macOS bay (no bevels or drop shadows). */
+@media (width >= 64rem) and (prefers-reduced-transparency: no-preference) {
+  :root[data-surface-style="liquid-glass"] :is([data-sidebar-column], [data-mac-bay-tools]) {
+    --inset: rgba(0, 0, 0, 0.05);
+    --hover: rgba(0, 0, 0, 0.06);
+    --field: rgba(0, 0, 0, 0.075);
+    --hover-2: rgba(0, 0, 0, 0.095);
+    --accent-tint: rgba(0, 0, 0, 0.095);
+    --surface: rgba(255, 255, 255, 0.80);
+    --line: rgba(0, 0, 0, 0.08);
+    --line-strong: rgba(0, 0, 0, 0.14);
+    --shadow-hairline: 0 0 0 1px rgba(0, 0, 0, 0.065);
+    --shadow-btn: 0 0 0 1px rgba(0, 0, 0, 0.085);
+  }
+  :root.dark[data-surface-style="liquid-glass"] :is([data-sidebar-column], [data-mac-bay-tools]) {
+    --inset: rgba(255, 255, 255, 0.06);
+    --hover: rgba(255, 255, 255, 0.075);
+    --field: rgba(255, 255, 255, 0.095);
+    --hover-2: rgba(255, 255, 255, 0.115);
+    --accent-tint: rgba(255, 255, 255, 0.115);
+    --surface: rgba(255, 255, 255, 0.145);
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --shadow-btn: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+}
+@media (width < 64rem) {
+  :root[data-surface-style="liquid-glass"] [data-sidebar-column] {
+    background: var(--page);
+  }
+}
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading {
+  position: static;
+  background: transparent;
+}
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading[data-edge]::after {
+  display: none;
+}
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > main,
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > aside {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell] > main,
+:root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
+  border-color: var(--glass-main-border);
+  box-shadow: var(--glass-main-shadow);
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+  box-shadow: none;
+  filter: drop-shadow(0 2px 10px rgba(17, 17, 19, 0.055));
+}
+:root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.34));
+}
+/* While ComposerImageStage elevates the live composer, clear shell filters/clip-path so position:fixed anchors to the viewport cleanly. */
+:root[data-composer-stage="1"] [data-app-shell],
+:root[data-composer-stage="1"] [data-app-shell] > :is(main, aside) {
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-surface-style="liquid-glass"],
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
+    background: #f1f1f4;
+    --canvas: #f1f1f4;
+    --page: #f7f7f9;
+    --glass-main-border: var(--line);
+    --glass-main-shadow: none;
+    --glass-sidebar-shadow: none;
+  }
+  :root.dark[data-surface-style="liquid-glass"],
+  :root.dark[data-surface-style="liquid-glass"][data-desktop-glass="1"] {
+    background: #0b0b0c;
+    --canvas: #0b0b0c;
+    --page: #111113;
+    --glass-main-border: var(--line);
+    --glass-main-shadow: none;
+    --glass-sidebar-shadow: none;
+  }
+  :root[data-surface-style="liquid-glass"] body,
+  :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body,
+  :root.dark[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+    background: var(--page);
+  }
+  :root[data-surface-style="liquid-glass"] [data-app-shell],
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell],
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > main,
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside,
+  :root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) [data-app-shell] > aside {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  :root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main,
+  :root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"], [data-sidebar-animating="1"][data-mac-chrome="windowed"]) > main {
+    filter: none;
+  }
+}
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); transition: transform 150ms var(--ease-out-strong); }
 .range::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); }
 .range:active::-webkit-slider-thumb { transform: scale(1.1); }
@@ -720,3 +984,6 @@ select:not([multiple], [size], .appearance-none) {
 .range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent), var(--shadow-btn); }
 .range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(--accent), var(--shadow-btn); }
 .range:disabled { opacity: 0.5; cursor: default; }
+
+/* The phone's tab bar (views/PhoneTabBar.tsx) gives its room to the composer while the keyboard is up (lib/viewport.ts). */
+:root[data-kb] [data-phone-tabs] { display: none; }

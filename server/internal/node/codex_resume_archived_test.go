@@ -4,9 +4,63 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestStoppedCodexNativeArchiveAndGuardedResume(t *testing.T) {
+	withCodexLaunchers(t, map[string][]string{"cx": {"codex"}})
+	n, f, cwd := codexHistoryNode(t)
+	provenanceHerdr(n)
+	withStop(t, 1, 50*time.Millisecond)
+	n.state.put(startThread, sessionState{Launcher: "cx", Cwd: cwd, Model: "gpt-7",
+		AppMode: "plan", Pane: "w1:p1", StartedAt: time.Now().Add(-time.Hour)})
+	n.agents[startThread] = host.Agent{Agent: "codex", PaneID: "w1:p1", TabID: "w1:t1",
+		WorkspaceID: "w1", AgentStatus: proto.StatusIdle}
+	quitsOn(f, "w1:p1", startThread, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, startThread))
+	if res, err := request(t, n, "session.stop", map[string]any{
+		"session_id": startThread, "retire": true, "stop_cause": proto.StopTaskCompleted,
+	}); err != nil || res["stopped"] != true {
+		t.Fatalf("stop did not complete: %v %v", res, err)
+	}
+	if info, err := n.sessionInfo(t.Context(), startThread); err != nil || info["stop_cause"] != proto.StopTaskCompleted {
+		t.Fatalf("post-stop provenance: %v %v", info, err)
+	}
+	commands := stubCodexArchiveCommand(t)
+	if res, err := request(t, n, "session.archive", map[string]any{"session_id": startThread}); err != nil || res["native"] != nativeArchiveDone {
+		t.Fatalf("native archive: %v %v", res, err)
+	}
+	// Its terminal has since gone too: only the archived rollout and saved node state remain.
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	if _, listed := byID(listSessions(t, n))[startThread]; listed {
+		t.Fatal("native archived conversation is still in the live inventory")
+	}
+	if info, err := n.sessionInfo(t.Context(), startThread); err != nil || info["stop_cause"] != proto.StopTaskCompleted {
+		t.Fatalf("native archival lost authoritative stop evidence: %v %v", info, err)
+	}
+	f.reset()
+	got := resumeFile(f, cwd)
+	if _, err := request(t, n, "session.start", map[string]any{
+		"resume_session_id": startThread, "resume_automatic": true, "prompt": "Continue the assigned task",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	commands.mu.Lock()
+	runs := commands.runs
+	commands.mu.Unlock()
+	if len(runs) != 2 || runs[0][2] != "archive" || runs[1][2] != "unarchive" ||
+		runs[0][3] != startThread || runs[1][3] != startThread || archiveIn(t, n.codexHome(), startThread) {
+		t.Fatalf("native stop/archive/resume handoff failed: %v", runs)
+	}
+	file := got()
+	args := strings.Join(file.Argv, " ")
+	if file.Prompt != "Continue the assigned task" || !strings.Contains(args, "resume "+startThread) ||
+		!strings.Contains(args, "--sandbox read-only") || !strings.Contains(args, "--model gpt-7") {
+		t.Fatalf("resume lost identity, prompt or launch constraints: %+v", file)
+	}
+}
 
 func TestArchivedCodexResumeRestoresBeforeOpeningTerminal(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"cx": {"codex"}})

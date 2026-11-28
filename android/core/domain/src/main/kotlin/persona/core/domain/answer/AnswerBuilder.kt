@@ -198,7 +198,7 @@ internal object KotlinAnswerBuilder {
                 resolved(Resolution(allow = false, message = draft.message.takeIf { it.isNotEmpty() }))
             }
             AnswerAction.CancelQuestion, AnswerAction.OwnerReply -> blocked() // handled before the answer policy
-            AnswerAction.Dismiss -> resolved(Resolution(dismiss = true))
+            AnswerAction.Dismiss -> if (interaction.noHandBack) blocked() else resolved(Resolution(dismiss = true))
             AnswerAction.PickOption, AnswerAction.Advance, AnswerAction.Submit -> question(interaction.questions.orEmpty(), action, draft)
             AnswerAction.ScreenOption -> {
                 val option = screenOptions(interaction).firstOrNull { it.key == draft.option } ?: return blocked()

@@ -68,7 +68,7 @@ function CommandScreenCardView({
   const go = (body: Record<string, unknown>, key: string) =>
     run(key, () => (onResolve ? onResolve(body) : resolve(ix, body)));
   const handleDismiss =
-    onDismiss === null
+    onDismiss === null || (onDismiss === undefined && ix.no_hand_back)
       ? undefined
       : () => void (onDismiss ? run("dismiss", onDismiss) : go({ dismiss: true }, "dismiss"));
   // digits pick the prompt's options by place, as the terminal reads them; Enter allows, as on the permission card, and

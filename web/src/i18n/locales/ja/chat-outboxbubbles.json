@@ -1,6 +1,7 @@
 {
   "failed": "送信できませんでした：{error}",
   "clear_and_send": "クリアして送信",
+  "open_terminal": "ターミナルを開く",
   "retry": "再試行",
   "check": "確認",
   "checking": "確認中…",

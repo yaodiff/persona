@@ -587,12 +587,14 @@ func (s *Service) deliverCard(source string, n Notification) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		// Off the caller's way, no lock of theirs is held: the owner may be read from the to-dos.
-		s.noteCardOwner(ctx, source, s.supervisingOwner(ctx, n))
 		s.capTrackPush(ctx, &n) // a track's push_cap (track_attention.go); never a card's
-		if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+		res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+		if err != nil {
 			s.logf("assistant: push: %v", err)
+			return
 		}
+		// Off the caller's way, no lock of theirs is held: the owner may be read from the to-dos.
+		s.noteCardOwnerResult(ctx, source, s.supervisingOwner(ctx, n), res)
 	}()
 }
 

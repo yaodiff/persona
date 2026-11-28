@@ -2,6 +2,7 @@
   "computer_run": "Computer control",
   "computer_state": "Computer view",
   "browser_run": "Browser script",
+  "browser_fetch_download": "Browser download",
   "iphone_do": "iPhone control",
   "extension_ui": "Extension action",
   "persona_settings": "Persona settings change",

@@ -6,8 +6,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The notes a node writes on its Paseo engine (the canonical Chinese of node-engine) reach each reader in their
-// language, the reason inside them as the node wrote it; any other note stays as it is.
+// The notes a node writes on its Paseo and Orca engines (the canonical Chinese of node-engine) reach each reader in
+// their language, the reason inside them as the node wrote it; any other note stays as it is.
 func TestEngineTextLanguages(t *testing.T) {
 	reason := "SyntaxError: Unexpected token '??='"
 	for _, c := range []struct {
@@ -18,6 +18,8 @@ func TestEngineTextLanguages(t *testing.T) {
 		{"node-engine.paseo_not_connected", nil},
 		{"node-engine.paseo_not_connected_why", Args{"reason": "paseo: Paseo refused the connection (4401); trying again"}},
 		{"node-engine.paseo_outdated", Args{"version": "0.14.0", "minimum": "0.15.0"}},
+		// Orca's, from before #17037 too: the canonical Chinese is the words nodes wrote then.
+		{"node-engine.orca_incompatible", nil},
 	} {
 		canonical := T(Default, c.key, c.args)
 		for _, l := range []Lang{En, ZhHans, Ja} {
@@ -32,7 +34,7 @@ func TestEngineTextLanguages(t *testing.T) {
 	if got := EngineText(En, T(Default, "node-engine.paseo_unreachable", Args{"reason": reason})); got != "Paseo is running, but Persona can’t connect to it: "+reason {
 		t.Fatalf("en: %q", got)
 	}
-	for _, raw := range []string{"这个版本的 Orca 和 Persona 不兼容，请把两边都更新到最新版", "exited: exit status 1", ""} {
+	for _, raw := range []string{"an older node's own words", "exited: exit status 1", ""} {
 		for _, l := range []Lang{En, ZhHans, Ja} {
 			if got := EngineText(l, raw); got != raw {
 				t.Fatalf("another note changed in %s: %q", l, got)
@@ -52,7 +54,7 @@ func TestEngineNotesCopies(t *testing.T) {
 	if engines[1].Note != note {
 		t.Fatal("the snapshot changed")
 	}
-	plain := []proto.Engine{{ID: "orca", Note: "这个版本的 Orca 和 Persona 不兼容，请把两边都更新到最新版"}}
+	plain := []proto.Engine{{ID: "orca", Note: "an older node's own words"}}
 	if got := EngineNotes(En, plain); &got[0] != &plain[0] {
 		t.Fatal("copied with nothing to change")
 	}

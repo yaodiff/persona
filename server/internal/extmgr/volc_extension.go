@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/builtinext"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -143,14 +144,18 @@ func (h *Manager) addVolcExtension(ctx context.Context, reg *extension.Registry,
 			return
 		}
 		if slices.ContainsFunc(rows, func(r extension.Record) bool {
-			return r.ID == volc.ExtensionID && r.Source == extension.SourceInstalled
+			return r.ID == volc.ExtensionID && r.Source == extension.SourceInstalled && !r.BuiltinPredecessor
 		}) {
 			return
 		}
 	}
 	if err := reg.AddBuiltinTranslated(volcManifest(h, volc), "", false, volcTranslations(volc)); err != nil {
 		h.logf("plugin %s: %v", volc.ExtensionID, err)
+		return
 	}
+	// Both implementations use the same extension process, transcription and speech
+	// dispatch. apply stops its predecessor before publishing the replacement.
+	reg.AllowBuiltinHandoff(volc.ExtensionID)
 }
 
 // isVolc says whether p is the built-in Volcengine speech extension.
@@ -185,8 +190,8 @@ func (ps *extensions) volcView(ctx context.Context, p *extension.Extension, v *E
 
 // volcMeetings is whether meetings transcribe with the extension now: the assistant's choice names it.
 func (h *Manager) volcMeetings(ctx context.Context) (on, known bool) {
-	var res assistantwire.MeetingTranscriptionChoice
-	if err := h.callAssistant(ctx, assistantwire.MethodMeetingTranscriptionChoice, assistantwire.MeetingTranscriptionChoose{}, &res); err != nil {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.MeetingTranscriptionChoiceMethod, assistantwire.MeetingTranscriptionChoose{})
+	if err != nil {
 		return false, false
 	}
 	return res.Extension == volcRef(h.modules()), true
@@ -218,9 +223,8 @@ func (h *Manager) volcConfigWrite(ctx context.Context, p *extension.Extension, r
 	if on, known := h.volcMeetings(ctx); known && on == want {
 		return rest, changed, nil
 	}
-	var res assistantwire.MeetingTranscriptionChoice
-	err := h.callAssistant(ctx, assistantwire.MethodMeetingTranscriptionChoice,
-		assistantwire.MeetingTranscriptionChoose{Set: true, Use: want, Extension: volcRef(h.modules())}, &res)
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.MeetingTranscriptionChoiceMethod,
+		assistantwire.MeetingTranscriptionChoose{Set: true, Use: want, Extension: volcRef(h.modules())})
 	if err != nil {
 		return nil, false, err
 	}

@@ -49,6 +49,7 @@ var managerMessageTypes = map[string]bool{
 	"agents": true, "agents.prefs": true, "inbox": true, "mail_accounts": true, "messaging": true,
 	"extension_auth": true, "extension_operation": true, "extension_ui": true, "plugin_ui": true,
 	"extension_upgrade": true, "plugin_upgrade": true, "subscription": true,
+	"text_lookup_changed": true,
 	// its devices
 	"file_transfer": true,
 	"held_start":    true,
@@ -67,6 +68,7 @@ var hubMessageTypes = map[string]bool{
 	"screen": true, "tool_call": true, "hook_event": true, "fs_changed": true, "desktops": true, "endpoints": true,
 	"terminal": true, "terminal_control": true, "herdr_state": true, "herdr_focus": true, "herdr_end": true, "herdr_data": true,
 	"fleet": true, "liveactivity": true, "look": true, "personas": true, "managers": true, "hub_update": true,
+	"mutes": true, "pins": true,
 	"hub_restarting":      true,
 	"extension_ui_stream": true, // reserved targeted transport; never a manager broadcast
 }

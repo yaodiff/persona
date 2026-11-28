@@ -1,4 +1,5 @@
 {
+  "direct_usage_needs_url": "请先保存直接额度来源的 HTTPS 地址，再设置它的 Key。",
   "no_auth": "这个扩展不用登录",
   "qr_missing_url": "扩展返回的扫码登录步骤没有链接",
   "not_found": "没有这个扩展",

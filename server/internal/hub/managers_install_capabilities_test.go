@@ -73,8 +73,8 @@ func TestManagerInstallRequiresOwnConfigBeforeSideEffects(t *testing.T) {
 				m.Sums = map[string]string{archive: hex.EncodeToString(sum[:])}
 			}
 			cmd := exec.Command("sh")
-			cmd.Stdin = strings.NewReader(managerInstallScript(m))
-			cmd.Env = append(os.Environ(), "HOME="+home, "PERSONA_HOME=", "PATH=/usr/bin:/bin", "NO_PROXY=*", "no_proxy=*", "CURL_HOME="+home)
+			cmd.Stdin = strings.NewReader(scriptOnlyHere(t, managerInstallScript(m), t.TempDir(), home))
+			cmd.Env = scriptEnv(home, "/usr/bin:/bin", "NO_PROXY=*", "no_proxy=*", "CURL_HOME="+home)
 			out, err := cmd.CombinedOutput()
 			if (err == nil) != tc.wantOK {
 				t.Fatalf("success=%t want=%t: %v\n%s", err == nil, tc.wantOK, err, out)

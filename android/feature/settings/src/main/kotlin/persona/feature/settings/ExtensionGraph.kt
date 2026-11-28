@@ -697,7 +697,7 @@ private fun graphNodeReadout(node: ExtensionGraphNode, parent: String?): String 
     return parts.joinToString(", ")
 }
 
-private fun ExtensionAction.toViewAction() = ExtensionViewAction(
+internal fun ExtensionAction.toViewAction() = ExtensionViewAction(
     id = id,
     confirm = confirm,
     submit = submit == true,

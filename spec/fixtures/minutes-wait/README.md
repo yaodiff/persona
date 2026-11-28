@@ -42,4 +42,5 @@ the same rule. All data is made up.
   `apple/Persona/Recording/MeetingAudioWire.swift`).
 - web: `cd web && npx vitest run src/modules/recording/minutes-wait.test.ts` (the rule in `web/src/modules/recording/minutes-wait.ts`).
 - Android: KnowledgeMinutesTest in the feature:knowledge module (the rule in KnowledgeMinutes.kt).
+- HarmonyOS: `cd harmony && node --test tests/minutes-wait.test.mjs` (the rule in `harmony/entry/src/main/ets/core/MinutesWait.ts`).
 - A new case: work out the expected line and numbers by hand from the rules above, then run the hub and client checks.

@@ -57,7 +57,16 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
   useEffect(() => {
     if (!picking) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) setPicked(null);
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if ([...document.querySelectorAll("[role=dialog],[role=menu],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
+      const target = e.target;
+      if (target instanceof Element) {
+        if (target instanceof HTMLInputElement && !["checkbox", "radio", "button", "submit", "reset", "range", "file", "image", "color"].includes(target.type)) return;
+        const ce = target.closest("[contenteditable]");
+        if (target.closest("textarea, select") || (ce ? ce.getAttribute("contenteditable") !== "false" : Boolean((target as HTMLElement).isContentEditable))) return;
+      }
+      e.preventDefault();
+      setPicked(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -79,8 +88,9 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
   useEffect(() => {
     if (!id) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || shown(listBox.current)) return;
-      if (document.querySelector("[role=dialog], [role=menu]") || (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]"))) return;
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.keyCode === 229 || shown(listBox.current)) return;
+      if ([...document.querySelectorAll("[role=dialog],[role=menu],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
+      if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
       backToInboxList();
     };
     window.addEventListener("keydown", onKey);

@@ -77,6 +77,7 @@ func TestAudioSocketRefusalsAreTheFirstFrame(t *testing.T) {
 // A trimmed recording's socket is refused transcript_expired.
 func TestAudioSocketTrimmed(t *testing.T) {
 	h := newHubFixture(t)
+	setSettings(t, h.s, func(v *Settings) { days := 14; v.RecordingTextDays = &days }) // the text is kept forever by default
 	h.hubUpload(meetingRec, 1, map[string]any{"complete": true, "duration": 60.0, "ended_at": time.Now().UTC().Format(time.RFC3339),
 		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
 	e := h.engine()

@@ -61,7 +61,7 @@ describe("全部对话's ⋯ (#8324)", () => {
   it("has the switch with its state and saves the other value at once", async () => {
     await mount(false);
     const rows = await openOptions();
-    expect(rows.map((r) => r.textContent?.trim().replace(/\s+/g, " "))).toEqual(["显示定时任务的对话", "侧栏的最近对话5"]);
+    expect(rows.map((r) => r.textContent?.trim().replace(/\s+/g, " "))).toEqual(["显示定时任务的对话", "侧栏最近对话5"]);
     await act(async () => rows[0].click());
     await flush();
     expect(hub.saved).toEqual([true]);
@@ -70,7 +70,7 @@ describe("全部对话's ⋯ (#8324)", () => {
   it("has only the count from a hub without the setting, and the count is the sidebar's own setting", async () => {
     await mount();
     const rows = await openOptions();
-    expect(rows.map((r) => r.textContent?.trim().replace(/\s+/g, " "))).toEqual(["侧栏的最近对话5"]);
+    expect(rows.map((r) => r.textContent?.trim().replace(/\s+/g, " "))).toEqual(["侧栏最近对话5"]);
     await act(async () => rows[0].click());
     const ten = [...document.querySelectorAll('[role="menuitemradio"]')].find((r) => r.textContent?.trim() === "10") as HTMLElement;
     await act(async () => ten.click());

@@ -8,10 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeclient"
@@ -19,9 +24,8 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// listenRuntimeSocket gives n a runtime socket of its own, at runtimePath, for the connection it serves itself
-// (`--stdio` with no resident node: runtimehost.go). A resident node's Nodes share one instead.
-func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
+// newRuntimeHost creates a standalone RuntimeHost bound to n.runtimes without listening yet.
+func (n *Node) newRuntimeHost() *RuntimeHost {
 	rh := &RuntimeHost{reg: n.runtimes, path: n.runtimePath(), version: n.Version, logger: n.logger, autoCompanions: n.autoCompanions}
 	if rh.reg == nil {
 		rh.reg = newRuntimeRegistry()
@@ -29,9 +33,18 @@ func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
 	if rh.reg.logf == nil && n.logger != nil {
 		rh.reg.logf = n.logger.Printf
 	}
+	return rh
+}
+
+// listenRuntimeSocket gives n a runtime socket of its own, at runtimePath, for the connection it serves itself
+// (`--stdio` with no resident node: runtimehost.go). A resident node's Nodes share one instead.
+func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
+	rh := n.newRuntimeHost()
+	n.runtimes = rh.reg
 	if err := rh.Listen(ctx); err != nil {
 		return nil, err
 	}
+	n.runtimeHost = rh
 	rh.attach(n)
 	return rh, nil
 }
@@ -190,6 +203,10 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 		if s.Agent == "" {
 			s.Agent = agent
 		}
+		agy := agent == agyAgent && s.Agent == agyAgent && !daemon
+		if agy && agyStopped(s.Status) {
+			s.Background = nil
+		}
 		if s.AgentLabel == "" && (s.Agent == rt || (agent != "" && s.Agent == agent && agent != "claude") || daemon && s.Agent != "claude") {
 			// The runtime runs its own agent (DSH, opencode-<pid>): the apps call it by the runtime's name. A daemon is called by the
 			// name its config gives, whatever agent it runs (a platform running DSH), unless that is Claude Code.
@@ -202,8 +219,10 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 		// sending, interrupting, answering cards and every terminal control on capabilities, the hub guards sends.
 		// What a runtime declared, never more: no terminal, no attach, cards always answerable (they are its own asks).
 		s.SourceKind, s.SourceInstanceID, s.SourceThreadID, s.ParentThreadID = proto.SourceRuntime, rt, "", ""
-		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID {
-			s.Host = rt // an engine host, though no terminal (#2576)
+		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID || rt == orcaRuntimeID && !daemon {
+			// An engine host, though no terminal (#2576). Orca's chats (orcabridge.go) are its engine's too: the apps ask
+			// that engine about the chat's worktree, not the computer's default one.
+			s.Host = rt
 		} else {
 			s.Host = ""
 		}
@@ -228,10 +247,11 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 			s.Efforts = nil
 		}
 		// The permission modes it lists for an agent that is not Claude Code (#8261) go with its modes too, and only where
-		// the apps' Claude Code chips do not stand (claudeModes): the apps switch between those instead.
+		// the apps' Claude Code chips do not stand (claudeModes) — except Antigravity (agy), which keeps capabilities.modes
+		// true while advertising a narrower permission_modes subset when a native mode (such as auto) is unavailable.
 		claudeModes := modes && runtimeModes(caps.Modes, rt, agent, s)
 		permissionModes := own.PermissionModes
-		if !modes || claudeModes {
+		if !modes || (claudeModes && s.Agent != agyAgent && agent != agyAgent) {
 			permissionModes = 0
 		}
 		rowCaps := proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
@@ -289,7 +309,8 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 			s.SetContextBreakdown(nil)
 		}
 		s.LastText = preview(s.SessionID, s.LastText)
-		runtimeWork(&s, preview)
+		runtimeLastText(&s)
+		runtimeWork(&s, agy, preview)
 		out = append(out, s)
 	}
 	clear(list[len(out):]) // the rows left out hold no strings
@@ -447,18 +468,13 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 		ix.Cwd = sessionCwd
 	}
 	// "Always allow for this session" kept by the hub for a runtime's permission card (#3974): what it grants is the node's word, never
-	// the runtime's — one key for this runtime's tool, which the manager keeps under this session id, so it never
-	// reaches another session or another tool. Only for a runtime that asked for it in its hello (caps.keep_always: it
-	// keeps no rule itself; a runtime whose always is a narrower rule of its own must not get the whole tool), only
-	// when the card offers it (an always_label), and never in a space or on a card with fields.
-	h.mu.Lock()
-	keepAlways := h.hello.Caps.KeepAlways
-	h.mu.Unlock()
-	ix.AlwaysKeys = nil
-	if keepAlways && ix.Kind == proto.IxPermission && strings.TrimSpace(ix.AlwaysLabel) != "" && strings.TrimSpace(ix.ToolName) != "" &&
-		len(ix.Fields) == 0 && !runtimeInSpace(h, ix) {
-		ix.AlwaysKeys = []string{"runtime:" + rt + ":tool:" + ix.ToolName}
-	}
+	// the runtime's. Only for a runtime that asked for it in its hello (caps.keep_always), never in a space or on a card with fields.
+	// Local assistant_environment runtimes (such as Antigravity) get scoped tool:* keys matching Claude Code hooks (directory-scoped
+	// file tools, inspected non-inbox Bash, or tool:<name>); non-assistant cards that already carry a native always_label keep their
+	// native rule without widening. Other keep_always runtimes (e.g. DSH) keep always_label-gated runtime:<rt>:tool:<tool> keys.
+	inSpace := runtimeInSpace(h, ix) || identity.InSpace(sessionCwd) || identity.InSpace(execCwd) ||
+		(hasRow && (s.Space != "" || identity.InSpace(s.Cwd))) || n.isSpaceSession(assistantSid)
+	ix.AlwaysKeys = n.runtimeAlwaysKeys(h, rt, &ix, assistantSid, inSpace, isAsstSession)
 	ix.CreatedAt = now
 	timeout := nodeclient.HookTimeout
 	if p.TimeoutSeconds > 0 && time.Duration(p.TimeoutSeconds)*time.Second < timeout {
@@ -515,18 +531,41 @@ func (n *Node) runtimeAssistantCommandGate(ctx context.Context, ix proto.Interac
 	if gateIx.SessionTitle == "" {
 		gateIx.SessionTitle = n.assistantTitle(session, gateCwd)
 	}
-	decision, reason, err := n.larkCheck(ctx, session, gateCwd, bashIn.Command, gateIx)
+	cfg := n.assistantLark(ctx)
+	call, _, original, editable := n.editableLarkCall(cfg, bashIn.Command, gateCwd)
+	if editable {
+		gateIx.EditableText = original
+	}
+	out, err := n.larkCheckOutcome(ctx, session, gateCwd, bashIn.Command, gateIx)
 	if errors.Is(err, errNodeGone) {
 		return nil, true, &rpc.Error{Message: "node going away", Code: "node_gone"}
 	}
 	if err != nil {
 		return nil, true, err
 	}
-	switch decision {
+	switch out.decision {
 	case "allow":
-		return proto.Resolution{Allow: proto.Bool(true), Message: reason}, true, nil
+		if editable && out.editedText != "" && out.editedText != original {
+			card := out.card
+			if card.InteractionID == "" {
+				card.InteractionID = gateIx.ID
+			}
+			if err := n.applyLarkProxyEdit(ctx, cfg, session, card, call, out.editedText); err != nil {
+				return proto.Resolution{Allow: proto.Bool(false), Message: err.Error(), Reason: "gate_rule"}, true, nil
+			}
+		}
+		return proto.Resolution{Allow: proto.Bool(true), Message: out.reason}, true, nil
 	case "deny":
-		return proto.Resolution{Allow: proto.Bool(false), Message: reason}, true, nil
+		if out.pending {
+			return proto.Resolution{Dismiss: true, Pending: true, ApprovalID: out.approvalID, Message: out.reason}, true, nil
+		}
+		if out.dismiss {
+			return proto.Resolution{Dismiss: true, ApprovalID: out.approvalID, Message: out.reason}, true, nil
+		}
+		if out.userDenied {
+			return proto.Resolution{Allow: proto.Bool(false), Message: out.userNote}, true, nil
+		}
+		return proto.Resolution{Allow: proto.Bool(false), Message: out.reason, Reason: "gate_rule"}, true, nil
 	}
 	mode, _ := n.modesOf(session)
 	rowMode := ""
@@ -540,6 +579,263 @@ func (n *Node) runtimeAssistantCommandGate(ctx context.Context, ix proto.Interac
 		return proto.Resolution{Allow: proto.Bool(true)}, true, nil
 	}
 	return nil, false, nil
+}
+
+// runtimeAlwaysKeys computes hub-remembered AlwaysKeys for a runtime permission card.
+// Any runtime-supplied always_keys are ignored (caller replaces ix.AlwaysKeys with the return value).
+func (n *Node) runtimeAlwaysKeys(h *runtimeConn, rt string, ix *proto.Interaction, assistantSid string, inSpace, isAsstSession bool) []string {
+	h.mu.Lock()
+	keepAlways := h.hello.Caps.KeepAlways
+	remoteCap := h.hello.Caps.RemoteAgent
+	h.mu.Unlock()
+	if !keepAlways || ix.Kind != proto.IxPermission {
+		return nil
+	}
+	// Remote-agent runtimes and sessions with latched RemoteAgent confirm-writes posture never get hub AlwaysKeys,
+	// even if caps.keep_always and always_label are present.
+	if remoteCap || h.remoteAgent() || n.isRemoteSession(assistantSid) || (ix.SessionID != assistantSid && n.isRemoteSession(ix.SessionID)) {
+		if isAsstSession {
+			ix.AlwaysLabel = ""
+		}
+		return nil
+	}
+	toolName := strings.TrimSpace(ix.ToolName)
+	if h.assistantEnvironment() {
+		if isAsstSession {
+			// Assistant sessions never create native ACP allow_always grants; Persona's scoped AlwaysKeys govern.
+			ix.AlwaysLabel = ""
+		} else if strings.TrimSpace(ix.AlwaysLabel) != "" {
+			// Non-assistant session with a native allow_always label (#15785): preserve its native scope without widening.
+			return nil
+		}
+		if toolName == "" || len(ix.Fields) > 0 || inSpace {
+			return nil
+		}
+		return n.scopedRuntimeAlwaysKeys(toolName, ix.ToolInput, assistantSid)
+	}
+	if strings.TrimSpace(ix.AlwaysLabel) == "" || toolName == "" || len(ix.Fields) > 0 || inSpace {
+		return nil
+	}
+	if strings.EqualFold(toolName, "Bash") && n.assistantOrigin(assistantSid) == originInbox {
+		return nil
+	}
+	return []string{"runtime:" + rt + ":tool:" + toolName}
+}
+
+// scopedRuntimeAlwaysKeys builds Claude-compatible scoped session AlwaysKeys for a local assistant_environment runtime.
+// File tools require an absolute, non-truncated, non-escaping, non-root, non-space path (directory-scoped); Bash requires
+// a parseable, non-empty, non-truncated command and never grants whole-tool tool:Bash on origin:inbox (#15292).
+// Unrecognized tools fail closed whenever their input contains path-like or command-like fields.
+func (n *Node) scopedRuntimeAlwaysKeys(toolName string, toolInput json.RawMessage, assistantSid string) []string {
+	if strings.EqualFold(toolName, "Bash") {
+		if n.assistantOrigin(assistantSid) == originInbox {
+			return nil
+		}
+		var bashIn struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(toolInput, &bashIn) != nil || strings.TrimSpace(bashIn.Command) == "" || truncatedCommandNoteRe.MatchString(bashIn.Command) {
+			return nil
+		}
+		return []string{"tool:Bash"}
+	}
+	lower := strings.ToLower(toolName)
+	switch lower {
+	case "read", "edit", "write", "multiedit", "notebookedit":
+		scope := runtimeFileRuleScope(toolInput, n.home)
+		if scope == "" {
+			return nil
+		}
+		tool := "Edit"
+		if lower == "read" {
+			tool = "Read"
+		}
+		return []string{"tool:" + tool + "(" + scope + ")"}
+	case "delete_file", "move_file", "remove_file", "rename_file", "copy_file",
+		"multi_replace_file_content", "replace_file_content", "write_to_file", "write_file",
+		"edit_file", "view_file", "read_file", "notebook_edit", "run_command", "execute_command", "shell":
+		// Unmapped raw file/shell tool names must never fall through to unscoped tool:<name>.
+		return nil
+	}
+	if !isKnownUnscopedAlwaysTool(toolName) && hasPathOrCommandInput(toolInput) {
+		return nil
+	}
+	return []string{"tool:" + toolName}
+}
+
+func isKnownUnscopedAlwaysTool(toolName string) bool {
+	if strings.HasPrefix(toolName, "mcp__") {
+		return true
+	}
+	switch toolName {
+	case "WebSearch", "WebFetch", "Grep", "Glob", "Agent":
+		return true
+	}
+	return false
+}
+
+// hasPathOrCommandInput reports whether raw tool input is malformed or carries any path-like or command-like field
+// (checked case-insensitively across nested JSON objects), causing unrecognized tools to fail closed.
+func hasPathOrCommandInput(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return false
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return true
+	}
+	return valueHasPathOrCommandKey(v, 0)
+}
+
+func valueHasPathOrCommandKey(v any, depth int) bool {
+	if depth > 8 {
+		return true
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			switch strings.ReplaceAll(strings.ToLower(k), "_", "") {
+			case "filepath", "path", "targetfile", "absolutepath", "directorypath", "searchpath",
+				"notebookpath", "source", "destination", "target",
+				"command", "commandline", "cmd", "script":
+				return true
+			}
+			if valueHasPathOrCommandKey(val, depth+1) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range x {
+			if valueHasPathOrCommandKey(item, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isWindowsDriveOrUNC(p string) bool {
+	if len(p) >= 3 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(p, `\\`)
+}
+
+// runtimeFileRuleScope extracts the directory rule ("//abs/dir/**") for a runtime file tool call.
+// Returns "" for missing, relative, traversal (".."), trailing-separator, bare-home, truncated,
+// root, space-targeted, or symlink-escaping paths so callers fail closed.
+func runtimeFileRuleScope(input json.RawMessage, home string) string {
+	var a struct {
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
+	}
+	if json.Unmarshal(input, &a) != nil {
+		return ""
+	}
+	p := strings.TrimSpace(a.FilePath)
+	if p == "" {
+		p = strings.TrimSpace(a.NotebookPath)
+	}
+	if p == "" || truncatedCommandNoteRe.MatchString(p) {
+		return ""
+	}
+	p = proto.ExpandHome(p, home)
+	// Reject bare ".", trailing separators, or any ".." path segment before Clean can collapse them.
+	if p == "." || strings.HasSuffix(p, "/") || strings.HasSuffix(p, `\`) {
+		return ""
+	}
+	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == "." || seg == ".." {
+			return ""
+		}
+	}
+	winPath := isWindowsDriveOrUNC(p)
+	if !winPath && !filepath.IsAbs(p) {
+		return ""
+	}
+	cleanHome := ""
+	if home != "" {
+		cleanHome = filepath.Clean(home)
+	}
+	if winPath {
+		slash := strings.ReplaceAll(p, `\`, "/")
+		if strings.HasPrefix(slash, "//") {
+			parts := strings.Split(strings.TrimPrefix(slash, "//"), "/")
+			// //server/share/dir/file requires at least 4 segments; //server/share/file's parent is the share root.
+			if len(parts) < 4 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+				return ""
+			}
+		}
+		dir := path.Dir(slash)
+		if len(dir) <= 3 && strings.HasSuffix(strings.TrimSuffix(dir, "/"), ":") {
+			return ""
+		}
+		if dir == "." || dir == "/" || path.Dir(dir) == dir {
+			return ""
+		}
+		if cleanHome != "" {
+			homeSlash := strings.TrimSuffix(strings.ReplaceAll(cleanHome, `\`, "/"), "/")
+			if strings.EqualFold(strings.TrimSuffix(slash, "/"), homeSlash) || strings.EqualFold(strings.TrimSuffix(dir, "/"), homeSlash) {
+				return ""
+			}
+		}
+		if identity.InSpace(slash) || identity.InSpace(dir) {
+			return ""
+		}
+		// On non-Windows hosts, return the lexically validated Windows directory key;
+		// on Windows, fall through to run native os.Lstat / realPath symlink and dir checks.
+		if runtime.GOOS != "windows" {
+			if !strings.HasPrefix(dir, "/") {
+				dir = "/" + dir
+			}
+			trimmed := strings.TrimSuffix(dir, "/")
+			if trimmed == "" {
+				return ""
+			}
+			return "/" + trimmed + "/**"
+		}
+	}
+	cleanP := filepath.Clean(p)
+	dir := filepath.Dir(cleanP)
+	if filepath.Dir(dir) == dir {
+		return ""
+	}
+	samePath := func(a, b string) bool {
+		if runtime.GOOS == "windows" {
+			return strings.EqualFold(a, b)
+		}
+		return a == b
+	}
+	if cleanHome != "" && (samePath(cleanP, cleanHome) || samePath(dir, cleanHome)) {
+		return ""
+	}
+	// Reject direct file symlinks (both live and dangling), existing directories (whose Dir would widen
+	// to the parent), and any symlink-based parent escape, while preserving lexical keys
+	// (e.g. /tmp vs /private/tmp) when no escape occurs.
+	if fi, err := os.Lstat(cleanP); err == nil && (fi.Mode()&os.ModeSymlink != 0 || fi.IsDir()) {
+		return ""
+	}
+	realP := realPath(cleanP)
+	realDir := realPath(dir)
+	if !samePath(filepath.Dir(realP), realDir) || samePath(filepath.Dir(realDir), realDir) {
+		return ""
+	}
+	if cleanHome != "" && samePath(realDir, realPath(cleanHome)) {
+		return ""
+	}
+	if identity.InSpace(cleanP) || identity.InSpace(dir) || identity.InSpace(realP) || identity.InSpace(realDir) {
+		return ""
+	}
+	slashDir := filepath.ToSlash(dir)
+	if !strings.HasPrefix(slashDir, "/") {
+		slashDir = "/" + slashDir
+	}
+	trimmed := strings.TrimSuffix(slashDir, "/")
+	if trimmed == "" {
+		return ""
+	}
+	return "/" + trimmed + "/**"
 }
 
 // runtimeInSpace: the card's session is in a space (its cwd or the row's), where every write is confirmed
@@ -563,4 +859,18 @@ func runtimeInSpace(h *runtimeConn, ix proto.Interaction) bool {
 func runtimeModes(declared bool, rt, rtAgent string, s proto.Session) bool {
 	own := (s.Agent == rt || (rtAgent != "" && s.Agent == rtAgent)) && rt != paseoRuntimeID
 	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || own)
+}
+
+// runtimeLastText bounds a runtime row's last_text, its preview (docs/integrations/runtimes.md), as the node's own
+// rows' are (#16343): a runtime may report the whole reply there, which every list and frame would then carry. The
+// question a long reply ends with is read off the whole of it first, as for a host's answer (sessionListIn): the
+// manager reads a question off last_text itself only while it is the whole reply (assistant decorateAwaits).
+func runtimeLastText(s *proto.Session) {
+	if utf8.RuneCountInString(s.LastText) <= maxRuntimeLastText {
+		return
+	}
+	if !s.AsksRead && s.Asks == "" {
+		s.Asks, s.AsksRead = closeout.AskOf(s.LastText), true
+	}
+	s.LastText = snippet(s.LastText)
 }

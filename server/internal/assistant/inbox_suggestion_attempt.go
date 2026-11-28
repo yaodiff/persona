@@ -33,6 +33,8 @@ type InboxSuggestionAttempt struct {
 	Retryable      bool             `json:"retryable"`
 	Code           string           `json:"code,omitempty"`
 	Text           string           `json:"text"`
+	Mentions       []InboxMention   `json:"mentions,omitempty"`
+	MentionsSet    bool             `json:"mentions_set,omitempty"`
 	At             time.Time        `json:"at"` // latest reservation or outcome, not the replacement suggestion's time
 	Conversation   *SessionRef      `json:"conversation,omitempty"`
 	RetryAfter     int              `json:"retry_after,omitempty"`
@@ -57,6 +59,8 @@ func listedSuggestionAttempts(attempts []*InboxSuggestionAttempt) []*InboxSugges
 			continue
 		}
 		c := *a
+		c.Mentions = slices.Clone(a.Mentions)
+		c.MentionsSet = false
 		c.ClientID, c.Target, c.Proposal, c.active = "", "", nil, false
 		c.Category, c.Route, c.ContentVersion, c.PolicyRevision = "", "", "", ""
 		c.Reviewed = false
@@ -115,6 +119,11 @@ func actualReply(a *InboxSuggestionAttempt) *InboxSuggestion {
 	}
 	actual := *a.Proposal
 	actual.Text = a.Text
+	if a.MentionsSet || len(a.Mentions) > 0 {
+		actual.Mentions = slices.Clone(a.Mentions)
+	} else {
+		actual.Mentions = activeReplyMentions(a.Text, a.Proposal.Mentions)
+	}
 	return &actual
 }
 
@@ -128,6 +137,7 @@ func uncertainReplyOperation(it *InboxItem, g *InboxSuggestion, text string, ign
 	}
 	actual := *g
 	actual.Text = text
+	actual.Mentions = activeReplyMentions(text, g.Mentions)
 	target := suggestionReplyTarget(it)
 	for _, a := range it.SuggestionAttempts {
 		if a != nil && (a.Status == suggestionUnknown || a.Status == suggestionSending) && a.Target == target && sameReplySuggestionMode(actualReply(a), &actual, ignoreDraftingProvenance) {
@@ -146,7 +156,7 @@ func inheritReplyUncertainty(it *InboxItem, g *InboxSuggestion, text string) *In
 	}
 	a := suggestionAttempt(it, g.Version)
 	if a == nil {
-		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, ClientID: proof.ClientID, Proposal: copySuggestion(g), Conversation: g.Conversation, Target: proof.Target}
+		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, Mentions: activeReplyMentions(text, g.Mentions), MentionsSet: true, ClientID: proof.ClientID, Proposal: copySuggestion(g), Conversation: g.Conversation, Target: proof.Target}
 		keepSuggestionAttempt(it, a)
 	}
 	a.Status, a.Retryable, a.Code, a.At, a.active = suggestionUnknown, false, assistantwire.CodeAssistantInDoubt, proof.At, false
@@ -215,10 +225,11 @@ func sameReplySuggestionMode(a, b *InboxSuggestion, ignoreDraftingProvenance boo
 	x.ReplyPublicationFailed, y.ReplyPublicationFailed = false, false
 	x.OnDemand, y.OnDemand = false, false
 	x.ReplyPublicationPending, y.ReplyPublicationPending = false, false
-	if !slices.Equal(x.Changes, y.Changes) {
+	if !slices.Equal(x.Changes, y.Changes) || !slices.Equal(x.Mentions, y.Mentions) {
 		return false
 	}
 	x.Changes, y.Changes = nil, nil
+	x.Mentions, y.Mentions = nil, nil
 	x.ReplyPolicy, y.ReplyPolicy = nil, nil
 	x.Version, y.Version, x.At, y.At = 0, 0, time.Time{}, time.Time{}
 	return reflect.DeepEqual(x, y)
@@ -631,7 +642,7 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		if !validClientID(id) {
 			id = namedClientID(fmt.Sprintf("suggestion\n%s\n%d", it.ID, g.Version))
 		}
-		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, ClientID: id, Proposal: copySuggestion(g),
+		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, Mentions: activeReplyMentions(text, g.Mentions), MentionsSet: true, ClientID: id, Proposal: copySuggestion(g),
 			Conversation: g.Conversation, Target: suggestionReplyTarget(it)}
 		keepSuggestionAttempt(it, a)
 	}
@@ -693,7 +704,7 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 	} else if mail {
 		err = errMailReplyTargetChanged
 	} else {
-		_, err = s.replyInboxDo(sendCtx, it.ID, a.Text, a.ClientID, false, false, a.Proposal.Changes...)
+		_, err = s.replyInboxDoMentions(sendCtx, it.ID, a.Text, a.ClientID, false, false, a.Mentions, a.Proposal.Changes...)
 	}
 	return s.finishSuggestionReply(ctx, it, a, err)
 }
@@ -729,6 +740,8 @@ func (s *Service) recordReplyPolicySendFailureLocked(ctx context.Context, it *In
 		a = &InboxSuggestionAttempt{
 			Version:      g.Version,
 			Text:         text,
+			Mentions:     activeReplyMentions(text, g.Mentions),
+			MentionsSet:  true,
 			ClientID:     id,
 			Proposal:     copySuggestion(g),
 			Conversation: g.Conversation,

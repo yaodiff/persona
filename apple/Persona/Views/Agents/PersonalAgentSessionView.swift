@@ -54,8 +54,9 @@ struct PersonalAgentSessionView: View {
         .pageToolbar {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: Theme.Space.s) {
-                    PersonalAgentAvatar(session: session, size: 24)
+                    PersonalAgentAvatar(session: session, size: 24, showsCharge: true)
                     Text(session.title).font(Theme.Font.heading).lineLimit(1)
+                    if let charge = session.charge { PersonalAgentBattery(charge: charge) }
                 }
             }
         }

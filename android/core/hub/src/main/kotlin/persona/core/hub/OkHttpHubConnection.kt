@@ -534,9 +534,10 @@ class OkHttpHubConnection(
         /** Longer than the client's 15 s, for answers the hub waits on a machine for (a CLI starting). */
         readTimeoutSeconds: Long? = null,
         sharingFence: HubSharingFence? = null,
+        allowNotModified: Boolean = false,
     ): Response {
         val (call, owner) = prepareRequest(path, method, body, headers, expectedRoute, readTimeoutSeconds, sharingFence)
-        return checkedResponse(call.awaitResponse(buffered), owner, sharingFence)
+        return checkedResponse(call.awaitResponse(buffered), owner, sharingFence, allowNotModified)
     }
 
     /** The call owns its body through validation and consumption, including cancellation after its headers. */
@@ -586,9 +587,11 @@ class OkHttpHubConnection(
         return client.newCall(request) to owner
     }
 
-    private fun checkedResponse(response: Response, owner: Owner, sharingFence: HubSharingFence?): Response {
+    private fun checkedResponse(
+        response: Response, owner: Owner, sharingFence: HubSharingFence?, allowNotModified: Boolean = false,
+    ): Response {
         try { sharingFence?.requireCurrent() } catch (error: Exception) { response.close(); throw error }
-        if (!response.isSuccessful) {
+        if (!response.isSuccessful && !(allowNotModified && response.code == 304)) {
             val error = response.use { if (sharingFence != null) sharingFailure(it) else HubFailure.from(it) }
             recordRequestFailure(error, owner)
             throw error
@@ -1039,7 +1042,8 @@ class OkHttpHubConnection(
         // The language the app shows (docs/protocol/i18n.md "Protocol"): this socket's notices, and the user's language.
         put("locale", persona.core.contracts.ClientLanguage.tag)
         putJsonArray("features") {
-            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", persona.core.contracts.api.AgentMessageHoldFeature, ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
+            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", "approval_mirrors", persona.core.contracts.api.AgentMessageHoldFeature,
+                persona.core.contracts.generated.ExtensionHubCapability.TOOL_VIEWS, ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
         }
         if ("heartbeat" in features) {
             putJsonObject("heartbeat") {
@@ -1052,7 +1056,7 @@ class OkHttpHubConnection(
     /** The socket's URL; with the stream and last broadcast seen, so the hub replays what was missed (#1574). */
     internal fun socketUrl(base: HttpUrl, resumeFrom: Pair<String, Long>?): HttpUrl =
         base.hubUrl("/api/v1/ws").newBuilder().apply {
-            addQueryParameter("features", "sessions_list,sessions_hierarchy,extension_ui_stream_v1,${ProtocolCompatibility.CAPABILITY}")
+            addQueryParameter("features", "sessions_list,sessions_hierarchy,extension_ui_stream_v1,approval_mirrors,${ProtocolCompatibility.CAPABILITY},${persona.core.contracts.generated.ExtensionHubCapability.TOOL_VIEWS}")
             resumeFrom?.let { (stream, seq) ->
                 addQueryParameter("event_stream", stream)
                 addQueryParameter("event_seq", seq.toString())

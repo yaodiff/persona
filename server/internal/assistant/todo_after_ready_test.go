@@ -888,6 +888,8 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		waitFor(t, "initial todo_ready wake", func() bool { return len(sendsToConversation(f, "conv1")) == 1 })
 
 		waitForTodoReadyReceipt(t, st, dep)
+		// Confirm the initial wake's dedup fingerprint was persisted.
+		initialKey := todoReadyKey(dep)
 		dedupKey, _ := digestFingerprint(prompts.SuperviseEntry{}, superviseSignal{Todo: dep.ID, Kind: sigTodoReady})
 		dedup := map[string]superviseFingerprint{}
 		if found, err := st.Setting(ctx, superviseDedupKey, &dedup); err != nil || !found {
@@ -911,7 +913,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		if reopenedDep.ReopenedAt == nil {
 			t.Fatalf("expected ReopenedAt set on reopened dependent")
 		}
-		if reopenedKey := todoReadyKey(reopenedDep); reopenedKey == todoReadyKey(dep) {
+		if reopenedKey := todoReadyKey(reopenedDep); reopenedKey == initialKey {
 			t.Fatalf("reopened todoReadyKey stayed %q, want new generation key", reopenedKey)
 		}
 

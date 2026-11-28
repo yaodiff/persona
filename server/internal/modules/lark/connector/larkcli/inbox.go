@@ -3,6 +3,7 @@ package larkcli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -451,10 +452,17 @@ func (c *Connector) Reply(ctx context.Context, r connectorwire.InboxReply) error
 		return fmt.Errorf("%w: the thread names no chat", connectorwire.ErrCannotReply) // never the thread: it is a private id
 	}
 	var err error
+	identity := connectorwire.SendIdentity(ctx)
+	if identity == "" {
+		identity = "bot"
+	}
+	if identity != "bot" && identity != "user" {
+		return errors.New("unsupported message sender identity")
+	}
 	if strings.TrimSpace(r.Last) != "" && strings.Contains(r.Thread, ":thread:") {
-		_, err = c.runner.ReplyText(ctx, r.Last, r.Text, r.ClientID, strings.Contains(r.Thread, ":thread:"))
+		_, err = c.runner.ReplyTextAs(ctx, identity, r.Last, r.Text, r.ClientID, strings.Contains(r.Thread, ":thread:"))
 	} else {
-		_, err = c.runner.SendText(ctx, chatID, r.Text, r.ClientID)
+		_, err = c.runner.SendTextAs(ctx, identity, chatID, r.Text, r.ClientID)
 	}
 	if err != nil {
 		return err

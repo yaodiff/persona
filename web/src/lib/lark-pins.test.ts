@@ -43,7 +43,7 @@ describe("pin helpers", () => {
     const gone = new ApiError(404, "原消息已不可用，请重新加载 Pin 列表", { code: "lark_pin_not_found" });
     expect(pinRouteError(gone)).toBe(gone);
     expect(pinProblemText(new ApiError(426, "升级飞书网关后可使用 Pin 消息。", { code: "lark_gateway_upgrade_required" }))).toBe("升级飞书网关后可使用 Pin 消息。");
-    expect(pinProblemText(new ApiError(500, "boom", {}))).toMatch(/^读不到 Pin 消息：.*HTTP 500: boom/);
+    expect(pinProblemText(new ApiError(500, "boom", {}))).toMatch(/^无法加载 Pin 消息：.*HTTP 500: boom/);
   });
 
   it("asks for a fresh list after an unknown write", () => {

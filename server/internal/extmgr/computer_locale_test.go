@@ -193,6 +193,40 @@ func TestComputerLocaleRPCAndStatus(t *testing.T) {
 	}
 }
 
+func TestBrowserLocaleUnsupportedOS(t *testing.T) {
+	const note = "当前 macOS 12.7.4 低于 ego lite 要求的 13.0，无法运行"
+	for _, builtin := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy-node", true: "builtin-node"}[builtin], func(t *testing.T) {
+			h, _ := extensionTestHub(t)
+			m, _ := computerMac(t, h, "mac")
+			enableComputerLocaleExtensions(t, h)
+			computerLocaleNode(t, m, builtin, func(method string) (any, error) {
+				switch method {
+				case "browser.open":
+					return nil, &rpc.Error{Message: note}
+				case "browser.status":
+					return proto.Browser{Note: note, Job: &proto.ComputerJob{Kind: "install", State: "failed", Error: note}, Checked: time.Now()}, nil
+				default:
+					return map[string]any{}, nil
+				}
+			})
+			mux := h.routes()
+			for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+				want := i18n.T(lang, "hub-browser.rpc_unsupported_os", i18n.Args{"current": "12.7.4", "required": "13.0"})
+				status, out := computerLocaleRequest(t, mux, "POST", "/api/v1/machines/mac/browser/open", "", h.cfg.Token, lang)
+				if status != 409 || out["error"] != want {
+					t.Errorf("open %s: %d %v, want %q", lang, status, out, want)
+				}
+				status, out = computerLocaleRequest(t, mux, "GET", "/api/v1/machines/mac/browser", "", h.cfg.Token, lang)
+				job, _ := out["job"].(map[string]any)
+				if status != 200 || out["note"] != want || job["error"] != want {
+					t.Errorf("status %s: %d %v, want %q", lang, status, out, want)
+				}
+			}
+		})
+	}
+}
+
 func TestComputerLocaleOfflineOutdatedAndDatabase(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	m, _ := computerMac(t, h, "mac")

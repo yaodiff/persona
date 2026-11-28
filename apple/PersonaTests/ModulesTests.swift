@@ -225,6 +225,34 @@ struct ModulesTests {
         }
     }
 
+    /// Mail is no packaged Apple module either: what mail offers follows `module.mail` by the same rule (#15995).
+    @Test func mailFollowsItsHubFlag() {
+        #expect(MailModule.descriptor.feature == "module.mail")
+        withDefaults { d in
+            let s = ModuleState(group: "home", defaults: d, isEnabled: { $0.descriptor.id == "voice" })
+            @MainActor func access() -> MailAccess { MailAccess(hub: s.registry.hub) }
+            #expect(access() == .live, "nothing heard yet")
+            s.heard(["file_upload", "connectors"], from: "home", isHub: true, defaults: d)
+            #expect(access() == .live, "an older hub leaves it live")
+            s.heard(["modules", "module.mail"], from: "home", isHub: true, defaults: d)
+            #expect(access() == .live)
+            s.heard(["modules", "module.voice", "module.lark"], from: "home", isHub: true, defaults: d)
+            #expect(access() == .storedOnly)
+            #expect(s.registry.offByHub.isEmpty, "mail is no listed module: voice stays on, and nothing else is turned off")
+            #expect(s.registry.isActive("voice"))
+            s.heard(["modules", "module.voice", "module.mail"], from: "home", isHub: true, defaults: d)
+            #expect(access() == .live, "back with the flag")
+            // Another hub's hello changes nothing until that hub is the one followed.
+            s.heard(["modules"], from: "work", isHub: false, defaults: d)
+            #expect(access() == .live)
+            s.follow("work", features: [], defaults: d)
+            #expect(access() == .storedOnly)
+            // The remembered answer, before the next launch's hello.
+            #expect(MailAccess(hub: HubModuleMemory.remembered("work", in: d)) == .storedOnly)
+            #expect(MailAccess(hub: HubModuleMemory.remembered("home", in: d)) == .live)
+        }
+    }
+
     @Test func glassesAreGatedByTheirHubFlag() {
         #expect(GlassesModule().descriptor.feature == "module.glasses")
     }

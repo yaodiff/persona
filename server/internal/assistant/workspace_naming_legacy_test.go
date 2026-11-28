@@ -18,7 +18,7 @@ import (
 func TestWorkspaceNamingLegacyImportBeforeResolution(t *testing.T) {
 	for _, edit := range []string{"none", "links", "selected ref"} {
 		t.Run(edit, func(t *testing.T) {
-			database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+			database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 			if err != nil {
 				t.Fatal(err)
 			}

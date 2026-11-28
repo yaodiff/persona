@@ -58,7 +58,7 @@ describe("Outlook 的 client ID", () => {
 
     type("not-an-id");
     await submit();
-    expect(host.textContent).toContain("这不像 client ID");
+    expect(host.textContent).toContain("客户端 ID 格式不正确");
     expect(puts()).toHaveLength(0);
 
     fetcher.mockResolvedValueOnce(ok({ configured: true, client_id: ID, source: "app", redirect_uri: redirect }));
@@ -66,9 +66,9 @@ describe("Outlook 的 client ID", () => {
     await submit();
     expect(puts()).toHaveLength(1);
     expect(JSON.parse(puts()[0][1].body)).toEqual({ client_id: ID });
-    expect(host.textContent).toContain("这个 hub 已经有 Outlook 登录用的 client ID");
+    expect(host.textContent).toContain("当前 hub 已配置用于 Outlook 登录的 client ID");
     expect(host.textContent).toContain(ID);
-    expect(host.textContent).toContain("在 Persona 里填的");
+    expect(host.textContent).toContain("在 Persona 中填写");
     expect(host.querySelector("form")).toBeNull();
   });
 
@@ -84,7 +84,7 @@ describe("Outlook 的 client ID", () => {
     expect(input.getAttribute("aria-invalid")).toBe("true");
     const described = input.getAttribute("aria-describedby");
     expect(described).toBeTruthy();
-    expect(document.getElementById(described!)?.textContent).toContain("这不像 client ID");
+    expect(document.getElementById(described!)?.textContent).toContain("客户端 ID 格式不正确");
   });
 
   it("goes to the form with 更换 (the current ID filled in) and back with 不换了", async () => {
@@ -94,9 +94,9 @@ describe("Outlook 的 client ID", () => {
     expect(host.textContent).toContain("来自 manager.json");
     act(() => button("更换 client ID")!.click());
     expect(host.querySelector<HTMLInputElement>("input")!.value).toBe(ID);
-    act(() => button("不换了")!.click());
+    act(() => button("保持当前配置")!.click());
     expect(host.querySelector("form")).toBeNull();
-    expect(host.textContent).toContain("这个 hub 已经有 Outlook 登录用的 client ID");
+    expect(host.textContent).toContain("当前 hub 已配置用于 Outlook 登录的 client ID");
     expect(puts()).toHaveLength(0);
   });
 
@@ -104,7 +104,7 @@ describe("Outlook 的 client ID", () => {
     fetcher.mockResolvedValueOnce(fail(500, "boom"));
     act(() => root.render(<OutlookClient />));
     await flush();
-    expect(host.textContent).toContain("读不到 Outlook 登录的设置");
+    expect(host.textContent).toContain("无法读取 Outlook 登录设置");
     expect(host.textContent).toContain("boom");
     expect(host.querySelector("form")).toBeNull();
   });

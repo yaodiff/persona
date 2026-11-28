@@ -43,6 +43,7 @@ export function ListPane({
   reloadKey,
   onToggleSidebar,
   onOpen,
+  onFirst,
 }: {
   kind: KBKind;
   selected?: { kind: string; id: string };
@@ -50,6 +51,9 @@ export function ListPane({
   reloadKey: number;
   onToggleSidebar: () => void;
   onOpen: (e: KBEntry, query?: string) => void;
+  /** The first entry this list shows, so the page can draw it beside the list while the address names no entry. The
+   *  list's kind can differ from the entry's (recordings under meetings). */
+  onFirst?: (first: { listKind: KBKind; entry: KBEntry } | undefined) => void;
 }) {
   const [tags, setTags] = useState<Partial<Record<KBKind, string>>>({});
   const tag = tags[kind];
@@ -126,6 +130,8 @@ export function ListPane({
   }, [error, searchError]);
 
   const sections = useMemo(() => (list?.items ? groupEntries(kind, list.items, tag) : []), [list, kind, tag]);
+  const first = sections[0]?.items[0];
+  useEffect(() => onFirst?.(first ? { listKind: kind, entry: first } : undefined), [first, kind, onFirst]);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [limits, setLimits] = useState<Record<string, number>>({});
   const toggle = (k: string) =>

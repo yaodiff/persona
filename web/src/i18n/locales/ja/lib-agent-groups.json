@@ -9,9 +9,8 @@
   "seg_repo": "リポ",
   "seg_project": "プロジェクト",
   "seg_state": "状態",
-  "state_muted": "ミュート中",
   "source_feishu": "Larkグループ",
-  "source_terminal": "ターミナル",
+  "source_terminal": "タブで実行中",
   "source_desktop": "デスクトップアプリ",
   "open_feishu_topic": "Larkでこのトピックを開く"
 }

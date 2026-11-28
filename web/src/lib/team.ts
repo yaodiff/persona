@@ -6,7 +6,7 @@
 // workers above the chosen one's conversation. This module says who is a worker, which one the panel shows, and when the
 // panel opens or closes by itself (cindy's timing, `teamReveal`).
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { stateOf } from "./format";
+import { activityOf, stateOf } from "./format";
 import { paneOrder } from "./herdr-tree";
 import { getPanel, openPanel, usePanel, type Panel } from "./panel";
 import { NARROW, useMedia } from "./viewport";
@@ -27,7 +27,7 @@ export function teamPanelOf(p: Panel | null, mid: string, sid: string): TeamPane
 /** The workers among the rows folded under a lead, in pane order. A worker that stops is not folded any more (the
  *  manager folds only running ones): it leaves the strip and is a row of its own again. */
 export function teamWorkers(rows: readonly Session[]): Session[] {
-  return rows.filter((s) => isWorker(s) && stateOf(s) !== "offline").sort(paneOrder);
+  return rows.filter((s) => isWorker(s) && activityOf(s) !== "offline").sort(paneOrder);
 }
 
 // the worker picked last on each lead's strip (this browser tab), so the panel opens on it again

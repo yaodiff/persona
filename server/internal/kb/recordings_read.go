@@ -25,13 +25,18 @@ import (
 // hub hub_segments.json and attachments/audio/ (transcription.go). Uploads journal the accepted files until all
 // replacements commit (recording_commit.go). Past recording_days a recording with minutes keeps only meta.json, its
 // minutes and the photos they cite until minutes_days (recording_trim.go); any other goes.
-// recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept recordingDays.
+// recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept AudioDays.
 
 // KindRecording is the recordings' kind and directory.
 const KindRecording = recordingwire.KindRecording
 
-// DefaultRecordingDays is how long recordings are kept unless the user says otherwise (assistant.recording_days).
+// DefaultRecordingDays is how long a recording's audio is kept unless the user says otherwise
+// (assistant.recording_audio_days, formerly recording_days): the phone deletes its copies at it.
 const DefaultRecordingDays = 14
+
+// DefaultRecordingTextDays is how long a recording's text (transcript, summary, live log) stays in the knowledge base
+// unless the user says otherwise (assistant.recording_text_days): 0 means forever.
+const DefaultRecordingTextDays = 0
 
 // DefaultMinutesDays is how long a meeting's minutes are kept unless the user says otherwise (assistant.minutes_days);
 // 0 means forever; a finite window is never shorter than the recording itself (MinutesDaysFor).
@@ -64,12 +69,19 @@ func badRecording(f string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrBadRecording, fmt.Sprintf(f, a...))
 }
 
-// recordingDays is days, or the default when unset.
-func recordingDays(days int) int {
+// RetentionCut is the start before which something kept days is past its retention at now; false when days is 0
+// (or less): kept forever.
+func RetentionCut(now time.Time, days int) (time.Time, bool) {
 	if days <= 0 {
-		return DefaultRecordingDays
+		return time.Time{}, false
 	}
-	return days
+	return now.UTC().AddDate(0, 0, -days), true
+}
+
+// pastRetention: a recording that started at start is past a retention of days at now (never when days is 0).
+func pastRetention(start, now time.Time, days int) bool {
+	cut, ok := RetentionCut(now, days)
+	return ok && start.Before(cut)
 }
 
 func (s *Store) Recording(id string) (*Recording, bool) {
@@ -188,16 +200,31 @@ func (s *Store) renderTranscript(r *Recording, segs []RecordingSegment) string {
 	return b.String()
 }
 
-// RecordingDays is the retention in days (Engine.RecordingDaysFunc, the assistant's setting), the default without one.
+// RecordingDays is how many days a recording's text stays in the knowledge base (Engine.RecordingDaysFunc, the
+// assistant's recording_text_days): 0 means forever; DefaultRecordingDays without a func.
 func (e *Engine) RecordingDays() int {
 	if e.RecordingDaysFunc != nil {
-		return recordingDays(e.RecordingDaysFunc())
+		return max(e.RecordingDaysFunc(), 0)
+	}
+	return DefaultRecordingDays
+}
+
+// AudioDays is how many days a recording's audio is kept (Engine.AudioDaysFunc, the assistant's
+// recording_audio_days): 0 means forever. The phone deletes its copies at it (the days of GET /api/v1/recordings), and
+// tombstones keep it: no phone uploads a recording older than that. Without a func it is RecordingDays when finite, the
+// default otherwise.
+func (e *Engine) AudioDays() int {
+	if e.AudioDaysFunc != nil {
+		return max(e.AudioDaysFunc(), 0)
+	}
+	if d := e.RecordingDays(); d > 0 {
+		return d
 	}
 	return DefaultRecordingDays
 }
 
 // MinutesDays is how many days a meeting's minutes are kept (Engine.MinutesDaysFunc, the assistant's setting, the
-// default without one): 0 means forever; otherwise never fewer than RecordingDays.
+// default without one): 0 means forever; otherwise never fewer than RecordingDays (forever when the text is).
 func (e *Engine) MinutesDays() int {
 	d := 0
 	if e.MinutesDaysFunc != nil {
@@ -207,10 +234,10 @@ func (e *Engine) MinutesDays() int {
 }
 
 // MinutesDaysFor is the minutes' retention in effect for the setting minutes (<= 0: DefaultMinutesDays) and the
-// recordings' days: 0 means forever; minutes never go before the recording they belong to.
-func MinutesDaysFor(minutes, recording int) int {
-	if minutes <= 0 {
+// recordings' text days (0: forever): 0 means forever; minutes never go before the text they are made of.
+func MinutesDaysFor(minutes, text int) int {
+	if minutes <= 0 || text <= 0 {
 		return DefaultMinutesDays
 	}
-	return max(minutes, recordingDays(recording))
+	return max(minutes, text)
 }

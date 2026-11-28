@@ -199,3 +199,111 @@ func TestSetBackgroundWaitStalledField(t *testing.T) {
 		t.Fatal("a turn that goes on has no background verdict")
 	}
 }
+
+// quietOutput is an output file last written an hour ago.
+func quietOutput(t *testing.T) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "task.output")
+	if err := os.WriteFile(out, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(out, old, old)
+	return out
+}
+
+// stallWatch is a node whose process table is rows under the claude of session s1, and a look at it that is due.
+func stallWatch(rows func() []psRow) (*Node, func(tasks []proto.BackgroundTask) (bool, time.Time)) {
+	n := &Node{}
+	n.bgWait.ps = func() map[int]psRow { return table(rows()...) }
+	live := func() []claudeProc { return []claudeProc{{pid: 100, SessionID: "s1"}} }
+	return n, func(tasks []proto.BackgroundTask) (bool, time.Time) {
+		n.bgWait.at = n.bgWait.at.Add(-bgWaitEvery) // the next look is due
+		return n.bgWait.judge("s1", tasks, live)
+	}
+}
+
+// A command that hangs on its stdin (#16418): a foreground cmp | head that hit the timeout and was moved to the
+// background, or any process nothing here knows. No CPU and no output: waiting at first, as before, and stalled once
+// that lasted bgZombieStallAfter, so its finished Agent no longer stays Working. A waiter the agent started (sleep,
+// watch, tail -f, gh … --watch) is never stalled, however long it waits; a known worker keeps the longer bgStallAfter.
+func TestBackgroundZombieShellIsStalled(t *testing.T) {
+	out := quietOutput(t)
+	shell := row(100, time.Hour, 0, taskShellArgs) // pid 200
+	for _, tc := range []struct {
+		name    string
+		rows    []psRow
+		moved   bool
+		idle    time.Duration // no CPU at any look for this long
+		waits   bool
+		stalled bool
+	}{
+		{"cmp on stdin, just quiet", []psRow{shell, row(200, time.Hour, 0, "cmp only.json"), row(200, time.Hour, 0, "head -2")}, true, 2 * time.Minute, true, false},
+		{"cmp on stdin, quiet past the grace", []psRow{shell, row(200, time.Hour, 0, "cmp only.json"), row(200, time.Hour, 0, "head -2")}, true, bgZombieStallAfter + time.Minute, false, true},
+		{"an unknown script started in the background", []psRow{shell, row(200, time.Hour, 0, "python3 poll.py")}, false, bgZombieStallAfter + time.Minute, false, true},
+		{"a moved cat on stdin: filters only", []psRow{shell, row(200, time.Hour, 0, "cat")}, true, bgZombieStallAfter + time.Minute, false, true},
+		{"a moved sleep still waits", []psRow{shell, row(200, time.Hour, 0, "sleep 900")}, true, time.Hour, true, false},
+		{"a sleep loop started in the background", []psRow{shell, row(200, time.Hour, 0, "bash -c until test -f done; do sleep 30; done"), row(201, time.Hour, 0, "sleep 30")}, false, time.Hour, true, false},
+		{"tail -f", []psRow{shell, row(200, time.Hour, 0, "tail -F /var/log/app.log")}, false, time.Hour, true, false},
+		{"gh watching checks", []psRow{shell, row(200, time.Hour, 0, "gh pr checks 12 --watch")}, false, time.Hour, true, false},
+		{"a quiet build before bgStallAfter", []psRow{shell, row(200, time.Hour, 0, "go test ./...")}, true, bgZombieStallAfter + time.Minute, false, false},
+		{"a quiet build past bgStallAfter", []psRow{shell, row(200, time.Hour, 0, "go test ./...")}, false, bgStallAfter + time.Minute, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, look := stallWatch(func() []psRow { return tc.rows })
+			tasks := []proto.BackgroundTask{{ID: "b1", Kind: "shell", OutputFile: out, MovedFromForeground: tc.moved}}
+			look(tasks) // the first look has nothing to compare with
+			look(tasks)
+			n.bgWait.busyAt["s1"] = n.bgWait.at.Add(-tc.idle)
+			waits, since := look(tasks)
+			if waits != tc.waits || since.IsZero() == tc.stalled {
+				t.Fatalf("waiting %v stalled since %v, want waiting %v stalled %v", waits, since, tc.waits, tc.stalled)
+			}
+		})
+	}
+}
+
+// Background commands the transcript still has running, though no shell of theirs is under the live claude any more
+// (it ended with no notification, #16418): stalled after bgMissingShellAfter of looks in a row that found none, and only
+// for background commands alone; a shell that shows up again ends it, and a Monitor or a subagent is not judged so.
+func TestBackgroundMissingShellIsStalled(t *testing.T) {
+	out := quietOutput(t)
+	shells := false
+	n, look := stallWatch(func() []psRow {
+		if shells {
+			return []psRow{row(100, time.Hour, 0, taskShellArgs), row(200, time.Hour, 0, "sleep 900")}
+		}
+		return []psRow{row(100, time.Hour, 0, "node mcp-server.js")} // the claude's other children
+	})
+	tasks := []proto.BackgroundTask{{ID: "b1", Kind: "shell", OutputFile: out}}
+	look(tasks)
+	if waits, since := look(tasks); waits || !since.IsZero() {
+		t.Fatalf("a shell missing at one look is no stall yet: %v %v", waits, since)
+	}
+	n.bgWait.missingAt["s1"] = n.bgWait.at.Add(-bgMissingShellAfter - time.Minute)
+	waits, since := look(tasks)
+	if waits || since.IsZero() || n.bgWait.at.Sub(since) < bgMissingShellAfter {
+		t.Fatalf("missing for longer than the grace: waiting %v stalled since %v", waits, since)
+	}
+	withMonitor := append([]proto.BackgroundTask{{ID: "m1", Kind: "monitor", OutputFile: out}}, tasks...)
+	if _, since := look(withMonitor); !since.IsZero() {
+		t.Fatal("a Monitor's work is not judged by a missing shell")
+	}
+	n.bgWait.missingAt["s1"] = n.bgWait.at.Add(-bgMissingShellAfter - time.Minute)
+	_ = os.Chtimes(out, time.Now(), time.Now())
+	if _, since := look(tasks); !since.IsZero() {
+		t.Fatal("output written meanwhile is a sign of life")
+	}
+	shells = true
+	if waits, since := look(tasks); !waits || !since.IsZero() {
+		t.Fatalf("its shell is back, sleeping: waiting %v stalled since %v", waits, since)
+	}
+	if _, ok := n.bgWait.missingAt["s1"]; ok {
+		t.Fatal("a shell seen again ends the run of missing looks")
+	}
+	n.bgWait.missingAt["s1"] = n.bgWait.at.Add(-time.Hour)
+	working := proto.Session{SessionID: "s1", Status: proto.StatusWorking, Background: tasks}
+	if n.setBackgroundWait(&working); n.bgWait.missingAt["s1"] != (time.Time{}) {
+		t.Fatal("a turn that goes on ends the run of missing looks")
+	}
+}

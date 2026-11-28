@@ -75,6 +75,19 @@ class HttpMachineManagement internal constructor(
         require(engine.isNotBlank())
         // The empty host set says no terminal engine, which a single engine cannot (docs/protocol/protocol.md "Host sets").
         val body = if (engine == NO_TERMINAL_ENGINE) buildJsonObject { put("hosts", JsonArray(emptyList())) } else buildJsonObject { put("engine", engine) }
+        return putEngine(machineId, body)
+    }
+
+    override suspend fun setEngineHosts(machineId: String, hosts: List<String>, default: String): Machine {
+        require(hosts.isNotEmpty() && default in hosts)
+        // The set as it is with a new default: a single engine would leave only that one (#17052).
+        return putEngine(machineId, buildJsonObject {
+            put("hosts", JsonArray(hosts.map(::JsonPrimitive)))
+            put("default", default)
+        })
+    }
+
+    private suspend fun putEngine(machineId: String, body: JsonObject): Machine {
         val machine = JsonCodec.decodeFromJsonElement<Machine>(call(api("machines", machineId, "engine"), "PUT", body))
         // An answer for another machine is not this machine's state.
         if (machine.id != machineId) throw HubFailure(HubError.Protocol, "hub answered for another machine", retryable = false)
@@ -84,6 +97,8 @@ class HttpMachineManagement internal constructor(
     override suspend fun botmux(machineId: String): Boolean? = boolSwitch(machineId, "botmux")
 
     override suspend fun setBotmux(machineId: String, on: Boolean): Boolean = setBoolSwitch(machineId, "botmux", on)
+
+    override suspend fun setOrcaChatStarts(machineId: String, on: Boolean): Boolean = setBoolSwitch(machineId, "orca-chat-starts", on)
 
     override suspend fun claudeLiveReplies(machineId: String): Boolean? = boolSwitch(machineId, "claude-live-replies")
 

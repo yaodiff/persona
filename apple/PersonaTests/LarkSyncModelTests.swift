@@ -27,8 +27,10 @@ import UIKit
         LarkSyncModel(deps: .init(api: { hub.client }, toast: { toasts.value.append($0.message) }))
     }
 
+    /// The request's JSON object. Run and the removals send no body (the hub's routes read none): that is an empty one.
     private func body(_ req: LocalRequest) throws -> [String: Any] {
-        try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any] ?? [:]
+        guard let data = req.body, !data.isEmpty else { return [:] }
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
     @Test func loadsTheViewWithTheChatBotFirst() async throws {
@@ -128,6 +130,10 @@ import UIKit
         await m.removeBot(v.bots[0])
         #expect(sent["DELETE \(Self.path)/bots/sync-1"] != nil)
         #expect(m.error == nil && m.busy.isEmpty)
+        for (method, route) in [("POST", "\(Self.path)/bindings/primary%3Aacc-1/run"), ("DELETE", "\(Self.path)/bindings/primary%3Aacc-2"),
+                                ("DELETE", "\(Self.path)/bots/sync-1")] {
+            #expect(hub.sent(method, route).count == 1 && hub.sent(method, route).first?.body == nil, "\(method) \(route) sends no body")
+        }
     }
 
     @Test func aFailedChangeKeepsTheViewAndSaysWhy() async throws {

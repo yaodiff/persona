@@ -107,6 +107,113 @@ func TestReadCodexApprovalWrapped(t *testing.T) {
 	}
 }
 
+func TestReadCodex0172ApprovalFooters(t *testing.T) {
+	for _, title := range []string{
+		"Would you like to run the following command?",
+		`Do you want to approve network access to "example.com"?`,
+		"Implement this plan?",
+	} {
+		for _, footer := range []string{
+			"Press enter to confirm or esc to cancel",
+			"enter confirm · esc cancel",
+			"enter to submit · esc to cancel",
+			"enter submit · esc cancel",
+			"enter to submit", "enter submit", "esc to cancel", "esc cancel",
+			"to confirm", "to cancel",
+			"Press enter to\n  confirm or esc to\n  cancel",
+		} {
+			t.Run(title+"/"+footer, func(t *testing.T) {
+				text := "  " + title + "\n\n  Reason: Contact the requested host\n\n" +
+					"› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\n\n  " + footer
+				s := ReadCodex(text)
+				if s.View != CodexApproval || s.Approval == nil {
+					t.Fatalf("no approval: %+v", s)
+				}
+				a := s.Approval
+				if a.Title != title || a.Reason != "Contact the requested host" || len(a.Options) != 2 ||
+					!a.Options[0].Selected || a.Role(RoleAllow).Key != "1" || a.Rev == "" || s.Draft != "" {
+					t.Fatalf("approval: %+v, draft %q", a, s.Draft)
+				}
+			})
+		}
+	}
+}
+
+func TestReadCodex0172ImplementPlan(t *testing.T) {
+	text := "  Implement this plan?\n\n" +
+		"› 1. Yes, implement this plan          Switch to Default and start coding\n" +
+		"  2. Yes, clear context and implement  Fresh thread with this plan\n" +
+		"  3. No, stay in Plan mode             Continue planning with the model\n\n"
+	for _, footer := range []string{"enter select · esc back", "enter to select · esc to go back", ""} {
+		s := ReadCodex(text + "  " + footer)
+		if s.View != CodexApproval || s.Approval == nil || s.Approval.Title != "Implement this plan?" ||
+			len(s.Approval.Options) != 3 || !s.Approval.Options[0].Selected || s.Draft != "" {
+			t.Fatalf("footer %q: %+v", footer, s)
+		}
+	}
+}
+
+func TestReadCodex0172QuestionFooters(t *testing.T) {
+	text := "  Question 1/2 (2 unanswered)\n  Which color should the banner be?\n\n" +
+		"  › 1. Red                warm\n    2. Blue               calm\n" +
+		"    3. None of the above  Optionally, add details in notes (tab)\n\n"
+	for _, footer := range []string{
+		"tab to add notes | enter to submit answer | esc to interrupt",
+		"enter submit | esc cancel", "enter to submit | esc to cancel",
+		"enter to submit", "enter submit", "esc to cancel", "esc cancel",
+		"enter to\n  submit answer | esc to\n  cancel",
+	} {
+		s := ReadCodex(text + "  " + footer)
+		if s.View != CodexQuestion || s.Question == nil {
+			t.Fatalf("footer %q: no question: %+v", footer, s)
+		}
+		q := s.Question
+		if q.Index != 1 || q.Total != 2 || q.Question != "Which color should the banner be?" ||
+			len(q.Options) != 3 || q.Options[0].Description != "warm" || q.Other().Key != "3" || s.Draft != "" {
+			t.Fatalf("footer %q: question %+v, draft %q", footer, q, s.Draft)
+		}
+	}
+}
+
+func TestReadCodex0172PlainScreenPlaceholders(t *testing.T) {
+	footer := "\n\n  GPT-6 low · ~/project\n  ? for shortcuts\n"
+	for _, placeholder := range []string{CodexPlaceholder, "Ask a follow-up question"} {
+		for _, tc := range []struct{ name, text, want string }{
+			{"plain", placeholder, ""},
+			{"plain reset", "\x1b[0m" + placeholder + "\x1b[0m", ""},
+			{"plain wrapped", strings.Replace(placeholder, " ", "\n  ", 1), ""},
+			{"dim", "\x1b[2m" + placeholder + "\x1b[0m", ""},
+			{"typed", "\x1b[37m" + placeholder + "\x1b[0m", placeholder},
+			{"typed prefix", placeholder + " about this project", placeholder + " about this project"},
+			{"typed multiline", placeholder + "\n  keep this text", placeholder + "\nkeep this text"},
+		} {
+			t.Run(placeholder+"/"+tc.name, func(t *testing.T) {
+				s := ReadCodex("› " + tc.text + footer)
+				if s.View != CodexComposer || s.Draft != tc.want {
+					t.Fatalf("view %q draft %q, want composer draft %q", s.View, s.Draft, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestReadCodex0172DialogHistory(t *testing.T) {
+	for _, tc := range []struct{ name, text, view string }{
+		{"plan in history", "  Implement this plan?\n› 1. Yes, implement this plan\n  2. No, stay in Plan mode\n\n" +
+			"• Done.\n\n› Ask a follow-up question\n\n  ? for shortcuts\n", CodexComposer},
+		{"approval before question", "  Would you like to run the following command?\n\n• Done.\n\n" +
+			"  Question 1/1\n  Choose a color.\n\n  › 1. Red\n    2. Blue\n\n  enter submit · esc cancel\n", CodexQuestion},
+		{"generic picker", "  Choose a model\n› 1. Default\n  2. Other\n\n  enter confirm · esc cancel\n", CodexDialog},
+		{"transcript with plan", "T R A N S C R I P T\n  Implement this plan?\n› 1. Yes\n  2. No\n\n  q to quit\n", CodexTranscript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if s := ReadCodex(tc.text); s.View != tc.view {
+				t.Fatalf("view %q, want %q: %+v", s.View, tc.view, s)
+			}
+		})
+	}
+}
+
 func TestReadCodexQuestion(t *testing.T) {
 	for _, name := range []string{"codex-0.153.4-plan-question-120", "codex-0.163.0-plan-question-120"} {
 		q := ReadCodex(fixture(t, name+".ansi")).Question

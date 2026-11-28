@@ -1,14 +1,14 @@
 {
-  "hub_upgrade": "要用 Pin 消息，先更新 hub：在设置里打开 hub，检查更新。",
-  "account_changed": "飞书账号换了，重新打开这个会话",
-  "result_unknown": "还不知道成没成功。重新加载 Pin 列表看看；不会自动再试。",
-  "page_incomplete": "Pin 列表没加载全，重新加载一下",
+  "hub_upgrade": "请先更新 hub 以使用 Pin 消息：前往「设置 › hub」检查更新。",
+  "account_changed": "飞书账号已切换，请重新打开该会话。",
+  "result_unknown": "暂无法确认操作结果，系统不会自动重试，请重新加载 Pin 列表查看。",
+  "page_incomplete": "Pin 列表未能完整加载，请重新加载。",
   "message_unavailable": "原消息已不可用",
   "message_recalled": "消息已撤回",
   "fallback_image": "[图片]",
   "fallback_file": "[文件]",
   "fallback_message": "消息",
-  "not_logged_in": "hub 连接的飞书网关没有登录飞书",
-  "load_failed": "读不到 Pin 消息：{error}",
+  "not_logged_in": "hub 连接的飞书网关尚未登录飞书",
+  "load_failed": "无法加载 Pin 消息：{error}",
   "recalled_kept": "{text} · 已撤回"
 }

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/url"
@@ -10,11 +11,81 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
 	repository "github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
+
+func (e *workspaceExecutor) sourceFetchTimeout(transport string, createdCommonDir bool) time.Duration {
+	if createdCommonDir && !filepath.IsAbs(transport) && !strings.HasPrefix(transport, "file://") {
+		return cmp.Or(e.coldFetchTimeout, taskworkspace.ColdFetchTimeout)
+	}
+	return taskworkspace.GitTimeout
+}
+
+func workspaceFetchErrorCode(err error, fallback string) string {
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout() {
+		return "source_fetch_timeout"
+	}
+	return fallback
+}
+
+func (e *workspaceExecutor) initPrivateSource(ctx context.Context, r *taskworkspace.Instance, transport, advertised string) (created bool, code string) {
+	if !e.owned(r.CommonDir) {
+		if err := e.claimDir(r.CommonDir); err != nil {
+			return false, "path_conflict"
+		}
+		created = true
+	}
+	for _, name := range []string{"config", "objects", "refs"} {
+		if workspaceNoLinks(filepath.Join(r.CommonDir, name)) != nil {
+			return created, "git_layout_mismatch"
+		}
+	}
+	objectFormat := "sha1"
+	if len(advertised) == 64 {
+		objectFormat = "sha256"
+	}
+	if _, err := e.git(ctx, r.CommonDir, "init", "--bare", "--object-format="+objectFormat, "."); err != nil {
+		return created, "source_failed"
+	}
+	// Use the upstream URL even when the initial objects come from a mirror.
+	if _, err := e.git(ctx, r.CommonDir, "config", "remote.origin.url", transport); err != nil {
+		return created, "source_failed"
+	}
+	return created, ""
+}
+
+// The caller holds the workspace locks and created this directory on this
+// attempt. The receipt and any registered worktrees keep their own lifetimes.
+func (e *workspaceExecutor) removeIncompleteCommonDir(r *taskworkspace.Instance) {
+	if r.State != "pending" || r.ResolvedCommit != "" || r.Input.Local != nil || r.CommonDir != e.privateCommonDir(r.RepoID) {
+		return
+	}
+	info, err := os.Lstat(r.CommonDir)
+	if err != nil || !e.owned(r.CommonDir) {
+		return
+	}
+	parent, err := os.OpenRoot(filepath.Dir(r.CommonDir))
+	if err != nil {
+		return
+	}
+	defer parent.Close()
+	name := filepath.Base(r.CommonDir)
+	current, err := parent.Lstat(name)
+	if err != nil || !os.SameFile(info, current) {
+		return
+	}
+	if _, err := parent.Lstat(filepath.Join(name, "worktrees")); !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err := parent.RemoveAll(name); err == nil {
+		delete(e.journal.Identities, r.CommonDir)
+	}
+}
 
 func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instance) string {
 	if r.Input.Local != nil {
@@ -86,33 +157,21 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	if advertised == "" {
 		return "ref_not_found"
 	}
-	objectFormat := "sha1"
-	if len(advertised) == 64 {
-		objectFormat = "sha256"
+	createdCommonDir, code := e.initPrivateSource(ctx, r, transport, advertised)
+	if createdCommonDir {
+		defer e.removeIncompleteCommonDir(r)
 	}
-	if !e.owned(r.CommonDir) {
-		if err = e.claimDir(r.CommonDir); err != nil {
-			return "path_conflict"
-		}
-	}
-	for _, path := range []string{filepath.Join(r.CommonDir, "config"), filepath.Join(r.CommonDir, "objects"), filepath.Join(r.CommonDir, "refs")} {
-		if workspaceNoLinks(path) != nil {
-			return "git_layout_mismatch"
-		}
-	}
-	if _, err = e.git(ctx, r.CommonDir, "init", "--bare", "--object-format="+objectFormat, "."); err != nil {
-		return "source_failed"
-	}
-	if _, err = e.git(ctx, r.CommonDir, "config", "remote.origin.url", transport); err != nil {
-		return "source_failed"
+	if code != "" {
+		return code
 	}
 	// Fetch the selected ref explicitly; FETCH_HEAD then identifies its actual
 	// remote object even if other refs in this store are stale.
-	if _, err = e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+	timeout := e.sourceFetchTimeout(transport, createdCommonDir)
+	if _, err = e.gitWithTimeout(ctx, timeout, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		if ref.Kind == "commit" {
-			return "ref_not_found"
+			return workspaceFetchErrorCode(err, "ref_not_found")
 		}
-		return "source_fetch_failed"
+		return workspaceFetchErrorCode(err, "source_fetch_failed")
 	}
 	r.ResolvedRef = resolvedRef
 	commit, err := workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
@@ -180,36 +239,22 @@ func (e *workspaceExecutor) sourceFromMirror(ctx context.Context, r *taskworkspa
 	if !ok || advertised == "" {
 		return false, ""
 	}
-	objectFormat := "sha1"
-	if len(advertised) == 64 {
-		objectFormat = "sha256"
+	createdCommonDir, code := e.initPrivateSource(ctx, r, transport, advertised)
+	if createdCommonDir {
+		defer e.removeIncompleteCommonDir(r)
 	}
-	if !e.owned(r.CommonDir) {
-		if err := e.claimDir(r.CommonDir); err != nil {
-			return true, "path_conflict"
-		}
-	}
-	for _, path := range []string{filepath.Join(r.CommonDir, "config"), filepath.Join(r.CommonDir, "objects"), filepath.Join(r.CommonDir, "refs")} {
-		if workspaceNoLinks(path) != nil {
-			return true, "git_layout_mismatch"
-		}
-	}
-	if _, err := e.git(ctx, r.CommonDir, "init", "--bare", "--object-format="+objectFormat, "."); err != nil {
-		return true, "source_failed"
-	}
-	// Keep origin pointing at the real upstream repository so subsequent agent pushes/fetches work normally.
-	if _, err := e.git(ctx, r.CommonDir, "config", "remote.origin.url", transport); err != nil {
-		return true, "source_failed"
+	if code != "" {
+		return true, code
 	}
 	var commit string
 	if ref.Kind == "commit" {
 		if _, err := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", info.Path, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
-			return true, "source_fetch_failed"
+			return true, workspaceFetchErrorCode(err, "source_fetch_failed")
 		}
 		commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", advertised+"^{commit}")
 		if err != nil {
 			if _, fetchErr := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", info.Path, advertised); fetchErr != nil {
-				return true, "ref_not_found"
+				return true, workspaceFetchErrorCode(fetchErr, "ref_not_found")
 			}
 			commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", advertised+"^{commit}")
 			if err != nil {
@@ -218,7 +263,7 @@ func (e *workspaceExecutor) sourceFromMirror(ctx context.Context, r *taskworkspa
 		}
 	} else {
 		if _, err := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", info.Path, resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
-			return true, "source_fetch_failed"
+			return true, workspaceFetchErrorCode(err, "source_fetch_failed")
 		}
 		commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
 		if err != nil {
@@ -290,6 +335,7 @@ func (e *workspaceExecutor) materialize(ctx context.Context, r *taskworkspace.In
 	// A completed command whose receipt was lost is adopted only through its
 	// exact private Git registration, not because a directory happens to exist.
 	if r.State == "materializing" {
+		_ = e.clearBareWorktreeConfig(ctx, r)
 		if e.checkRegistration(ctx, r) == "" {
 			id, err := workspaceFileID(r.Path)
 			if err != nil {
@@ -336,6 +382,9 @@ func (e *workspaceExecutor) materialize(ctx context.Context, r *taskworkspace.In
 		return "identity_mismatch"
 	}
 	e.journal.Identities[r.Path] = id
+	if code := e.clearBareWorktreeConfig(ctx, r); code != "" {
+		return code
+	}
 	if code := e.checkRegistration(ctx, r); code != "" {
 		return code
 	}
@@ -348,6 +397,60 @@ func (e *workspaceExecutor) materialize(ctx context.Context, r *taskworkspace.In
 		return "persistence_failed"
 	}
 	return e.inspect(ctx, r)
+}
+
+// When a local bare repository enables extensions.worktreeConfig while keeping
+// core.bare=true in its shared config, `git -C <bare> worktree add` creates a
+// linked worktree without a config.worktree override, so Git treats the new
+// checkout itself as bare and refuses working-tree commands (--show-toplevel,
+// status, commit). Set core.bare=false only in this worktree's config.worktree
+// after verifying registration under r.CommonDir without symlinks.
+func (e *workspaceExecutor) clearBareWorktreeConfig(ctx context.Context, r *taskworkspace.Instance) string {
+	if r.Input.Local == nil || !e.sameGitDir(r) || !e.owned(r.Path) {
+		return ""
+	}
+	if workspaceNoLinks(r.Path) != nil || workspaceNoLinks(filepath.Join(r.Path, ".git")) != nil {
+		return "git_layout_mismatch"
+	}
+	bare, err := workspaceReadGit(ctx, r.Path, "rev-parse", "--is-bare-repository")
+	if err != nil || bare != "true" {
+		return ""
+	}
+	wtConfig, err := workspaceReadGit(ctx, r.CommonDir, "config", "--bool", "--get", "extensions.worktreeConfig")
+	if err != nil || wtConfig != "true" {
+		return ""
+	}
+	common, err := workspaceReadGit(ctx, r.Path, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "git_layout_mismatch"
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(r.Path, common)
+	}
+	if filepath.Clean(common) != r.CommonDir {
+		return "git_layout_mismatch"
+	}
+	dir, err := workspaceReadGit(ctx, r.Path, "rev-parse", "--git-dir")
+	if err != nil {
+		return "git_layout_mismatch"
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(r.Path, dir)
+	}
+	dir = filepath.Clean(dir)
+	rel, err := filepath.Rel(filepath.Join(r.CommonDir, "worktrees"), dir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) ||
+		workspaceNoLinks(dir) != nil || workspaceNoLinks(filepath.Join(dir, "config.worktree")) != nil {
+		return "git_layout_mismatch"
+	}
+	registered, err := workspaceWorktreeList(ctx, r.CommonDir)
+	if err != nil || !slices.ContainsFunc(registered, func(field string) bool { return strings.TrimSpace(field) == "worktree "+r.Path }) {
+		return "git_layout_mismatch"
+	}
+	if _, err := e.git(ctx, r.Path, "config", "--worktree", "core.bare", "false"); err != nil {
+		return "git_layout_mismatch"
+	}
+	return ""
 }
 func (e *workspaceExecutor) checkRegistration(ctx context.Context, r *taskworkspace.Instance) string {
 	if workspaceNoLinks(r.Path) != nil || !e.sameGitDir(r) || r.Input.Local != nil && !e.owned(r.Path) {
@@ -375,8 +478,10 @@ func (e *workspaceExecutor) checkRegistration(ctx context.Context, r *taskworksp
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(r.Path, dir)
 	}
+	dir = filepath.Clean(dir)
 	rel, err := filepath.Rel(filepath.Join(r.CommonDir, "worktrees"), dir)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) || workspaceNoLinks(filepath.Clean(dir)) != nil {
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) ||
+		workspaceNoLinks(dir) != nil || workspaceNoLinks(filepath.Join(dir, "config.worktree")) != nil {
 		return "git_layout_mismatch"
 	}
 	top, err := workspaceReadGit(ctx, r.Path, "rev-parse", "--show-toplevel")

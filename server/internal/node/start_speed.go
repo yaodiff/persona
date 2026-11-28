@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -42,16 +43,37 @@ func (n *Node) prepareSessionStartSpeed(ctx context.Context, speed, launcher, ho
 	if !proto.FasterSpeed(speed) {
 		return speed, nil
 	}
-	if proto.IsExternalLauncher(launcher) || isDesktopLauncher(launcher) || isCodexAppLauncher(launcher) {
-		return "", unsupportedStartSpeed(launcher, speed)
-	}
-	if _, runtime := engineRuntimes[cmp.Or(host, n.defaultKind())]; runtime {
-		return "", unsupportedStartSpeed(launcher, speed)
-	}
-	if h, _ := n.startRuntimeIn(withStartHost(ctx, host), launcher); h != nil {
+	if !n.terminalStartSpeedSupported(withStartHost(ctx, host), launcher) {
 		return "", unsupportedStartSpeed(launcher, speed)
 	}
 	return speed, nil
+}
+
+func (n *Node) terminalStartSpeedSupported(ctx context.Context, launcher string) bool {
+	if proto.IsExternalLauncher(launcher) || isDesktopLauncher(launcher) || isCodexAppLauncher(launcher) {
+		return false
+	}
+	if _, runtime := engineRuntimes[n.startKind(ctx)]; runtime {
+		return false
+	}
+	h, _ := n.startRuntimeIn(ctx, launcher)
+	return h == nil
+}
+
+func (n *Node) checkStartServiceTier(ctx context.Context, tier, speed, launcher, resume string) error {
+	if tier == "" {
+		return nil
+	}
+	if speed != "" || (tier != "priority" && tier != "ultrafast") {
+		return speedRefusal("agent_speed_invalid", i18n.T(i18n.From(ctx), "rpc-errors.agent_speed_tier_value"))
+	}
+	if resume != "" {
+		return speedRefusal("agent_speed_start_only", i18n.T(i18n.From(ctx), "rpc-errors.agent_speed_tier_new"))
+	}
+	if !n.terminalStartSpeedSupported(ctx, launcher) {
+		return unsupportedStartSpeed(launcher, tier)
+	}
+	return nil
 }
 
 // applyStartSpeed resolves the actual terminal dispatch, which can differ from

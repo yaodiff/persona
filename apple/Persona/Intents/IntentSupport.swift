@@ -245,7 +245,7 @@ nonisolated enum IntentPicker {
     static func visible(_ interactions: [Interaction], sessions: [Session], mutes: [String: Pins]) -> [Interaction] {
         let byKey = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         return interactions.filter { ix in
-            guard ix.answerableHere else { return false }
+            guard !ix.isDisplayMirror, ix.answerableHere else { return false }
             let s = byKey[ix.sessionKey]
             switch TabBadges.place(ix.sessionKey, session: s, quiet: s?.quiet == true, mutes: mutes[ix.group]) {
             case .assistant: return true

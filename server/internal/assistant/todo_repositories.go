@@ -25,13 +25,6 @@ type todoRepositoryStore interface {
 
 var _ todoRepositoryStore = (*repositorystore.Store)(nil)
 
-// todoRepositoryRoleStore persists a single link role rewrite the manager classified, bumping the revision.
-type todoRepositoryRoleStore interface {
-	SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error)
-}
-
-var _ todoRepositoryRoleStore = (*repositorystore.Store)(nil)
-
 type todoPRLinkTitleStore interface {
 	SetTodoPRLinkTitle(ctx context.Context, id, canonicalURL, title string) error
 }

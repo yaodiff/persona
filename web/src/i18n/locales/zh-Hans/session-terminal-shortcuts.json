@@ -1,16 +1,16 @@
 {
   "title": "快捷命令",
-  "popover_header": "快捷 · 单击输入，↵ 执行",
+  "popover_header": "快捷命令 · 单击输入，↵ 执行",
   "edit": "编辑",
-  "popover_empty": "还没有快捷命令，点「编辑」添加",
+  "popover_empty": "暂无快捷命令，点击「编辑」即可添加。",
   "type": "输入：{command}",
   "run": "执行：{command}",
   "done": "完成",
-  "editor_hint": "在按键栏的闪电里：单击输入到终端，↵ 带回车执行。只存在这个浏览器里。",
-  "editor_empty": "没有快捷命令",
+  "editor_hint": "可在按键栏的闪电图标中打开：单击输入到终端，点击 ↵ 直接回车执行。仅保存在当前浏览器中。",
+  "editor_empty": "暂无快捷命令",
   "move_up": "上移",
   "move_down": "下移",
   "delete": "删除",
-  "new_placeholder": "新的快捷命令",
+  "new_placeholder": "输入新快捷命令",
   "add": "添加"
 }

@@ -2,7 +2,7 @@
 // over the version opened (files/write with its revision and the hash of what was opened); when the file changed on
 // the computer meanwhile the user chooses: Save as copy, Discard mine (open the new version), Overwrite anyway (asked
 // again), or Keep editing. Line endings and a byte order mark go back as the file had them.
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { t } from "../../../i18n";
 import { ApiError } from "../../../lib/api";
 import { opErrorText, writeTextFile } from "../../../lib/file-ops";
@@ -103,8 +103,35 @@ export function FileEdit({ mid, cwd, file, text, onDone }: {
     }
   };
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || (!dirty && !saving)) return;
+    const onPanelEscape = (ev: Event) => {
+      ev.preventDefault();
+      if (asking || saving) return;
+      if (dirty) setAsking("discard");
+    };
+    el.addEventListener("persona:escape-unsaved", onPanelEscape);
+    return () => el.removeEventListener("persona:escape-unsaved", onPanelEscape);
+  }, [dirty, saving, asking]);
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="file-edit">
+    <div
+      ref={rootRef}
+      className="flex min-h-0 flex-1 flex-col"
+      data-testid="file-edit"
+      data-unsaved-edit={dirty || saving ? "" : undefined}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || asking) return;
+        if ([...document.querySelectorAll("[role=menu],[role=dialog],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (saving) return;
+        if (dirty) setAsking("discard");
+        else onDone(false);
+      }}
+    >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-ink">{fileName(file.path)}</p>

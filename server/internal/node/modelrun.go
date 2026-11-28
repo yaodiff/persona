@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,19 +99,23 @@ func (n *Node) modelRun(ctx context.Context, params json.RawMessage) (any, error
 	if err := validModesFor(agent, "", p.Effort); err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp("", launcherCheckDir) // a check's name: the session list drops what a run leaves (launchercheck.go)
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-
 	switch agent {
 	case "claude":
+		dir, err := mkModelRunTempDir()
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(dir)
 		return n.modelRunClaude(ctx, p, dir, timedOut)
 	case "codex":
+		dir, err := mkModelRunTempDir()
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(dir)
 		return n.modelRunCodex(ctx, p, dir, timedOut)
 	case agyAgent:
-		return n.modelRunAgy(ctx, p, dir, builtinAgyBacked, timedOut)
+		return n.modelRunAgy(ctx, p, builtinAgyBacked, timedOut)
 	default:
 		return nil, fmt.Errorf("model.run: unsupported agent %q", agent)
 	}
@@ -141,6 +147,10 @@ func (n *Node) builtinAgyExecutable() string {
 		}
 	}
 	return findAgyExecutable()
+}
+
+func mkModelRunTempDir() (string, error) {
+	return os.MkdirTemp("", launcherCheckDir) // a check's name: the session list drops what a run leaves (launchercheck.go)
 }
 
 func writeTempFile(dir, name, text string) (string, error) {
@@ -533,8 +543,11 @@ func (n *Node) prepareAgyIsolatedHome(dir string) (string, error) {
 	realData := n.agyDataRoot()
 	for _, entry := range []string{"antigravity-oauth-token", "installation_id", "bin", "builtin"} {
 		src := filepath.Join(realData, entry)
-		if _, err := os.Stat(src); err == nil {
-			_ = os.Symlink(src, filepath.Join(isoData, entry))
+		if st, err := os.Stat(src); err == nil {
+			dst := filepath.Join(isoData, entry)
+			if err := os.Symlink(src, dst); err != nil && runtime.GOOS == "windows" {
+				_ = copyAgyIsolatedEntry(src, dst, st)
+			}
 		}
 	}
 	if runtime.GOOS == "darwin" && n.home != "" {
@@ -549,8 +562,70 @@ func (n *Node) prepareAgyIsolatedHome(dir string) (string, error) {
 	return isoHome, nil
 }
 
-// modelRunAgy executes a single isolated turn via `agy --input-format stream-json --output-format stream-json`.
-func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir string, builtinAgyBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
+// copyAgyIsolatedEntry provides a read-only copy fallback on Windows when symlink creation is unavailable.
+// External symlinks inside directory trees are never followed.
+func copyAgyIsolatedEntry(src, dst string, st os.FileInfo) error {
+	if !st.IsDir() {
+		return copyIsolatedFile(src, dst, 0o600)
+	}
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		mode := fs.FileMode(0o600)
+		if info, statErr := d.Info(); statErr == nil && info.Mode()&0o111 != 0 {
+			mode = 0o700
+		}
+		return copyIsolatedFile(path, target, mode)
+	})
+}
+
+func copyIsolatedFile(src, dst string, mode fs.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+// modelRunAgy answers an Antigravity model.run request, reusing the Node's on-demand warm `agy acp` worker when all
+// zero-side-effect guardrails hold and transparently falling back to modelRunAgyCold otherwise.
+func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, builtinAgyBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
+	if ans, handled, err := n.modelRunAgyWarm(ctx, p, builtinAgyBacked, timedOut); handled {
+		return ans, err
+	}
+	return n.modelRunAgyCold(ctx, p, builtinAgyBacked, timedOut)
+}
+
+// modelRunAgyCold executes a single isolated turn via `agy --input-format stream-json --output-format stream-json`.
+func (n *Node) modelRunAgyCold(ctx context.Context, p proto.ModelRunParams, builtinAgyBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
+	dir, err := mkModelRunTempDir()
+	if err != nil {
+		return proto.ModelRunAnswer{}, err
+	}
+	defer os.RemoveAll(dir)
+
 	// Write the workspace-scoped zero-tool custom agent definition (system prompt lives in its Markdown body).
 	agentDir := filepath.Join(dir, ".agents", "agents", agyModelRunAgentName)
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {

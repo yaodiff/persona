@@ -8,6 +8,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -43,11 +44,12 @@ var companionAwayErr = &rpc.Error{Code: proto.CodeAgyCompanionOffline, Message: 
 // with the node's reason. Other launchers never get a host (#13447).
 func TestTaskPlanStartHost(t *testing.T) {
 	for _, tc := range []struct {
-		name, launcher, host string
-		launchers            []proto.Launcher
-		away                 bool     // the node answers a start naming agy with agy_companion_offline
-		want                 []string // each session.start's host
-		failed               string   // the task's error code
+		name, launcher, host, role string
+		tierHost                   *string
+		launchers                  []proto.Launcher
+		away                       bool     // the node answers a start naming agy with agy_companion_offline
+		want                       []string // each session.start's host
+		failed                     string   // the task's error code
 	}{
 		{name: "companion connected", launcher: "agy", launchers: companionLaunchers(), want: []string{"agy"}},
 		{name: "no companion", launcher: "agy", launchers: paneLaunchers(), want: []string{""}},
@@ -57,6 +59,11 @@ func TestTaskPlanStartHost(t *testing.T) {
 		{name: "named companion away", launcher: "agy", host: proto.HostAgy, launchers: companionLaunchers(), away: true,
 			want: []string{"agy"}, failed: proto.CodeAgyCompanionOffline},
 		{name: "claude", launcher: "claude", launchers: companionLaunchers(), want: []string{""}},
+		{name: "preset herdr leader", launcher: "agy", role: roleLeader, tierHost: new(proto.EngineHerdr), launchers: companionLaunchers(), want: []string{"herdr"}},
+		{name: "preset herdr worker", launcher: "agy", role: "worker", tierHost: new(proto.EngineHerdr), launchers: companionLaunchers(), want: []string{"herdr"}},
+		{name: "named companion overrides preset", launcher: "agy", host: proto.HostAgy, role: roleLeader, tierHost: new(proto.EngineHerdr),
+			launchers: companionLaunchers(), want: []string{"agy"}},
+		{name: "other launcher bypasses preset", launcher: "claude", tierHost: new(proto.EngineHerdr), launchers: companionLaunchers(), want: []string{""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -68,6 +75,13 @@ func TestTaskPlanStartHost(t *testing.T) {
 				ctx := context.Background()
 				task := readonlyTestTask("")
 				task.Readonly, task.Launcher, task.Host = false, tc.launcher, tc.host
+				task.Role = tc.role
+				if tc.tierHost != nil {
+					st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+					s.setStore(func() Store { return st })
+					putTierProfiles(t, s, "economy", map[string]ModelTier{"agy-work": {Launcher: "agy", Host: tc.tierHost}}, nil)
+					task.Tier = "agy-work"
+				}
 				if _, err := s.toolTaskPlan(ctx, "host-chat", readonlyTaskArgs(t, task)); err != nil {
 					t.Fatal(err)
 				}
@@ -130,6 +144,7 @@ func TestTaskPlanRefusesHostsItCannotStartIn(t *testing.T) {
 func TestAgentStartHost(t *testing.T) {
 	for _, tc := range []struct {
 		name, args string
+		usePreset  bool
 		launchers  []proto.Launcher
 		away       bool
 		want       []string
@@ -138,11 +153,20 @@ func TestAgentStartHost(t *testing.T) {
 		{name: "no companion", args: `"launcher":"agy"`, launchers: paneLaunchers(), want: []string{""}},
 		{name: "companion went away", args: `"launcher":"agy"`, launchers: companionLaunchers(), away: true, want: []string{"agy", ""}},
 		{name: "named herdr", args: `"launcher":"agy","host":"herdr"`, launchers: companionLaunchers(), want: []string{"herdr"}},
+		{name: "preset herdr", args: `"tier":"agy-work"`, usePreset: true, launchers: companionLaunchers(), want: []string{"herdr"}},
+		{name: "named companion overrides preset", args: `"tier":"agy-work","host":"agy"`, usePreset: true, launchers: companionLaunchers(), want: []string{"agy"}},
 		{name: "claude", args: `"launcher":"claude"`, launchers: companionLaunchers(), want: []string{""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f := newTaskService(t)
+			var st Store
+			if tc.usePreset {
+				st = &memStore{}
+			}
+			s, f := newTaskServiceOn(t, st)
 			f.launcherList = tc.launchers
+			if tc.usePreset {
+				putTierProfiles(t, s, "economy", map[string]ModelTier{"agy-work": {Launcher: "agy", Host: new(proto.EngineHerdr)}}, nil)
+			}
 			if tc.away {
 				f.refuseHost = map[string]error{proto.HostAgy: companionAwayErr}
 			}

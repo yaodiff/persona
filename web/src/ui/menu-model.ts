@@ -1,7 +1,7 @@
 // The pure half of the menu in atoms.tsx (#2329): what a key does in an open menu, whether a row needs a second
 // activation, where the context-menu key opens it. No React, so every rule is tested without a DOM.
 import type { ReactNode } from "react";
-import type { AgentState } from "../lib/types";
+import type { StatusMarkState } from "../lib/types";
 import type { IconName } from "./icons";
 
 /** Sidebar header menus: the earlier product menu and the assistant roster, in pixels. */
@@ -43,7 +43,7 @@ export interface MenuItem {
   badgeLabel?: string;
   /** The whole row is drawn faded (an offline assistant) yet chosen like any other, unlike `disabled`. */
   dim?: boolean;
-  state?: AgentState;
+  state?: StatusMarkState;
   checked?: boolean;
   /** The row is one choice of a set and `checked` marks the chosen one (permission mode, effort, model): it is a
    *  menuitemradio with aria-checked, so screen readers say which is selected. A row that sets only `checked` (an

@@ -119,7 +119,7 @@ class AgentCreationModelTest {
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
             server.enqueue(MockResponse().setBody("""{"agent":"codex","models":[{"id":"gpt-6.1-sol","name":"GPT-6.1-sol"}]}"""))
             val model = requireNotNull(service.launcherModels("box", "test-launcher")).models.single()
-            assertEquals("6.1 Sol", (model.label).zhAny())
+            assertEquals("GPT-6.1 Sol", (model.label).zhAny())
             server.takeRequest()
             server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"box","session_id":"gpt"}}"""))
             service.start(AgentStartRequest("box", "/srv/app", "test-launcher", model = model.id),

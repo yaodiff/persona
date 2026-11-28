@@ -170,7 +170,7 @@ func TestLinkAttentionKeepsTheNewest(t *testing.T) {
 	for i := range 22 { // cards oldest first, as the fleet keeps them
 		sid := fmt.Sprintf("s-%02d", i)
 		agents = append(agents, fleetInput{Machine: "Mac", Session: &proto.Session{MachineID: "mac", SessionID: sid, State: proto.StateNeedsYou}})
-		ixs = append(ixs, proto.Interaction{ID: "ix-" + sid, MachineID: "mac", SessionID: sid, Kind: proto.IxPermission,
+		ixs = append(ixs, proto.Interaction{ID: "ix-" + sid, MachineID: "mac", SessionID: sid, Kind: proto.IxPermission, OutwardWrite: true,
 			CreatedAt: at.Add(time.Duration(i) * time.Minute)})
 	}
 	agents = append(agents, fleetInput{Machine: "Mac", Session: &proto.Session{MachineID: "mac", SessionID: "s-dialog",
@@ -199,7 +199,7 @@ func TestLinkAttentionCardsReadApartFromTheirRows(t *testing.T) {
 		t.Fatalf("Live Activity %+v", st)
 	}
 	raised := []fleetInput{{Machine: "Mac", Session: &proto.Session{MachineID: "mac", SessionID: "s-1", State: proto.StateNeedsYou}}}
-	ixs := []proto.Interaction{{ID: "ix-1", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, CreatedAt: time.Now()}}
+	ixs := []proto.Interaction{{ID: "ix-1", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, OutwardWrite: true, CreatedAt: time.Now()}}
 	if a := linkAttention("en", raised, ixs, nil); a.NeedsYou != 1 || a.Items[0].InteractionID != "ix-1" || a.Items[0].Notify {
 		t.Fatalf("a card raised between the reads: %+v", a)
 	}
@@ -212,7 +212,7 @@ func TestLinkAttentionStandsByTheHandedCard(t *testing.T) {
 	agents := []fleetInput{{Machine: "Mac", Session: &proto.Session{MachineID: "mac", SessionID: "s-1", State: proto.StateNeedsYou}}}
 	deciding := proto.Interaction{ID: "ix-deciding", MachineID: "mac", SessionID: "s-1", Kind: proto.IxQuestion, CreatedAt: at, Delegating: true}
 	undecided := proto.Interaction{ID: "ix-undecided", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPlan, CreatedAt: at.Add(time.Minute)}
-	handed := proto.Interaction{ID: "ix-handed", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, CreatedAt: at.Add(2 * time.Minute)}
+	handed := proto.Interaction{ID: "ix-handed", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, OutwardWrite: true, CreatedAt: at.Add(2 * time.Minute)}
 	for _, tc := range []struct {
 		ixs    []proto.Interaction
 		told   map[string]bool
@@ -243,7 +243,7 @@ func TestLinkAttentionSameInAnyOrder(t *testing.T) {
 		sid := fmt.Sprintf("s-%02d", i)
 		agents = append(agents, fleetInput{Machine: "Mac", Session: &proto.Session{MachineID: "mac", SessionID: sid, State: proto.StateNeedsYou}})
 		for j := range 2 { // two cards of the same time each
-			ixs = append(ixs, proto.Interaction{ID: fmt.Sprintf("ix-%s-%d", sid, j), MachineID: "mac", SessionID: sid, Kind: proto.IxPermission, CreatedAt: at})
+			ixs = append(ixs, proto.Interaction{ID: fmt.Sprintf("ix-%s-%d", sid, j), MachineID: "mac", SessionID: sid, Kind: proto.IxPermission, OutwardWrite: true, CreatedAt: at})
 		}
 	}
 	want := linkAttention("en", agents, ixs, allTold(ixs))
@@ -275,7 +275,7 @@ func TestLinkAttentionOfTheFleetsInputs(t *testing.T) {
 	if a := summary(); a.NeedsYou != 0 || a.Items == nil {
 		t.Fatalf("before a card %+v; want an empty list", a)
 	}
-	card := proto.Interaction{ID: "ix-1", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, ToolName: "Bash",
+	card := proto.Interaction{ID: "ix-1", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		Summary: "npm test", CreatedAt: time.Now()}
 	putPending(s, &pending{ix: card})
 	if a := summary(); a.NeedsYou != 1 || a.Items[0].Notify {
@@ -410,7 +410,7 @@ func TestLinkAttentionNotifiesOnlyOnceTheQuestionIsTheUsers(t *testing.T) {
 // phone is pushed), not while it is still being recorded.
 func TestLinkAttentionNotifiesACardOnceAnnounced(t *testing.T) {
 	af := newAttentionFlow(t, false)
-	ix := proto.Interaction{ID: "p1", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash", Summary: "npm test",
+	ix := proto.Interaction{ID: "p1", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", Summary: "npm test",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 	af.raise(t, ix)
 	if it := af.now(t, "p1"); it.Notify {
@@ -683,7 +683,7 @@ func TestLinkAttentionAfterAManagerRestart(t *testing.T) {
 // rows, then the cards) is not listed until its row says "Needs you", announced or not. The Live Activity keeps its
 // own rule and shows the card.
 func TestLinkAttentionCountsByTheRow(t *testing.T) {
-	ixs := []proto.Interaction{{ID: "ix-1", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, CreatedAt: time.Now()}}
+	ixs := []proto.Interaction{{ID: "ix-1", MachineID: "mac", SessionID: "s-1", Kind: proto.IxPermission, OutwardWrite: true, CreatedAt: time.Now()}}
 	for _, state := range []string{proto.StateWorking, proto.StateIdle} {
 		agents := []fleetInput{{Machine: "Mac", Session: &proto.Session{MachineID: "mac", SessionID: "s-1", State: state}}}
 		for _, told := range []map[string]bool{nil, {"ix-1": true}} {

@@ -81,6 +81,7 @@ func TestLarkCheckTagsConnectorOutwardWrites(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			needsLarkGateForCommand(t, tc.command)
 			cfg := olCfg()
 			cfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
 			n, fh := readCardBypassNode(t, cfg)
@@ -106,6 +107,7 @@ func TestLarkCheckTagsConnectorOutwardWrites(t *testing.T) {
 	}
 
 	t.Run("whole-command read-only pipeline", func(t *testing.T) {
+		needsLarkGate(t)
 		cfg := olCfg()
 		cfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
 		n, fh := readCardBypassNode(t, cfg)

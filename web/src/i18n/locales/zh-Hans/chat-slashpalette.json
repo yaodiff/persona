@@ -1,7 +1,7 @@
 {
   "label": "命令",
   "label_with_skills": "命令和技能",
-  "no_match": "没有匹配的命令",
-  "no_match_skills": "没有匹配的命令或技能",
+  "no_match": "未找到匹配的命令",
+  "no_match_skills": "未找到匹配的命令或技能",
   "types": "填入：「{text}」"
 }

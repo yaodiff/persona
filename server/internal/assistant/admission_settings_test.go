@@ -81,6 +81,46 @@ func TestAdmissionSettingChangeAfterApproval(t *testing.T) {
 	}
 }
 
+// The card the user approves says the lines that change, not the two settings as JSON: a computer's override reads
+// with its number and unit, the side that was not set reads as the line it falls back to, and nothing is cut off.
+func TestAdmissionSettingCardSaysTheLinesThatChange(t *testing.T) {
+	s := newTestService(t, newFakeHub().withMachine())
+	setSettings(t, s, func(v *Settings) { v.Main, v.Leaders = "main-1", nil })
+
+	done := make(chan string, 1)
+	go func() {
+		r := s.Tool(context.Background(), ToolCall{Name: "persona_settings", MachineID: "mac", SessionID: "main-1",
+			Arguments: json.RawMessage(`{"action":"set","key":"assistant.admission","value":{"machines":{"laptop":` +
+				`{"max_claude_procs":2,"min_memory_bytes":4294967296}},"launcher_groups":[{"name":"shared-pool",` +
+				`"launchers":["claude","claude-team","claude-night"],"cap":3}]}}`)})
+		done <- r.Content[0].Text
+	}()
+	card, ok := awaitCard(s)
+	if !ok {
+		t.Fatal("no approval card")
+	}
+	for _, raw := range []string{`{"`, "max_claude_procs", "min_memory_bytes", "launcher_groups", "…"} {
+		if strings.Contains(card.Summary, raw) {
+			t.Errorf("the card shows %q:\n%s", raw, card.Summary)
+		}
+	}
+	// laptop's two lines with what they were (the built-in 20 and 2.0 GiB), and the whole launcher group.
+	for _, said := range []string{"laptop", "20", "2.0 GiB", "4.0 GiB", "shared-pool", "claude, claude-team, claude-night"} {
+		if !strings.Contains(card.Summary, said) {
+			t.Errorf("the card does not say %q:\n%s", said, card.Summary)
+		}
+	}
+	no := false
+	if _, err := s.Action(context.Background(), Action{Op: "answer", InteractionID: card.ID,
+		Answer: json.RawMessage(mustMarshal(proto.Resolution{Allow: &no}))}); err != nil {
+		t.Fatal(err)
+	}
+	resultOf(t, done, 5*time.Second)
+	if got := s.admissionSettings(context.Background()); len(got.Machines) != 0 || len(got.LauncherGroups) != 0 {
+		t.Fatalf("a refused card changed the setting: %+v", got)
+	}
+}
+
 func mustMarshal(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {

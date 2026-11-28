@@ -4,6 +4,7 @@ import androidx.lifecycle.viewModelScope
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
 import persona.core.contracts.api.*
+import persona.core.domain.sort.AgentProjectFolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +15,37 @@ import java.io.IOException
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class NewAgentViewModelTest {
+    @Test fun projectHeadingStartsTheOrdinaryFormInItsFolderWithTheDefaultLauncher() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = MemoryStore().apply { saved["second"] = AgentDefaults("/last-used", "codex") }
+        val service = FakeService().apply { available = listOf(AgentLauncher("claude"), AgentLauncher("codex")) }
+        val machines = MutableStateFlow(listOf(Machine("first", online = true), Machine("second", online = true)))
+        val model = NewAgentViewModel(service, store, machines)
+        try {
+            advanceUntilIdle()
+            model.inWorktree(true)
+            model.worktreeBranch("previous-draft")
+            model.startIn(null, AgentProjectFolder("second", "/Users/sample/Desktop/site"))
+            advanceUntilIdle()
+            assertEquals("second", model.state.value.machineId)
+            assertEquals("/Users/sample/Desktop/site", model.state.value.selection.cwd)
+            assertEquals("codex", model.state.value.selection.launcher)
+            assertNull(model.state.value.space)
+            assertFalse(model.state.value.inWorktree)
+            assertEquals("", model.state.value.worktreeBranch)
+            assertEquals("second", service.modelMachine)
+            model.prompt("Check the example")
+            model.submit()
+            advanceUntilIdle()
+            assertEquals("second", service.request?.machineId)
+            assertEquals("/Users/sample/Desktop/site", service.request?.cwd)
+            assertEquals("codex", service.request?.launcher)
+        } finally {
+            model.viewModelScope.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test fun historyResumePersistsBeforePostingAndReopeningOnlyQueriesItsReceipt() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = MemoryStore()
@@ -235,11 +267,16 @@ class NewAgentViewModelTest {
         var request: AgentStartRequest? = null
         var result: AgentStartResult = AgentStartResult.Unknown
         var available = listOf(AgentLauncher("claude"))
+        var modelMachine: String? = null
         var leftOut = emptyMap<String, List<UnavailableLauncher>>()
         var beforeStart: () -> Unit = {}
         override suspend fun launchers(machineId: String) = available
         override suspend fun launcherList(machineId: String) = AssistantLaunchers(available, unavailable = leftOut[machineId].orEmpty())
         override suspend fun directories(machineId: String, path: String) = AgentDirectories(path.ifEmpty { "/code" })
+        override suspend fun newAgentModel(machineId: String): ModelPurposeDetail? {
+            modelMachine = machineId
+            return null
+        }
         override suspend fun start(request: AgentStartRequest, operationId: String): AgentStartResult {
             beforeStart()
             starts++

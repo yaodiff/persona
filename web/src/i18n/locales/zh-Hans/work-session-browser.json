@@ -21,13 +21,13 @@
   "z_to_a": "名称降序",
   "reset_view": "恢复默认视图",
   "reset_filters": "清除筛选",
-  "remove_filter": "移除{name}筛选：{value}",
-  "no_options": "没有可选项",
+  "remove_filter": "移除「{name}」筛选：{value}",
+  "no_options": "暂无匹配项",
   "unknown_device": "未知设备",
   "unknown_project": "未知项目",
   "unknown_harness": "未知 Agent 类型",
   "by_name": "按名称合并",
-  "empty": "还没有工作会话",
-  "legacy": "当前显示 Hub 的旧版会话列表。更新 Hub 后可使用组合筛选、分组和完整计数。",
+  "empty": "暂无工作会话",
+  "legacy": "当前显示的是旧版 hub 会话列表。更新 hub 后即可使用组合筛选、分组及完整计数功能。",
   "details": "会话详情"
 }

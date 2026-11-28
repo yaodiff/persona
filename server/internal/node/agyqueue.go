@@ -67,7 +67,7 @@ func cleanAgyQueuedPreview(s string) string {
 	s = strings.TrimSpace(s)
 	for {
 		trimmed := s
-		for _, prefix := range []string{"❯", "›", ">", "•", "⎿", "│"} {
+		for _, prefix := range []string{"❯", "›", ">", "•", "▸", "▹", "▶", "‣", "⎿", "│"} {
 			if rest, ok := strings.CutPrefix(trimmed, prefix); ok {
 				trimmed = strings.TrimSpace(rest)
 			}

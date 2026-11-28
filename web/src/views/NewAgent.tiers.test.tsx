@@ -69,6 +69,7 @@ beforeEach(() => {
     if (url.includes("/launchers/fast/models")) return json(fastList);
     if (url.includes("/launchers/codex/models")) return json({ agent: "codex", models: [{ id: "gpt-5.5", name: "GPT-5.5", default: true }] });
     if (url.includes("/launchers/grok/models")) return json({ agent: "grok", models: [{ id: "grok-4", name: "Grok 4", default: true }] });
+    if (url.includes("/launchers/agy/models")) return json({ agent: "agy", models: [{ id: "gemini-3", name: "Gemini 3", default: true }] });
     if (url.includes("/launchers/") && url.includes("/models")) return json(claudeList);
     if (url.includes("/launchers")) return json({ launchers, tiers, tiers_profile: tiers ? { id: "performance", name: "性能" } : undefined });
     return json({ path: "/code", entries: [] });
@@ -153,7 +154,7 @@ describe("New agent: presets (#2225)", () => {
     tiers = [{ name: "deepest", launcher: "fast", model: "m-review", effort: "max" }];
     await open();
     await pick("preset:deepest");
-    expect(hint()?.textContent).toBe("这里用不上：Max，会按启动器或模型自己的设置运行。");
+    expect(hint()?.textContent).toBe("以下设置在此不适用：Max，将沿用启动器或模型自身的设置。");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review" });
     expect(launched[0]?.effort).toBeUndefined();
@@ -205,7 +206,7 @@ describe("New agent: presets (#2225)", () => {
     await openPanel();
     const review = preset("review")!;
     expect(review.getAttribute("aria-disabled")).toBe("true");
-    expect(review.title).toBe("Key 或登录被拒绝了");
+    expect(review.title).toBe("Key 或登录凭证已被拒绝");
     act(() => review.click());
     await flush();
     expect(panel()).not.toBeNull();
@@ -330,5 +331,56 @@ describe("New agent: presets (#2225)", () => {
     await pick("model:claude\ndefault");
     act(() => button("启动").click());
     expect(launched[2]).toMatchObject({ launcher: "claude", permissionMode: "default" });
+  });
+
+  it("applies allowed preset modes and filters unavailable auto for restricted Antigravity (#17239)", async () => {
+    localStorage.setItem("new.mode.mac", "plan");
+    launchers = [
+      { name: "claude", agent: "claude" },
+      { name: "agy", agent: "agy", source: "agy", display_name: "Antigravity", permission_modes: ["default", "acceptEdits", "plan", "bypassPermissions"] },
+    ];
+    tiers = [
+      { name: "agy-accept", launcher: "agy", permission_mode: "acceptEdits" },
+      { name: "agy-auto", launcher: "agy", permission_mode: "auto" },
+    ];
+    await open();
+
+    // Picking a restricted agy preset with an allowed mode applies that mode (not the prior remembered mode).
+    await pick("preset:agy-accept");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "agy", permissionMode: "acceptEdits" });
+
+    // Dropping the preset by switching back to Claude restores the prior remembered mode without leaking acceptEdits.
+    localStorage.setItem("new.mode.mac", "plan");
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:agy-accept");
+    await pick("model:claude\ndefault");
+    act(() => button("启动").click());
+    expect(launched[1]).toMatchObject({ launcher: "claude", permissionMode: "plan" });
+
+    // Picking a restricted agy preset carrying unavailable "auto" clears to launcher default and keeps remembered mode intact.
+    localStorage.setItem("new.mode.mac", "plan");
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:agy-auto");
+    act(() => button("启动").click());
+    expect(launched[2]).toMatchObject({ launcher: "agy" });
+    expect(launched[2]?.permissionMode).toBeUndefined();
+    expect(localStorage.getItem("new.mode.mac")).toBe("plan");
+
+    // Picking a restricted agy preset then explicitly clicking Follow launcher clears permissionMode to undefined.
+    localStorage.setItem("new.mode.mac", "plan");
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:agy-accept");
+    act(() => button("跟随启动器").click());
+    await flush();
+    act(() => button("启动").click());
+    expect(launched[3]).toMatchObject({ launcher: "agy" });
+    expect(launched[3]?.permissionMode).toBeUndefined();
   });
 });

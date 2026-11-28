@@ -142,20 +142,29 @@ nonisolated enum WatchPhoneCapabilities {
     }
 
     /// The all-day keys alone; returns how many it wrote or removed. Any change is the watch's day transfer's to act on
-    /// at once (`WatchSync.onDayCapabilities`): sending waits for `recordingDay` ≥ 1, and the age limit follows the keep
-    /// days.
+    /// at once (`WatchSync.onDayCapabilities`): sending waits for the phone to take day recordings (`takesDays`; a
+    /// value of 0 still sends a recording already running), and the age limit follows the keep days.
     @discardableResult static func storeDay(_ ctx: [String: Any], full: Bool, in defaults: UserDefaults = .standard) -> Int {
         var writes = keep(ctx[RecordingDayContract.phoneKey] as? Int, as: dayKey, full: full, in: defaults)
         writes += keep(ctx[RecordingDayContract.phoneHubKey] as? Bool, as: dayHubKey, full: full, in: defaults)
-        let keepDays = (ctx[RecordingDayContract.phoneKeepDaysKey] as? Int).map { RecordingDayContract.keepDays(recordingDays: $0) }
+        let keepDays = (ctx[RecordingDayContract.phoneKeepDaysKey] as? Int).map { RecordingDayContract.keepDays(audioDays: $0) }
         writes += keep(keepDays, as: keepDaysKey, full: full, in: defaults)
         return writes
     }
 
     /// How long the watch keeps a chunk the phone hasn't acknowledged, in days after its `day`.
     static func keepDays(_ defaults: UserDefaults = .standard) -> Int {
-        (defaults.object(forKey: keepDaysKey) as? Int).map { RecordingDayContract.keepDays(recordingDays: $0) }
+        (defaults.object(forKey: keepDaysKey) as? Int).map { RecordingDayContract.keepDays(audioDays: $0) }
             ?? RecordingDayContract.maxKeepDays
+    }
+
+    /// Whether the phone takes all-day recordings at all: it sets `recordingDay` (0 until its user agrees to the
+    /// sheet's current version, else the contract's version). A phone from before never sets it and takes none. The
+    /// value is not whether to send: a recording that started under an older agreement goes on under it, its chunks
+    /// included (docs/assistant/day-recap.md「Watch and phone capabilities」), so only a phone that never set the key
+    /// stops the watch's day transfer; the value gates a new start (`AllDayAlertPolicy.access`).
+    static func takesDays(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: dayKey) != nil
     }
 
     /// A day key: written when present and different, removed when a full context lacks it. Absent and false (or 0)

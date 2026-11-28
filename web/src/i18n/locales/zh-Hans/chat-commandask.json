@@ -1,12 +1,12 @@
 {
-  "title": "{agent} 想运行一条命令",
-  "risk_delete": "无法确认这条命令不会删除文件",
-  "risk_other": "Claude Code 提醒这条命令可能有风险",
+  "title": "{agent} 请求运行命令",
+  "risk_delete": "无法确认此命令不会删除文件",
+  "risk_other": "Claude Code 提示此命令可能存在风险",
   "countdown_deny": "{time} 后自动拒绝",
   "countdown_allow": "{time} 后自动允许",
-  "countdown_over_deny": "时间到了，Claude Code 会自动拒绝",
-  "countdown_over_allow": "时间到了，Claude Code 会自动允许",
+  "countdown_over_deny": "已超时，Claude Code 将自动拒绝",
+  "countdown_over_allow": "已超时，Claude Code 将自动允许",
   "show_original": "显示原文",
   "hide_original": "隐藏原文",
-  "show_all": "看全部"
+  "show_all": "查看全部"
 }

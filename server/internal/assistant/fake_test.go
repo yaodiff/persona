@@ -24,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -792,13 +793,15 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.retired = append(f.retired, a["session_id"].(string))
 		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true,"guard_verified":true}`), nil
-	case deviceSessionStop:
+	case deviceSessionStop, nodeproto.StopIfIdle:
 		if f.retireErr != nil {
 			return nil, f.retireErr
 		}
 		if retire, _ := a["retire"].(bool); retire {
 			f.retired = append(f.retired, a["session_id"].(string))
-			f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "retire": true})
+			f.retireArgs = append(f.retireArgs, map[string]any{
+				"method": p.Method, "retire": true, "stop_cause": a["stop_cause"], "close_terminal": a["close_terminal"],
+			})
 		} else {
 			f.stopped = append(f.stopped, a["session_id"].(string))
 		}
@@ -1717,7 +1720,7 @@ type told struct {
 
 // launcherAgent is the agent a launcher starts in these tests: the one its name starts with, else claude.
 func launcherAgent(name string) string {
-	for _, other := range []string{"codex", "gemini"} {
+	for _, other := range []string{"codex", "gemini", "traex"} {
 		if strings.HasPrefix(name, other) {
 			return other
 		}

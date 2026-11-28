@@ -2,7 +2,7 @@
   "this_work": "独立审查这项工作",
   "busy": "Agent 正忙、正在启动，或正在等待其他回答",
   "running": "已有一项审查正在进行",
-  "no_change": "没有可审查的改动",
+  "no_change": "暂无可审查的改动",
   "checking": "正在检查是否可以审查…",
   "starting": "正在启动审查…",
   "requested": "已请求审查",

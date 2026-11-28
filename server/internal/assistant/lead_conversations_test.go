@@ -1247,7 +1247,10 @@ func (n *noticeBus) read(msg, outcome string) busEvent {
 		n.t.Fatal(err)
 	}
 	n.b.queueEvent(assistantwire.EventConversationSent, raw)
-	ev := <-n.b.events
+	ev, ok := n.b.events.take()
+	if !ok {
+		n.t.Fatal("the notice is not in line")
+	}
 	n.b.pending.Add(-1)
 	return ev
 }

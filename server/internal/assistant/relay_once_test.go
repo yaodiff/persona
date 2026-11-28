@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // relayTries records the once_id of every assistant.send try into conversation to.
@@ -149,13 +150,29 @@ func TestRelayInDoubtNotFoundStaysQueuedWithoutBlocking(t *testing.T) {
 	}
 }
 
-// A refusal is no doubt: the conversation is not read, and the message stays queued.
+// A refusal or explicit not-sent / not-written error is no doubt: the conversation is not read, and the message stays queued.
 func TestRelayRefusalIsNotLookedFor(t *testing.T) {
-	if relayInDoubt(errors.New("conversation conv1 is gone")) || relayInDoubt(errors.New("the launcher did not start")) {
-		t.Fatal("a refusal taken as a send in doubt")
+	for _, err := range []error{
+		errors.New("conversation conv1 is gone"),
+		errors.New("the launcher did not start"),
+		rpc.NotSent(context.DeadlineExceeded),
+		rpc.NotSent(rpc.ErrClosed),
+		errors.Join(rpc.ErrNotWritten, context.DeadlineExceeded),
+		fmt.Errorf("send: %w", rpc.NotSent(rpc.ErrClosed)),
+	} {
+		if relayInDoubt(err) {
+			t.Fatalf("expected relayInDoubt(%v) = false", err)
+		}
 	}
-	if !relayInDoubt(context.DeadlineExceeded) || !relayInDoubt(fmt.Errorf("relay: %w", context.DeadlineExceeded)) {
-		t.Fatal("a send whose time ran out is not in doubt")
+	for _, err := range []error{
+		context.DeadlineExceeded,
+		fmt.Errorf("relay: %w", context.DeadlineExceeded),
+		rpc.ErrClosed,
+		rpc.ErrDropped,
+	} {
+		if !relayInDoubt(err) {
+			t.Fatalf("expected relayInDoubt(%v) = true", err)
+		}
 	}
 }
 

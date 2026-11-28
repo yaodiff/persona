@@ -63,9 +63,14 @@ func (s *Service) resolveBotTarget(ctx context.Context, t botTarget) (resolvedTa
 		}
 		r := resolvedTarget{machine: d.ID, machineName: d.Name, main: sid != "" && sid == cfg.Main}
 		if sid == "" {
+			if t.Kind == targetPersona && t.Space != "" && !s.taskSpaceAllowed(ctx, t.Space) {
+				return resolvedTarget{}, errors.New(i18n.T(l, "assistant-schedule.unknown_space"))
+			}
 			r.isNew, r.main, r.label = true, t.Kind == targetMain, i18n.T(l, "assistant-feishu.new_chat")
 			if r.main {
 				r.label = i18n.T(l, "assistant-feishu.main_chat")
+			} else if t.Space != "" {
+				r.label = t.Space
 			}
 			return r, nil
 		}

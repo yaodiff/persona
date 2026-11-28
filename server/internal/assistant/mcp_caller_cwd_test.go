@@ -164,7 +164,7 @@ func TestSpaceCallerCwdIsBoundToNodeCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if toolListed(out.(map[string]any)["tools"].([]proto.Tool), spaceStateTool) {
+	if toolListed(out.(assistantwire.ToolsResult).Tools, spaceStateTool) {
 		t.Fatal("hub payload attested a node directory")
 	}
 	if s.healthOn() {

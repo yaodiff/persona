@@ -815,6 +815,8 @@ nonisolated enum Theme {
         /// Today's outline and the picked square's.
         static let todayLine: CGFloat = 1.5
         static let pickedLine: CGFloat = 2
+        /// A chart's columns other than the one its line reads (Token usage by project's days, #16530; the web's 55%).
+        static let unpicked: Double = 0.55
 
         /// A square at step `level`: 0 is no usage, 1 to 4 the theme color's steps.
         static func fill(_ level: Int) -> Color {

@@ -4,12 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
 // The node knows its own program two ways (#10365). exe is the file itself, links followed: what an update replaces
 // (never a link to it) and what macOS attributes Full Disk Access to. bin is how the processes the node starts are
 // told to run it: a managed launcher's typed command, codex-start and tab-start lines, the generated hooks, settings
-// and MCP configs. A terminal can run somewhere that sees the home only as $HOME names it, such as a container that
+// and MCP configs, and the companions it supervises (`--personad-bin`). A terminal can run somewhere that sees the
+// home only as $HOME names it, such as a container that
 // mounts the home at /home/me while the host reaches it through /home/me -> /data/home/me: there the resolved file's
 // path does not exist ("No such file or directory"), though the data directory, where the start files are, does.
 // So bin is the data directory's spelling of the same file, else its $HOME spelling, else exe as it is.
@@ -84,4 +87,19 @@ var selfProgram = func(home, dir string) (exe, bin string, err error) {
 		exe = p
 	}
 	return exe, agentProgram(exe, home, dir), nil
+}
+
+// ownProgram is bin for this machine's home and data directory, worked out as the node and `personad node doctor` do:
+// what the Antigravity companion a RuntimeHost starts is told to run for Persona's tools (`--personad-bin`, #14582),
+// whether or not a hub connection's Node is there yet. "" when it cannot be told.
+func ownProgram() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	_, bin, err := selfProgram(home, identity.DataDir(home))
+	if err != nil {
+		return ""
+	}
+	return bin
 }

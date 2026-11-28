@@ -47,13 +47,13 @@ describe("运行隔离", () => {
   it("says what was blocked in words, when, and links to the admin page's network block (#5696)", () => {
     const html = renderToStaticMarkup(<SandboxGroup s={blocked} id="rsshub" name="RSSHub" />);
     expect(html).toContain("运行隔离");
-    expect(html).toContain("沙箱正在生效");
-    expect(html).toContain("放行 3");
-    expect(html).toContain("拦下 1");
-    expect(html).toContain("RSSHub 想连");
+    expect(html).toContain("沙箱已生效");
+    expect(html).toContain("已放行 3");
+    expect(html).toContain("已拦截 1");
+    expect(html).toContain("RSSHub 尝试访问");
     expect(html).toContain("rss.example.org:443");
-    expect(html).toContain("不在它申请的范围里");
-    expect(html).toContain("去管理界面放行");
+    expect(html).toContain("不在其申请的允许范围内");
+    expect(html).toContain("前往管理界面放行");
     expect(html).not.toContain("最近拒绝");
     expect(adminNetworkURL("rsshub")).toBe("/admin/extensions?extension=rsshub#network");
   });
@@ -66,12 +66,12 @@ describe("运行隔离", () => {
   });
   it("has no notice when nothing was blocked", () => {
     const html = renderToStaticMarkup(<SandboxGroup s={{ enabled: true, active: true, egress: { allowed: 12, denied: 0 } }} id="rsshub" name="RSSHub" />);
-    expect(html).toContain("拦下 0");
+    expect(html).toContain("已拦截 0");
     expect(html).not.toContain("data-sandbox-blocked");
   });
   it("says why a sandbox asked for is not in effect", () => {
     const html = renderToStaticMarkup(<SandboxGroup s={{ enabled: true, active: false, why: "这台机器没有 bubblewrap" }} id="x" name="X" />);
-    expect(html).toContain("要求了沙箱，但现在没开起来");
+    expect(html).toContain("已请求启用沙箱，但当前未生效");
     expect(html).toContain("这台机器没有 bubblewrap");
     expect(html).not.toContain("data-sandbox-egress");
   });
@@ -88,8 +88,8 @@ describe("扩展详情里的渠道", () => {
     const onChannel = vi.fn();
     act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={onChannel} />));
     await flush();
-    expect(host.textContent).toContain("要求了沙箱，但现在没开起来");
-    const link = [...host.querySelectorAll<HTMLElement>("button, a, [role=button]")].find((b) => b.textContent?.includes("在 设置 › 渠道 里设置微信"));
+    expect(host.textContent).toContain("已请求启用沙箱，但当前未生效");
+    const link = [...host.querySelectorAll<HTMLElement>("button, a, [role=button]")].find((b) => b.textContent?.includes("在「设置 › 渠道」中设置「微信」"));
     expect(link).toBeTruthy();
     act(() => link!.click());
     expect(onChannel).toHaveBeenCalledWith("wechat");
@@ -100,7 +100,7 @@ describe("扩展详情里的渠道", () => {
     act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={() => {}} />));
     await flush();
     expect(host.textContent).toContain("示例微信");
-    expect(host.textContent).not.toContain("渠道 里设置");
+    expect(host.textContent).not.toContain("渠道」中设置");
     expect(host.textContent).not.toContain("运行隔离");
   });
 });

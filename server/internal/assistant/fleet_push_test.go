@@ -59,8 +59,8 @@ func TestQuietAgents(t *testing.T) {
 	if st := s.fleetSnapshot(); st.Working != 1 || len(st.Items) != 1 || st.Items[0].ID != "mac/s2" {
 		t.Fatalf("fleet = %+v", st)
 	}
-	s.announce(proto.Interaction{ID: "ix_q", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash"})
-	s.announce(proto.Interaction{ID: "ix_s", MachineID: "mac", SessionID: "s2", Kind: proto.IxPermission, ToolName: "Bash"})
+	s.announce(proto.Interaction{ID: "ix_q", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash"})
+	s.announce(proto.Interaction{ID: "ix_s", MachineID: "mac", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash"})
 	got := ft.pushesOf(assistantwire.NotifyInput, 2, 300*time.Millisecond)
 	if len(got) != 1 || got[0].SessionID != "s2" {
 		t.Fatalf("pushes %+v", got)

@@ -121,20 +121,18 @@ class MergePrTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
-    def test_a_core_change_needs_the_label_and_the_reason(self):
-        """core-change-check.py (#14916): a PR that changes a core path merges only with the label and the section."""
+    def test_a_core_change_merges_without_the_label_advisory(self):
+        """core-change-check.py (#17195): a PR that changes a core path merges without the label; the check is advisory."""
         core = ["server/internal/hub/hub.go"]
         why = "Fixes #6\n\n## Why this must change the core\n\nThe hub must route the new frame.\n"
         for name, labels, body in (("no label, no section", (), "Fixes #6"), ("no label", (), why),
                                    ("no section", ("core-change",), "Fixes #6"),
-                                   ("placeholder", ("core-change",), "Fixes #6\n\n## Why this must change the core\n\nN/A\n")):
+                                   ("with label and reason", ("core-change",), why)):
             with self.subTest(name):
                 self.log.unlink(missing_ok=True)
                 result, calls = self.merge_with_files(core, labels, body)
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("server/internal/hub/hub.go", result.stderr)
-                self.assertIn("not merged", result.stderr)
-                self.assertEqual(self.merges(calls), [])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(self.merges(calls)), 1)
         self.log.unlink(missing_ok=True)
         result, calls = self.merge_with_files(core, ("core-change",), why)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -154,10 +152,11 @@ class MergePrTests(unittest.TestCase):
                 self.assertEqual(len(self.merges(calls)), 1)
 
     def test_a_headless_web_file_is_core(self):
+        # #17195: a headless (core) file merges without a label now; the check is advisory.
         result, calls = self.merge_with_files(["web/src/lib/model-config.ts"])
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("web/src/lib/model-config.ts", result.stderr)
-        self.assertEqual(self.merges(calls), [])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("web/src/lib/model-config.ts", result.stdout)
+        self.assertEqual(len(self.merges(calls)), 1)
 
     def test_the_check_reads_the_verified_head_not_the_files_api(self):
         """The files come from the diff of the head merge-pr.sh verified: an API that says nothing (or something else,
@@ -166,10 +165,11 @@ class MergePrTests(unittest.TestCase):
             with self.subTest(name):
                 self.log.unlink(missing_ok=True)
                 result, calls = self.merge_with_files(["server/internal/hub/hub.go"], api_files=api)
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("server/internal/hub/hub.go", result.stderr)
-                self.assertEqual(self.merges(calls), [])
-                self.assertEqual([c for c in calls if c["argv"][:1] == ["api"]], [])  # no files read from the API at all
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)  # merges now (#17195)
+                self.assertIn("server/internal/hub/hub.go", result.stdout)
+                self.assertEqual(len(self.merges(calls)), 1)
+                # no files list read from the API (the delete-branch call after merging is fine)
+                self.assertEqual([c for c in calls if c["argv"][:1] == ["api"] and "/files" in c["argv"][1]], [])
 
     def test_a_rename_out_of_a_core_path_counts(self):
         self.git("checkout", "-q", "main")
@@ -185,9 +185,9 @@ class MergePrTests(unittest.TestCase):
         self.git("push", "-q", "origin", "+HEAD:refs/pull/7/head")
         pr = self.view(self.git("rev-parse", "HEAD"))
         result, calls = self.merge_pr(pr)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("web/src/lib/model-config.ts", result.stderr)  # the name it moved away from
-        self.assertEqual(self.merges(calls), [])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)  # merges now (#17195)
+        self.assertIn("web/src/lib/model-config.ts", result.stdout)  # the name it moved away from
+        self.assertEqual(len(self.merges(calls)), 1)
 
     def test_merges_the_scanned_head_title_and_body_once(self):
         head = self.open_pr()
@@ -280,6 +280,26 @@ class MergePrTests(unittest.TestCase):
         self.git("config", "--unset-all", "remote.origin.fetch")
         self.git("update-ref", "-d", "refs/remotes/origin/main")
         result, calls = self.merge_pr(self.view(self.open_pr()))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.merges(calls)), 1)
+
+    def test_a_competing_fetch_between_the_two_fetches_cannot_change_the_merged_base(self):
+        """The watcher preparing a worktree in the same clone fetches the PR head into the shared FETCH_HEAD (#16759).
+        That fetch is made to land between merge-pr.sh's own base and head fetches; the base it verified must still
+        merge, because each fetch lands in its own ref instead of FETCH_HEAD."""
+        head = self.open_pr()
+        base = self.git("rev-parse", "main")
+        real_git = shutil.which("git")
+        wrapper = Path(self.env["PATH"].split(os.pathsep)[0]) / "git"
+        wrapper.write_text("#!/bin/sh\n\"%s\" \"$@\"\nstatus=$?\n"
+                           "case \" $* \" in\n"
+                           "  (*\" fetch \"*\" refs/heads/main\"*) \"%s\" -C \"%s\" fetch -q origin pull/7/head ;;\n"
+                           "esac\nexit $status\n" % (real_git, real_git, self.repo))
+        wrapper.chmod(0o755)
+        try:
+            result, calls = self.merge_pr(self.view(head), extra_args=["--expect-head", head, "--expect-base", base])
+        finally:
+            wrapper.unlink()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(self.merges(calls)), 1)
 

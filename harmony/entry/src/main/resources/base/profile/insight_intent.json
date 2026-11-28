@@ -1,0 +1,34 @@
+{
+  "insightIntentsSrcEntry": [
+    {
+      "srcEntry": "./ets/xiaoyi/intents/AskPersonaIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/CheckPersonaStatusIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/SendAgentTaskIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/ApproveFirstPendingIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/AddPersonaTodoIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/LogPersonaWaterIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/PushPersonaItemIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/StartPersonaRecordingIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/OpenPersonaDestinationIntent.ets"
+    },
+    {
+      "srcEntry": "./ets/xiaoyi/intents/SearchPersonaKnowledgeIntent.ets"
+    }
+  ]
+}

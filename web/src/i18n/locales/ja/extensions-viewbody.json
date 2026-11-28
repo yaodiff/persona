@@ -31,6 +31,8 @@
   "graph_links": "セッションとリンク",
   "graph_open_action": "開く",
   "graph_running": "実行中",
+  "scene": "3Dシーン",
+  "scene_reset": "視点をリセット",
   "map": "マップ",
   "map_zoom_in": "拡大",
   "map_zoom_out": "縮小",

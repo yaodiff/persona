@@ -260,15 +260,15 @@ describe("Machines", () => {
     expect(host.textContent).toContain("电脑 A");
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
-    expect(alert()?.textContent).toContain("显示的是上次的数据");
+    expect(alert()?.textContent).toContain("当前显示上次的数据");
     expect(host.textContent).toContain("电脑 A");
-    expect(host.textContent).not.toContain("还没有电脑");
+    expect(host.textContent).not.toContain("尚未添加电脑");
   });
 
   it("shows the empty state when the hub has no machines", async () => {
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("还没有电脑");
+    expect(host.textContent).toContain("尚未添加电脑");
     expect(alert()).toBeNull();
   });
 
@@ -283,7 +283,7 @@ describe("Machines", () => {
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     fullRow(alert());
-    const empty = [...host.querySelectorAll("div")].find((d) => d.parentElement?.className.includes("2xl:grid-cols-3") && d.textContent?.includes("看不到"));
+    const empty = [...host.querySelectorAll("div")].find((d) => d.parentElement?.className.includes("2xl:grid-cols-3") && d.textContent?.includes("无法查看"));
     fullRow(empty);
     expect(host.innerHTML).not.toMatch(/(?<![\w:-])md:col-span-2/);
   });
@@ -333,7 +333,7 @@ describe("Machines", () => {
       await flush();
       expect(buttons(t("lib-machine-deploy.redeploy"))[0]?.disabled).toBe(false);
     });
-    for (const phase of ["waiting_idle", "transferring", "restarting", "confirming"] as const) {
+    for (const phase of ["waiting_idle", "transferring", "draining", "restarting", "confirming"] as const) {
       show(phase); // phase alone is sufficient, including when an older hub omits `deploying`
       const [redeploy] = buttons(t(`lib-machine-deploy.${phase}`));
       expect(redeploy?.disabled).toBe(true);
@@ -403,9 +403,9 @@ describe("Machines", () => {
     replies = [503];
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("现在看不到机器");
+    expect(host.textContent).toContain("当前无法查看机器");
     expect(alert()).not.toBeNull();
-    expect(alert()?.textContent).not.toContain("显示的是上次的数据");
+    expect(alert()?.textContent).not.toContain("当前显示上次的数据");
   });
 
   it("offers 添加电脑 in the empty state, and in the header only when the hub can add one (machines_add)", async () => {
@@ -419,7 +419,7 @@ describe("Machines", () => {
     act(() => root.render(<Machines onToggleSidebar={() => {}} key="new" />));
     await flush();
     expect(buttons("添加电脑")).toHaveLength(1); // the empty state's; the header has none while the page is empty
-    expect(host.textContent).toContain("添加一台，Persona 就能在上面替你干活");
+    expect(host.textContent).toContain("添加一台电脑后，Persona 就能在上面为你执行任务");
 
     fake.machines = [{ id: "mac", name: "电脑 A", online: true }];
     act(() => root.render(<Machines onToggleSidebar={() => {}} key="one" />));
@@ -432,7 +432,7 @@ describe("Machines", () => {
     fake.machines = [{ id: "home", name: "家里的服务器", online: true, trust: "pending", error: "等你在新版 App 或网页里确认这是你的电脑" }];
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("有一台电脑想加入：家里的服务器，是你的吗？");
+    expect(host.textContent).toContain("一台电脑请求加入：家里的服务器，这是你的电脑吗？");
     expect(host.textContent).not.toContain("等你在新版 App"); // the hub's words for old apps
     await act(async () => buttons("是我的电脑")[0]!.click());
     await flush();
@@ -444,9 +444,9 @@ describe("Machines", () => {
     fake.machines = [{ id: "home", name: "家里的服务器", online: false, kind: "link", trust: "pending", error_code: "never_connected", error: "等你确认" }];
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("等这台电脑用配对链接连上来");
-    expect(buttons("重新出链接")).toHaveLength(1);
-    expect(buttons("删掉")).toHaveLength(1);
+    expect(host.textContent).toContain("等待这台电脑通过配对链接接入");
+    expect(buttons("重新生成链接")).toHaveLength(1);
+    expect(buttons("移除")).toHaveLength(1);
     expect(buttons("重新连接")).toHaveLength(0);
   });
 
@@ -454,7 +454,7 @@ describe("Machines", () => {
     fake.machines = [{ id: "mac", name: "电脑 A", online: false, kind: "link", error_code: "link_offline", error: "link closed: failed to get reader" }];
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.querySelector('[data-error-code="link_offline"]')?.textContent).toContain("Persona Link 没在运行");
+    expect(host.querySelector('[data-error-code="link_offline"]')?.textContent).toContain("Persona Link 未运行");
     expect(host.textContent).not.toContain("failed to get reader");
   });
 });
@@ -520,7 +520,7 @@ describe("Machines metrics across managers", () => {
     metricsReplies["/api/v1/metrics"] = 503;
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
-    expect(alert()?.textContent).toContain("显示的是上次的数据");
+    expect(alert()?.textContent).toContain("当前显示上次的数据");
     expect(host.textContent).toContain("62%");
     await showManager("assistant");
     expect(host.textContent).toContain("23%");

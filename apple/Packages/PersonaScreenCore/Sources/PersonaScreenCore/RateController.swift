@@ -120,8 +120,9 @@ public struct RateController {
     private mutating func queueing(delay: Int64, now: UInt64) -> Int64 {
         while let last = baseline.last, last.delay >= delay { baseline.removeLast() }
         baseline.append((now, delay))
-        while baseline.count > 1, now &- baseline[0].at > Self.baselineMicros { baseline.removeFirst() }
-        return delay - baseline[0].delay
+        while baseline.count > 1, now > baseline[0].at, now - baseline[0].at > Self.baselineMicros { baseline.removeFirst() }
+        let (diff, overflow) = delay.subtractingReportingOverflow(baseline[0].delay)
+        return overflow ? .max : diff
     }
 
     /// Adds a report's arrival to the delivered-rate window. An arrival before the last one (the phone's clock moved)
@@ -130,17 +131,29 @@ public struct RateController {
         if let last = arrivals.last, report.arrivalMicros < last.at { arrivals.removeAll() }
         arrivals.append((report.arrivalMicros, report.bytesSinceLast))
         let newest = report.arrivalMicros
-        while arrivals.count > 1, newest &- arrivals[0].at > Self.deliveredWindowMicros { arrivals.removeFirst() }
+        while arrivals.count > 1, newest > arrivals[0].at, newest - arrivals[0].at > Self.deliveredWindowMicros { arrivals.removeFirst() }
     }
 
     /// The rate that arrived over the last second, in kbit/s: the bytes reported after the window's first arrival,
     /// over the time from it to the last. nil when too few reports or too short a time say it.
     public var deliveredKbps: Int? {
-        guard arrivals.count >= Self.deliveredMinReports, let first = arrivals.first, let last = arrivals.last else { return nil }
-        let span = last.at &- first.at
+        guard arrivals.count >= Self.deliveredMinReports, let first = arrivals.first, let last = arrivals.last,
+              last.at > first.at else { return nil }
+        let span = last.at - first.at
         guard span >= Self.deliveredMinSpanMicros else { return nil }
-        let bytes = arrivals.dropFirst().reduce(UInt64(0)) { $0 + UInt64($1.bytes) }
-        return Int(bytes * 8 * 1000 / span)
+        var bytes: UInt64 = 0
+        for entry in arrivals.dropFirst() {
+            let (sum, overflow) = bytes.addingReportingOverflow(UInt64(entry.bytes))
+            bytes = overflow ? .max : sum
+        }
+        let q = bytes / span
+        let r = bytes % span
+        let (hi, hiOverflow) = q.multipliedReportingOverflow(by: 8_000)
+        if hiOverflow { return Int.max }
+        let lo = span.dividingFullWidth(r.multipliedFullWidth(by: 8_000)).quotient
+        let (total, addOverflow) = hi.addingReportingOverflow(lo)
+        if addOverflow || total > UInt64(Int.max) { return Int.max }
+        return Int(total)
     }
 
     /// The link has no queue to speak of: not skipping, and the last report's queueing under the cut threshold. Idle
@@ -151,7 +164,9 @@ public struct RateController {
     /// frame's report, which says whether that pass queued but must not move the floor or the rate.
     public func queueing(of report: ReceiverReport) -> Int64? {
         guard let floor = baseline.first?.delay else { return nil }
-        return Int64(truncatingIfNeeded: report.arrivalMicros) - Int64(truncatingIfNeeded: report.captureMicros) - floor
+        let delay = Int64(truncatingIfNeeded: report.arrivalMicros) &- Int64(truncatingIfNeeded: report.captureMicros)
+        let (diff, overflow) = delay.subtractingReportingOverflow(floor)
+        return overflow ? (delay >= floor ? .max : .min) : diff
     }
 
     /// One receiver report, received at `now`. A refinement frame's report (`refinement`, idle refinement's passes) asks
@@ -161,7 +176,7 @@ public struct RateController {
         guard !refinement else {
             return Decision(skipping: skipping, keyframe: report.flags.contains(.decodingError))
         }
-        let delay = Int64(truncatingIfNeeded: report.arrivalMicros) - Int64(truncatingIfNeeded: report.captureMicros)
+        let delay = Int64(truncatingIfNeeded: report.arrivalMicros) &- Int64(truncatingIfNeeded: report.captureMicros)
         let queue = queueing(delay: delay, now: now)
         lastQueueMicros = queue
         arrived(report)
@@ -177,7 +192,7 @@ public struct RateController {
 
         if queue > Self.cutAboveMicros {
             calmSince = nil
-            if lastCut.map({ now &- $0 >= Self.cutHoldMicros }) ?? true {
+            if lastCut.map({ now >= $0 && now - $0 >= Self.cutHoldMicros }) ?? true {
                 lastCut = now
                 everCut = true
                 let cut = Swift.max(floorKbps, cutTarget())
@@ -189,8 +204,8 @@ public struct RateController {
         } else if queue < Self.raiseBelowMicros {
             let since = calmSince ?? now
             calmSince = since
-            let slowStart = tiered && !everCut && now &- (firstReport ?? now) < Self.slowStartMicros
-            if now &- since >= (slowStart ? Self.slowStartCalmMicros : Self.calmMicros) {
+            let slowStart = tiered && !everCut && firstReport.map({ now < $0 || now - $0 < Self.slowStartMicros }) ?? true
+            if now >= since && now - since >= (slowStart ? Self.slowStartCalmMicros : Self.calmMicros) {
                 calmSince = now // the next raise needs another calm stretch
                 let raised = Swift.min(cap, slowStart ? (kbps * 5 + 3) / 4 : (kbps * 11 + 9) / 10)
                 if raised != kbps {
@@ -208,13 +223,13 @@ public struct RateController {
     /// Where a cut goes: 30% down; with a band and a delivered rate, 85% of that rate, and at least 15% down.
     private func cutTarget() -> Int {
         guard tiered, let delivered = deliveredKbps else { return kbps * 7 / 10 }
-        return Swift.min(kbps * 85 / 100, delivered * 85 / 100)
+        return Swift.min(kbps, delivered) * 85 / 100
     }
 
     /// Whether a frame captured at `now` should be encoded: always, but while skipping only one per `probeMicros`.
     public mutating func admit(now: UInt64) -> Bool {
         guard skipping else { return true }
-        if let last = lastProbe, now &- last < Self.probeMicros { return false }
+        if let last = lastProbe, now < last || now - last < Self.probeMicros { return false }
         lastProbe = now
         return true
     }

@@ -119,12 +119,90 @@
   column-span: all;
 }
 
+.usage-popover-header {
+  margin-bottom: 10px;
+}
+
 .usage-popover-pinned {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .usage-popover-unconnected {
-  margin-top: 12px;
+  margin-top: 10px;
+}
+
+.usage-timeline-grid {
+  display: grid;
+  grid-template-columns: clamp(6.75rem, 34%, 11rem) minmax(0, 1fr);
+}
+
+.usage-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.usage-table {
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.usage-table-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.usage-table-head-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--inset);
+}
+
+/* Low-interference per-window pin toggle: stays quiet until hover/focus on desktop pointers, always visible when pinned
+ * or on touch devices, and overlays without eating meter width while nothing in the card/cell is pinned. */
+@media (hover: hover) and (pointer: fine) {
+  .usage-win-pin[data-pin-pinned="false"] {
+    opacity: 0;
+  }
+
+  .usage-win-row:hover .usage-win-pin[data-pin-pinned="false"],
+  .usage-win-row:focus-within .usage-win-pin[data-pin-pinned="false"],
+  .usage-table-cell:hover .usage-win-pin[data-pin-pinned="false"],
+  .usage-table-cell:focus-within .usage-win-pin[data-pin-pinned="false"] {
+    opacity: 1;
+  }
+
+  .usage-win-pin[data-pin-overlay="true"] {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+
+  .usage-table-cell .usage-win-pin[data-pin-overlay="true"] {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+
+  .usage-win-pin[data-pin-overlay="true"][data-pin-pinned="false"] {
+    pointer-events: none;
+  }
+
+  .usage-win-row:hover .usage-win-pin[data-pin-overlay="true"],
+  .usage-win-row:focus-within .usage-win-pin[data-pin-overlay="true"],
+  .usage-table-cell:hover .usage-win-pin[data-pin-overlay="true"],
+  .usage-table-cell:focus-within .usage-win-pin[data-pin-overlay="true"] {
+    pointer-events: auto;
+  }
 }
 
 /* Override the global 1ms reduced-motion rule in styles.css so reduced motion keeps a 120ms opacity-only fade. */

@@ -144,16 +144,14 @@ describe("Back with the model panel open (#11442)", () => {
     await mount();
     act(() => void dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
     expect(panel()).toBeNull();
-    await settle();
-    expect(onOverlayEntry()).toBe(false);
+    await act(async () => void (await vi.waitFor(() => expect(onOverlayEntry()).toBe(false), { timeout: 1000, interval: 10 })));
 
     act(() => root.render(<></>));
     await mount();
     expect(onOverlayEntry()).toBe(true);
     act(() => void document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
     expect(panel()).toBeNull();
-    await settle();
-    expect(onOverlayEntry()).toBe(false);
+    await act(async () => void (await vi.waitFor(() => expect(onOverlayEntry()).toBe(false), { timeout: 1000, interval: 10 })));
   });
 
   it("in New Agent's sheet, a pick closes only the panel; the next Back closes the sheet", async () => {

@@ -17,5 +17,6 @@ export async function askApprovalQuestion(ix: Interaction, text: string, clientM
     method: "POST",
     opId: clientMsgID,
     json: { text, client_msg_id: clientMsgID },
+    headers: ix.created_at ? { "X-Persona-Interaction-Created-At": ix.created_at } : undefined,
   });
 }

@@ -32,7 +32,9 @@ open class ConnectionWatchdog(context: Context, parameters: WorkerParameters) : 
                     { NotificationPolicy.suppressed(it, Notify.foreground.value, Notify.visibleSession.value) },
                     notifier::postInteraction, notifier::postNotify, notifier::retract,
                     preferences::refreshPreferences, notifier::deliveredRequests, preferences::desktopOnline,
-                    catchUpPreferences = preferences::refreshPreferencesForCatchUp).catchUp()
+                    catchUpPreferences = preferences::refreshPreferencesForCatchUp,
+                    retractOccurrence = { id, occurrence -> notifier.retract(id, occurrence) },
+                    notifiedOccurrences = notifier::deliveredOccurrences).catchUp()
             },
         )
     }

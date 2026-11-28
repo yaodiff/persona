@@ -76,5 +76,6 @@
   "lark_triage": "受信トレイの仕分けルール",
   "lark_triage_footer": "Lark の何が「要対応」「参考」「折りたたみ」かを一、二文で書きます。空欄なら受信トレイの既定の判断、書けば Lark の項目はこのルールだけで仕分けます。",
   "lark_triage_placeholder": "例：ビルド・リリース・アラートのボットは参考。対応を求められたときだけ要対応。質問やレビュー依頼は要対応。",
-  "lark_triage_save": "ルールを保存"
+  "lark_triage_save": "ルールを保存",
+  "bind_in_integrations": "設定 › 連携と拡張機能 › {name} でも連携できます。"
 }

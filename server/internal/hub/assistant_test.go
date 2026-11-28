@@ -15,7 +15,7 @@ func TestAskUserReturnsAnswers(t *testing.T) {
 	m := newMachine(h, MachineConfig{ID: "box", Name: "Box", Kind: "local"})
 	h.machines, h.byID["box"] = []*Machine{m}, m
 	connectAssistant(t, h)
-	args := json.RawMessage(`{"questions":[{"question":"发吗？","options":[{"label":"发"},{"label":"不发"}]}]}`)
+	args := json.RawMessage(`{"why_owner":"visible_to_others","questions":[{"question":"发吗？","options":[{"label":"发"},{"label":"不发"}]}]}`)
 	done := make(chan proto.ToolResult, 1)
 	go func() { done <- h.callAssistantTool(context.Background(), m, "conv-1", "ask_user", args) }()
 	eventually(t, 10*time.Second, "the question on the phone", func() bool { return len(h.pendingInteractions()) > 0 })

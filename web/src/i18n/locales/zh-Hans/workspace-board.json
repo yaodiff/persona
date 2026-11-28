@@ -2,11 +2,11 @@
   "title": "工作流看板",
   "setting_group": "Agent",
   "setting_label": "工作流看板",
-  "setting_hint": "按代码目录把 Agent 排成看板，侧边栏多一个入口。默认关；存在 hub 上，每个浏览器都一样。关掉只是不显示，看板的内容会留着。",
-  "setting_readonly": "只读设备不能改这个开关。",
+  "setting_hint": "按代码目录将 Agent 组织为看板，并在侧边栏中显示独立入口。此功能默认关闭，开关状态保存在 hub 上并同步至所有浏览器。关闭后仅隐藏入口，看板内容仍会保留。",
+  "setting_readonly": "只读设备无法修改此设置。",
   "off_title": "工作流看板未开启",
-  "off_body": "在设置 › 通用 › Agent 里打开。以前排好的列和卡片都还在，打开后原样恢复。",
-  "open_settings": "去设置打开",
-  "loading": "正在读取工作流看板的开关",
+  "off_body": "可在「设置 › 通用 › Agent」中开启此功能。之前配置好的列和卡片均已保留，开启后将按原样恢复。",
+  "open_settings": "打开设置",
+  "loading": "正在检查工作流看板状态",
   "sidebar": "侧边栏"
 }

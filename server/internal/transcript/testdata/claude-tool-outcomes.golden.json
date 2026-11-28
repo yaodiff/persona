@@ -784,7 +784,8 @@
         "kind": "shell",
         "description": "超时转到后台的命令",
         "output_file": "/prfruwz/dez/fivduw-909/-Acamg-sbzz-txb-ksiprsebdw/065e04be-d835-2757-e9e7-155f70062351/nhkyy/asg58h61i.output",
-        "started_at": "2026-01-01T10:00:46Z"
+        "started_at": "2026-01-01T10:00:46Z",
+        "moved_from_foreground": true
       },
       {
         "id": "qy5vci1hz",

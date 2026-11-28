@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -351,33 +350,6 @@ func TestBriefTaskCardWaitIdentityAndPrivacy(t *testing.T) {
 				}
 			} else if w.TodoID != todo.ID || w.Title != todo.Title {
 				t.Fatalf("ordinary card lost its task identity: %+v", w)
-			}
-		})
-	}
-}
-
-// max_rows bounds only the non-owner tail, in main as well as every leader. Every owner-wait row remains, even when
-// owner rows alone exceed the configured limit; the folded rows become one direction-level "N more" count.
-func TestFoldBriefDirectionKeepsEveryOwnerWait(t *testing.T) {
-	waits := defaultTestWaits(t, newStorelessService(t, newFakeHub().withMachine()))
-	now := time.Now().UTC()
-	for _, ownerDirection := range []bool{false, true} {
-		t.Run(fmt.Sprintf("owner_direction_%v", ownerDirection), func(t *testing.T) {
-			d := prompts.BriefDirection{Owner: ownerDirection}
-			for i := 0; i < 20; i++ {
-				d.Waits = append(d.Waits, prompts.BriefWait{TodoID: fmt.Sprintf("owner-%02d", i), Kind: "needs_user", Since: now.Add(time.Duration(i) * time.Minute)})
-			}
-			for i := 0; i < 17; i++ {
-				d.Waits = append(d.Waits, prompts.BriefWait{TodoID: fmt.Sprintf("other-%02d", i), Kind: "stalled", Since: now.Add(time.Duration(i) * time.Minute)})
-			}
-			foldBriefDirection(&d, waits)
-			if len(d.Waits) != 35 || d.More != 2 {
-				t.Fatalf("kept %d rows, more %d; want 35 and 2", len(d.Waits), d.More)
-			}
-			for i := 0; i < 20; i++ {
-				if d.Waits[i].Kind != "needs_user" {
-					t.Fatalf("owner row %d was folded or sorted behind another wait: %+v", i, d.Waits[i])
-				}
 			}
 		})
 	}

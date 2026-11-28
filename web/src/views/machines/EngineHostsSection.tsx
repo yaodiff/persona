@@ -22,6 +22,7 @@ import { Icon } from "../../ui/icons";
 import { ENGINE_SECTION_ID } from "./engine-anchor";
 import { beginEngineSave, finishEngineSave, isLatestEngineSave } from "./engine-save";
 import { t } from "../../i18n";
+import { OrcaChatStarts } from "./OrcaChatStarts";
 
 export function EngineHostsSection({ machine, heading }: { machine: Machine; heading: React.ReactNode }) {
   const current = currentHosts(machine);
@@ -184,6 +185,7 @@ export function EngineHostsSection({ machine, heading }: { machine: Machine; hea
         </p>
       )}
       <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{hostsFooter(choice, machine.online)}</p>
+      <OrcaChatStarts machine={machine} />
     </section>
   );
 }

@@ -9,9 +9,8 @@
   "seg_repo": "仓库",
   "seg_project": "项目",
   "seg_state": "状态",
-  "state_muted": "已屏蔽",
   "source_feishu": "飞书群",
-  "source_terminal": "终端",
+  "source_terminal": "在标签页中",
   "source_desktop": "桌面端",
-  "open_feishu_topic": "在飞书里打开这个话题"
+  "open_feishu_topic": "在飞书中打开该话题"
 }

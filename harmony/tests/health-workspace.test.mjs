@@ -213,11 +213,11 @@ function pathMethod(env, method, prefix) {
 
 test('the four iPhone Health suggestions retain distinct controls and send their displayed prompt to Health', async () => {
   const english = ['How did I sleep this week?', 'How do my steps over the last 7 days compare with last week?',
-    'Log my weight today: 62.5 kg', 'Log my weight today: 62.5 kg'];
+    'How has my resting heart rate been trending this week?', 'Log my weight today: 62.5 kg'];
   const questions = {
     base: english, en_US: english,
     zh_CN: ['这周我睡得怎么样？', '最近 7 天步数和上周比怎么样', '我的静息心率最近有变化吗', '帮我记一下今天体重 62.5 kg'],
-    ja_JP: ['今週の睡眠はどうでしたか？', '直近7日間の歩数は先週と比べてどうですか？', '今日の体重62.5kgを記録して', '今日の体重62.5kgを記録して']
+    ja_JP: ['今週の睡眠はどうでしたか？', '直近7日間の歩数は先週と比べてどうですか？', '今週の安静時心拍数の推移はどうですか？', '今日の体重62.5kgを記録して']
   };
   assert.equal(new Set(HEALTH_SUGGESTIONS).size, 4);
   for (const [locale, expected] of Object.entries(questions)) {

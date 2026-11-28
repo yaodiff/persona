@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
@@ -47,6 +49,10 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("NODE_TEST_PLUGIN"); mode != "" { // the test binary as a plugin's program (plugins_test.go)
 		runTestPlugin(mode)
 	}
+	if os.Getenv("PERSONA_TEST_CLAUDE_USAGE_CLI") == "1" { // fake Claude CLI before TestMain unsets CLAUDE_CONFIG_DIR
+		runFakeClaudeUsageCLI()
+		os.Exit(0)
+	}
 	if os.Getenv("NODE_TEST_PREFLIGHT") == "1" { // the test binary as the preflight's child (preflight_test.go)
 		// NODE_TEST_PREFLIGHT_SLOW: start that much later, as on a busy machine; NODE_TEST_PREFLIGHT_STARTED: a file
 		// to write the time to once running, for a test that times the run without the start.
@@ -75,6 +81,11 @@ func TestMain(m *testing.M) {
 	codexStartupLook = time.Second
 	// No test may reach the user's running Orca: the default metadata path points nowhere.
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
+	// Nor an Orca app installed on the developer's machine: Orca is not installed unless a test says so.
+	orcaInstalled = func() (bool, string) { return false, "" }
+	// Nor the user's book of Orca chats in the node's cache folder (orcabridge_book.go): kept in memory unless a test
+	// gives it a file.
+	orcaBookPath = func() string { return "" }
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
 	botmuxBin = func() string { return "" }
 	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).
@@ -86,8 +97,11 @@ func TestMain(m *testing.M) {
 	// Nor the user's Codex catalog: a model recovery on a Codex list runs no `codex debug models` (a test that wants
 	// windows gives its own, assistant_fallback_window.go).
 	codexDebugModels = func(context.Context, *Node, string) ([]byte, error) { return nil, errors.New("no codex in tests") }
-	// Subscription usage tests provide their own app-server instead of polling a real account.
+	// Subscription usage tests provide their own CLI / app-server instead of polling a real account.
 	codexUsageCLI = func() (string, error) { return "", errors.New("no codex in tests") }
+	claudeUsageCommand = func(context.Context, string, []string, []string, bool) (*exec.Cmd, error) {
+		return nil, errors.New("no claude in tests")
+	}
 	// Nor the ChatGPT app's bundled codex: a test that wants one sets its own (codex_bundled_test.go).
 	bundledCodexCLI = func() string { return "" }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
@@ -98,6 +112,13 @@ func TestMain(m *testing.M) {
 	// its own).
 	os.Setenv("T3CODE_HOME", "/tmp/persona-test-no-t3code")
 	t3codeBin = func() string { return "" }
+	// Nor the user's login shell on macOS, where the account's bash or zsh decides the node's shell (loginShellProgram,
+	// #16217): the fixtures write ~/.zshrc, so a developer whose login shell is bash would run them in a bash that
+	// never reads it. zsh, as on most Macs; a test that wants another sets SHELL, or macLoginShell for an unset one.
+	pinTestLoginShell()
+	// Nor the user's login-shell proxy variables: tests exercising shell proxy fallback call readShellProxy directly
+	// or stub detectShellProxy themselves so unrelated tests never spawn a real login shell against the developer's HOME.
+	detectShellProxy = func(context.Context) shellProxy { return shellProxy{} }
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
 	// session): the node's own default is then ~/.claude of the test's home (#2140; a test that wants one sets its own).
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
@@ -401,6 +422,101 @@ func TestOrcaSendsToForegroundTraeCLI(t *testing.T) {
 	}
 }
 
+// A foreground agy in an Orca terminal is an agy pane (#16531). Persona's own hook names its conversation (the only
+// source on macOS, which has no presence lock to read), so the companion's agy-<conversation> row merges into the
+// pane's, and a message or an interrupt for it goes to the terminal instead of being refused as agy_in_terminal while
+// that agy holds the conversation's presence lock. A background agy is no agent pane.
+func TestOrcaSendsToForegroundAgy(t *testing.T) {
+	n, _, o, procs, _ := orcaNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	const pane, pid, command = "tab1:leaf1", 4646, "/usr/local/bin/agy"
+	paneID := "orca:" + pane
+	oldPresence := agyPresenceOf
+	agyPresenceOf = func(int) string { return "" } // no open presence lock is read: the hook alone names the conversation
+	t.Cleanup(func() { agyPresenceOf = oldPresence })
+	withAgyPresenceHooks(t, func(path string) agyLockState {
+		if filepath.Base(path) == agyTestID+".lock" {
+			return agyLockHeld // the terminal's agy has the conversation open
+		}
+		return agyLockMissing
+	}, nil)
+	acpRow := "agy-" + agyTestID
+	n.runtimes = newRuntimeRegistry()
+	companion := n.runtimes.add(nil) // a call that reached it would fail: it has no peer
+	companion.ready, companion.hello.Runtime = true, agyAgent
+	n.runtimes.setSessions(companion, []proto.Session{{SessionID: acpRow, Agent: agyAgent, Cwd: orcaCwd, Status: proto.StatusIdle}})
+	file := agyTestFile(t, n.agyDataRoot(), agyTestID, `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"<USER_REQUEST>\nFix the auth bug\n</USER_REQUEST>"}`+"\n")
+	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", ""))
+	o.SetScreen("term_1", "> \n")
+	setProcess := func(state string) {
+		args := fmt.Sprintf("%d %s 01:00 %s", pid, state, command)
+		env := fmt.Sprintf("%d %s ORCA_PANE_KEY=%s", pid, command, pane)
+		procs.set(pane, parseOrcaPSEnv(env, parseOrcaPSArgs(args, time.Now()), nil)[pane]...)
+	}
+	setProcess("S+")
+	if r := n.hookReport(paneID, "PreInvocation", agyTestID); r["ok"] != true {
+		t.Fatalf("hook report refused: %v", r)
+	}
+	n.mu.Lock() // older than agyReportGrace: only a pane listed as running agy keeps it
+	r := n.agyReports[paneID]
+	r.at = time.Now().Add(-time.Minute)
+	n.agyReports[paneID] = r
+	n.mu.Unlock()
+
+	paneRow := otherSession(host.Agent{Agent: agyAgent, PaneID: paneID})
+	var agyRows []string
+	for _, s := range listSessions(t, n) {
+		if s.Agent == agyAgent {
+			agyRows = append(agyRows, s.SessionID+"@"+s.PaneID)
+		}
+	}
+	if len(agyRows) != 1 || agyRows[0] != paneRow+"@"+paneID {
+		t.Fatalf("agy rows %v, want the Orca pane's %s alone", agyRows, paneRow)
+	}
+
+	// The terminal plays agy: the submit appends the typed message to its conversation.
+	o.Handle("terminal.send", func(p map[string]any) any {
+		text, _ := p["text"].(string)
+		if text == "\r" {
+			line := fmt.Sprintf(`{"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":%q,"content":"<USER_REQUEST>\nhello from the phone\n</USER_REQUEST>"}`+"\n", time.Now().UTC().Format(time.RFC3339Nano))
+			f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				return orcarttest.Fail{Code: "test_write_failed"}
+			}
+			_, err = f.WriteString(line)
+			if cerr := f.Close(); err != nil || cerr != nil {
+				return orcarttest.Fail{Code: "test_write_failed"}
+			}
+		}
+		return map[string]any{"send": map[string]any{"handle": p["terminal"], "accepted": true, "bytesWritten": len(text)}}
+	})
+	o.Reset()
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": acpRow, "text": "hello from the phone"}); err != nil {
+		t.Fatalf("send to a conversation an Orca terminal's agy has open: %v", err)
+	}
+	if _, err := request(t, n, "session.interrupt", map[string]any{"session_id": acpRow}); err != nil {
+		t.Fatalf("interrupt of a conversation an Orca terminal's agy has open: %v", err)
+	}
+	writes := o.Writes()
+	if len(writes) != 3 || writes[0].Text != pasteStart+"hello from the phone"+pasteEnd || writes[1].Text != "\r" ||
+		writes[2].Text != "\x1b" {
+		t.Fatalf("expected a bracketed paste, a separate submit and an escape in the terminal, got %+v", writes)
+	}
+
+	// The same agy, no longer in its terminal's foreground group: refused with nothing typed (by the pane's own check
+	// while the last list still has the pane, else as a conversation a terminal holds).
+	setProcess("S")
+	o.Reset()
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": acpRow, "text": "again"}); err == nil {
+		t.Fatal("a background agy's conversation took a message")
+	} else if code, data := refusalOf(t, err); code != "not_delivered" && code != codeAgyInTerminal || data["delivered"] != "none" {
+		t.Fatalf("expected a refusal before typing, got %v", err)
+	}
+	if writes := o.Writes(); len(writes) != 0 {
+		t.Fatalf("wrote into the terminal without agy in front: %+v", writes)
+	}
+}
+
 // Orca turning the input down (nothing written) is a refusal the app can retry: a permission dialog is dialog_open,
 // no agent in front / a gone or read-only terminal is not_delivered.
 func TestOrcaSendRefusedByOrca(t *testing.T) {
@@ -487,7 +603,8 @@ func TestOrcaKeysAndText(t *testing.T) {
 	}
 }
 
-// A colored screen read gets the plain rows (CRLF-ended like colored ones); "recent" reads the screen too.
+// A colored screen read gets the plain rows (CRLF-ended like colored ones); "recent" asks for Orca's output tail
+// first (hostorca_scrollback.go), and reads the screen when Orca answers with the screen (nothing above it).
 func TestOrcaScreenIsPlain(t *testing.T) {
 	n, o, _ := orcaSession(t)
 	o.SetScreen("term_1", "line one\nline two\n")
@@ -503,6 +620,7 @@ func TestOrcaScreenIsPlain(t *testing.T) {
 	}
 	assertTrace(t, o.Trace(), []string{
 		`terminal.read {"screen":true,"terminal":"term_1"}`,
+		`terminal.read {"limit":750,"terminal":"term_1"}`,
 		`terminal.read {"screen":true,"terminal":"term_1"}`,
 	})
 	if _, err := request(t, n, "terminal.watch", map[string]any{"session_id": sidA}); err == nil ||
@@ -652,22 +770,40 @@ func TestOrcaPollsEverySecond(t *testing.T) {
 	}
 }
 
-// node.info finds Orca when its runtime answers with a protocol Persona speaks; an incompatible one is there, not
-// available, with a note.
+// withOrcaInstalled makes Orca installed (found, at version, "" for none) for one test, or not (TestMain's default).
+func withOrcaInstalled(t *testing.T, found bool, version string) {
+	t.Helper()
+	old := orcaInstalled
+	orcaInstalled = func() (bool, string) { return found, version }
+	t.Cleanup(func() { orcaInstalled = old })
+}
+
+// node.info finds Orca when its runtime answers with a protocol Persona speaks (running); an incompatible one is
+// there, not available, with its version and the catalog's note; one that does not answer is stopped when it is
+// installed (with the version its install says) and missing when it is not (#17037).
 func TestOrcaEngineDetection(t *testing.T) {
 	o := orcarttest.New(t)
 	e := orcaEngine(context.Background(), &orcart.Client{MetaPath: o.MetaPath})
-	if e != (proto.Engine{ID: "orca", Name: "Orca", Available: true, Version: "1.4.245"}) {
+	if e != (proto.Engine{ID: "orca", Name: "Orca", Available: true, Version: "1.4.245", State: proto.EngineRunning}) {
 		t.Errorf("engine %+v", e)
 	}
 	o.SetStatus(map[string]any{"runtimeProtocolVersion": 2})
 	e = orcaEngine(context.Background(), &orcart.Client{MetaPath: o.MetaPath})
-	if e.Available || e.Note == "" || e.Version != "1.4.245" {
+	if e.Available || e.Version != "1.4.245" || e.State != proto.EngineIncompatible ||
+		e.Note != i18n.T(i18n.Default, "node-engine.orca_incompatible") {
 		t.Errorf("incompatible: %+v", e)
 	}
-	e = orcaEngine(context.Background(), &orcart.Client{MetaPath: "/tmp/persona-no-such-dir/orca-runtime.json"})
-	if e != (proto.Engine{ID: "orca", Name: "Orca"}) {
+	// The hub words the note in each reader's language (i18n.EngineText).
+	if got := i18n.EngineText(i18n.En, e.Note); got != i18n.T(i18n.En, "node-engine.orca_incompatible") || got == e.Note {
+		t.Errorf("the note in English: %q", got)
+	}
+	absent := &orcart.Client{MetaPath: "/tmp/persona-no-such-dir/orca-runtime.json"}
+	if e = orcaEngine(context.Background(), absent); e != (proto.Engine{ID: "orca", Name: "Orca", State: proto.EngineMissing}) {
 		t.Errorf("absent: %+v", e)
+	}
+	withOrcaInstalled(t, true, "1.4.277")
+	if e = orcaEngine(context.Background(), absent); e != (proto.Engine{ID: "orca", Name: "Orca", Version: "1.4.277", State: proto.EngineStopped}) {
+		t.Errorf("installed, not running: %+v", e)
 	}
 	if hs := engineHosts(proto.EngineOrca, nil); len(hs) != 1 || hs[0].Kind() != host.Orca {
 		t.Errorf("orca hosts %v", hs)

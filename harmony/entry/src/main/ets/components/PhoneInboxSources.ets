@@ -67,11 +67,31 @@ export struct PhoneInboxSources {
   private destinations(source:Record<string,Object>):string {
     return this.graph.destinations(source).map((id:string)=>Wire.text(this.graph.item('destinations',id),'name',id)).join('、');
   }
+  private filterTitle(key:string):string { return tr('phone_sources_'+key); }
   private readName(source:Record<string,Object>):string {
     const read=this.read(source);
     return Wire.bool(read,'direct') ? tr('phone_sources_direct') : Wire.text(read,'title');
   }
-  private filterTitle(key:string):string { return tr('phone_sources_'+key); }
+  private extensionIdAllowed(id: string): boolean {
+    const normalized = id.trim().toLowerCase();
+    if (!this.model.mailModuleAllowed() && (normalized === 'mail' || normalized.startsWith('mail:'))) return false;
+    // `module.lark` gates only the Lark bot (feishu, feishu_bot, feishu-bot, lark_bot, larksync);
+    // the Lark extension stays visible (#16073).
+    if (!this.model.larkModuleAllowed() && ['feishu', 'feishu_bot', 'feishu-bot', 'lark_bot', 'larksync'].includes(normalized)) return false;
+    return true;
+  }
+  private visibleGraphGroups(): InboxSourceGroup[] {
+    return this.graph.groups().filter((group: InboxSourceGroup): boolean =>
+      this.extensionIdAllowed(Wire.text(group.entry, 'id')));
+  }
+  private sourceEntryAllowed(source: Record<string, Object>): boolean {
+    const extId = Wire.text(this.extensionFor(source), 'id') || Wire.text(source, 'read');
+    return this.extensionIdAllowed(extId);
+  }
+  private visibleSourceCount(filter: string): number {
+    return this.graph.sources().filter((row: Record<string, Object>): boolean =>
+      this.sourceEntryAllowed(row) && this.graph.matches(row, filter)).length;
+  }
   @Builder sourceRow(source:Record<string,Object>) {
     Button({type:ButtonType.Normal}) {
       Row({space:8}) {
@@ -97,7 +117,7 @@ export struct PhoneInboxSources {
   @Builder graphContent() {
     if (!Object.keys(this.graph.data).length && this.graph.loading) LoadingProgress().width(32).height(32)
     else if (this.graph.error) Button(tr('retry')).accessibilityDescription(tr(this.graph.error)).onClick(()=>this.graph.load(this.model)).id('graph.retry')
-    else if (!this.graph.count('all')) Column({space:8}) {
+    else if (!this.visibleSourceCount('all')) Column({space:8}) {
       Text(tr('phone_sources_empty')).fontSize(20).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
       Text(tr('phone_sources_empty_hint')).fontSize(15).fontColor(Colors.secondary).textAlign(TextAlign.Center)
     }.width('100%').padding(20).id('graph.empty')
@@ -107,14 +127,14 @@ export struct PhoneInboxSources {
         Scroll() {
           Row({space:8}) {
             ForEach(['all','inbox','kb','idle'],(key:string)=>{
-              Button(this.filterTitle(key)+' '+String(this.graph.count(key)),{type:ButtonType.Capsule})
+              Button(this.filterTitle(key)+' '+String(this.visibleSourceCount(key)),{type:ButtonType.Capsule})
                 .fontSize(14).fontColor(this.graph.filter===key ? Colors.onAction : Colors.ink)
                 .backgroundColor(this.graph.filter===key ? Colors.action : Colors.surface).accessibilitySelected(this.graph.filter===key)
                 .onClick(()=>{this.graph.filter=key;}).id('graph.filter.'+key)
             },(key:string)=>key)
           }
         }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
-        ForEach(this.graph.groups(),(group:InboxSourceGroup)=>{this.graphGroup(group)},(group:InboxSourceGroup)=>Wire.text(group.entry,'id'))
+        ForEach(this.visibleGraphGroups(),(group:InboxSourceGroup)=>{this.graphGroup(group)},(group:InboxSourceGroup)=>Wire.text(group.entry,'id'))
       }.width('100%').alignItems(HorizontalAlign.Start).padding(PhoneStyle.page)
     }.width('100%').height('100%')
   }
@@ -134,7 +154,7 @@ export struct PhoneInboxSources {
           .fontSize(17).fontColor(Colors.ink)
         if (Wire.text(this.picked,'line')) Text(Wire.text(this.picked,'line')).fontSize(15).fontColor(Colors.secondary)
         if (this.duplicateName()) Text(tr('phone_sources_duplicate').replace('{name}',this.duplicateName())).fontSize(15).fontColor(Colors.ink)
-        if (inboxSourcesLink(Wire.text(this.picked,'ask'))?.kind==='ask') Button(tr('phone_sources_ask')).width('100%')
+        if (inboxSourcesLink(Wire.text(this.picked,'ask'))?.kind==='ask' && this.sourceEntryAllowed(this.picked)) Button(tr('phone_sources_ask')).width('100%')
           .onClick(()=>{const frame=this.navigation.current();const ask=Wire.text(this.picked,'ask');this.showingDetails=false;if(frame)this.openAddress(frame,ask);}).id('graph.ask')
         Button(tr('phone_sources_open')).width('100%').onClick(()=>{
           const state=Wire.text(this.picked,'state'),frame=this.navigation.current();this.showingDetails=false;

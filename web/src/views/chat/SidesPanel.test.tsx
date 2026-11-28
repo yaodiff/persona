@@ -80,7 +80,7 @@ describe("SidesPanel", () => {
     });
     act(() => root.render(<SidesPanel mid="mac" sid="review" onClose={() => {}} />));
     expect(pills()).toHaveLength(0);
-    expect(host.textContent).toContain("没有分支会话");
+    expect(host.textContent).toContain("暂无分支会话");
   });
 
   it("names a side's state, not its engine", () => {

@@ -1,7 +1,7 @@
 {
   "name_placeholder": "名称",
-  "close_confirm": "窗格里运行的程序会一起结束。",
-  "section_pane": "窗格 · {name}",
+  "close_confirm": "在此运行的程序也将随之停止。",
+  "section_pane": "终端 · {name}",
   "section_tab": "标签页 · {name}",
   "section_space": "空间 · {name}"
 }

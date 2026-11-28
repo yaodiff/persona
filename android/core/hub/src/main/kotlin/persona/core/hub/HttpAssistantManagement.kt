@@ -33,6 +33,8 @@ class HttpAssistantManagement private constructor(
     private val runHttp = http.newBuilder().readTimeout(130, TimeUnit.SECONDS).build()
     /** Compacting may start the conversation's process first, and "New main chat" reads what the old one left: the hub allows a minute. */
     private val compactHttp = http.newBuilder().readTimeout(70, TimeUnit.SECONDS).build()
+    /** Switching or clearing a conversation's model allows up to 30 s on the hub (`model_pick.go`). */
+    private val modelPickHttp = http.newBuilder().readTimeout(MODEL_PICK_TIMEOUT_SECONDS, TimeUnit.SECONDS).build()
 
     override fun forManager(manager: String?): AssistantManagement =
         HttpAssistantManagement(base.toString(), token, http, isCurrent, manager.orEmpty())
@@ -199,17 +201,26 @@ class HttpAssistantManagement private constructor(
     }
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick): persona.core.contracts.ModelPick {
         require(session.sessionId.isNotBlank() && pick.launcher.isNotBlank())
-        val answer = assistant("PUT", "conversations", session.sessionId, "model", body = buildJsonObject {
-            put("launcher", pick.launcher)
-            pick.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
-            pick.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
-            if (session.machineId.isNotBlank()) put("machine_id", session.machineId)
-        })
+        val answer = request(
+            method = "PUT",
+            segments = listOf("api", "v1", "assistant", "conversations", session.sessionId, "model"),
+            body = buildJsonObject {
+                put("launcher", pick.launcher)
+                pick.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
+                pick.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
+                if (session.machineId.isNotBlank()) put("machine_id", session.machineId)
+            },
+            client = modelPickHttp,
+        )
         return (answer["model_pick"] as? JsonObject)?.let { JsonCodec.decodeFromJsonElement<persona.core.contracts.ModelPick>(it) } ?: pick
     }
     override suspend fun clearModelPick(session: SessionKey) {
         require(session.sessionId.isNotBlank())
-        assistant("DELETE", "conversations", session.sessionId, "model")
+        val _ = request(
+            method = "DELETE",
+            segments = listOf("api", "v1", "assistant", "conversations", session.sessionId, "model"),
+            client = modelPickHttp,
+        )
     }
     override suspend fun conversationSwitchState(session: SessionKey): ConversationSwitchState {
         require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
@@ -380,5 +391,22 @@ class HttpAssistantManagement private constructor(
         require(days in 1..7) { "days is 1 to 7" }
         val answer = request("GET", listOf("api", "v1", "usage", "hours"), query = mapOf("days" to days.toString()))
         return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
+    override suspend fun usageProjects(): UsageProjects? = try {
+        val answer = request("GET", listOf("api", "v1", "usage", "projects"))
+        JsonCodec.decodeFromJsonElement<UsageProjects>(answer.getValue("usage")).takeIf { it.ranges.isNotEmpty() }
+    } catch (failure: HubFailure) {
+        if (failure.status == 404) null else throw failure
+    }
+
+    override suspend fun usageProjectDetail(key: String): UsageProjectDetail {
+        require(key.isNotBlank()) { "project key is required" }
+        val answer = request("GET", listOf("api", "v1", "usage", "projects", "detail"), query = mapOf("key" to key))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
+    companion object {
+        internal const val MODEL_PICK_TIMEOUT_SECONDS = 40L
     }
 }

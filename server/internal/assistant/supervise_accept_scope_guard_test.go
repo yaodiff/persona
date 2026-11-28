@@ -513,6 +513,19 @@ func (s *scopeOutcomeStore) InsertTodoDecision(context.Context, db.TodoDecisionR
 	return true, nil
 }
 
+// TaskPlansMadeSince lists the plans this store holds. A review that accepts reads the task's current plan assignment
+// first (checkOwnerResultBeforeAccept, #15566), and a store swapped in under a planned task has to answer that read
+// as the database does: the task's plan stayed with the store it was made in, so the task is in no plan here.
+func (s *scopeOutcomeStore) TaskPlansMadeSince(context.Context, time.Time) ([]db.TaskPlanRow, error) {
+	s.planMu.Lock()
+	defer s.planMu.Unlock()
+	rows := make([]db.TaskPlanRow, 0, len(s.plans))
+	for _, p := range s.plans {
+		rows = append(rows, p)
+	}
+	return rows, nil
+}
+
 // #13169 design note 3: an effective outcome decision whose text records an owner-confirmation condition counts as an
 // open wait for bare accepted instead of settled history.
 func TestAcceptScopeGuardTreatsOwnerConfirmOutcomeDecisionAsOpenWait(t *testing.T) {

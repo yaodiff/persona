@@ -110,5 +110,11 @@
   "memory_load_failed": "メモリーを読み込めませんでした：{error}",
   "load_earlier": "以前のメッセージを読み込む",
   "close": "閉じる",
-  "icon_sun": "太陽"
+  "icon_sun": "太陽",
+  "chat_count_one": "{count} 件の会話",
+  "chat_count_other": "{count} 件の会話",
+  "new_chat_in": "「{name}」で新しい会話",
+  "edit_md_for": "「{name}」の SPACE.md を表示・編集",
+  "expand_space": "「{name}」の会話を表示",
+  "collapse_space": "「{name}」の会話を非表示"
 }

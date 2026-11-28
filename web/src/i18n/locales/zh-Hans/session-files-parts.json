@@ -12,7 +12,7 @@
   "copied": "复制",
   "untracked": "未跟踪",
   "conflict": "冲突",
-  "type_changed": "类型改变",
-  "contains": "里面有{change}",
+  "type_changed": "类型变更",
+  "contains": "包含：{change}",
   "changes": "改动"
 }

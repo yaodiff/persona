@@ -57,17 +57,17 @@ describe("ChatSearch", () => {
   it("asks for a keyword, says what it searches and that the chat starts here", () => {
     panel();
     const text = document.body.textContent ?? "";
-    expect(text).toContain("输入关键词");
-    expect(text).toContain("可搜索正文、引用、思考、工具名、工具输入和输出、系统事件。");
+    expect(text).toContain("输入关键词开始搜索");
+    expect(text).toContain("支持搜索正文、引用、思考过程、工具名、工具输入与输出及系统事件。");
     expect(text).toContain("0 条命中，已加载 1 轮");
-    expect(text).toContain("已到最早的记录");
+    expect(text).toContain("已到达对话开头");
   });
 
   it("says while it searches the folded steps, and when some could not be searched (#6281)", () => {
     panel({ foldsLoading: true });
-    expect(document.body.textContent).toContain("正在搜索收起的工作记录…");
+    expect(document.body.textContent).toContain("正在搜索已折叠的步骤…");
     panel({ foldsPartial: true });
-    expect(document.body.textContent).toContain("部分收起的工作记录没能搜索。");
+    expect(document.body.textContent).toContain("部分已折叠的步骤未能完成搜索。");
   });
 
   it("lists a quoted context under its own heading, without the tag it travels in", () => {
@@ -97,15 +97,15 @@ describe("ChatSearch", () => {
     vi.useFakeTimers();
     panel({ query: "nothing-like-this" });
     act(() => vi.advanceTimersByTime(250));
-    expect(document.body.textContent).toContain("没有找到匹配记录");
+    expect(document.body.textContent).toContain("未找到匹配记录");
   });
 
   it("keeps the existing earlier-load failure text and retry button when loading throws", async () => {
     panel({ hasMore: true, onLoadEarlier: async () => { throw new Error("Synthetic earlier-load failure"); } });
-    const load = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "加载更早的记录并继续搜")!;
+    const load = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "加载更早的记录并继续搜索")!;
     await act(async () => load.click());
-    expect(document.body.textContent).toContain("更早的记录未能载入，请重试");
-    expect([...document.querySelectorAll<HTMLButtonElement>("button")].some(button => button.textContent === "加载更早的记录并继续搜")).toBe(true);
+    expect(document.body.textContent).toContain("无法加载更早的消息，请重试。");
+    expect([...document.querySelectorAll<HTMLButtonElement>("button")].some(button => button.textContent === "加载更早的记录并继续搜索")).toBe(true);
     expect([...document.querySelectorAll<HTMLButtonElement>("button")].some(button => button.textContent === "停止加载")).toBe(false);
   });
 
@@ -116,12 +116,12 @@ describe("ChatSearch", () => {
       return new Promise<string | null>((r) => (resolve = r));
     });
     panel({ hasMore: true, onLoadEarlier });
-    const load = [...document.querySelectorAll("button")].find((b) => b.textContent === "加载更早的记录并继续搜")!;
+    const load = [...document.querySelectorAll("button")].find((b) => b.textContent === "加载更早的记录并继续搜索")!;
     act(() => load.click());
     expect(document.body.textContent).toContain("正在加载更早的记录，已加载 2 页");
     expect([...document.querySelectorAll("button")].some((b) => b.textContent === "停止加载")).toBe(true);
-    await act(async () => resolve("更早的记录未能载入，请重试"));
-    expect(document.body.textContent).toContain("更早的记录未能载入，请重试");
+    await act(async () => resolve("无法加载更早的消息，请重试。"));
+    expect(document.body.textContent).toContain("无法加载更早的消息，请重试。");
   });
 });
 

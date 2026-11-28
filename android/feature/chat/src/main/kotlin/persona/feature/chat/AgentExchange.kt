@@ -121,9 +121,9 @@ internal fun agentWords(md: String): AnnotatedString {
                 ReceiptMarkdown.Mark.Emphasis -> addStyle(SpanStyle(fontStyle = FontStyle.Italic), span.start, span.end)
                 ReceiptMarkdown.Mark.Strike -> addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), span.start, span.end)
                 ReceiptMarkdown.Mark.Code -> addStyle(SpanStyle(fontFamily = type.code.fontFamily, background = palette.sunken), span.start, span.end)
-                ReceiptMarkdown.Mark.Link -> addLink(LinkAnnotation.Url(span.url.orEmpty(), link), span.start, span.end)
+                ReceiptMarkdown.Mark.Link -> if (isWebLinkUrl(span.url)) addLink(LinkAnnotation.Url(span.url.orEmpty(), link), span.start, span.end)
             }
-            val linked = styled.spans.filter { it.mark == ReceiptMarkdown.Mark.Link }
+            val linked = styled.spans.filter { it.mark == ReceiptMarkdown.Mark.Link && isWebLinkUrl(it.url) }
             ChatLinks.matches(styled.text).filter { m -> linked.none { m.start < it.end && it.start < m.end } }
                 .forEach { addLink(LinkAnnotation.Url(it.url, link), it.start, it.end) }
         }

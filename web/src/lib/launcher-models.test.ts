@@ -222,6 +222,14 @@ describe("思考强度", () => {
 });
 
 describe("启动时发什么", () => {
+  it("sends only the model and effort offered by the TRAE CLI catalog", () => {
+    const list: LauncherModels = { agent: "traex", models: [{ id: "example-fast", name: "Example Fast", efforts: ["medium", "xhigh"] }] };
+    expect(startPicks({ agent: "traex", list, model: "example-fast", effort: "xhigh" }))
+      .toEqual({ model: "example-fast", effort: "xhigh" });
+    expect(startPicks({ agent: "traex", list, model: "example-fast", effort: "max" })).toEqual({ model: "example-fast" });
+    expect(startPicks({ agent: "traex", list, model: "", effort: "" })).toEqual({});
+  });
+
   it("sends a picked model unless it is the default or the launcher fixes its own", () => {
     expect(startPicks({ agent: "claude", list: claude, model: "opus", effort: "" })).toEqual({ model: "opus" });
     expect(startPicks({ agent: "claude", list: claude, model: "default", effort: "" })).toEqual({});
@@ -309,7 +317,10 @@ describe("手动输入的模型 ID（#1644）", () => {
     expect(typedModelOffered("omp", list)).toBe(false);
     expect(startPicks({ ...pick, list })).toEqual({ model: pick.model });
     expect(startPicks({ ...pick, list, model: "opus" })).toEqual({ model: "opus" });
+    expect(nativeOmpStart("omp", { name: "omp" }, "orca")).toBe(true);
+    expect(startPicks({ ...pick, nativeOmp: nativeOmpStart("omp", { name: "omp" }, "orca"), list })).toEqual({ model: pick.model });
     expect(nativeOmpStart("omp", { name: "alias" }, "herdr")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "alias" }, "orca")).toBe(false);
     expect(nativeOmpStart("omp", { name: "omp", source: "paseo" }, "herdr")).toBe(false);
     expect(nativeOmpStart("omp", { name: "omp" }, "herdr-core")).toBe(false);
     expect(nativeOmpStart("codex", { name: "omp" }, "herdr")).toBe(false);

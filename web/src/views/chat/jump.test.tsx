@@ -79,7 +79,7 @@ describe("跳到发起的这一步", () => {
     expect(notice, "the notice's row").toBeTruthy();
     await act(async () => notice!.click());
     const jump = host.querySelector<HTMLButtonElement>("[data-jump-to-call]");
-    expect(jump?.textContent).toBe("跳到发起的这一步");
+    expect(jump?.textContent).toBe("跳转到发起此操作的步骤");
     await act(async () => jump!.click());
     await flush();
     expect(jumps).toEqual(["tu-bg"]);

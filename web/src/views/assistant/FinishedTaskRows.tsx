@@ -19,5 +19,5 @@ function seeFinished(item: FinishedItem) {
  *  one nobody opened yet says Just finished (#10922). Its line when nothing is left, the tray kept open past the last. */
 export function FinishedTaskRows({ items, conversation }: { items: readonly FinishedItem[]; conversation: string }) {
   if (!items.length) return <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-finishedtaskrows.empty")}</p>;
-  return <>{items.map((item) => <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} countsOpen={false} fresh={item.fresh} onOpen={() => seeFinished(item)} />)}</>;
+  return <>{items.map((item) => <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} countsOpen={false} inFinished fresh={item.fresh} onOpen={() => seeFinished(item)} />)}</>;
 }

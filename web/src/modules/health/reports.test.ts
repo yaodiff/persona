@@ -24,7 +24,7 @@ describe("uploadReports", () => {
   });
 
   it("starts nothing for a file over the limit", async () => {
-    await expect(uploadReports("m1", [file("a.pdf"), file("big.pdf", MAX_FILE + 1)], "health")).rejects.toThrow("文件太大");
+    await expect(uploadReports("m1", [file("a.pdf"), file("big.pdf", MAX_FILE + 1)], "health")).rejects.toThrow("文件过大");
     expect(sendFile).not.toHaveBeenCalled();
   });
 

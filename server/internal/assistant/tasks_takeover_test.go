@@ -142,7 +142,7 @@ func TestPlanDuplicatesLooksAtContinuations(t *testing.T) {
 	putTodo(e.s, Todo{ID: "todo_a", Title: "合并发布 #7240 并补历史", Origin: "m1"})
 	putTodo(e.s, Todo{ID: "todo_c", Title: "合并发布 #7240 补历史数据", Origin: "c1x1x1"})
 	task := PlanTask{Title: "合并发布 #7240 并补历史", Prompt: "接着做", Machine: "box", Cwd: "/code/app", Continues: "todo_a"}
-	got := e.s.planDuplicates(context.Background(), []PlanTask{task})
+	got := e.s.planDuplicates(context.Background(), []PlanTask{task}, nil)
 	if !strings.Contains(got, "todo_c") || strings.Contains(got, "todo_a") {
 		t.Fatalf("hint %q: want todo_c, not the continued todo_a", got)
 	}

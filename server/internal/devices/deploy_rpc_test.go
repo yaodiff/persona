@@ -15,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/update/updatetest"
@@ -42,6 +44,7 @@ type updatingNode struct {
 	sessions            []proto.Session // when set, what sessions.list answers
 	updateBusy          *bool           // with sessions: the node's update_busy (nil leaves it out)
 	installErr          error
+	commitDelay         time.Duration // how long commit takes before it answers (a scanned first self-check)
 	stayOld             bool
 	target              string // the build it confirms ("" the fixture hub's, new-build)
 	committed           chan struct{}
@@ -112,6 +115,7 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 			n.handoffGraceSeconds = *p.HandoffGraceSeconds
 		}
 		n.commits++
+		time.Sleep(n.commitDelay) // sleep-ok: the fake node's commit takes this long, as a node's first-run self-checks do
 		if n.busyCommit && n.commits == 1 {
 			return nil, &rpc.Error{Code: "node_update_busy", Message: "node is busy"}
 		}
@@ -250,6 +254,37 @@ func TestLinkedDeployTransfersAndConfirms(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestFleetUpdateConvergesResidentsAcrossTransports(t *testing.T) {
+	program := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, "linux", "amd64", "new-build")
+	for _, kind := range []string{"local", kindLink, kindService, "ssh", "tailcat"} {
+		t.Run(kind, func(t *testing.T) {
+			isolateNodeBinaries(t)
+			d, m, n, _ := linkedDeployFixture(t, kind)
+			dir := nodeBinaryDir()
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			copyFile(t, program, filepath.Join(dir, "personad-linux-amd64"))
+			b, err := os.ReadFile(program)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.mu.Lock()
+			n.expected = b
+			n.mu.Unlock()
+			m.updateOnConnect(t.Context())
+			waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return s.NodeVersion == "new-build" && !s.Deploying })
+			// The post-confirmation fleet sweep must be safe on the same connection.
+			d.updateNodes(t.Context())
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			if n.begin != 1 || n.commits != 1 || n.confirms != 1 {
+				t.Fatalf("transfers %d, commits %d, confirmations %d", n.begin, n.commits, n.confirms)
+			}
+		})
 	}
 }
 
@@ -489,6 +524,35 @@ func TestLinkedDeployPersistsRejectedInstallation(t *testing.T) {
 	defer n.mu.Unlock()
 	if n.confirms != 0 || n.aborts != 1 {
 		t.Fatalf("confirms=%d aborts=%d", n.confirms, n.aborts)
+	}
+}
+
+// A new file's first self-check can take a minute while endpoint protection scans it (#12528), and the node answers
+// node.update.commit only after its checks. The deploy waits for that answer: a check that failed is reported as
+// itself, not taken for a lost answer and followed by the reconnect wait's not_confirmed.
+func TestLinkedDeployWaitsForAScannedFirstSelfCheck(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, m, n, bin := linkedDeployFixture(t, kindService)
+		h.opts.Store = newMemStore()
+		n.commitDelay = 61 * time.Second // the first run's minute, and the second the process gets to exit
+		n.installErr = &rpc.Error{Code: "invalid_update",
+			Message: "node executable self-check: node-update-check timed out after 1m0s (first run of this file)"}
+		record := nodeDeployRecord{Target: h.hubVersion(), State: "queued"}
+		m.runRPCDeployment(t.Context(), nodePackage{Version: record.Target, path: bin}, record)
+		var saved nodeDeployRecord
+		if _, err := h.opts.Store.Setting(t.Context(), m.deployRecordKey(), &saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved.State != "failed" || !strings.Contains(saved.Error, "first run of this file") {
+			t.Fatalf("record = %+v, want the self-check's own failure", saved)
+		}
+	})
+}
+
+// Whoever waits for node.update.commit waits at least as long as the node may take to answer it.
+func TestDeployCommitWaitCoversTheNodesChecks(t *testing.T) {
+	if deployCommitWait() <= nodeupdate.CommitWait() {
+		t.Fatalf("the deploy waits %s for node.update.commit, the node may take %s", deployCommitWait(), nodeupdate.CommitWait())
 	}
 }
 

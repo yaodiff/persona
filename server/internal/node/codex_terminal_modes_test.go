@@ -141,6 +141,66 @@ func TestCodexTerminalRow(t *testing.T) {
 	}
 }
 
+func TestCodexTerminalLaunchSettings(t *testing.T) {
+	n, f, path := cxTerminalNode(t, proto.StatusIdle, "0.172.0", "", "")
+	if err := os.WriteFile(path, []byte(cxToday(strings.Replace(cxMeta, "0.163.0", "0.172.0", 1))+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := codexHomeOf(path)
+	n.state.put(cxID, sessionState{Launcher: "codex", Cwd: t.TempDir()})
+	for file, content := range map[string]string{
+		"config.toml":       "model = 'gpt-a'\nmodel_reasoning_effort = 'high'\nservice_tier = 'fast'\n",
+		"models_cache.json": strings.Replace(cxModelsCache, `"slug":"gpt-a"`, `"slug":"gpt-a","service_tiers":[{"id":"priority"},{"id":"ultrafast"}]`, 1),
+	} {
+		if err := os.WriteFile(filepath.Join(home, file), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := paneRow(t, n, cxID)
+	if s.Model != "gpt-a" || s.Effort != "high" || s.ServiceTier != "priority" || len(s.ServiceTiers) != 3 || s.ServiceTiers[2].ID != "ultrafast" {
+		t.Fatalf("startup config: %q / %q / %q, tiers %+v", s.Model, s.Effort, s.ServiceTier, s.ServiceTiers)
+	}
+	if _, err := request(t, n, "session.speed", map[string]any{"session_id": cxID, "service_tier": "unknown"}); err == nil || len(cxTyped(f)) != 0 {
+		t.Fatalf("unadvertised speed: %v", err)
+	}
+	f.after(func(c herdrCall) {
+		if c.Method != "agent.prompt" {
+			return
+		}
+		tier := map[string]string{"/model --speed=fast": "priority", "/model --speed=ultrafast": "ultrafast", "/model --speed=standard": "default"}[str(c.Params["text"])]
+		if tier != "" {
+			appendLine(t, path, strings.Replace(cxSettingsLine("gpt-a", "high"), `"reasoning_effort":`, `"service_tier":"`+tier+`","reasoning_effort":`, 1))
+		}
+	})
+	for _, tier := range []string{"ultrafast", "default", "priority"} {
+		if _, err := request(t, n, "session.speed", map[string]any{"session_id": cxID, "service_tier": tier}); err != nil {
+			t.Fatal(err)
+		}
+		if s := paneRow(t, n, cxID); s.ServiceTier != tier || s.Effort != "high" {
+			t.Fatalf("confirmed speed: %q / %q", s.ServiceTier, s.Effort)
+		}
+	}
+	appendLine(t, path, cxSettingsLine("gpt-c", ""))
+	n.forgetMeta(path)
+	if s := paneRow(t, n, cxID); s.Model != "gpt-c" || s.Effort != "" || len(s.ServiceTiers) != 0 {
+		t.Fatalf("recorded settings: %q / %q, tiers %+v", s.Model, s.Effort, s.ServiceTiers)
+	}
+}
+
+func TestCodexTerminalLaunchOverride(t *testing.T) {
+	n, _, path := cxTerminalNode(t, proto.StatusIdle, "0.172.0", "", "")
+	withCodexLaunchers(t, map[string][]string{"demo": {"codex", "-m", "gpt-b", "-c", "model_reasoning_effort=max"}})
+	n.state.put(cxID, sessionState{Launcher: "demo", Cwd: t.TempDir(), CodexStartTier: "default"})
+	terminal := codexTerminal{home: codexHomeOf(path)}
+	if got := n.codexTerminalSettingsOf(cxID, terminal, quickMeta{}); got != (codexTerminalSettings{model: "gpt-b", effort: "max", tier: "default"}) {
+		t.Fatalf("launcher settings: %+v", got)
+	}
+	n.state.put(cxID, sessionState{Launcher: "demo", Cwd: t.TempDir(), Model: "gpt-a", ModelEffort: "low", CodexStartTier: "priority"})
+	if got := n.codexTerminalSettingsOf(cxID, terminal, quickMeta{}); got != (codexTerminalSettings{model: "gpt-a", effort: "low", tier: "priority"}) {
+		t.Fatalf("explicit launch settings: %+v", got)
+	}
+}
+
 // The phone's pick goes in as one /model line, and is made once the rollout records it: an effort alone; a model,
 // keeping the effort the new model takes (Codex would put it on its default); a model that does not take it, which
 // Codex puts on its default; both at once. Mid-turn too. The row shows the new values from the record.
@@ -398,7 +458,7 @@ func TestCodexModelArgsOutcome(t *testing.T) {
 		{"quoted mid-line", box, "• The tool said: Unexpected argument 'x'. Use '--reasoning=<level>' or '--speed=<tier>'." + box, "", "high", "", ""},
 		{"another model", box, "■ Model 'gpt-8' is unavailable. Use /model to see available models." + box, "gpt-9", "", "", ""},
 	} {
-		err := codexModelArgsOutcome(c.before, c.after, c.model, c.effort)
+		err := codexTerminalOutcome(c.before, c.after, codexTerminalSettings{model: c.model, effort: c.effort})
 		var starting codexStarting
 		switch {
 		case c.words == "" && err != nil:
@@ -429,11 +489,11 @@ func TestCodexSettingsRecorded(t *testing.T) {
 		{"gpt-a", "low", true}, {"", "low", true}, {"gpt-a", "", true},
 		{"gpt-b", "max", false}, {"", "max", false}, {"gpt-a", "high", false},
 	} {
-		if got := codexSettingsRecorded(path, from, c.model, c.effort); got != c.want {
+		if got := codexSettingsRecorded(path, from, codexTerminalSettings{model: c.model, effort: c.effort}); got != c.want {
 			t.Errorf("%q %q: %v", c.model, c.effort, got)
 		}
 	}
-	if codexSettingsRecorded(filepath.Join(t.TempDir(), "none.jsonl"), 0, "", "low") {
+	if codexSettingsRecorded(filepath.Join(t.TempDir(), "none.jsonl"), 0, codexTerminalSettings{effort: "low"}) {
 		t.Error("a missing rollout recorded a change")
 	}
 }

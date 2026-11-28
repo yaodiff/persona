@@ -5,12 +5,14 @@
 // to the front, never on a timer. Not on the first screen: a lazy import, its strings the namespace `tokencalendar`.
 // The line opens Token usage (#10042, TokenUsagePage.tsx) in a dialog (a sheet on a phone), in this chunk (a chunk of
 // its own would name itself on the first screen); there the calendar is drawn again with only a picked day's line
-// (`page`).
+// (`page`). A project picked under By project (#16530, TokenProjects.tsx) shows in the same dialog, its title going back.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatDate, formatNumber, t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
 import { calendarLayout, dayTotal, fetchUsageDays, lastDays, weeksThatFit, type UsageDay, type UsageDays } from "../../lib/usage-history";
+import type { UsageProject } from "../../lib/usage-projects";
 import { Dialog } from "../../ui/atoms";
+import { ProjectTitle } from "./TokenProjects";
 import TokenUsage from "./TokenUsagePage";
 
 // The squares' size and spacing (the iPhone's Theme.Heat, a little smaller for a page's 13 px text), and the theme
@@ -55,6 +57,8 @@ export default function TokenCalendar({ days, page }: { days?: UsageDays | null;
   const [width, setWidth] = useState(0);
   const [picked, setPicked] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
+  // The project Token usage shows (By project, #16530): the dialog's title goes back from it.
+  const [project, setProject] = useState<UsageProject | null>(null);
   // The squares' room, measured where they are drawn: a narrower window shows fewer weeks.
   const measure = useCallback((el: HTMLDivElement | null) => {
     if (!el) return;
@@ -150,8 +154,16 @@ export default function TokenCalendar({ days, page }: { days?: UsageDays | null;
         </div>
       </div>
       {!page && (
-        <Dialog open={opened} onClose={() => setOpened(false)} title={t("tokencalendar.title")} width={720}>
-          {opened && <TokenUsage />}
+        <Dialog
+          open={opened}
+          onClose={() => {
+            setOpened(false);
+            setProject(null);
+          }}
+          title={project ? <ProjectTitle project={project} onBack={() => setProject(null)} /> : t("tokencalendar.title")}
+          width={720}
+        >
+          {opened && <TokenUsage project={project} onProject={setProject} />}
         </Dialog>
       )}
     </div>

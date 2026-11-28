@@ -18,6 +18,7 @@ import (
 	ai "github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 var (
@@ -35,12 +36,21 @@ func (s *store) putMinutes(id string, m *Minutes) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
 	}
+	s.recFilesMu.Lock()
+	defer s.recFilesMu.Unlock()
+	return s.putMinutesLocked(id, m)
+}
+
+// putMinutesLocked writes minutes.json and minutes.md of recording id, unless it was deleted meanwhile (false then).
+// The caller holds recMu and recFilesMu.
+func (s *store) putMinutesLocked(id string, m *Minutes) (bool, error) {
+	if s.readOnly {
+		return false, ErrReadOnly
+	}
 	raw, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return false, err
 	}
-	s.recFilesMu.Lock()
-	defer s.recFilesMu.Unlock()
 	if err := s.recoverRecordingLocked(id); err != nil {
 		return false, err
 	}
@@ -163,9 +173,10 @@ func (e *engine) WriteMinutes(ctx context.Context, max int) int {
 	}
 	var todo []*Recording
 	for _, r := range e.Store.Recordings() {
-		// In hub mode they wait for the final transcript, at most minutesHubWait after the complete upload.
+		// In hub mode they wait for the final transcript (at most minutesHubWait after the complete upload), then for
+		// speaker separation while speakers.state is waiting (up to SpeakersWaitDeadline).
 		if r.Complete && r.Chars > 0 && r.MinutesState == MinutesPending && !minutesWaiting(r, now) && !r.Trimmed() &&
-			!transcriptionHolds(r, now) {
+			!transcriptionHolds(r, now) && !speakersHolds(r, now) {
 			todo = append(todo, r)
 		}
 	}
@@ -337,12 +348,16 @@ func matchCalendar(r *Recording, kinds ...[]*Item) *Item {
 }
 
 // minutesLine is a line as the model reads it: a transcript line, N what it cites, or a photo's (Photo its number, N
-// 0).
+// 0). End, Speaker, Unsure and UnreliableTiming are set for hub-transcribed meetings (#17674).
 type minutesLine struct {
-	N     int
-	Photo int
-	At    float64
-	Text  string
+	N                int
+	Photo            int
+	At               float64
+	End              float64
+	Text             string
+	Speaker          SpeakerID
+	Unsure           bool
+	UnreliableTiming bool
 }
 
 // minutesAnswer is the model's minutes (kb/minutes, kb/minutes_merge): items cite transcript lines, or photos, by
@@ -360,6 +375,7 @@ type minutesAnswer struct {
 	Decisions   []answerItem                `json:"decisions"`
 	Actions     []answerAction              `json:"actions"`
 	Open        []answerItem                `json:"open"`
+	Debates     modelList[answerDebate]     `json:"debates"`
 }
 
 // answerPoint is a point of the model's answer, in a topic or (the old shape) outside topics.
@@ -435,8 +451,23 @@ func (e *engine) writeMinutes(ctx context.Context, id string) error {
 		return err
 	}
 	r.Conv = meeting
-	if !r.Complete || r.Chars == 0 || r.MinutesState != MinutesPending || r.Trimmed() || transcriptionHolds(&r, e.now()) {
+	now := e.now()
+	if !r.Complete || r.Chars == 0 || r.MinutesState != MinutesPending || r.Trimmed() ||
+		transcriptionHolds(&r, now) || speakersHolds(&r, now) {
 		return nil
+	}
+	if meeting != nil && meeting.Speakers != nil && meeting.Speakers.State == SpeakerStateWaiting && transcriptionDone(&r) {
+		updated, err := e.expireSpeakersWaiting(id, meeting.Speakers.Since, meeting.Speakers.Tries)
+		if err != nil {
+			return err
+		}
+		if updated != nil {
+			meeting = updated
+			r.Conv = meeting
+			if speakersHolds(&r, e.now()) {
+				return nil
+			}
+		}
 	}
 	var device []RecordingSegment
 	if err := json.Unmarshal(files["segments.json"], &device); err != nil {
@@ -446,13 +477,48 @@ func (e *engine) writeMinutes(ctx context.Context, id string) error {
 	// Minutes made from the final transcript take the hub's audio with them once written (storeMinutes).
 	final := transcriptionDone(&r)
 	zone := e.Store.Zone()
+	var segLabels []recordingwire.AlignedSpeakerLine
+	if r.HubTranscribed() && meeting != nil && meeting.Speakers != nil &&
+		meeting.Speakers.State == SpeakerStateReady && meeting.Speakers.Quality == SpeakerQualityOk {
+		if turns, err := e.Store.speakerTurns(id); err == nil && turns != nil {
+			if aligned, err := e.Store.core.AlignTranscriptSpeakers(recordingwire.SpeakerAlignInput{
+				Segments: segs,
+				Turns:    turns.Turns,
+				Covered:  turns.Covered,
+				Speakers: *meeting.Speakers,
+				Timing:   hub.EffectiveTiming(),
+			}); err == nil {
+				segLabels = aligned.Lines
+			} else {
+				e.logf("recording %s: align transcript speakers: %v", id, err)
+			}
+		}
+	}
+	timingSpread := hub.EffectiveTiming() == TimingSpread
+	numbered := false
 	lines := make([]minutesLine, 0, len(segs))
 	for i, sg := range segs {
 		if sg.Echo {
 			continue // Persona's own answer, heard by the microphone: not the meeting's (N still counts it: citations index segs)
 		}
 		if t := strings.Join(strings.Fields(sg.Text), " "); t != "" {
-			lines = append(lines, minutesLine{N: i + 1, At: sg.Start, Text: clip(t, minutesLineRunes)})
+			end := sg.End
+			if end < sg.Start {
+				end = sg.Start
+			}
+			ml := minutesLine{
+				N:                i + 1,
+				At:               sg.Start,
+				End:              end,
+				Text:             clip(t, minutesLineRunes),
+				UnreliableTiming: r.HubTranscribed() && strings.EqualFold(sg.Source, SourceHub) && timingSpread,
+			}
+			if i < len(segLabels) && segLabels[i].Speaker != "" {
+				ml.Speaker = segLabels[i].Speaker
+				ml.Unsure = segLabels[i].Unsure
+				numbered = true
+			}
+			lines = append(lines, ml)
 		}
 	}
 	// The photos with words, among the lines in time order (after the lines of the same second). A photo added or
@@ -478,6 +544,7 @@ func (e *engine) writeMinutes(ctx context.Context, id string) error {
 	}
 	lang := e.outputLang(&r)
 	owner := e.writingOwner(lang)
+	owner.Speakers = numbered
 	system := prompts.RenderKBMinutes(owner)
 	var read []minutesLine
 	var ans minutesAnswer
@@ -496,7 +563,11 @@ func (e *engine) writeMinutes(ctx context.Context, id string) error {
 				return fmt.Errorf("part %d of %d: %w", i+1, len(chunks), err)
 			}
 			read = append(read, c...)
-			merge.Parts = append(merge.Parts, notesForMerge(i+1, notes, c, r.StartedAt, zone, max(2, minutesMergeItems/len(chunks))))
+			part := notesForMerge(i+1, notes, c, r.StartedAt, zone, max(2, minutesMergeItems/len(chunks)))
+			if limit := max(2, minutesMergeDebateTotal/len(chunks)); len(part.Debates) > limit {
+				part.Debates = part.Debates[:limit]
+			}
+			merge.Parts = append(merge.Parts, part)
 		}
 		merge.Meeting.Transcript = ""
 		err := call(prompts.RenderKBMinutesMerge(owner), prompts.RenderKBMinutesMergeInput(merge), &ans)
@@ -505,7 +576,7 @@ func (e *engine) writeMinutes(ctx context.Context, id string) error {
 		}
 		read = notedLines(read, merge.Parts) // the merging call saw the notes, not the transcript
 	}
-	m, err := e.buildMinutes(&r, ans, read, zone, lang)
+	m, err := e.buildMinutesWith(&r, ans, read, zone, lang, numbered)
 	if err != nil {
 		return err
 	}
@@ -542,12 +613,21 @@ func untitledMinutes(r *Recording, zone *time.Location, lang i18n.Lang) string {
 	return i18n.T(lang, "kb-minutes.untitled", i18n.Args{"when": r.StartedAt.In(zone).Format("2006-01-02 15:04")})
 }
 
+// minutesLineWeight is the rune budget of l for chunkLines, including the optional 〔S…〕 speaker marker (#17674).
+func minutesLineWeight(l minutesLine) int {
+	w := len([]rune(l.Text)) + 16
+	if tag := formatPromptSpeaker(l.Speaker, l.Unsure); tag != "" {
+		w += len([]rune(tag)) + 3 // "〔" + tag + "〕 "
+	}
+	return w
+}
+
 // chunkLines cuts lines into chunks of about size runes at line boundaries: one chunk when all of them fit in one,
 // at most max chunks (partial: lines were left out).
 func chunkLines(lines []minutesLine, one, size, max int) (chunks [][]minutesLine, partial bool) {
 	total := 0
 	for _, l := range lines {
-		total += len([]rune(l.Text)) + 16
+		total += minutesLineWeight(l)
 	}
 	if total <= one {
 		if len(lines) == 0 {
@@ -558,7 +638,7 @@ func chunkLines(lines []minutesLine, one, size, max int) (chunks [][]minutesLine
 	var cur []minutesLine
 	n := 0
 	for i, l := range lines {
-		w := len([]rune(l.Text)) + 16
+		w := minutesLineWeight(l)
 		if n > 0 && n+w > size {
 			chunks = append(chunks, cur)
 			cur, n = nil, 0
@@ -575,8 +655,8 @@ func chunkLines(lines []minutesLine, one, size, max int) (chunks [][]minutesLine
 	return chunks, false
 }
 
-// renderMinutesLines is the transcript as the model reads it: "[N] HH:MM:SS text" per line in the user's zone, a
-// photo's line as photos.md has it (photoLine).
+// renderMinutesLines is the transcript as the model reads it: "[N] HH:MM:SS text" per line (or "[N] HH:MM:SS 〔S2〕 text"
+// when a speaker label is present) in the user's zone, a photo's line as photos.md has it (photoLine).
 func renderMinutesLines(lines []minutesLine, start time.Time, zone *time.Location) string {
 	var b strings.Builder
 	for _, l := range lines {
@@ -584,7 +664,11 @@ func renderMinutesLines(lines []minutesLine, start time.Time, zone *time.Locatio
 			b.WriteString(photoLine(l.Photo, clockAt(start, l.At, zone), l.Text) + "\n")
 			continue
 		}
-		fmt.Fprintf(&b, "[%d] %s %s\n", l.N, clockAt(start, l.At, zone), l.Text)
+		if tag := formatPromptSpeaker(l.Speaker, l.Unsure); tag != "" {
+			fmt.Fprintf(&b, "[%d] %s 〔%s〕 %s\n", l.N, clockAt(start, l.At, zone), tag, l.Text)
+		} else {
+			fmt.Fprintf(&b, "[%d] %s %s\n", l.N, clockAt(start, l.At, zone), l.Text)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -596,11 +680,13 @@ func renderMinutesLines(lines []minutesLine, start time.Time, zone *time.Locatio
 // conclusions are not read: the merging call writes the meeting's own.
 func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Time, zone *time.Location, each int) prompts.KBMinutesPart {
 	lines, photos := map[int]int{}, map[int]int{} // what the chunk has, by its place in it
+	lineByN := map[int]minutesLine{}
 	for i, l := range chunk {
 		if l.Photo > 0 {
 			photos[l.Photo] = i
 		} else {
 			lines[l.N] = i
+			lineByN[l.N] = l
 		}
 	}
 	p := prompts.KBMinutesPart{Part: part, From: clockAt(start, chunk[0].At, zone), To: clockAt(start, chunk[len(chunk)-1].At, zone),
@@ -624,6 +710,9 @@ func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Ti
 			n.Photo, at = int(photo), i
 		} else if i, ok := lines[int(line)]; ok {
 			n.Line, at = int(line), i
+			if ml, has := lineByN[int(line)]; has {
+				n.Speaker = formatPromptSpeaker(ml.Speaker, ml.Unsure)
+			}
 		} else {
 			return
 		}
@@ -666,6 +755,7 @@ func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Ti
 		return out
 	}
 	p.Points, p.Decisions, p.Actions, p.Open = section(points), section(decisions), section(actions), section(open)
+	p.Debates = debateNotesForMerge(a, lines, lineByN, minutesDebatesMax)
 	return p
 }
 
@@ -680,6 +770,21 @@ func notedLines(read []minutesLine, parts []prompts.KBMinutesPart) []minutesLine
 				} else {
 					cited[n.Line] = true
 				}
+			}
+		}
+		for _, d := range p.Debates {
+			for _, pos := range d.Positions {
+				if pos.Line > 0 {
+					cited[pos.Line] = true
+				}
+				for _, al := range pos.Also {
+					if al.Line > 0 {
+						cited[al.Line] = true
+					}
+				}
+			}
+			if d.OutcomeLine > 0 {
+				cited[d.OutcomeLine] = true
 			}
 		}
 	}
@@ -705,13 +810,19 @@ func clipText(s string) string { return clipRunes(s, minutesTextRunes) }
 // line, or a photo: its time then), a person must be named in them or in the calendar, a due date must be a real day
 // from the meeting on (within a year). A photo's words count as said. The minutes are in lang.
 func (e *engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine, zone *time.Location, lang i18n.Lang) (*Minutes, error) {
+	return e.buildMinutesWith(r, a, read, zone, lang, false)
+}
+
+func (e *engine) buildMinutesWith(r *Recording, a minutesAnswer, read []minutesLine, zone *time.Location, lang i18n.Lang, numbered bool) (*Minutes, error) {
 	at, photoSec := map[int]float64{}, map[int]float64{}
+	lineByN := map[int]minutesLine{}
 	var saidB strings.Builder
 	for _, l := range read {
 		if l.Photo > 0 {
 			photoSec[l.Photo] = l.At
 		} else {
 			at[l.N] = l.At
+			lineByN[l.N] = l
 		}
 		saidB.WriteString(l.Text)
 		saidB.WriteByte('\n')
@@ -783,14 +894,22 @@ func (e *engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 	point := func(x answerPoint, topic int) {
 		if t, strong := strongText(x.Text, minutesTextRunes); t != "" {
 			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("p", t) {
-				points = append(points, placed[MinutesPoint]{MinutesPoint{Text: t, At: sec, Photo: photo, Who: named(x.Who)}, topic, strong})
+				lineN := 0
+				if photo == 0 {
+					lineN = int(x.Line)
+				}
+				points = append(points, placed[MinutesPoint]{MinutesPoint{Text: t, At: sec, Photo: photo, Who: named(x.Who)}, topic, strong, lineN})
 			}
 		}
 	}
 	decision := func(x answerItem, topic int) {
 		if t, strong := strongText(x.Text, minutesTextRunes); t != "" {
 			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("d", t) {
-				decisions = append(decisions, placed[MinutesItem]{MinutesItem{Text: t, At: sec, Photo: photo}, topic, strong})
+				lineN := 0
+				if photo == 0 {
+					lineN = int(x.Line)
+				}
+				decisions = append(decisions, placed[MinutesItem]{MinutesItem{Text: t, At: sec, Photo: photo}, topic, strong, lineN})
 			}
 		}
 	}
@@ -848,6 +967,8 @@ func (e *engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 	if m.Overview, why = buildOverview(a, points, decisions, at, photoSec, m.Title); why != "" {
 		e.logf("recording %s: minutes: no overview: %s", r.ID, why)
 	}
+	storeSpan := r.HubTranscribed() && (r.Conv == nil || r.Conv.Speakers == nil || r.Conv.Speakers.State != SpeakerStateCleared)
+	m.Debates = buildDebates(a.Debates, lineByN, decisions, named, storeSpan, numbered)
 	return m, nil
 }
 
@@ -933,10 +1054,18 @@ func keepTodos(m, old *Minutes) {
 // photo ends with its number. Its headings and fixed words are in the minutes' language (kb-minutes.json). Minutes
 // with an overview follow it (renderOverview).
 func renderMinutes(m *Minutes, start time.Time, zone *time.Location) string {
+	return renderMinutesWith(m, start, zone, nil)
+}
+
+func (e *engine) renderMinutes(m *Minutes, start time.Time, zone *time.Location, speakers *MeetingSpeakers) string {
+	return renderMinutesWith(m, start, zone, e.debateWhoFunc(speakers))
+}
+
+func renderMinutesWith(m *Minutes, start time.Time, zone *time.Location, debateWho func(MinutesDebatePosition, i18n.Lang, func(string) string) string) string {
 	if m.Overview != nil {
-		return renderOverview(m, start, zone)
+		return renderOverviewWith(m, start, zone, debateWho)
 	}
-	w := newMinutesMarkdown(m, start, zone, func(s string) string { return s })
+	w := newMinutesMarkdown(m, start, zone, func(s string) string { return s }, debateWho)
 	b, l := &w.b, w.l
 	w.head(m)
 	if len(m.Points) > 0 {
@@ -950,17 +1079,21 @@ func renderMinutes(m *Minutes, start time.Time, zone *time.Location) string {
 		}
 	}
 	w.section(i18n.T(l, "kb-minutes.decisions"), m.Decisions)
-	w.tail(m)
+	w.tail(m, true)
 	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderOverview is minutes.md of minutes with an overview (docs/assistant/meeting-minutes.md "Markdown"): the
-// headline, the core conclusions, then each group's topics (a topic a ## heading with one group, a ### under its
-// group's ## with several), each decision after "Decided:", then the action items and open questions as without one,
-// and the AI note last. A literal * is escaped, and the bold places are wrapped in **.
+// headline, the core conclusions, any disagreements, then each group's topics (a topic a ## heading with one group, a
+// ### under its group's ## with several), each decision after "Decided:", then the action items and open questions as
+// without one, and the AI note last. A literal * is escaped, and the bold places are wrapped in **.
 func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
+	return renderOverviewWith(m, start, zone, nil)
+}
+
+func renderOverviewWith(m *Minutes, start time.Time, zone *time.Location, debateWho func(MinutesDebatePosition, i18n.Lang, func(string) string) string) string {
 	o := m.Overview
-	w := newMinutesMarkdown(m, start, zone, escapeStars)
+	w := newMinutesMarkdown(m, start, zone, escapeStars, debateWho)
 	b, l := &w.b, w.l
 	w.head(m)
 	if o.Headline != "" {
@@ -973,6 +1106,7 @@ func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
 			w.end(c.Photo)
 		}
 	}
+	w.debates(m.Debates)
 	topic := "\n## "
 	for _, g := range o.Groups {
 		if len(o.Groups) > 1 {
@@ -994,7 +1128,7 @@ func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
 			}
 		}
 	}
-	w.tail(m)
+	w.tail(m, false)
 	b.WriteString("\n*" + i18n.T(l, "kb-minutes.ai_note") + "*\n")
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -1002,15 +1136,16 @@ func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
 // minutesMarkdown writes minutes.md: esc is what every text the minutes hold goes through (the overview's layout
 // escapes a literal *, the legacy one writes them as they are).
 type minutesMarkdown struct {
-	b     strings.Builder
-	l     i18n.Lang
-	start time.Time
-	zone  *time.Location
-	esc   func(string) string
+	b         strings.Builder
+	l         i18n.Lang
+	start     time.Time
+	zone      *time.Location
+	esc       func(string) string
+	debateWho func(MinutesDebatePosition, i18n.Lang, func(string) string) string
 }
 
-func newMinutesMarkdown(m *Minutes, start time.Time, zone *time.Location, esc func(string) string) *minutesMarkdown {
-	return &minutesMarkdown{l: storedLang(m.Language), start: start, zone: zone, esc: esc}
+func newMinutesMarkdown(m *Minutes, start time.Time, zone *time.Location, esc func(string) string, debateWho func(MinutesDebatePosition, i18n.Lang, func(string) string) string) *minutesMarkdown {
+	return &minutesMarkdown{l: storedLang(m.Language), start: start, zone: zone, esc: esc, debateWho: debateWho}
 }
 
 func (w *minutesMarkdown) at(sec float64) string { return "[" + clockAt(w.start, sec, w.zone) + "] " }
@@ -1051,8 +1186,9 @@ func (w *minutesMarkdown) section(title string, items []MinutesItem) {
 	}
 }
 
-// tail is the action items, the open questions and the partial note.
-func (w *minutesMarkdown) tail(m *Minutes) {
+// tail is the action items, optionally the disagreements (legacy layout, before open questions), the open questions
+// and the partial note.
+func (w *minutesMarkdown) tail(m *Minutes, withDebates bool) {
 	b, l := &w.b, w.l
 	if len(m.Actions) > 0 {
 		b.WriteString("\n## " + i18n.T(l, "kb-minutes.actions") + "\n\n")
@@ -1067,6 +1203,9 @@ func (w *minutesMarkdown) tail(m *Minutes) {
 			}
 			w.end(a.Photo)
 		}
+	}
+	if withDebates {
+		w.debates(m.Debates)
 	}
 	w.section(i18n.T(l, "kb-minutes.open"), m.Open)
 	if m.Partial {
@@ -1104,7 +1243,6 @@ func (e *engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, fin
 		keepTodos(m, old)
 		before = minutesPhotos(old)
 	}
-	m.Markdown = renderMinutes(m, r.StartedAt, st.Zone())
 	// Each photo's cited follows the minutes: PartPhotos' revision moves first, so that a failure leaves the minutes
 	// pending (made again at the next round) and a crash between costs only a revision too many.
 	photos := citedChanged(book, before, minutesPhotos(m))
@@ -1114,7 +1252,28 @@ func (e *engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, fin
 			return fmt.Errorf("photos before the minutes: %w", err)
 		}
 	}
-	if wrote, err := st.putMinutes(cur.ID, m); err != nil || !wrote {
+	// Attribute disagreement positions and render Markdown under recMu -> meetMu -> recFilesMu against the latest
+	// speaker roster and timeline, so edits or a late timeline arriving during generation are never overwritten.
+	wrote, err := func() (bool, error) {
+		st.meetMu.Lock()
+		defer st.meetMu.Unlock()
+		st.recFilesMu.Lock()
+		defer st.recFilesMu.Unlock()
+		meeting, _ := st.readMeeting(cur.ID)
+		speakers := meetingSpeakersOf(meeting)
+		if cur.HubTranscribed() && speakers != nil && speakers.State == SpeakerStateReady {
+			turns, _ := st.readSpeakerTurnsLocked(cur.ID)
+			hub, _ := st.readHubLocked(cur.ID)
+			e.attributeDebates(m, speakers, turns, hub.EffectiveTiming(), false)
+		} else if speakers != nil && speakers.State == SpeakerStateCleared {
+			clearDebateSpeakerData(m)
+		} else {
+			clearDebateAttribution(m)
+		}
+		m.Markdown = e.renderMinutes(m, r.StartedAt, st.Zone(), speakers)
+		return st.putMinutesLocked(cur.ID, m)
+	}()
+	if err != nil || !wrote {
 		st.recMu.Unlock()
 		return err
 	}

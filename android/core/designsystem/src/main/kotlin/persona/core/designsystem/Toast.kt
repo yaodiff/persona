@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.delay
 import persona.core.designsystem.icons.PersonaIcons
 
@@ -79,6 +80,12 @@ internal fun toastMillis(notice: FeedbackNotice): Long = when {
     notice.style == FeedbackStyle.Error -> 4_000
     else -> 2_500
 }
+
+/**
+ * Top clearance below the status bar so window- and page-level toasts sit cleanly beneath
+ * floating top bars ([ChatTopBar], [HomeNavigation], [PageBar]), matching iOS `ShellNavigationClearance`.
+ */
+val ToastTopBarClearance: Dp get() = Tokens.Space.xxl + Tokens.Space.xxl + Tokens.Space.m
 
 /**
  * The window's toast at the top of what it covers (iOS `ToastOverlay`): a capsule with the style's icon, the words and up

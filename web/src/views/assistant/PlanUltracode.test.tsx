@@ -78,7 +78,7 @@ describe("ultracode on the plan card", () => {
   it("shows each task's choice and starts the plan as it is when nothing changed", async () => {
     await render(<PlanCard plan={plan([task(), task({ title: "重构", ultracode: true })])} />);
     expect(chips().map((c) => c.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
-    await click(byText("开始 2 个任务")[0]);
+    await click(byText("启动 2 个任务")[0]);
     expect(startPlan).toHaveBeenCalledTimes(1);
     expect(sent()).toBeUndefined();
   });
@@ -88,7 +88,7 @@ describe("ultracode on the plan card", () => {
     await click(chips()[0]);
     await click(chips()[1]);
     expect(chips().map((c) => c.getAttribute("aria-pressed"))).toEqual(["true", "false", "false"]);
-    await click(byText("开始 3 个任务")[0]);
+    await click(byText("启动 3 个任务")[0]);
     expect(sent()).toEqual([{ ultracode: true }, { ultracode: false }, {}]);
   });
 
@@ -98,7 +98,7 @@ describe("ultracode on the plan card", () => {
     expect(chip.disabled).toBe(true);
     expect(chip.getAttribute("aria-pressed")).toBe("false");
     expect(chip.title).toContain("2.1.284");
-    expect(document.body.textContent).toContain("不开 ultracode 开始");
+    expect(document.body.textContent).toContain("不开启 ultracode 启动");
     await click(byText("开始")[0]);
     expect(sent()).toEqual([{ ultracode: false }]);
   });
@@ -114,7 +114,7 @@ describe("ultracode on the plan card", () => {
   it("opens 改一下 with the card's choice and sends only what differs from the assistant's", async () => {
     await render(<PlanCard plan={plan([task(), task({ title: "重构", ultracode: true })])} />);
     await click(chips()[0]); // on, from the card
-    await click(byText("改一下")[0]);
+    await click(byText("编辑")[0]);
     expect(editSwitches().map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "true"]);
     await click(editSwitches()[1]); // off, in the dialog
     await click(startInDialog());
@@ -123,7 +123,7 @@ describe("ultracode on the plan card", () => {
 
   it("keeps the choice in 改一下 for a task moved off a computer that can't", async () => {
     await render(<PlanCard plan={plan([task({ machine: "m2", ultracode: true })])} />);
-    await click(byText("改一下")[0]);
+    await click(byText("编辑")[0]);
     expect(editSwitches()[0].getAttribute("aria-checked")).toBe("false"); // drawn off on the old computer
     await pickMachine("m1");
     expect(editSwitches()[0].getAttribute("aria-checked")).toBe("true"); // the assistant's choice again
@@ -133,7 +133,7 @@ describe("ultracode on the plan card", () => {
 
   it("starts without it from 改一下 where the task stays on a computer that can't", async () => {
     await render(<PlanCard plan={plan([task({ machine: "m2", ultracode: true })])} />);
-    await click(byText("改一下")[0]);
+    await click(byText("编辑")[0]);
     await click(startInDialog());
     expect(sent()?.[0]?.ultracode).toBe(false);
   });
@@ -141,7 +141,7 @@ describe("ultracode on the plan card", () => {
   it("keeps an omitted permission omitted when starting from the lazy plan editor", async () => {
     const proposed = plan([task(), task({ permission: "default" })]);
     await render(<PlanCard plan={proposed} />);
-    await click(byText("改一下")[0]);
+    await click(byText("编辑")[0]);
     await click(startInDialog());
     expect(startPlan.mock.calls[0]?.[0]).toBe(proposed);
     expect(sent()?.[0]).not.toHaveProperty("permission");
@@ -152,7 +152,7 @@ describe("ultracode on the plan card", () => {
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
     await render(<PlanCard plan={plan([task()])} />);
     await click(chips()[0]);
-    await click(byText("改一下")[0]);
+    await click(byText("编辑")[0]);
     await click(byText("取消")[0]);
     expect(ask).not.toHaveBeenCalled();
     expect(chips()[0].getAttribute("aria-pressed")).toBe("true"); // the card keeps it

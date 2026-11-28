@@ -17,6 +17,11 @@ type UserUpdate struct {
 	// ProjectMode and SourceURLs are the owner's project settings. An empty SourceURLs list clears the pointers.
 	ProjectMode *string  `json:"project_mode,omitempty"`
 	SourceURLs  []string `json:"source_urls,omitempty"`
+	// Parent (projects): the project to sit under, by slug or name; "" moves it to the top level. Milestones replaces
+	// its milestone flags; Milestone adds, changes or removes one (project_tree.go). Each locks what it sets.
+	Parent     *string        `json:"parent,omitempty"`
+	Milestones *[]Milestone   `json:"milestones,omitempty"`
+	Milestone  *MilestoneEdit `json:"milestone,omitempty"`
 	// Unmerge (projects): undo the merge that folded this project into another (Unmerge); nothing else applies.
 	Unmerge bool `json:"unmerge,omitempty"`
 	// LockLists: a list a removal takes a link out of is locked whole too, on both entries, so automatic organizing
@@ -43,6 +48,9 @@ func (e *Engine) ApplyUser(kind, id string, u UserUpdate) (string, error) {
 	}
 	if u.ProjectMode != nil || u.SourceURLs != nil {
 		return "", fmt.Errorf("%w: set project_mode or source_urls separately from unmerge", ErrInvalidProjectSource)
+	}
+	if u.hasTreeEdit() {
+		return "", &TreeError{Code: CodeParentWithMerge}
 	}
 	return e.Unmerge(id)
 }
@@ -214,6 +222,11 @@ func (e *Engine) unmergeProject(drop *Project) error {
 		return err
 	}
 	e.index(KindProject, drop.Slug, drop.Name, drop.Tagging, drop.OneLine, drop.Updated)
+	if rec != nil { // the projects the merge moved off drop come back under it
+		if err := e.moveBack(rec.Children, drop.Slug); err != nil {
+			return err
+		}
+	}
 	if found { // last, so a retry after a failed write does not note the unmerge twice
 		_ = e.Store.AppendLog(keep.Slug, now, "Persona", fmt.Sprintf("拆开了项目「%s」", drop.Name))
 	}

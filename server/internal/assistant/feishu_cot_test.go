@@ -179,8 +179,9 @@ func TestHeldRunsNextTurnIsAProgressCard(t *testing.T) {
 	r, prog := cotRun(s)
 	withCot(s, r)
 	feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
+	s.setRunExt(r, "cot_answer", "1")
 	s.finishChannelRun(r, &channel.Result{Answer: "先答一部分", Held: true})
-	for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_done"} {
+	for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_done", "cot_answer"} {
 		if r.Ext[k] != "" {
 			t.Fatalf("%s kept: %v", k, r.Ext)
 		}

@@ -42,13 +42,17 @@ struct FleetIntentsTests {
     }
 
     @Test func explicitInteractionIsPreserved() {
-        let allow = AllowPermissionIntent(interactionID: "ix_123")
+        let occurrence = "2026-01-02T03:04:05.000000001Z"
+        let allow = AllowPermissionIntent(interactionID: "ix_123", interactionCreatedAt: occurrence)
         #expect(allow.interactionID == "ix_123")
+        #expect(allow.interactionCreatedAt == occurrence)
 
-        let deny = DenyPermissionIntent(interactionID: "ix_456")
+        let deny = DenyPermissionIntent(interactionID: "ix_456", interactionCreatedAt: occurrence)
         #expect(deny.interactionID == "ix_456")
+        #expect(deny.interactionCreatedAt == occurrence)
 
-        let plan = ApprovePlanIntent(interactionID: "ix_789")
+        let plan = ApprovePlanIntent(interactionID: "ix_789", interactionCreatedAt: occurrence)
         #expect(plan.interactionID == "ix_789")
+        #expect(plan.interactionCreatedAt == occurrence)
     }
 }

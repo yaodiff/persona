@@ -273,6 +273,15 @@ struct IntentsTests {
         ]
     }
 
+    @Test func waitingCountsAndApprovesOnlyTheAuthoritativeCard() {
+        let original = waitingCard("original", session: "plain", created: 10)
+        var copy = waitingCard("copy", session: "persona", created: 1)
+        copy.mirrorOf = original.id
+        let waiting = IntentPicker.waiting([copy, original], sessions: waitingSessions, mutes: waitingMutes)
+        #expect(waiting.cards.map(\.id) == ["original"])
+        #expect(waiting.first?.id == "original")
+    }
+
     @Test func waitingSkipsMutedAndQuietCards() {
         for c in waitingCases {
             let waiting = IntentPicker.waiting(c.cards, sessions: waitingSessions, mutes: waitingMutes)

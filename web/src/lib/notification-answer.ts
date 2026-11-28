@@ -36,7 +36,8 @@ export function failedTagsOver(pending: readonly Interaction[]): string[] {
 
 const isNote = (m: unknown): m is NoteMessage => {
   const n = m as Partial<NoteMessage> | null;
-  return n?.type === NOTE_MESSAGE && typeof n.ix === "string" && typeof n.until === "number" && ["allow", "deny", "open"].includes(n.action ?? "");
+  return n?.type === NOTE_MESSAGE && typeof n.ix === "string" && typeof n.until === "number" && ["allow", "deny", "open"].includes(n.action ?? "") &&
+    (n.created_at === undefined || typeof n.created_at === "string");
 };
 
 /**
@@ -49,7 +50,7 @@ export function planClick(m: unknown, interactions: readonly Interaction[], now:
   // until is the worker's Date.now() and now the page's: one browser on one machine, so the same clock
   if (!isNote(m) || now > m.until) return undefined;
   if (m.action === "open") return m.url?.startsWith("/") && !m.url.startsWith("//") ? { open: m.url } : undefined;
-  const ix = interactions.find((x) => x.id === m.ix);
+  const ix = interactions.find((x) => x.id === m.ix && (m.created_at === undefined || x.created_at === m.created_at));
   if (ix?.kind !== "permission" || needsFieldValues(ix) || answering.has(ix.id)) return undefined;
   const allow = m.action === "allow";
   return { ix, allow, body: allow ? allowBody() : denyBody() };

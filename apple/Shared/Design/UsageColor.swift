@@ -12,6 +12,10 @@ nonisolated enum UsageColor {
     static let cacheRead = Color(light: 0x1BAF7A, dark: 0x199E70)
     /// The cache hit rate's one line.
     static let hitRate = cacheRead
+    /// Token usage by project (#16530): non-development projects (folders, the home folder, the assistant), apart from
+    /// the kinds' teal; development ones take the accent. At least 3:1 on a card in both schemes; the web's
+    /// `--project-other`.
+    static let projectOther = Color(light: 0x0F7F8F, dark: 0x4BBFCC)
     /// A card's sparkline of all tokens.
     static let total = input
 

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -236,10 +237,33 @@ func (s *Service) logicalPublishInteraction(ctx context.Context, ix proto.Intera
 	if !s.physicalSameMachine(caller.PhysicalMachine, route.PhysicalMachine) || caller.PhysicalSession != route.PhysicalSession || caller.Epoch != route.Epoch {
 		return false, logicalRefusal(ctx, "retired")
 	}
+	sameOwnerOperation := func(other proto.Interaction) bool {
+		return persistentOwnerProposal(ix) && persistentOwnerProposal(other) &&
+			ix.MachineID == other.MachineID && ix.SessionID == other.SessionID &&
+			ix.ApprovalBatchID == other.ApprovalBatchID && ix.ApprovalItemID == other.ApprovalItemID
+	}
+	sameOccurrence := func(other proto.Interaction) bool {
+		// Legacy zero-time non-resumable duplicates retain ID-only joining.
+		return (!ix.Detachable && ix.CreatedAt.IsZero()) || sameApprovalOccurrence(ix, other) || sameOwnerOperation(other)
+	}
+	s.fleet.mu.Lock()
+	live := s.fleet.interactions[ix.ID]
+	if live != nil {
+		if live.local != nil || !sameOccurrence(live.ix) {
+			s.fleet.mu.Unlock()
+			return false, fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+		}
+		if live.graceEnded {
+			s.fleet.mu.Unlock()
+			return false, nil
+		}
+	}
+	s.fleet.mu.Unlock()
 	st := s.store().(logicalConversationStore)
 	cards, ok := s.store().(interface {
-		InteractionOutcome(context.Context, string) (string, *proto.Resolution, error)
-		InsertInteraction(context.Context, proto.Interaction) error
+		InteractionRecord(context.Context, string) (*db.InteractionRecord, error)
+		InsertInteractionOccurrence(context.Context, proto.Interaction) error
+		FinishInteractionOccurrence(context.Context, proto.Interaction, string, *proto.Resolution) (bool, bool, error)
 	})
 	if !ok {
 		return false, logicalRefusal(ctx, "unavailable")
@@ -253,12 +277,57 @@ func (s *Service) logicalPublishInteraction(ctx context.Context, ix proto.Intera
 		if c.Switch != nil && c.Switch.Phase != "active" {
 			return logicalRefusal(ctx, "busy")
 		}
-		status, _, err := cards.InteractionOutcome(ctx, ix.ID)
+		record, err := cards.InteractionRecord(ctx, ix.ID)
 		if err != nil {
 			return err
 		}
-		fresh = status == ""
-		return cards.InsertInteraction(ctx, ix)
+		// A genuinely new occurrence replacing terminal history must announce;
+		// only a replay of the same pending occurrence is restart restoration.
+		fresh = record == nil || (record.Status != "pending" && !sameOccurrence(record.Interaction))
+		if record != nil && record.Status == "pending" && !sameOccurrence(record.Interaction) {
+			return fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+		}
+		if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
+			if live != nil {
+				// The fleet resolver participates in the live answer claim and owns
+				// legacy zero-time resolution; never contradict it with a DB write.
+				return nil
+			}
+			if record != nil && record.Status == "pending" {
+				completed := ix
+				if !ix.Detachable && ix.CreatedAt.IsZero() {
+					completed = record.Interaction
+				}
+				matched, _, err := cards.FinishInteractionOccurrence(ctx, completed, "dismissed", &proto.Resolution{Dismiss: true})
+				if err != nil {
+					return err
+				}
+				if !matched {
+					return fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+				}
+			}
+			return nil
+		}
+		if record != nil && record.Status != "pending" && sameOccurrence(record.Interaction) &&
+			(record.Status != "cancelled" || record.Resolution != nil || ix.Resumable) {
+			// A terminal outcome for this exact operation wins over a replay whose
+			// display timestamp was refreshed. Only a different occurrence may
+			// replace terminal history, apart from the legacy cancelled reopen.
+			return nil
+		}
+		if err := cards.InsertInteractionOccurrence(ctx, ix); err != nil {
+			return err
+		}
+		// The conditional upsert cannot replace a different pending winner.
+		// Reading the winner back closes the freshness-read/insertion gap.
+		record, err = cards.InteractionRecord(ctx, ix.ID)
+		if err != nil {
+			return err
+		}
+		if record == nil || !sameOccurrence(record.Interaction) {
+			return fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
+		}
+		return nil
 	})
 	return fresh, err
 }

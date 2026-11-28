@@ -532,6 +532,7 @@ type todoPredecessorInfo struct {
 	agent        TodoAgent
 	session      proto.Session
 	hasSess      bool
+	planLauncher string
 	planPerm     string
 	planReadonly bool
 }
@@ -560,13 +561,16 @@ func (s *Service) todoPredecessor(ctx context.Context, todo Todo) (todoPredecess
 	} else if c, ok := s.session(ctx, picked.MachineID, picked.SessionID); ok {
 		info.session, info.hasSess = c, true
 	}
-	if strings.TrimSpace(info.session.PermissionMode) == "" {
+	if strings.TrimSpace(info.session.PermissionMode) == "" || strings.TrimSpace(info.session.Launcher) == "" {
 		if p, idx, err := s.currentPlanAssignment(ctx, todo); err == nil && p != nil && idx >= 0 && idx < len(p.Tasks) {
 			pt := p.Tasks[idx]
-			info.planPerm = strings.TrimSpace(cmp.Or(pt.StartPermission, pt.Permission))
-			info.planReadonly = pt.Readonly
-			if info.planPerm == "" && info.planReadonly {
-				info.planPerm = "plan"
+			info.planLauncher = strings.TrimSpace(pt.Launcher)
+			if strings.TrimSpace(info.session.PermissionMode) == "" {
+				info.planPerm = strings.TrimSpace(cmp.Or(pt.StartPermission, pt.Permission))
+				info.planReadonly = pt.Readonly
+				if info.planPerm == "" && info.planReadonly {
+					info.planPerm = "plan"
+				}
 			}
 		}
 	}
@@ -576,6 +580,9 @@ func (s *Service) todoPredecessor(ctx context.Context, todo Todo) (todoPredecess
 func (p todoPredecessorInfo) launcher() string {
 	if p.hasSess && p.session.Launcher != "" {
 		return p.session.Launcher
+	}
+	if p.planLauncher != "" {
+		return p.planLauncher
 	}
 	if p.hasSess && p.session.Agent != "" {
 		return p.session.Agent
@@ -618,19 +625,50 @@ func (p todoPredecessorInfo) permission() string {
 	return ""
 }
 
-// isProviderSwitchContinuation reports whether continuing todo on (targetMachine, targetLauncher)
-// moves work to another launcher, provider, or machine relative to its predecessor.
-func (s *Service) isProviderSwitchContinuation(ctx context.Context, todo Todo, targetMachine, targetLauncher string) bool {
+type continuationSwitch struct {
+	machineChanged  bool
+	launcherChanged bool
+}
+
+func (c continuationSwitch) any() bool {
+	return c.machineChanged || c.launcherChanged
+}
+
+// continuationSwitchKind classifies how continuing todo on (targetMachine, targetLauncher, targetAgent)
+// differs from its predecessor. Both machine moves and launcher/provider switches require auditable handoffs
+// and fail-closed non-escalation checks; only launcher/provider switches always require an explicit owner
+// Start card when an orchestrator (main chat or direction leader) dispatches the continuation.
+func (s *Service) continuationSwitchKind(ctx context.Context, todo Todo, targetMachine, targetLauncher, targetAgent string) continuationSwitch {
 	pred, ok := s.todoPredecessor(ctx, todo)
 	if !ok {
-		return false
+		return continuationSwitch{}
 	}
+	var sw continuationSwitch
 	if targetMachine != "" && pred.agent.MachineID != "" && targetMachine != pred.agent.MachineID {
-		return true
+		sw.machineChanged = true
 	}
 	srcLauncher := cmp.Or(pred.launcher(), "claude")
 	dstLauncher := s.startLauncher(ctx, strings.TrimSpace(targetLauncher))
-	return dstLauncher != srcLauncher
+	if dstLauncher != srcLauncher {
+		sw.launcherChanged = true
+	} else if targetAgent != "" && pred.agentKind() != "" && targetAgent != pred.agentKind() {
+		sw.launcherChanged = true
+	}
+	return sw
+}
+
+// isProviderSwitchContinuation reports whether continuing todo on (targetMachine, targetLauncher)
+// moves work to another launcher, provider, or machine relative to its predecessor.
+func (s *Service) isProviderSwitchContinuation(ctx context.Context, todo Todo, targetMachine, targetLauncher string) bool {
+	return s.continuationSwitchKind(ctx, todo, targetMachine, targetLauncher, "").any()
+}
+
+// continuationNeedsOwner keeps implicit health detours and non-supervisory continuations behind
+// Start. An authorized supervisor may choose another launcher/provider as well as another owned
+// machine: handoffLauncherSwitch records that choice, not a new owner-only decision. This predicate
+// never grants execution permission; both planning and dispatch enforce checkContinuationBlockers.
+func (task PlanTask) continuationNeedsOwner(orchestrates bool) bool {
+	return task.HandoffOperationID != "" && (task.Reroute != nil || !orchestrates)
 }
 
 // handoffBlockerError carries a machine-readable refusal code for HTTP callers.

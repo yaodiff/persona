@@ -1,3 +1,5 @@
 {
-  "control_unavailable": "View-only: the Codex App is not accepting messages or stop requests from Persona. Continue this chat in the Codex App on the computer."
+  "control_unavailable": "View-only: the Codex App is not accepting messages or stop requests from Persona. Continue this chat in the Codex App on the computer.",
+  "recoverable_resume_or_continue": "View-only in the Codex App: resume or take over in a Persona terminal, or continue in a new session from here.",
+  "recoverable_continue_only": "View-only in the Codex App: resume is unavailable here. Continue in a new session from here, or open the session in the Codex App on the computer."
 }

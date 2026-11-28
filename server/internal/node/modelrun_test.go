@@ -247,7 +247,8 @@ printf '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_toke
 // hooks/MCP and zero session persistence into the real ~/.gemini/antigravity-cli), and NDJSON stdin/stdout streaming.
 func TestModelRunAnswersWithIsolatedAgy(t *testing.T) {
 	out := t.TempDir()
-	home := fakeModelRunCLIHome(t, "agy", "agy", `printf '%s\n' "$@" > `+shellQuote(filepath.Join(out, "args"))+`
+	home := fakeModelRunCLIHome(t, "agy", "agy", `[ "$1" = acp ] && exit 2
+printf '%s\n' "$@" > `+shellQuote(filepath.Join(out, "args"))+`
 cat > `+shellQuote(filepath.Join(out, "stdin"))+`
 pwd > `+shellQuote(filepath.Join(out, "cwd"))+`
 printf '%s\n' "$HOME" > `+shellQuote(filepath.Join(out, "home"))+`

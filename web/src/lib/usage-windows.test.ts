@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../i18n";
 import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
 import { accountPace, pace } from "./usage-pace";
-import { groupByProvider, planNote, providerTitle, remainingText, sortedWindows, sortForCard, timelinePosition } from "./usage-popover";
+import { formatPlanLabel, groupByProvider, planNote, providerTitle, remainingText, sortedWindows, sortForCard, timelinePosition } from "./usage-popover";
 import { isAccountPaused, isWindowPaused, providerTimeline, stripProviderPrefix, unifiedTimeline, windowHeadroom } from "./usage-timeline";
 import { countdown, fullest, isBalanceAccount, isPinnableUsageAccount, liveAccounts, parsePinnedUsageAccounts, parseUsageWindowPinId, PINNED_USAGE_ACCOUNTS_KEY, protectReserve, remainingPercent, remainingTone, resetLabel, resetPinnedUsageAccounts, sampleAge, selectSidebarUsageAccounts, selectSidebarUsageItems, setPinnedUsageAccounts, sidebarWindowTitle, sourceNames, tightestRemaining, togglePinnedUsageAccount, topAccounts, usageWindowPinId, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
@@ -276,13 +276,21 @@ describe("accounts with several sources and per-model windows (#2595)", () => {
     expect(sourceNames(account({ sources: ["Relay", "Team pool"] }))).toEqual(["Relay", "Team pool"]);
     expect(sourceNames(account())).toEqual([]); // an older hub says nothing about it
   });
-  it("shows the plan unless the name has it", () => {
+  it("shows the normalized plan unless the name has it", () => {
     expect(planNote(account({ name: "Codex Pro", plan: "pro" }))).toBe("");
     expect(planNote(account({ name: "work seat", plan: "Pro" }))).toBe("Pro");
+    expect(planNote(account({ name: "work seat", plan: "max" }))).toBe("Max");
+    expect(planNote(account({ name: "work seat", plan: "claude_max_20x" }))).toBe("Claude Max 20x");
+    expect(planNote(account({ name: "work seat", plan: "api" }))).toBe("API");
+    expect(planNote(account({ name: "work seat", plan: "Pro+" }))).toBe("Pro+");
+    expect(formatPlanLabel("enterprise")).toBe("Enterprise");
+    expect(formatPlanLabel("xAI")).toBe("xAI");
     expect(planNote(account({ plan: " " }))).toBe("");
   });
-  it("tells windows of one length apart by model", () => {
+  it("tells windows of one length apart by model, group, and title", () => {
     expect(windowKey(win("7d", 10080, 1))).not.toBe(windowKey({ ...win("7d", 10080, 1), model: "Fable" }));
+    expect(windowKey({ ...win("7d", 10080, 1), group: "Pool A" })).not.toBe(windowKey({ ...win("7d", 10080, 1), group: "Pool B" }));
+    expect(windowKey({ ...win("5h", 300, 1), group: "Pool A", title: "Burst" })).not.toBe(windowKey({ ...win("5h", 300, 1), group: "Pool A", title: "Steady" }));
   });
 });
 
@@ -518,9 +526,34 @@ describe("pinned individual usage windows (#13870)", () => {
 
 describe("provider cards and the reset timeline (#13173)", () => {
   const acct = (id: string, name: string, provider: string, windows: UsageWindow[], sampled = at(-60_000)): UsageAccount => ({ id, name, provider, windows, sampled_at: sampled });
-  it("lists the 5h window, then 7d, then the rest, per-model allowances last", () => {
+  it("lists the 5h window, then 7d, then the rest, grouping extension groups and per-model pools without interleaving", () => {
     const a = acct("a", "A", "claude", [{ ...win("7d", 10080, 1, 3 * H), model: "Fable" }, win("1d", 1440, 1, H), win("7d", 10080, 1, 5 * H), win("5h", 300, 1, H)]);
     expect(sortedWindows(a).map((w) => `${w.label}${w.model ? "*" : ""}`)).toEqual(["5h", "7d", "1d", "7d*"]);
+
+    const agy = acct("agy", "Antigravity", "antigravity", [
+      { ...win("5h", 300, 10, 2 * H), model: "Claude and GPT models" },
+      { ...win("5h", 300, 20, 3 * H), model: "Gemini Models" },
+      { ...win("7d", 10080, 30, 48 * H), model: "Claude and GPT models" },
+      { ...win("7d", 10080, 40, 72 * H), model: "Gemini Models" },
+    ]);
+    expect(sortedWindows(agy).map((w) => `${w.model}:${w.label}`)).toEqual([
+      "Claude and GPT models:5h",
+      "Claude and GPT models:7d",
+      "Gemini Models:5h",
+      "Gemini Models:7d",
+    ]);
+
+    const ext = acct("ext", "Gateway", "claude", [
+      { ...win("7d", 10080, 40, 48 * H), group: "Coding Pool", title: "Weekly" },
+      { ...win("5h", 300, 20, 2 * H), group: "Reasoning Pool", title: "Burst" },
+      { ...win("5h", 300, 10, 1 * H), group: "Coding Pool", title: "Short" },
+    ]);
+    // Preserves extension group order and relative window order inside each group
+    expect(sortedWindows(ext).map((w) => `${w.group}:${w.title}`)).toEqual([
+      "Coding Pool:Weekly",
+      "Coding Pool:Short",
+      "Reasoning Pool:Burst",
+    ]);
   });
   it("sorts a card's accounts by the 7d reset, soonest first, those without one last, then case-insensitive name and id", () => {
     const a1 = acct("1", "Zed", "claude", [win("5h", 300, 1, H), win("7d", 10080, 1, 48 * H)]);
@@ -552,6 +585,16 @@ describe("provider cards and the reset timeline (#13173)", () => {
     expect(rows.map((r) => r.account.id)).toEqual(["b", "a"]);
     expect(rows[1].lanes.map((l) => [l.label, l.long, Number(l.end.toFixed(4)), l.remainingMs])).toEqual([["5h", false, 0.0375, 2 * H], ["7d", true, 0.45 + (24 / 144) * 0.55 > 0 ? Number((0.45 + (24 / 144) * 0.55).toFixed(4)) : 0, 48 * H]]);
     expect(rows[0].lanes[0].end).toBe(1); // beyond 7 days runs to the end of the axis
+  });
+  it("moves a rollout past its stale deadline out of account timelines and pinned sidebar items", () => {
+    const windows = [win("5h", 300, 30, H)];
+    const live = acct("seat", "Seat", "codex", windows);
+    const file = { ...acct("file", "Codex", "codex", windows, at(-H)), reading_source: "rollout" as const, stale_at: at(-H / 2) };
+    const readings = liveAccounts([live, file], NOW);
+    expect(providerTimeline(readings, NOW).map((r) => r.account.id)).toEqual(["seat"]);
+    const { items, custom } = selectSidebarUsageItems(readings, ["file", usageWindowPinId("file", windows[0])]);
+    expect(custom).toBe(false);
+    expect(items.map((item) => item.account.id)).toEqual(["seat"]);
   });
   it("merges multi-model windows of the same kind into one lane taking the earliest reset, while dropping missing/ended resets", () => {
     const empty = acct("e", "Empty", "claude", [win("5h", 300, 1), win("7d", 10080, 1, -H)]);

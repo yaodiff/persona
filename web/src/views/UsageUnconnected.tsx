@@ -102,7 +102,7 @@ export function unconnectedUsageProviders(launchers: readonly UsageProviderCandi
         a.sources?.some((s) => s.toLowerCase() === titleLower || s.toLowerCase() === idLower),
     );
     if (matchedByProvider || matchedByName) continue;
-    out.push({ id: l.name, title, agent });
+    out.push({ id: l.name, title, agent, ...(l.base_url ? { base_url: l.base_url } : {}) });
   }
   return out;
 }

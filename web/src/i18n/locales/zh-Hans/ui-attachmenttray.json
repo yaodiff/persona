@@ -1,5 +1,5 @@
 {
   "edit": "编辑 {name}",
-  "edit_hint": "点一下标注后再发",
+  "edit_hint": "点击进行标注后再发送",
   "remove": "移除 {name}"
 }

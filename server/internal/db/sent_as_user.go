@@ -36,6 +36,13 @@ func (d *DB) RecordSentAsUser(ctx context.Context, s SentAsUser) (int64, error) 
 	return id, err
 }
 
+// SetSentAsUserOutcome completes a durable, pre-send audit attempt. A pending
+// attempt after a crash deliberately says nothing about whether delivery occurred.
+func (d *DB) SetSentAsUserOutcome(ctx context.Context, id int64, outcome string) error {
+	_, err := d.pool.Exec(ctx, `UPDATE sent_as_user SET let_through = let_through || jsonb_build_object('outcome', $2::text) WHERE id = $1`, id, outcome)
+	return err
+}
+
 func objectOrEmpty(raw json.RawMessage) []byte {
 	if len(raw) == 0 {
 		return []byte(`{}`)

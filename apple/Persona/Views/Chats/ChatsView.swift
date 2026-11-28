@@ -21,16 +21,43 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
     var id: String // machineID/spaceID, "group|machineID/spaceID" for another group of hubs
     var machineID: String
     var spaceID: String
+    /// By Project can use a workspace ID when the session has no terminal space ID.
+    var workspaceGroupID: String? = nil
     /// The group of hubs its machine is in (docs/protocol/multi-hub.md); "" = the default group.
     var group: String = ""
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
     var name: String
+    var projectFolder: AgentProjectFolder? = nil
     var index: Int
     var sessions: [Session] // in tab order
     /// The hub project key for whole-space todo links; nil outside a herdr workspace.
     var todoSpace: String? = nil
     var aggregate: SessionListCounts? = nil
     var bounded = false
+
+    var headingLabel: String { [name, projectFolder?.qualifier].compactMap { $0 }.joined(separator: " · ") }
+
+    static func withProjectFolders(_ groups: [Self], machines: [MachineRef: Machine]) -> [Self] {
+        let sharedNames = Dictionary(grouping: groups, by: \.machineRef).mapValues { sameComputer in
+            Dictionary(grouping: sameComputer) { $0.name.lowercased() }.filter { $0.value.count > 1 }
+        }
+        return groups.map { group in
+            guard group.workspaceGroupID != nil || (group.spaceID != "-" && !group.spaceID.isEmpty) else { return group }
+            var counts: [String: Int] = [:]
+            for row in group.sessions {
+                let path = row.workspaceCWD.flatMap { $0.isEmpty ? nil : $0 } ?? row.cwd
+                if !path.isEmpty { counts[path, default: 0] += 1 }
+            }
+            guard let folder = counts.min(by: { left, right in
+                left.value == right.value ? left.key < right.key : left.value > right.value
+            })?.key else { return group }
+            let qualifier = sharedNames[group.machineRef]?[group.name.lowercased()] == nil ? nil
+                : AgentProjectFolder.parentLabel(folder, home: machines[group.machineRef]?.home)
+            var withFolder = group
+            withFolder.projectFolder = AgentProjectFolder(machine: group.machineRef, cwd: folder, qualifier: qualifier)
+            return withFolder
+        }
+    }
 
     var state: AgentState { sessions.map(\.countedState).min { $0.priority < $1.priority } ?? .idle }
     var updatedAt: Date { sessions.compactMap(\.updatedAt).max() ?? .distantPast }
@@ -53,11 +80,12 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
     /// Its agents that only wait in the background (#6045): counted apart, with a clock (`StateCounts`).
     var waitingInBackground: Int { sessions.filter { $0.waitsInBackground && !$0.isNestedSubtask }.count }
 
-    static func build(_ sessions: [Session]) -> [SpaceGroup] {
+    static func build(_ sessions: [Session], byProject: Bool = false) -> [SpaceGroup] {
         var groups: [String: SpaceGroup] = [:]
         for s in sessions where s.state.isLive {
             let spaceID = s.spaceID ?? "-"
-            let key = "\(s.machineRef.path)/\(spaceID)"
+            let workspace = byProject && (s.spaceID ?? "").isEmpty ? s.workspaceID.flatMap { $0.isEmpty ? nil : $0 } : nil
+            let key = "\(s.machineRef.path)/\(workspace ?? spaceID)"
             if groups[key] == nil {
                 let todoSpace: String?
                 if let id = s.spaceID, !id.isEmpty {
@@ -65,7 +93,7 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
                 } else {
                     todoSpace = nil
                 }
-                groups[key] = SpaceGroup(id: key, machineID: s.machineID, spaceID: spaceID, group: s.group,
+                groups[key] = SpaceGroup(id: key, machineID: s.machineID, spaceID: spaceID, workspaceGroupID: workspace, group: s.group,
                                          name: s.spaceName ?? s.folderName, index: s.spaceIndex ?? 0, sessions: [], todoSpace: todoSpace)
             }
             groups[key]!.sessions.append(s)
@@ -287,8 +315,10 @@ struct ChatsView: View {
     #if os(iOS)
     @State private var personalEntry = PersonalAgentEntryModel()
     private var showsPersonalEntry: Bool { personalEntry.isAvailable(for: model.api) }
+    private var personalCount: Int? { personalEntry.count(for: model.api) }
     #else
     private var showsPersonalEntry: Bool { true }
+    private var personalCount: Int? { nil }
     #endif
     /// The ⋯ menu's actions, kept current by the list (not observed: see `AgentsListMenu`).
     @State private var menuActions = AgentsListMenu.Actions()
@@ -724,7 +754,7 @@ struct ChatsView: View {
     private func agentsList(rows: AnyView?) -> AgentsList {
         AgentsList(path: listPushPath, spaceAt: $spaceAt, query: $query, searching: $searching,
                    searchedBeforePush: $searchedBeforePush, showNew: newSession, menuActions: menuActions, ownsTop: ownsTop,
-                   showsPersonalEntry: showsPersonalEntry, beginSearch: beginSearch, sidebarRows: rows)
+                   showsPersonalEntry: showsPersonalEntry, personalCount: personalCount, beginSearch: beginSearch, sidebarRows: rows)
     }
 
     /// The chat asked for from outside the list (a notification, a launch onto it): open, and the request taken.
@@ -884,6 +914,7 @@ private struct AgentsList: View {
     @State private var creatingChild: HostWorkspace?
     @State private var createdWorktree: HostWorkspace?
     @State private var startingWorktree: HostWorkspace?
+    @State private var startingProject: AgentProjectFolder?
     @State private var renamingWorktree: HostWorkspace?
     /// iPhone Duo's bars down the side: the shell's bar is the side rail, and the list needs no room for it at its top.
     @Environment(\.shellRailEdge) private var railEdge
@@ -893,6 +924,7 @@ private struct AgentsList: View {
     static let emptyNoComputerMessage = String(localized: "Add one and Persona can work on it for you.")
     @Environment(AppModel.self) private var model
     @Environment(\.shell) private var shell
+    @Environment(\.agentConsole) private var agentConsole
     /// The list's own column: regular beside the iPad's split; on a phone's split (iPhone Duo open) the sidebar column
     /// reads compact while the page is regular (#1971). `pushedOver` goes by `ownsTop` instead (#3680).
     @Environment(\.horizontalSizeClass) private var widthClass
@@ -906,6 +938,8 @@ private struct AgentsList: View {
     /// A phone: the page's own top (`AgentsHeader`), not the system's search.
     var ownsTop: Bool
     var showsPersonalEntry: Bool
+    /// How many personal agent conversations there are, for their group's heading (nil while unknown).
+    var personalCount: Int?
     var beginSearch: () -> Void
     /// The Sidebar layout (#6332): the Persona sidebar's rows (the pages, Persona's chats), held above the Agents, which
     /// get a heading of their own with the list's ⋯, Personal Agents and New Session (`UnifiedSidebarColumn`).
@@ -932,7 +966,7 @@ private struct AgentsList: View {
     private var hubFilter: String { HubFilter.shown(storedHubFilter, current: model.hub?.group) }
     @StoredValue("dev.grouping") private var storedGrouping: DevGrouping = .standard // by repository first (#2108)
     /// The grouping in use (`DevGrouping.resolved`).
-    private var grouping: DevGrouping { DevGrouping.resolvedNow(storedGrouping) }
+    private var grouping: DevGrouping { agentConsole ? .machine : DevGrouping.resolvedNow(storedGrouping) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
     /// Opt-in By Repository toggle (#14607): off by default, aligned with Android and Web.
     @StoredValue("dev.showEmptyWorkspaces") private var showEmptyWorkspaces = false
@@ -1065,7 +1099,7 @@ private struct AgentsList: View {
     private func projectionSettings() -> AgentListProjection.Settings {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
-        return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
+        return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, runningTerminalOnly: agentConsole, query: query,
                      searchScope: appliedScope,
                      searchAsCode: searchAsCode,
                      machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
@@ -1079,7 +1113,7 @@ private struct AgentsList: View {
         let settings = projectionSettings()
         let partitions = AgentListProjectionCache.partitions(model)
         let follows = feed.following && feed.hasPartitions(partitions)
-        let asks = ChildSessions.asks(model.pendingInteractions)
+        let asks = ChildSessions.asks(model.aggregatePendingInteractions)
         let key = AgentListProjectionCache.Key(revision: feed.revision, partitions: partitions, settings: settings,
                                                workspaceRevision: workspaceCatalog.revision, asks: asks)
         return feed.projection.resolve(key, immediate: !follows || feed.immediateRevision == key.revision,
@@ -1322,14 +1356,6 @@ private struct AgentsList: View {
                             machineFilterChip
                         }
                     }
-                    #if os(iOS)
-                    if shell != nil, showsPersonalEntry {
-                        AgentsPersonalPill { openFromList(PersonalAgentsRoute()) }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, Theme.Space.page)
-                            .padding(.bottom, Theme.Space.sm)
-                    }
-                    #endif
                 }
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
@@ -1401,6 +1427,20 @@ private struct AgentsList: View {
                     SectionHeader(title: String(localized: "section.pinned", defaultValue: "Pinned"), count: nil, tone: StatusPalette.idle)
                 }
             }
+
+            #if os(iOS)
+            // The shell's way to the personal agents (#140): a group of its own above the computers' (#16769), only
+            // over the whole list (not a quick filter's or a search's results, which it is not one of).
+            if shell != nil, showsPersonalEntry, quick == .all, query.isEmpty {
+                Section {
+                    AgentsPersonalHeading(count: personalCount) { openFromList(PersonalAgentsRoute()) }
+                        .modifier(ButtonRowInsets(edges: Self.hostHeadingInsets))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                .listSectionSpacing(.custom(0))
+            }
+            #endif
 
             if grouping == .recent {
                 recentSection(unpinned)
@@ -1588,6 +1628,12 @@ private struct AgentsList: View {
         .sheet(item: $startingWorktree) { workspace in
             NewChatView(preset: workspace.preset) { session in
                 startingWorktree = nil
+                openFromList(session.key)
+            }
+        }
+        .sheet(item: $startingProject) { project in
+            NewChatView(projectFolder: project) { session in
+                startingProject = nil
                 openFromList(session.key)
             }
         }
@@ -2019,15 +2065,16 @@ private struct AgentsList: View {
         let host = showHost ? s.hostKind.flatMap { $0 == "herdr" ? nil : $0 } : nil
         let sideUnread = unreadSideSummary(for: s)
         let preferTab = model.prefersHerdrTabName(for: s)
+        let pendingTitle = model.pendingAgentTitle(s.key)
         if grouping == .repo && !repoTree {
             // The Mac's and Apple Vision Pro's repository cards keep their rows. On iOS By Repository draws the same
             // rows as every other grouping (#3753).
-            WorkspaceAgentRow(session: s, time: time, muted: model.isMuted(s), sideUnread: sideUnread, preferHerdrTabName: preferTab)
+            WorkspaceAgentRow(session: s, pendingTitle: pendingTitle, time: time, muted: model.isMuted(s), sideUnread: sideUnread, preferHerdrTabName: preferTab)
         } else if compact {
-            CompactSlotRow(session: s, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane, sideUnread: sideUnread, preferHerdrTabName: preferTab)
+            CompactSlotRow(session: s, pendingTitle: pendingTitle, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane, sideUnread: sideUnread, preferHerdrTabName: preferTab)
                 .equatable()
         } else {
-            SlotRow(session: s, muted: model.isMuted(s), space: context ? (s.spaceName ?? s.folderName) : nil,
+            SlotRow(session: s, pendingTitle: pendingTitle, muted: model.isMuted(s), space: context ? (s.spaceName ?? s.folderName) : nil,
                     machine: rowMachine(s, context: context), host: host,
                     hideState: inStateSection, surface: cardLast.map { .cardRow(last: $0) } ?? .capsule, time: time, pane: pane,
                     rowStyle: listRowStyle, dense: !ownsTop, sideUnread: sideUnread, preferHerdrTabName: preferTab)
@@ -2142,7 +2189,7 @@ private struct AgentsList: View {
     private func spaceScope(_ group: SpaceGroup) -> RuntimeSessionLists.Scope {
         var query = listQuery
         query.machine = group.machineID
-        query.group = group.spaceID == "-" ? "" : group.spaceID
+        query.group = group.workspaceGroupID ?? (group.spaceID == "-" ? "" : group.spaceID)
         return RuntimeSessionLists.Scope(hub: group.group, query: query)
     }
 
@@ -2171,18 +2218,38 @@ private struct AgentsList: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("agents.space")
             TodoSpaceTag(group: g) { todoID in openFromList(TodoDetailRoute(id: todoID)) }
-            Menu {
-                SpaceHeaderMenu(group: g, isMuted: model.isMuted, rename: { renamingSpace = g }, open: { openFromList(SpaceRoute(id: g.id)) },
-                                linkTodo: { linkingSpace = g }).equatable()
-            } label: {
-                headerMenuLabel
+            if let folder = availableProjectFolder(g) {
+                Button {
+                    startingProject = folder
+                } label: {
+                    ThemedIcon(Theme.Icon.add).font(Theme.Font.label).foregroundStyle(.secondary)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("agents.project.new")
+                .accessibilityLabel("New Agent in \(g.headingLabel)")
             }
-            // Compact List: as quiet as the counts beside it (a Menu's label takes the accent otherwise).
-            .tint(compact ? Color.secondary : nil)
-            .labelOnlyMenu()
-            .accessibilityLabel("More actions for \(g.name) [Chats View 661d12]")
+            if g.workspaceGroupID == nil {
+                Menu {
+                    SpaceHeaderMenu(group: g, isMuted: model.isMuted, rename: { renamingSpace = g }, open: { openFromList(SpaceRoute(id: g.id)) },
+                                    linkTodo: { linkingSpace = g }).equatable()
+                } label: {
+                    headerMenuLabel
+                }
+                // Compact List: as quiet as the counts beside it (a Menu's label takes the accent otherwise).
+                .tint(compact ? Color.secondary : nil)
+                .labelOnlyMenu()
+                .accessibilityLabel("More actions for \(g.name) [Chats View 661d12]")
+            }
         }
         .task(id: spaceScope(g)) { await model.sessionLists.loadCounts(spaceScope(g)) }
+    }
+
+    private func availableProjectFolder(_ group: SpaceGroup) -> AgentProjectFolder? {
+        guard machine(group.machineRef)?.online == true,
+              model.sessionLists.hasCompleteSessions(group.group) else { return nil }
+        return group.projectFolder
     }
 
     /// The ⋯ on a space's or a repository's header.
@@ -2207,6 +2274,15 @@ private struct AgentsList: View {
                         }
                     } else {
                         quietRow(g, namesMachine: namesMachine, repo: false, selected: false)
+                            .contextMenu {
+                                if let folder = availableProjectFolder(g) {
+                                    Button {
+                                        startingProject = folder
+                                    } label: {
+                                        Label("New Agent in \(g.headingLabel)", systemImage: Theme.Icon.add)
+                                    }
+                                }
+                            }
                     }
                 }
             } header: {
@@ -2327,12 +2403,13 @@ private struct AgentsList: View {
     @ViewBuilder private func repoCard(_ r: RepoTree.Repo) -> some View {
         let folded = isFolded(r.id)
         Section {
-            Button { toggleFold(r.id) } label: { RepoCardHeader(name: r.name, folded: folded) }
+            Button { toggleFold(r.id) } label: {
+                RepoCardHeader(name: r.name, folded: folded, workspace: r.flattenedWorkspace)
+            }
                 .buttonStyle(.plain)
                 .contextMenu { repoMenu(r) }
                 .accessibilityIdentifier("agents.project")
-                .accessibilityLabel([r.name, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded")]
-                    .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+                .accessibilityLabel(repositoryLabel(r, folded: folded))
                 .selectionDisabled()
                 .modifier(FoldAnchor(id: r.id, reader: feed.reader))
                 .modifier(ButtonRowInsets(edges: rowInsets(level: 0)))
@@ -2352,6 +2429,7 @@ private struct AgentsList: View {
     /// What the ⋯ and the to-do's mark beside a repository's header offered: when its agents are all in one herdr space
     /// (the usual case), that space's pin, mute, rename, open and to-do; otherwise Mark All as Seen.
     @ViewBuilder private func repoMenu(_ r: RepoTree.Repo) -> some View {
+        if let workspace = r.flattenedWorkspace { worktreeMenu(workspace) }
         let prepared = lookup.projection?.repositories[r.id]
         if let space = prepared?.space {
             SpaceHeaderMenu(group: space, isMuted: model.isMuted, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
@@ -2505,23 +2583,29 @@ private struct AgentsList: View {
         let prepared = lookup.projection?.repositories[r.id]
         let space = prepared?.space
         let unread = prepared?.unread ?? []
+        let workspace = r.flattenedWorkspace
         return HStack(spacing: Theme.Space.xs) {
             Button { toggleFold(r.id) } label: {
                 HStack(spacing: Theme.Space.s) {
-                    ThemedIcon(Theme.Icon.folder).foregroundStyle(Theme.WorkspaceSidebar.muted)
-                    Text(r.name).font(Theme.WorkspaceSidebar.titleUnread).foregroundStyle(Theme.WorkspaceSidebar.foreground).lineLimit(1)
+                    ThemedIcon(workspace?.main == true ? Theme.Icon.home : Theme.Icon.folder).foregroundStyle(Theme.WorkspaceSidebar.muted)
+                    Text(r.name).font(Theme.WorkspaceSidebar.titleUnread).lineLimit(1)
+                        .foregroundStyle(workspace?.unavailable == true ? Theme.WorkspaceSidebar.muted : Theme.WorkspaceSidebar.foreground)
+                    if workspace?.latestPinnedAt != nil {
+                        ThemedIcon(Theme.Icon.pinned).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.accent).accessibilityHidden(true)
+                    }
                     Spacer(minLength: 0)
                     FoldChevron(folded: isFolded)
                 }.contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("agents.project")
-            .accessibilityLabel([r.name, isFolded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded")].joined(separator: ", "))
+            .accessibilityLabel(repositoryLabel(r, folded: isFolded))
             if let space {
                 TodoSpaceTag(group: space) { todoID in openFromList(TodoDetailRoute(id: todoID)) }
             }
-            if space != nil || !unread.isEmpty {
+            if workspace != nil || space != nil || !unread.isEmpty {
                 Menu {
+                    if let workspace { worktreeMenu(workspace) }
                     if let space {
                         SpaceHeaderMenu(group: space, isMuted: model.isMuted, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
                                         linkTodo: { linkingSpace = space }).equatable()
@@ -2537,6 +2621,17 @@ private struct AgentsList: View {
             }
         }
         .task(id: repoScope(r)) { await model.sessionLists.loadCounts(repoScope(r)) }
+    }
+
+    private func repositoryLabel(_ repo: RepoTree.Repo, folded: Bool) -> String {
+        var labels = [repo.name]
+        if let workspace = repo.flattenedWorkspace {
+            if workspace.main { labels.append(String(localized: "Main worktree")) }
+            if workspace.latestPinnedAt != nil { labels.append(String(localized: "Pinned [Personal Agent List View fb47db]")) }
+            if workspace.unavailable { labels.append(String(localized: "This computer is offline")) }
+        }
+        labels.append(folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"))
+        return labels.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
     }
 
     /// A working tree in its repository's card: its row and agents (`worktreeRow`), then the spaces nested under it
@@ -4349,9 +4444,9 @@ struct SpaceHeader: View {
             }
             if compact {
                 // Compact List: the space is the title over its rows (Color.primary: a header dims `.primary` a level).
-                Text(group.name).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
+                group.headingText(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
             } else {
-                Text(group.name).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).textCase(nil).lineLimit(1)
+                group.headingText(Theme.Font.sectionHeader).foregroundStyle(.secondary).textCase(nil).lineLimit(1)
             }
             let small = compact ? CompactList.meta : Theme.Font.label
             if pinned { ThemedIcon(Theme.Icon.pinned).font(small).foregroundStyle(Theme.accent).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
@@ -4366,11 +4461,19 @@ struct SpaceHeader: View {
         }
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([group.name, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"),
+        .accessibilityLabel([group.headingLabel, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"),
                              pinned ? String(localized: "Pinned [Personal Agent List View fb47db]") : "", muted ? String(localized: "Muted [Chats View b66705]") : "",
                              showMachine ? machine?.title ?? "" : "", StateCounts.spoken(group)]
             .filter { !$0.isEmpty }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+extension SpaceGroup {
+    @MainActor func headingText(_ font: Font) -> Text {
+        let title = Text(name).font(font)
+        guard let qualifier = projectFolder?.qualifier else { return title }
+        return Text("\(title)\(Text(" · " + qualifier).font(font).fontWeight(.regular).foregroundColor(.secondary))")
     }
 }
 
@@ -4500,6 +4603,7 @@ struct SourceLabel: View {
 /// words there: a tinted tab chip, a colored state word and an outlined kind tag on one line said the state three times.
 nonisolated struct SlotRow: View, Equatable {
     var session: Session
+    var pendingTitle: String? = nil
     /// Muted (itself or its space): no state word, a bell-slash — it should not catch the eye.
     var muted = false
     /// Named when the list is grouped by state or machine (otherwise the section is the space).
@@ -4533,7 +4637,7 @@ nonisolated struct SlotRow: View, Equatable {
     var preferHerdrTabName = false
 
     var primaryTab: String? { session.displayTabName(preferTab: preferHerdrTabName) }
-    var rowTitle: String { session.displayTitle(preferTab: preferHerdrTabName) }
+    var rowTitle: String { pendingTitle ?? session.displayTitle(preferTab: preferHerdrTabName) }
     var titleDetail: String? { session.displayTitleDetail(preferTab: preferHerdrTabName) }
 
     enum Surface: Equatable {
@@ -4862,6 +4966,7 @@ struct AgentTimeText: View {
 /// when on the right (alone there, so the times line up). `CompactList`'s scale.
 nonisolated struct CompactSlotRow: View, Equatable {
     var session: Session
+    var pendingTitle: String? = nil
     var muted = false
     /// As SlotRow's: the section already says the state (By Status).
     var hideState = false
@@ -4875,6 +4980,8 @@ nonisolated struct CompactSlotRow: View, Equatable {
     var sideUnread: SideFold.UnreadSummary? = nil
     /// Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and moves the CLI title to detail (#13899).
     var preferHerdrTabName = false
+
+    var rowTitle: String { pendingTitle ?? session.displayTitle(preferTab: preferHerdrTabName) }
 
     @MainActor
     var body: some View {
@@ -4908,7 +5015,7 @@ nonisolated struct CompactSlotRow: View, Equatable {
             }
             .scaledFrame(width: CompactList.mark)
             HStack(alignment: .firstTextBaseline, spacing: CompactList.gap) {
-                Text(session.displayTitle(preferTab: preferHerdrTabName))
+                Text(rowTitle)
                     .font(session.state == .unread ? CompactList.titleUnread : CompactList.title)
                     .lineLimit(1)
                     .layoutPriority(1)
@@ -4997,7 +5104,7 @@ struct QuietSpaceRow: View {
         HStack(spacing: Theme.Space.m) {
             ThemedIcon(repo ? Theme.Icon.folder : Theme.Icon.space).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(group.name).font(Theme.Font.heading).lineLimit(1)
+                group.headingText(Theme.Font.heading).lineLimit(1)
                 Text([showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
                       group.sessions.compactMap(\.slotLabel).prefix(3).joined(separator: " · ")]
                     .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
@@ -5144,7 +5251,7 @@ struct QuietSpaceCardHead: View {
 
     var body: some View {
         TaskRow(TaskItem(id: group.id, title: group.name,
-                         subtitle: [showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
+                         subtitle: [group.projectFolder?.qualifier, showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
                                     group.sessions.compactMap(\.slotLabel).prefix(3).joined(separator: " · ")]
                             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
                          status: .pending(step: 0)),
@@ -5169,6 +5276,7 @@ struct QuietSpaceCardHead: View {
 /// A session that is no longer running (resumable by sending a message).
 /// Used by the machine detail page.
 struct SessionRow: View {
+    @Environment(AppModel.self) private var model
     var session: Session
     var machine: Machine?
     var showMachine = true
@@ -5178,7 +5286,7 @@ struct SessionRow: View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
             // The avatar's color is the state: no dot on its corner nor beside the title (2026-10-31, three said it once).
             SessionAvatar(machine: machine, state: session.state, dot: false)
-            SlotRow(session: session, dot: false, preferHerdrTabName: preferHerdrTabName).equatable()
+            SlotRow(session: session, pendingTitle: model.pendingAgentTitle(session.key), dot: false, preferHerdrTabName: preferHerdrTabName).equatable()
         }
     }
 }

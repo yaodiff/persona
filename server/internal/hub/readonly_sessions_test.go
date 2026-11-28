@@ -518,6 +518,7 @@ func TestReadOnlyRouteMatrixScopesAndRelayHeaders(t *testing.T) {
 		{http.MethodPost, "/api/v1/interactions/ix1/resolve"},
 		{http.MethodPost, "/api/v1/assistant/messages"},
 		{http.MethodPost, "/api/v1/notify"},
+		{http.MethodPost, "/api/v1/mail/messages/acc1/1/move"},
 	} {
 		rec := doReadOnlyReq(t, mux, tc.method, tc.path, baseRO.Token, `{}`, "127.0.0.1:41000", nil, nil)
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "readonly_forbidden") {

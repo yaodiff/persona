@@ -197,8 +197,7 @@ extension AppModel {
     /// Picks the group hub-level pages show.
     func selectHub(_ group: String) {
         guard group != hub?.group, link(group) != nil else { return }
-        hubGroup = group
-        UserDefaults.standard.set(group, forKey: Self.hubGroupKey)
+        rememberHubGroup(group)
         hubChanged()
     }
 

@@ -144,6 +144,16 @@ describe("the decided differences: each case, and look-alikes that are not one",
     { why: "awaits_reply", is: { local: local("working", "agent_running"), view: view("can_wait", "awaits_reply"), facts: facts({ awaitsReply: true }) }, not: [] },
     { why: "awaits_reply", is: { local: local("parked", "pr_open"), view: view("can_wait", "awaits_reply"), facts: facts({ awaitsReply: true }) }, not: [] },
     { why: "awaits_reply", is: { local: local("parked", "parked"), view: view("can_wait", "awaits_reply"), facts: facts({ awaitsReply: true }) }, not: [] },
+    {
+      why: "stopped_unfinished",
+      is: { local: local("just_done", "finished_unseen"), view: view("needs_you", "stopped_unfinished") },
+      not: [
+        { local: local("just_done", "finished_unseen"), view: view("needs_you", "agent_asks") },
+        { local: local("just_done", "closed"), view: view("needs_you", "stopped_unfinished") },
+        { local: local("working", "agent_running"), view: view("needs_you", "stopped_unfinished") },
+        { local: local("just_done", "finished_unseen"), view: view("todo", "stopped_unfinished") },
+      ],
+    },
     // row 9: accepted work nobody has seen stays Just finished
     {
       why: "finished_unseen",

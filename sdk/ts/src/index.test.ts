@@ -129,6 +129,26 @@ test("push for apps before UI version 3", async () => {
   expect((await call("ui.action", { contribution: "home", ui_version: 3, action: "save" })).result).toEqual({ pop: true, toast: "存好了" });
 });
 
+test("a routine collects only from its named provider", async () => {
+  const { call } = harness({
+    id: "example", version: "1.0.0",
+    routineFacts: {
+      library: ({ date, language }) => ({
+        facts: [date], sections: [{ title: language, body: "Two books are due." }],
+      }),
+    },
+  });
+  await call("initialize", { protocol: 1, hub: { build: 0 }, granted: { routine_facts: true } });
+  const params = { contribution: "library", date: "2026-11-27", language: "en" };
+  expect((await call("routine_facts.collect", params)).result).toEqual({
+    facts: [params.date], sections: [{ title: "en", body: "Two books are due." }],
+  });
+  for (const contribution of ["missing", "toString"]) {
+    expect((await call("routine_facts.collect", { ...params, contribution })).error.code).toBe("no_contribution");
+  }
+  expect((await call("routine_facts.status", params)).error.code).toBe("unknown_method");
+});
+
 test("shortcuts and widgets", async () => {
   const { call } = harness({
     id: "example",

@@ -472,6 +472,7 @@ func TestPushGradingLayerCombinesSafelyWithOwnerControls(t *testing.T) {
 		}
 		nInFocusNonMain := trackNotification("", "qa-plain", "", "in focus non-main")
 		nInFocusNonMain.DeviceID, nInFocusNonMain.SessionID = "mac", "routine-conv"
+		nInFocusNonMain.Asked = true
 		out, err = h.deliverPushFrom(assistantwire.AssistantID, nInFocusNonMain)
 		if err != nil || heldOf(out) != assistantwire.AttentionReasonImmersiveHeld || *attempts != 0 {
 			t.Fatalf("immersive in-focus non-main promoted by ext: out=%+v err=%v attempts=%d", out, err, *attempts)
@@ -721,6 +722,7 @@ func TestPushGradingPreviewLiveSemanticParity(t *testing.T) {
 		setup(t, h)
 		for _, st := range steps {
 			mgr := cmp.Or(st.manager, assistantwire.AssistantID)
+			asked := st.notification.Asked
 			payload, err := json.Marshal(map[string]any{
 				"notification": pushGradingPreviewNotification{
 					Kind:       st.notification.Kind,
@@ -731,6 +733,7 @@ func TestPushGradingPreviewLiveSemanticParity(t *testing.T) {
 					Track:      st.notification.Track,
 					Depth:      st.notification.Depth,
 					Manager:    mgr,
+					Asked:      &asked,
 					Title:      st.notification.Title,
 					Body:       st.notification.Body,
 				},
@@ -1009,4 +1012,84 @@ func TestPushGradingLayerConcurrentAccess(t *testing.T) {
 	if !h.waitPushGradingLayerReconciled(ctx) {
 		t.Fatal("background layer reconciliation did not settle")
 	}
+}
+
+// Per-manager Hello.QuietPush and Hello.PushGradingCards reflect effectiveGradingFor (covering both hub.ln_mode and
+// extension layers with manager isolation), and writing, deleting, or pruning a layer refreshes connected managers via
+// manager.updated without mutating hub.ln_mode.
+func TestHelloQuietPushAndCardsReflectExtensionLayer(t *testing.T) {
+	h := newTestHub(t)
+	h.push.store = newGradingStore()
+	a := connectAssistant(t, h)
+	ctx := context.Background()
+	extA := extGradingPrincipal(assistantwire.AssistantID, "ext-a")
+
+	// Initially off: neither assistant nor manager-b has QuietPush or PushGradingCards.
+	initial := h.assistantHelloFor(ctx, assistantwire.AssistantID)
+	if initial.QuietPush || initial.PushGradingCards != nil {
+		t.Fatalf("initial assistant hello = %+v, want QuietPush=false and PushGradingCards=nil", initial)
+	}
+	if other := h.assistantHelloFor(ctx, "manager-b"); other.QuietPush || other.PushGradingCards != nil {
+		t.Fatalf("initial manager-b hello = %+v, want QuietPush=false and PushGradingCards=nil", other)
+	}
+
+	// Extension writes a layer with custom cards.* while owner hub.ln_mode stays off.
+	putVersionedLayer(t, h, extA, `{"version":1,"cards":{"supervisor_hold":false,"escalate_reasons":["irreversible"],"hold_conclusions":false,"hold_acceptance":true,"decision_level":"P1","report_level":"P2"}}`)
+	if h.push.pushGradingOn() {
+		t.Fatal("extension layer mutated owner hub.ln_mode")
+	}
+
+	wantCards := &assistantwire.PushGradingCards{
+		SupervisorHold:  false,
+		EscalateReasons: []string{"irreversible"},
+		HoldConclusions: false,
+		HoldAcceptance:  true,
+		DecisionLevel:   assistantwire.LevelP1,
+		ReportLevel:     assistantwire.LevelP2,
+	}
+	// Connected assistant receives the layer update over manager.updated.
+	eventually(t, 5*time.Second, "assistant receives layer QuietPush and PushGradingCards", func() bool {
+		hello, _ := a.bh.Hello(ctx)
+		return hello.QuietPush && reflect.DeepEqual(hello.PushGradingCards, wantCards)
+	})
+	// Fresh handshake hello for assistant matches, while manager-b does NOT inherit assistant's extension layer.
+	gotAssistant := h.assistantHelloFor(ctx, assistantwire.AssistantID)
+	if !gotAssistant.QuietPush || !reflect.DeepEqual(gotAssistant.PushGradingCards, wantCards) {
+		t.Fatalf("assistant hello after layer PUT: QuietPush=%v cards=%+v, want true %+v", gotAssistant.QuietPush, gotAssistant.PushGradingCards, wantCards)
+	}
+	gotOther := h.assistantHelloFor(ctx, "manager-b")
+	if gotOther.QuietPush || gotOther.PushGradingCards != nil {
+		t.Fatalf("manager-b hello inherited assistant layer: QuietPush=%v cards=%+v", gotOther.QuietPush, gotOther.PushGradingCards)
+	}
+
+	// Deleting the layer clears QuietPush and PushGradingCards and refreshes the connected manager.
+	if code, raw := gradingLayerHTTP(t, h, extA, http.MethodDelete, "/api/v1/push/grading/layer", ""); code != http.StatusOK || !strings.Contains(string(raw), `"removed":true`) {
+		t.Fatalf("DELETE layer: %d %s", code, raw)
+	}
+	eventually(t, 5*time.Second, "assistant receives cleared QuietPush after DELETE", func() bool {
+		hello, _ := a.bh.Hello(ctx)
+		return !hello.QuietPush && hello.PushGradingCards == nil
+	})
+	afterDelete := h.assistantHelloFor(ctx, assistantwire.AssistantID)
+	if afterDelete.QuietPush || afterDelete.PushGradingCards != nil {
+		t.Fatalf("assistant hello after DELETE: QuietPush=%v cards=%+v, want false nil", afterDelete.QuietPush, afterDelete.PushGradingCards)
+	}
+
+	// Re-claim layer, then uninstall/revoke via EventReport prune: connected manager refreshes back to off.
+	putVersionedLayer(t, h, extA, `{"version":1,"cards":{"report_level":"P2"}}`)
+	eventually(t, 5*time.Second, "assistant receives re-claimed layer", func() bool {
+		hello, _ := a.bh.Hello(ctx)
+		return hello.QuietPush && hello.PushGradingCards != nil && hello.PushGradingCards.ReportLevel == assistantwire.LevelP2
+	})
+	rawDrop, _ := json.Marshal(extwire.Report{PushGradingDeclared: true})
+	busEvents[extwire.EventReport](h, nil, rawDrop)
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if !h.waitPushGradingLayerReconciled(waitCtx) {
+		t.Fatal("reconcile prune did not settle")
+	}
+	eventually(t, 5*time.Second, "assistant receives cleared QuietPush after lifecycle prune", func() bool {
+		hello, _ := a.bh.Hello(ctx)
+		return !hello.QuietPush && hello.PushGradingCards == nil
+	})
 }

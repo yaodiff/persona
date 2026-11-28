@@ -227,7 +227,11 @@ export const uninstallExtension = async (id: string, keepData: boolean) =>
 
 const markets = async () => `${await extRoot()}/-/markets`;
 export const getMarkets = async () => adminApi<{ markets?: Market[] }>(await markets()).then((r) => (r.markets ?? []).map(marketView));
-export const addMarket = async (spec: string, token?: string) => adminApi<Market>(await markets(), "POST", token ? { spec, token } : { spec }).then(marketView);
+export const addMarket = async (spec: string, token?: string, keys?: string[]) =>
+  adminApi<Market>(await markets(), "POST", { spec, ...(token ? { token } : {}), ...(keys?.length ? { keys } : {}) }).then(marketView);
+/** A private market's trusted keys (docs/extensions/extensions.md "Private market keys"): add one, remove one by key id. */
+export const addMarketKey = async (id: string, key: string) => adminApi<Market>(`${await markets()}/${enc(id)}/keys`, "POST", { key }).then(marketView);
+export const removeMarketKey = async (id: string, keyID: string) => adminApi<Market>(`${await markets()}/${enc(id)}/keys/${enc(keyID)}`, "DELETE").then(marketView);
 export const removeMarket = async (id: string) => adminApi<{ ok: boolean }>(`${await markets()}/${enc(id)}`, "DELETE");
 export const refreshMarket = async (id: string) => adminApi<Market>(`${await markets()}/${enc(id)}/refresh`, "POST").then(marketView);
 export const setMarketToken = async (id: string, token: string) => adminApi<Market>(`${await markets()}/${enc(id)}/token`, "PUT", { token }).then(marketView);

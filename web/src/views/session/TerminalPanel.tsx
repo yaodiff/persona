@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { resumeAgent, useResume } from "../../lib/agent-resume";
-import { isStoppedAgent, sessionTitle, stateOf } from "../../lib/format";
+import { isStoppedAgent, sessionTitle, activityOf } from "../../lib/format";
 import { machineWithHub } from "../../lib/mesh";
 import { registerShortcut } from "../../lib/shortcuts";
 import { getSession, useStore } from "../../lib/store";
@@ -75,6 +75,9 @@ function PaneTerminal({
   live,
   resumable,
   onOffline,
+  compact,
+  fullSupported,
+  onSplit,
 }: {
   mid: string;
   sid: string;
@@ -87,11 +90,16 @@ function PaneTerminal({
   resumable?: boolean;
   /** Whether the stream says the session is not running (the panel's Resume line says the terminal is gone). */
   onOffline?: (offline: boolean) => void;
+  /** Compact standalone header: fold secondary actions into a single overflow menu. */
+  compact?: boolean;
+  fullSupported?: boolean;
+  onSplit?: () => void;
 }) {
   const session = useStore(() => getSession(mid, sid));
   const canDrive = useStore((s) => s.features.includes("terminal_control"));
   const host = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
+  const overflowAnchor = useRef<HTMLElement | null>(null);
   const [feed, setFeed] = useState<TerminalFeed | null>(null);
   const v = useFeed(feed);
   const [keyBar, setKeyBar] = useState(savedKeyBar);
@@ -262,26 +270,51 @@ function PaneTerminal({
           <>
             {v && <SizeLabel v={v} switching={Boolean(feed && canDrive && streaming)} />}
             {feed && v && canDrive && streaming && <ModeSwitch v={v} onChange={(on) => feed.setWants(on)} />}
-            {feed && v && !driving && (
-              <IconButton
-                icon="wrap"
-                label={v.wrap ? t("session-terminalpanel.wrap_on") : t("session-terminalpanel.wrap_off")}
-                active={v.wrap}
-                onClick={() => feed.setWrap(!v.wrap)}
+            {compact ? (
+              <PaneActions
+                mid={mid}
+                sid={sid}
+                fullSupported={Boolean(fullSupported)}
+                onSplit={onSplit ?? (() => {})}
+                compact
+                onButton={(el) => { overflowAnchor.current = el; }}
+                extraItems={[
+                  ...(feed && v && !driving ? [{
+                    key: "wrap",
+                    label: v.wrap ? t("session-terminalpanel.wrap_on") : t("session-terminalpanel.wrap_off"),
+                    icon: "wrap" as const,
+                    checked: v.wrap,
+                    onSelect: () => feed.setWrap(!v.wrap),
+                  }] : []),
+                  ...(onFiles && dir ? [{ key: "files", label: t("session-terminalpanel.files"), icon: "folder" as const, onSelect: onFiles }] : []),
+                  { key: "settings", label: t("session-terminalpanel.settings"), icon: "gear" as const, disabled: !feed, onSelect: () => setOptions(overflowAnchor.current) },
+                  { key: "reconnect", label: t("session-terminalpanel.reconnect"), icon: "retry" as const, disabled: !feed, onSelect: () => feed?.retry() },
+                ]}
               />
+            ) : (
+              <>
+                {feed && v && !driving && (
+                  <IconButton
+                    icon="wrap"
+                    label={v.wrap ? t("session-terminalpanel.wrap_on") : t("session-terminalpanel.wrap_off")}
+                    active={v.wrap}
+                    onClick={() => feed.setWrap(!v.wrap)}
+                  />
+                )}
+                {onFiles && dir && <IconButton icon="folder" label={t("session-terminalpanel.files")} onClick={onFiles} className="max-lg:hidden" />}
+                <IconButton
+                  icon="gear"
+                  label={t("session-terminalpanel.settings")}
+                  active={Boolean(options)}
+                  disabled={!feed}
+                  onClick={(e) => {
+                    const target = e.currentTarget;
+                    setOptions((o) => (o ? null : target));
+                  }}
+                />
+                <IconButton icon="retry" label={t("session-terminalpanel.reconnect")} onClick={() => feed?.retry()} disabled={!feed} />
+              </>
             )}
-            {onFiles && dir && <IconButton icon="folder" label={t("session-terminalpanel.files")} onClick={onFiles} className="max-lg:hidden" />}
-            <IconButton
-              icon="gear"
-              label={t("session-terminalpanel.settings")}
-              active={Boolean(options)}
-              disabled={!feed}
-              onClick={(e) => {
-                const target = e.currentTarget;
-                setOptions((o) => (o ? null : target));
-              }}
-            />
-            <IconButton icon="retry" label={t("session-terminalpanel.reconnect")} onClick={() => feed?.retry()} disabled={!feed} />
           </>,
           slot,
         )}
@@ -455,14 +488,19 @@ export function TerminalPanel({
   mid,
   sid,
   label,
+  context,
   cwd,
   onFiles,
   onClose,
   embedded,
+  standalone,
+  onToggleSidebar,
 }: {
   mid: string;
   sid: string;
   label?: string;
+  /** Secondary workspace / machine breadcrumb for the compact standalone header. */
+  context?: string;
   /** The pane's working directory when the page knows it (else the session's): dropped Files entries are named relative to it. */
   cwd?: string;
   /** Opens the Files panel beside the terminal (the terminal page; as a side panel the Files panel would replace this one). */
@@ -470,6 +508,10 @@ export function TerminalPanel({
   onClose: () => void;
   /** Shown under a header of the page's own (a session's terminal view): this panel's header shrinks to a toolbar of its controls. */
   embedded?: boolean;
+  /** Standalone terminal workspace card (/terminal/<mid>/<id>): collapses header and toolbar into one compact 44px bar. */
+  standalone?: boolean;
+  /** Narrow-screen sidebar drawer button inside the compact standalone bar. */
+  onToggleSidebar?: () => void;
 }) {
   const session = useStore(() => getSession(mid, sid));
   const machine = useStore((s) => machineWithHub(mid, s.machines));
@@ -533,9 +575,11 @@ export function TerminalPanel({
   const [paneOffline, setPaneOffline] = useState(false);
   const resume = useResume(mid, sid);
   const agentRow = Boolean(session && (!session.source_kind || isStoppedAgent(session)) && !session.assistant && !isPaneAddress(sid));
-  const resumable = agentRow && (isStoppedAgent(session) || (paneOffline && stateOf(session!) === "offline") || resume.phase === "resuming");
+  const resumable = agentRow && (isStoppedAgent(session) || (paneOffline && activityOf(session!) === "offline") || resume.phase === "resuming");
 
   const dir = cwd || session?.cwd || "";
+  const primaryTitle = label || (session ? sessionTitle(session) : "") || t("session-terminalpanel.title");
+  const contextText = context ?? machine;
   const subtitle = [label ?? (session ? sessionTitle(session) : ""), machine].filter(Boolean).join(" · ");
   // pane → full: the pane surface still drives its own pane while it fades, so the other opens after it
   const waitFor = (mode: TerminalMode) => (surfaces.from === "pane" && mode === "full" ? SURFACE_MS + 40 : 0);
@@ -543,12 +587,31 @@ export function TerminalPanel({
 
   return (
     <div ref={root} className="@container flex min-h-0 flex-1 flex-col">
-      {!embedded && <PanelHeader icon="terminal" title={t("session-terminalpanel.title")} subtitle={subtitle} onClose={onClose} />}
-      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-1" data-terminal-toolbar>
-        {supported && <ModeToggle mode={surfaces.shown} onChange={choose} />}
-        <PaneActions key={key} mid={mid} sid={sid} fullSupported={supported} onSplit={() => choose("full")} />
-        <span ref={setSlot} className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2" />
-      </div>
+      {standalone ? (
+        <header data-terminal-header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-page/85 px-3 backdrop-blur-md">
+          {onToggleSidebar && <IconButton icon="sidebar" label={t("shellswitch.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
+          <span aria-hidden data-terminal-icon className="flex size-6 shrink-0 items-center justify-center rounded-[6px] border border-line bg-inset text-ink-2">
+            <Icon name="terminal" size={13} />
+          </span>
+          <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden text-meta" title={[primaryTitle, contextText].filter(Boolean).join(" · ")}>
+            <span className="truncate font-medium text-ink">{primaryTitle}</span>
+            {contextText && <span className="min-w-0 shrink truncate text-label text-ink-3">· {contextText}</span>}
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {supported && <ModeToggle mode={surfaces.shown} onChange={choose} />}
+            <span ref={setSlot} className="flex shrink-0 items-center gap-1.5" />
+          </div>
+        </header>
+      ) : (
+        <>
+          {!embedded && <PanelHeader icon="terminal" title={t("session-terminalpanel.title")} subtitle={subtitle} onClose={onClose} />}
+          <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-1" data-terminal-toolbar>
+            {supported && <ModeToggle mode={surfaces.shown} onChange={choose} />}
+            <PaneActions key={key} mid={mid} sid={sid} fullSupported={supported} onSplit={() => choose("full")} />
+            <span ref={setSlot} className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2" />
+          </div>
+        </>
+      )}
       {resumable && <ResumeLine mid={mid} sid={sid} closed={paneOffline} />}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {order.map((mode) => {
@@ -556,7 +619,19 @@ export function TerminalPanel({
           return (
             <Surface key={mode} leaving={leaving} enter={!leaving && surfaces.from !== null} dir={slideFrom(surfaces.shown)}>
               {mode === "pane" ? (
-                <PaneTerminal mid={mid} sid={sid} cwd={cwd} onFiles={onFiles} slot={slot} live={!leaving} resumable={resumable} onOffline={setPaneOffline} />
+                <PaneTerminal
+                  mid={mid}
+                  sid={sid}
+                  cwd={cwd}
+                  onFiles={onFiles}
+                  slot={slot}
+                  live={!leaving}
+                  resumable={resumable}
+                  onOffline={setPaneOffline}
+                  compact={standalone}
+                  fullSupported={supported}
+                  onSplit={() => choose("full")}
+                />
               ) : (
                 <FullTerminal
                   mid={mid}
@@ -568,6 +643,7 @@ export function TerminalPanel({
                   delay={waitFor(mode)}
                   onFallback={() => choose("pane")}
                   onFailed={fallBack}
+                  compact={standalone}
                 />
               )}
             </Surface>
@@ -608,6 +684,7 @@ function HistoryStatus({ v, onLoad }: { v: FeedView; onLoad: () => void }) {
         {t("session-terminalpanel.loading_older")}
       </div>
     );
+  if (v.dropped) return <div className={cls}>{t("session-terminalpanel.history_dropped")}</div>;
   if (v.atLimit) return <div className={cls}>{t("session-terminalpanel.history_limit")}</div>;
   if (!v.hasOlder) return <div className={cls}>{t("session-terminalpanel.history_start")}</div>;
   return (
@@ -630,7 +707,8 @@ function SizeLabel({ v, switching }: { v: FeedView; switching: boolean }) {
   if (v.control === "starting") return <span className="hidden shrink-0 whitespace-nowrap text-[11.5px] text-ink-3 @md:inline">{t("session-terminalpanel.size_starting")}</span>;
   // The switch is the truth only when it shows what happens: "Take control" while the keys go in, or "View only" chosen.
   if (switching && (v.control === "active" || !v.wants)) return null;
-  const title = v.mode === "poll" ? t("session-terminalpanel.size_poll_hint") : t("session-terminalpanel.size_watch_hint");
+  const title =
+    v.mode !== "poll" ? t("session-terminalpanel.size_watch_hint") : v.pollFast ? t("session-terminalpanel.size_poll_fast_hint") : t("session-terminalpanel.size_poll_hint");
   return (
     <span title={title} className="hidden shrink-0 whitespace-nowrap text-[11.5px] text-ink-3 @md:inline">
       {t("session-terminalpanel.size_watch_only")}

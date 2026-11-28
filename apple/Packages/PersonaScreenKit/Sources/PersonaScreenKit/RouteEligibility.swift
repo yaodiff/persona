@@ -37,9 +37,13 @@ public enum RouteEligibility {
         guard let ip = IPBytes.parse(candidate.addr) else { return nil }
         switch LinkStats.Kind(rawValue: candidate.kind) {
         case .lan?:
+            guard !IPBytes.isUnspecifiedOrLoopback(ip) else { return nil }
             return interfaces.first { i in
                 (i.via == .wifi || i.via == .wired) && i.addresses.contains { a in
-                    a.bytes.count == ip.count && IPBytes.sameNetwork(a.bytes, ip, prefix: a.prefix)
+                    a.bytes.count == ip.count
+                        && a.prefix > 0
+                        && !IPBytes.isUnspecifiedOrLoopback(a.bytes)
+                        && IPBytes.sameNetwork(a.bytes, ip, prefix: a.prefix)
                 }
             }
         case .tailscale?:
@@ -58,6 +62,7 @@ public enum RouteEligibility {
 /// Address arithmetic, without Network.framework (PersonaScreenKit is Foundation only).
 enum IPBytes {
     static func parse(_ text: String) -> [UInt8]? {
+        guard !text.utf8.contains(0) else { return nil }
         var v4 = in_addr()
         if inet_pton(AF_INET, text, &v4) == 1 { return withUnsafeBytes(of: &v4) { Array($0) } }
         var v6 = in6_addr()
@@ -67,7 +72,8 @@ enum IPBytes {
 
     /// Whether a and b share their first `prefix` bits.
     static func sameNetwork(_ a: [UInt8], _ b: [UInt8], prefix: Int) -> Bool {
-        guard a.count == b.count, prefix >= 0, prefix <= a.count * 8 else { return false }
+        let (maxBits, overflow) = a.count.multipliedReportingOverflow(by: 8)
+        guard !overflow, a.count == b.count, prefix >= 0, prefix <= maxBits else { return false }
         var bits = prefix
         for i in 0..<a.count where bits > 0 {
             let mask: UInt8 = bits >= 8 ? 0xff : UInt8(truncatingIfNeeded: 0xff << (8 - bits))
@@ -75,6 +81,21 @@ enum IPBytes {
             bits -= 8
         }
         return true
+    }
+
+    /// Unspecified (`0.0.0.0/8`, `::`) or loopback (`127.0.0.0/8`, `::1`, or IPv4-mapped equivalents).
+    static func isUnspecifiedOrLoopback(_ ip: [UInt8]) -> Bool {
+        if ip.count == 4 {
+            return ip[0] == 127 || ip[0] == 0
+        }
+        if ip.count == 16 {
+            if ip.allSatisfy({ $0 == 0 }) { return true }
+            if ip[0..<15].allSatisfy({ $0 == 0 }) && ip[15] == 1 { return true }
+            if ip[0..<10].allSatisfy({ $0 == 0 }) && ip[10] == 0xff && ip[11] == 0xff {
+                return isUnspecifiedOrLoopback(Array(ip[12..<16]))
+            }
+        }
+        return false
     }
 
     /// Tailscale's range holding ip: 100.64.0.0/10 or fd7a:115c:a1e0::/48; nil outside both.

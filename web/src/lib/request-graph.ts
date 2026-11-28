@@ -296,7 +296,7 @@ function ownerOfAgent(todos: readonly Todo[], key: string): Todo | undefined {
  * else the to-do's own links), and under each, first the workers it handed out (open and closed) with their own trees,
  * then the Agents it spawned, then its in-session subagents (running and ended, nested by the subagent that launched
  * each, the earliest first); the ones it had before come last. A summary row has no subagents, so they are read from the
- * complete row when there is one, and the direction tree's running ones fill in what a stale row does not have yet.
+ * complete row when there is one, and the direction tree fills in subagents the session row does not have.
  */
 export function nodeAgents(todo: Todo, data: GraphData): NodeAgent[] {
   const out: NodeAgent[] = [];
@@ -321,7 +321,7 @@ export function nodeAgents(todo: Todo, data: GraphData): NodeAgent[] {
       for (const c of kids ?? []) {
         const id = subagentId(c.session_id, sid);
         if (id === undefined) continue;
-        if (!subs.some((x) => x.id === id)) subs.push({ id, parent: under, title: c.title, running: true, doing: "", i: subs.length });
+        if (!subs.some((x) => x.id === id)) subs.push({ id, parent: under, title: c.title, running: c.state === "working", doing: "", i: subs.length });
         fromTree(c.children, id);
       }
     };

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,6 +52,16 @@ func (s core) FeishuMessage(ctx context.Context, p FeishuMessage) error {
 	if err != nil {
 		return &rpc.Error{Code: CodeTryAgain, Message: "the bot's status: " + err.Error()}
 	}
+	// This is the internal, paired Feishu bot handover. Other extensions enter through channelReceive.
+	// The bound chat check was made at the bot, before it called this method.
+	// The core decides whether a project review takes it (Host.ProjectReviewOwnerInput).
+	if p.From == "" && st.Enabled && st.Owner != "" && ev.Message.MessageID != "" &&
+		ev.Sender.SenderType == "user" && ev.Sender.SenderID.OpenID == st.Owner && slices.Contains(st.Chats, ev.Message.ChatID) {
+		target := s.botTargetFor(ev.Message.RootID, ev.Message.ParentID)
+		if err := s.h.ProjectReviewOwnerInput(ctx, "feishu:"+ev.Message.MessageID, target.MachineID, target.SessionID); err != nil {
+			return &rpc.Error{Code: CodeTryAgain, Message: "could not commit project review input"}
+		}
+	}
 	first, err := s.claimBotMessage(ev.Message.MessageID)
 	if err != nil {
 		return &rpc.Error{Code: CodeTryAgain, Message: err.Error()}
@@ -92,8 +103,7 @@ func (s core) feishuMessage(ev botcard.MessageEvent, st FeishuStatus, action str
 		return
 	}
 	if msg.ChatType != "p2p" {
-		// A group chat's message never takes the private chat's road (its commands, its replies, the current target):
-		// the hub does not hand any over yet, and this is the second line when it does (thread.go).
+		// Group messages route by topic, independently of private chat commands, cards and the current target.
 		s.threadMessage(ctx, ev, st, content)
 		return
 	}
@@ -147,8 +157,7 @@ func (s core) botSend(ctx context.Context, ev *botcard.MessageEvent, content bot
 	return s.botSendIn(ctx, ev, content, t, nil)
 }
 
-// botSendIn is botSend for a message said in a topic (topic given: the chat and thread of the todo it is bound to,
-// thread.go): the message quotes and forwards nothing in (what others said there is not the owner's words),
+// botSendIn is botSend for a message said in a topic. It imports no quotes or forwards from that group,
 // and the run's progress, answer and notes go back into that thread (runTo).
 func (s core) botSendIn(ctx context.Context, ev *botcard.MessageEvent, content botcard.Content, t botTarget, topic *feishuTopic) error {
 	rt, err := s.resolveBotTarget(ctx, t)
@@ -169,6 +178,12 @@ func (s core) botSendIn(ctx context.Context, ev *botcard.MessageEvent, content b
 	hello := s.hello(ctx)
 	lang := i18n.Lang(hello.Locale)
 	in := prompts.BotMessage{Persona: !t.Agent(), Topic: topic != nil, Owner: strings.TrimSpace(hello.Owner), Language: s.h.AnswerLanguage(hello.Locale), Text: content.Text}
+	if topic != nil {
+		in.UnboundTopic = topic.UnboundMode != ""
+		if topic.UnboundMode == assistantwire.TopicMainDecides {
+			in.TopicMessageID = msg.MessageID
+		}
+	}
 	if t.TodoID != "" && topic == nil {
 		in.Todo = s.h.ReminderTodo(ctx, t.TodoID)
 	}
@@ -273,6 +288,9 @@ func (s core) botSendIn(ctx context.Context, ev *botcard.MessageEvent, content b
 	ext := map[string]string{}
 	if topic != nil {
 		ext["chat"], ext["thread"] = topic.Chat, topic.Thread
+		if in.TopicMessageID != "" {
+			ext[assistantwire.FeishuTopicMayOpenTodo] = topic.Pairing
+		}
 	}
 	if err := s.h.StartRun(ctx, rt, t, msg.MessageID, text, images, botProbe(content.Text, in), reaction, ext); err != nil {
 		return err

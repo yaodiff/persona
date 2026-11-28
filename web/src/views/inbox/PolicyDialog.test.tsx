@@ -65,7 +65,7 @@ describe("收件箱规则", () => {
     await flush();
     expect(button("移除")).toBeUndefined(); // nothing to remove yet
     act(() => button("始终需要你")!.click());
-    act(() => button("分身不碰")!.click());
+    act(() => button("不交由分身")!.click());
     act(() => button("保存")!.click());
     await flush();
     const post = call("POST", "/api/v1/inbox/policies");

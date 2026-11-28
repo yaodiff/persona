@@ -119,6 +119,7 @@ describe("the settings search's index", () => {
     finds(t("settings-assistantsettings.timezone"), "persona", "runs-on");
     finds(t("settings-assistantsettings.recent_task_chats"), "persona", "recent-task-chats");
     finds(t("settings-assistantsettings.default_permissions"), "persona", "default-permissions");
+    finds(t("settings-assistantsettings.approval_mirror_main"), "persona", "approval-mirror-main");
     finds(t("settings-triagesettings.auto_continue"), "persona", "triage-auto-continue");
     finds(t("settings-notifications.quiet"), "notifications", "notify-quiet");
     finds(t("settings-notifications.system_always"), "notifications", "notify-system-always");

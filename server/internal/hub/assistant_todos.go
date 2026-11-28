@@ -25,7 +25,7 @@ import (
 func (h *Hub) todoHandoff(ctx context.Context, w http.ResponseWriter, p assistantwire.TodoHandoff) (string, []proto.Image, bool) {
 	res, err := h.asst().TodoHandoff(ctx, p)
 	if err != nil {
-		writeAssistantErr(w, err)
+		writeSendAssistantErr(w, err)
 		return "", nil, false
 	}
 	if res.Status != 0 {

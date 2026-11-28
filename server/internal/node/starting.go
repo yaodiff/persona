@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -305,6 +307,9 @@ func (n *Node) startAsyncIn(kind, id, cwd, launcher, prompt, workspaceID, mode, 
 	// Known from now on: its chat loads empty while it starts (startingSession) and its watch waits for the transcript.
 	initial := sessionState{Launcher: launcher, Cwd: cwd, StartedAt: now}
 	if execution.taskSpace != nil {
+		if cmp.Or(kind, n.defaultKind()) == host.Orca {
+			initial.WorkspaceHost = host.Orca
+		}
 		initial.TaskID = execution.taskSpace.task
 		initial.WorkspaceID = execution.taskSpace.id
 		initial.WorkspaceLabel = execution.taskSpace.label

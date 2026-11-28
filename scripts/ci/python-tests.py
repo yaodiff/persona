@@ -38,11 +38,21 @@ DEFAULT_JOBS = 6
 SUITE_SECONDS = 120
 
 
-def run_suite(suite, home_root, lock):
+def toolchain_homes(environment):
+    """Rust shims need their installed toolchain and shared Cargo cache after HOME is isolated."""
+    home = Path(environment.get("HOME") or str(Path.home()))
+    homes = {key: str(Path(value).expanduser().resolve())
+             for key, value in environment.items() if key in {"RUSTUP_HOME", "CARGO_HOME"} and value}
+    homes.setdefault("RUSTUP_HOME", str(home / ".rustup"))
+    homes.setdefault("CARGO_HOME", str(home / ".cargo"))
+    return homes
+
+
+def run_suite(suite, home_root, lock, homes):
     """Run one suite with captured output; print its block whole; return (label, exit code)."""
     label = str(suite.relative_to(ROOT))
     home = tempfile.mkdtemp(prefix="h-", dir=home_root)
-    env = dict(os.environ, HOME=home)
+    env = dict(os.environ, HOME=home, **homes)
     started = time.monotonic()
     with tempfile.TemporaryFile(dir=home_root) as output:
         process = subprocess.Popen(resolve([sys.executable, "-B", "-m", "unittest", "-q", suite.stem]), cwd=suite.parent,
@@ -83,6 +93,8 @@ def main():
         sys.exit("FAIL no Python script suites discovered for shard")
     print(f"Python shard {args.shard_index + 1}/{args.shard_count}: {len(suites)} suites", flush=True)
     caches = json.loads(subprocess.check_output(["go", "env", "-json", "GOCACHE", "GOMODCACHE", "GOPATH"], text=True, timeout=30))
+    # Resolve the caller's rustup home before the launcher replaces its own HOME; doing this in run_suite would be too late.
+    homes = toolchain_homes(os.environ)
     failed = []
     with tempfile.TemporaryDirectory(prefix="persona-ci-home-", dir=os.environ.get("TMPDIR")) as home:
         cleaned = clean_environment(dict(os.environ))
@@ -100,7 +112,7 @@ def main():
                 reservation.close()
         lock = threading.Lock()
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            for label, code in pool.map(lambda suite: run_suite(suite, home, lock), suites):
+            for label, code in pool.map(lambda suite: run_suite(suite, home, lock, homes), suites):
                 if code:
                     failed.append(label)
     print(f"Python suites: {len(suites)}; failed: {len(failed)}")

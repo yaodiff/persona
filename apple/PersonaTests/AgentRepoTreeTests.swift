@@ -21,6 +21,119 @@ struct AgentRepoTreeTests {
 
     private let machines = [MachineRef(id: "machine-b"), MachineRef(id: "machine-a")]
 
+    @Test func removedHerdrTreesJoinOnlyAnUnambiguousRepository() throws {
+        let home = [MachineRef(id: "machine-a"): "/home/me"]
+        let main = session("main", "/code/app", repoRoot: "/code/app")
+        let removed = session("removed", "/home/me/.herdr/worktrees/app/removed")
+        let other = session("other", "/other/app", repoRoot: "/other/app")
+        let knownPath = "/home/me/.herdr/worktrees/app/known"
+        let known = session("known", knownPath, repoRoot: "/code/app", worktree: knownPath)
+
+        let unique = try #require(RepoTree.build([main, removed], machines: machines, homes: home).first?.repos.first)
+        #expect(unique.path == "/code/app")
+        #expect(Set(unique.sessions.map(\.sessionID)) == ["main", "removed"])
+        #expect(RepoTree.build([main, removed], machines: machines).first?.repos.count == 2)
+        #expect(RepoTree.build([main, removed, other], machines: machines, homes: home).first?.repos.count == 3)
+        let learned = try #require(RepoTree.build([main, removed, other], machines: machines, homes: home,
+                                                knownSessions: [main, removed, other, known]).first?.repos)
+        #expect(learned.count == 2)
+        #expect(Set(learned.first(where: { $0.path == "/code/app" })?.sessions.map(\.sessionID) ?? []) == ["main", "removed"])
+        let conflicting = session("conflicting", knownPath, repoRoot: "/other/app", worktree: knownPath)
+        #expect(RepoTree.build([main, removed, other], machines: machines, homes: home,
+                               knownSessions: [known, conflicting]).first?.repos.count == 3)
+    }
+
+    @Test func aLoneHerdrWorktreeCarriesItsWorkspaceToTheRepositoryHeader() throws {
+        var workspace = HostWorkspace(machineID: "machine-a", source: "herdr", sourceID: "notes", title: "notes", cwd: "/code/notes")
+        workspace.pinnedAt = Date(timeIntervalSince1970: 10)
+        workspace.available = false
+        var row = session("agent", workspace.cwd)
+        row.spaceKind = "herdr"
+        row.spaceID = workspace.sourceID
+        let repo = try #require(RepoTree.build([row], machines: machines, workspaces: [workspace]).first?.repos.first)
+        #expect(repo.flat)
+        #expect(repo.flattenedWorkspace?.workspace?.key == workspace.key)
+        #expect(repo.flattenedWorkspace?.latestPinnedAt == workspace.pinnedAt)
+        #expect(repo.flattenedWorkspace?.unavailable == true)
+        #expect(repo.flattenedWorkspace?.main == true)
+        #expect(RepoTree.build([], machines: machines, workspaces: [workspace]).first?.repos.first?.flat == false)
+        workspace.branch = "feature"
+        #expect(RepoTree.build([row], machines: machines, workspaces: [workspace]).first?.repos.first?.flat == false)
+    }
+
+    @Test func searchingDoesNotDiscardGitPlacementForARemovedTree() throws {
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(
+            #"{"id":"machine-a","name":"Computer","kind":"local","online":true,"home":"/home/me"}"#.utf8
+        ))
+        let known = "/home/me/.herdr/worktrees/app/known"
+        let rows = [
+            session("pick-main", "/code/app", repoRoot: "/code/app"),
+            session("pick-other", "/other/app", repoRoot: "/other/app"),
+            session("pick-removed", "/home/me/.herdr/worktrees/app/removed"),
+            session("known", known, repoRoot: "/code/app", worktree: known),
+        ]
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"
+        settings.query = "pick"
+        let result = AgentListProjection.build(.init(sessions: rows, machines: [machine], settings: settings))
+        let sections = try #require(result.tree.first?.repos)
+        #expect(sections.count == 2)
+        #expect(Set(sections.first(where: { $0.path == "/code/app" })?.sessions.map(\.sessionID) ?? []) == ["pick-main", "pick-removed"])
+    }
+
+    @Test func anUnboundAgentAtTheSamePathDoesNotInheritTheHerdrWorkspace() throws {
+        let workspace = HostWorkspace(machineID: "machine-a", source: "herdr", sourceID: "notes", title: "notes", cwd: "/code/notes")
+        var bound = session("bound", workspace.cwd)
+        bound.spaceKind = "herdr"
+        bound.spaceID = workspace.sourceID
+        let free = session("free", workspace.cwd)
+        let repos = try #require(RepoTree.build([free, bound], machines: machines, workspaces: [workspace]).first?.repos)
+        let repo = try #require(repos.first)
+        #expect(repos.count == 1)
+        #expect(repo.worktrees.count == 2)
+        #expect(repo.flattenedWorkspace == nil)
+        #expect(repo.worktrees.first(where: { $0.workspace?.key == workspace.key })?.sessions.map(\.sessionID) == ["bound"])
+        #expect(repo.worktrees.first(where: { !$0.catalog })?.sessions.map(\.sessionID) == ["free"])
+    }
+
+    @Test func discoveredHerdrWorkspacesRespectEmptyReadingAndPinnedAgentNavigation() throws {
+        let workspace = HostWorkspace(machineID: "machine-a", source: "herdr", sourceID: "notes", title: "notes", cwd: "/code/notes")
+        #expect(RepoTree.build([], machines: machines, workspaces: [workspace]).isEmpty)
+        let visible = try #require(RepoTree.build([], machines: machines, workspaces: [workspace],
+                                                 showEmptyWorkspaces: true).first?.repos.first)
+        #expect(visible.worktrees.first?.workspace?.key == workspace.key)
+        var pinned = session("pinned", workspace.cwd)
+        pinned.spaceKind = "herdr"
+        pinned.spaceID = workspace.sourceID
+        let navigation = try #require(RepoTree.build([], machines: machines, workspaces: [workspace],
+                                                     navigationSessions: [pinned]).first?.repos.first)
+        #expect(navigation.worktrees.first?.workspace?.key == workspace.key)
+        #expect(navigation.sessions.isEmpty)
+    }
+
+    @Test func theHomeFolderMarksAHerdrCheckoutOnlyForAPathOwnedRepository() throws {
+        let root = "/code/app"
+        var main = HostWorkspace(machineID: "machine-a", source: "herdr", sourceID: "main", title: "z-checkout", cwd: root)
+        let linked = HostWorkspace(machineID: "machine-a", source: "herdr", sourceID: "linked", title: "a-tree",
+                                   cwd: "/home/me/.herdr/worktrees/app/a-tree")
+        let rows = [main, linked].map { workspace in
+            var row = session(workspace.sourceID, workspace.cwd, repoRoot: root)
+            row.spaceKind = "herdr"
+            row.spaceID = workspace.sourceID
+            return row
+        }
+        let repo = try #require(RepoTree.build(rows, machines: machines, workspaces: [linked, main]).first?.repos.first)
+        #expect(repo.worktrees.map { $0.workspace?.sourceID } == ["main", "linked"])
+        #expect(repo.worktrees.first?.main == true)
+        main.projectID = "claimed-project"
+        #expect(RepoTree.build([rows[0]], machines: machines, workspaces: [main]).first?.repos.first?.worktrees.first?.main == false)
+        main.projectPath = root
+        #expect(RepoTree.build([rows[0]], machines: machines, workspaces: [main]).first?.repos.first?.worktrees.first?.main == true)
+        main.projectID = nil
+        main.isMain = false
+        #expect(RepoTree.build([rows[0]], machines: machines, workspaces: [main]).first?.repos.first?.worktrees.first?.main == false)
+    }
+
     // MARK: Where a working directory sits
 
     /// A main checkout is the repository itself (a trailing slash is the same directory); the usual working-tree folders belong

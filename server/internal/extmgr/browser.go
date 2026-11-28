@@ -7,9 +7,12 @@ package extmgr
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -183,14 +186,18 @@ func (h *Manager) browserTools() []proto.Tool {
 	if s := h.machineExtension(egoExtensionID); !s.On || len(s.Machines) == 0 {
 		return nil
 	}
-	return []proto.Tool{mcpTool("browser_run"), mcpTool("browser_look")}
+	return []proto.Tool{mcpTool("browser_run"), mcpTool("browser_look"), mcpTool("browser_fetch_download")}
 }
 
-func isBrowserTool(name string) bool { return name == "browser_run" || name == "browser_look" }
+func isBrowserTool(name string) bool {
+	return name == "browser_run" || name == "browser_look" || name == "browser_fetch_download"
+}
 
-// callBrowserTool runs browser_run or browser_look for the assistant's conversation sessionID: in that conversation's
-// own task space in ego, so its tabs and snapshot refs carry from one call to the next.
-func (h *Manager) callBrowserTool(ctx context.Context, sessionID, name string, args json.RawMessage) proto.ToolResult {
+// Browser scripts and snapshots share the conversation's task space in ego.
+func (h *Manager) callBrowserTool(ctx context.Context, callerMachine, sessionID, name string, args json.RawMessage) proto.ToolResult {
+	if name == "browser_fetch_download" {
+		return h.fetchBrowserDownload(ctx, callerMachine, sessionID, args)
+	}
 	var a struct {
 		Machine   string `json:"machine"`
 		Script    string `json:"script"`
@@ -229,6 +236,144 @@ func (h *Manager) callBrowserTool(ctx context.Context, sessionID, name string, a
 		return proto.TextResult(callErr.Error(), true)
 	}
 	return browserResult(&res)
+}
+
+func (h *Manager) fetchBrowserDownload(ctx context.Context, callerMachine, sessionID string, args json.RawMessage) proto.ToolResult {
+	var a struct {
+		Machine  string `json:"machine"`
+		Filename string `json:"filename"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return proto.TextResult("bad arguments: "+err.Error(), true)
+	}
+	if strings.TrimSpace(a.Machine) == "" {
+		return proto.TextResult("give the name or id of the browser machine", true)
+	}
+	if a.Filename == "" || a.Filename == "." || a.Filename == ".." ||
+		strings.ContainsAny(a.Filename, "/\\\x00") || filepath.Base(a.Filename) != a.Filename {
+		return proto.TextResult("give the exact filename in Persona browser downloads, without a directory", true)
+	}
+	src, err := h.browserMachine(a.Machine)
+	if err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
+	dst := src
+	if callerMachine != "" && callerMachine != src.cfg.ID {
+		dst = h.machineByName(callerMachine)
+		if dst == nil {
+			return proto.TextResult(fmt.Sprintf("no caller machine %q for the download", callerMachine), true)
+		}
+		if !dst.isOnline() {
+			return proto.TextResult(fmt.Sprintf("the caller's machine %s is offline", dst.cfg.ID), true)
+		}
+	}
+	for _, m := range []*Machine{src, dst} {
+		if m.config().trust == "work" {
+			return proto.TextResult(fmt.Sprintf("%s is a work computer. Browser downloads are only available on personal computers", m.name()), true)
+		}
+	}
+	if h.machineExtension(egoExtensionID).Confirm {
+		summary := i18n.T(h.userLang(), "hub-browser.confirm_download", i18n.Args{
+			"filename": a.Filename, "source": src.name(), "destination": dst.name(),
+		})
+		if ok, outcome := h.approveOutcome(ctx, h.assistantAsker(sessionID, src.cfg.ID), "browser_fetch_download", summary, args); !ok {
+			return notApproved(outcome)
+		}
+	}
+	var info proto.BrowserDownloadInfo
+	if err := src.callBuiltin(ctx, "browser.download_info", map[string]string{"filename": a.Filename}, &info); err != nil {
+		return proto.TextResult(fmt.Sprintf("read download info from %s: %v", src.name(), err), true)
+	}
+	if info.Name != a.Filename || info.Path == "" || info.Size < 0 || info.Size > proto.MaxTerminalUploadBytes ||
+		len(info.SHA256) != sha256.Size*2 {
+		return proto.TextResult("the browser machine returned invalid download metadata", true)
+	}
+	if _, err := hex.DecodeString(info.SHA256); err != nil {
+		return proto.TextResult("the browser machine returned an invalid download SHA-256", true)
+	}
+	path, copied := info.Path, src.cfg.ID != dst.cfg.ID
+	if copied {
+		path, err = h.copyBrowserDownload(ctx, src, dst, info)
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+	}
+	receipt, _ := json.Marshal(map[string]any{
+		"source_machine": src.cfg.ID, "dest_machine": dst.cfg.ID, "filename": info.Name, "path": path,
+		"size": info.Size, "sha256": info.SHA256, "copied": copied,
+	})
+	return proto.TextResult(string(receipt), false)
+}
+
+func (h *Manager) copyBrowserDownload(ctx context.Context, src, dst *Machine, info proto.BrowserDownloadInfo) (string, error) {
+	var begin struct {
+		UploadID   string `json:"upload_id"`
+		ChunkBytes int    `json:"chunk_bytes"`
+		SHA256     bool   `json:"sha256"`
+	}
+	if err := dst.call(ctx, "file.upload.begin", map[string]any{
+		"name": info.Name, "size": info.Size, "dest": proto.UploadDestTerminal, "sha256": info.SHA256,
+	}, &begin); err != nil {
+		return "", fmt.Errorf("start download upload on %s: %w", dst.name(), err)
+	}
+	if begin.UploadID == "" {
+		return "", fmt.Errorf("the caller's machine %s did not return an upload ID", dst.name())
+	}
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := dst.call(cleanup, "file.upload.abort", map[string]string{"upload_id": begin.UploadID}, nil); err != nil {
+			h.logf("[%s] browser_fetch_download: could not abort the upload: %v", dst.cfg.ID, err)
+		}
+	}()
+	if !begin.SHA256 {
+		return "", fmt.Errorf("update Persona Link on %s to copy downloads with SHA-256 verification", dst.name())
+	}
+
+	chunkBytes := min(proto.FileDownloadChunkBytes, proto.UploadChunkBytes)
+	if begin.ChunkBytes > 0 {
+		chunkBytes = min(chunkBytes, begin.ChunkBytes)
+	}
+	digest := sha256.New()
+	var offset int64
+	for offset < info.Size {
+		length := min(int64(chunkBytes), info.Size-offset)
+		var chunk proto.BrowserDownloadChunk
+		if err := src.callBuiltin(ctx, "browser.download_chunk", map[string]any{
+			"filename": info.Name, "offset": offset, "length": length,
+		}, &chunk); err != nil {
+			return "", fmt.Errorf("read download at byte %d from %s: %w", offset, src.name(), err)
+		}
+		if chunk.Name != info.Name || chunk.Offset != offset || chunk.Size != info.Size ||
+			int64(len(chunk.Data)) != length || chunk.EOF != (offset+length == info.Size) {
+			return "", fmt.Errorf("invalid download chunk at byte %d from %s", offset, src.name())
+		}
+		if err := dst.call(ctx, "file.upload.chunk", map[string]any{
+			"upload_id": begin.UploadID, "offset": offset, "data": chunk.Data,
+		}, nil); err != nil {
+			return "", fmt.Errorf("upload download at byte %d to %s: %w", offset, dst.name(), err)
+		}
+		digest.Write(chunk.Data)
+		offset += int64(len(chunk.Data))
+	}
+	if offset != info.Size || !strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), info.SHA256) {
+		return "", fmt.Errorf("download changed during the transfer: size or SHA-256 mismatch")
+	}
+	var uploaded proto.UploadedFile
+	if err := dst.call(ctx, "file.upload.end", map[string]string{
+		"upload_id": begin.UploadID, "sha256": info.SHA256,
+	}, &uploaded); err != nil {
+		return "", fmt.Errorf("finish download upload on %s: %w", dst.name(), err)
+	}
+	if uploaded.Path == "" || uploaded.Size != info.Size || !strings.EqualFold(uploaded.SHA256, info.SHA256) {
+		return "", fmt.Errorf("%s did not confirm the download's path, size and SHA-256. Check the destination before retrying", dst.name())
+	}
+	complete = true
+	return uploaded.Path, nil
 }
 
 // browserResult preserves a script's error as a failed tool call. The node returns it in JSON alongside page metadata

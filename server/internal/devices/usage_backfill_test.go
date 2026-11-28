@@ -138,3 +138,32 @@ func TestPutUsageBackfillByAgent(t *testing.T) {
 		t.Fatalf("put = %+v", p)
 	}
 }
+
+// usageBackfillDirStore keeps the resolutions a backfill sends.
+type usageBackfillDirStore struct {
+	*usageBackfillMemStore
+	dirs []proto.UsageDir
+}
+
+func (s *usageBackfillDirStore) PutUsageDirs(_ context.Context, _ string, dirs []proto.UsageDir) error {
+	s.dirs = append(s.dirs, dirs...)
+	return nil
+}
+
+// A backfill names the directories its buckets started in (#16530): the resolutions are kept, a refused one left out.
+func TestUsageBackfillKeepsDirs(t *testing.T) {
+	now := time.Date(2026, 11, 17, 9, 30, 0, 0, time.UTC)
+	st := &usageBackfillDirStore{usageBackfillMemStore: &usageBackfillMemStore{memStore: newMemStore()}}
+	d := New(Options{Hub: &fakeHost{}, Store: st})
+	hour := time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC).Unix()
+	params, _ := json.Marshal(map[string]any{"through": hour, "agents": []string{"claude"},
+		"buckets": []proto.UsageBucket{{Minute: hour, Model: "opus", Agent: "claude", Dir: "~/code/app", Output: 5, Requests: 1}},
+		"dirs": []proto.UsageDir{
+			{Dir: "~/code/app", Project: "git:github.com/acme/app", Name: "acme/app", Host: "github.com", Place: "~/code/app"},
+			{Dir: "~/x", Project: "git:github.com/acme/app?t=1", Name: "acme/app", Host: "github.com"},
+		}})
+	out, err := d.putUsageBackfill(context.Background(), "a", params, now)
+	if err != nil || out["stored"] != 1 || len(st.dirs) != 1 || st.dirs[0].Dir != "~/code/app" || st.puts[0].buckets[0].Dir != "~/code/app" {
+		t.Fatalf("stored %v, %v; dirs %+v", out, err, st.dirs)
+	}
+}

@@ -73,14 +73,14 @@ const openAndEditHost = async () => {
 
 describe("a settings save that cleared secrets but failed", () => {
   it("reads the page again so the cleared key shows as not set, and keeps the draft", async () => {
-    hub.details = [voice(true), voice(false)];
+    hub.details = [voice(true), voice(true), voice(false)];
     hub.save = () => Promise.reject(new ApiError(500, "secret not cleared", { code: "secret_not_cleared", secrets_cleared: ["api_key"] }));
     const input = await openAndEditHost();
     await act(async () => button("保存")!.click());
     await flush();
 
     expect(setExtensionConfig).toHaveBeenCalledTimes(1);
-    expect(extensionDetail).toHaveBeenCalledTimes(2);
+    expect(extensionDetail).toHaveBeenCalledTimes(3); // opening, preflight, and the post-refusal read
     expect(toast).toHaveBeenCalledWith(expect.stringContaining("secret not cleared"), "error");
     expect(host.textContent).not.toContain("已设置");
     expect(host.textContent).toContain("未设置");
@@ -89,7 +89,7 @@ describe("a settings save that cleared secrets but failed", () => {
   });
 
   it("refreshes the extension's places too: the hub restarts it without those secrets", async () => {
-    hub.details = [voice(true), voice(false)];
+    hub.details = [voice(true), voice(true), voice(false)];
     hub.save = () => Promise.reject(new ApiError(409, "read only", { code: "read_only", secrets_cleared: ["api_key"] }));
     await openAndEditHost();
     const changes = vi.fn();
@@ -104,7 +104,7 @@ describe("a settings save that cleared secrets but failed", () => {
   });
 
   it("does not read the page again for a failure that cleared nothing", async () => {
-    hub.details = [voice(true), voice(false)];
+    hub.details = [voice(true), voice(true)];
     hub.save = () => Promise.reject(new ApiError(409, "read only", { code: "read_only" }));
     const input = await openAndEditHost();
     const changes = vi.fn();
@@ -113,7 +113,7 @@ describe("a settings save that cleared secrets but failed", () => {
     await flush();
     window.removeEventListener("persona:extensions-changed", changes);
 
-    expect(extensionDetail).toHaveBeenCalledTimes(1);
+    expect(extensionDetail).toHaveBeenCalledTimes(2); // opening and preflight only
     expect(changes).not.toHaveBeenCalled();
     expect(host.textContent).toContain("已设置");
     expect(input.value).toBe("b.example.com");

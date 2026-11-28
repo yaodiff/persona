@@ -102,11 +102,11 @@ it("counts again on a managers push, and says what the count is to a screen read
   expect(badge()).toBe("2");
   // the number is drawn; a screen reader hears what it counts
   expect(workRow()!.querySelector("[data-menu-badge]")!.getAttribute("aria-hidden")).toBe("true");
-  expect(workRow()!.querySelector(".sr-only")?.textContent).toBe("2 件等你处理");
+  expect(workRow()!.querySelector(".sr-only")?.textContent).toBe("2 项等待你处理");
   inbox = 5;
   await push({ type: "managers" });
   expect(badge()).toBe("5");
-  expect(workRow()!.querySelector(".sr-only")?.textContent).toBe("5 件等你处理");
+  expect(workRow()!.querySelector(".sr-only")?.textContent).toBe("5 项等待你处理");
 });
 
 it("reads the roster again for a push that came while a read was out", async () => {

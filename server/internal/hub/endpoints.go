@@ -201,6 +201,25 @@ func (h *Hub) endpointList() []Endpoint {
 	return append([]Endpoint{}, h.public.endpoints...)
 }
 
+func (h *Hub) linkEndpointList() []Endpoint {
+	if len(h.cfg.Public.LinkAdvertise) == 0 {
+		return h.endpointList()
+	}
+	port, _ := h.tlsPin()
+	if port == 0 {
+		port = 443
+	}
+	var endpoints []Endpoint
+	seen := make(map[string]bool)
+	for _, raw := range h.cfg.Public.LinkAdvertise {
+		if e, ok := configuredEndpoint(raw, "https", port, time.Time{}); ok && e.Scheme == "https" && !seen[e.URL] {
+			seen[e.URL] = true
+			endpoints = append(endpoints, e)
+		}
+	}
+	return endpoints
+}
+
 func (h *Hub) localAddresses() ([]localAddress, error) {
 	scan := h.public.addresses
 	if scan == nil {

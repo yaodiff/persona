@@ -165,14 +165,23 @@ func (s *Service) toolSecretStore(ctx context.Context, machine, session string, 
 		}
 		// No arbitrary provider response can become a tool answer.
 		refs := map[string]string{}
+		var deleted []string
 		for _, f := range p.target.Fields {
+			if f.Delete {
+				deleted = append(deleted, f.Name)
+				continue
+			}
 			ref := out.References[f.Name]
 			if scheme, valid := extension.ReferenceScheme(ref); !valid || scheme != "op" {
 				return bad("secret storage completed without valid field references; do not retry blindly")
 			}
 			refs[f.Name] = ref
 		}
-		b, _ := json.Marshal(map[string]any{"references": refs})
+		ans := map[string]any{"references": refs}
+		if len(deleted) > 0 {
+			ans["deleted"] = deleted
+		}
+		b, _ := json.Marshal(ans)
 		return proto.TextResult(string(b), false)
 	default:
 		return bad("use personad tool secret_store --from-file; internal phase must be prepare or commit")

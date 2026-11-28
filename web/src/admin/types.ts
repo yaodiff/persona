@@ -265,6 +265,8 @@ export interface AdminExtension {
   sandbox?: import("../lib/extensions").ExtensionSandbox;
   /** An extension whose program runs on computers: the hub's aggregate across its machines. */
   node_status?: import("../lib/extensions").NodeStatusSummary;
+  /** An extension installed from a market: how its package was verified (docs/extensions/extensions.md "Private market keys"). */
+  market_signature?: import("../lib/extension-market").ExtensionSignature;
 }
 
 export interface AdminExtensions {

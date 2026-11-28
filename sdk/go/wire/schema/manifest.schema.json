@@ -319,11 +319,12 @@
         "network": {"type": "array", "items": {"$ref": "#/$defs/NetworkEntry"}},
         "hub_api": {"type": "boolean", "description": "The old way: the hub's full token. With hub scopes, the scopes win."},
         "hub": {"type": "array", "description": "The scopes of the hub's API it calls: its token opens their routes only.",
-          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|sent\\.read|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|agents\\.archive_idle|agents\\.permission_mode|machines\\.read|machines\\.pair|browser\\.run|notify|push\\.grading|assistant\\.ask|spaces|assistant\\.read|assistant\\.memory\\.read|assistant\\.entries\\.read|todos\\.read|todos\\.write|tasks\\.schedule|decisions\\.raise|bots\\.feishu\\.identity|bots\\.feishu\\.handoff|leaders\\.read|leaders\\.write|assistant\\.dispatch_policy|assistant\\.start_defaults|dispatch.guard|models|transcription|market\\.refresh_own|assistant\\.events|lark\\.messages\\.read|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
+          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|kb\\.import_status|sent\\.read|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|agents\\.archive_idle|agents\\.permission_mode|machines\\.read|machines\\.pair|browser\\.run|notify|push\\.grading|assistant\\.ask|spaces|assistant\\.read|assistant\\.memory\\.read|assistant\\.entries\\.read|todos\\.read|todos\\.write|tasks\\.schedule|decisions\\.raise|bots\\.feishu\\.identity|bots\\.feishu\\.handoff|leaders\\.read|leaders\\.write|assistant\\.dispatch_policy|assistant\\.start_defaults|dispatch.guard|models|transcription|market\\.refresh_own|assistant\\.events|lark\\.messages\\.read|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
         "launcher_keys": {"type": "boolean"},
         "gh_login": {"type": "boolean", "description": "It asks the hub for the GitHub token of a computer's gh login (the one the user picks for the GitHub connector), held in its memory only."},
         "usage_gateways": {"type": "boolean", "description": "It reads the account list of the account-pool gateways in the hub's usage sources (usage.gateway_accounts): accounts, status and quota windows, never a key."},
         "agent_runtimes": {"type": "boolean", "description": "Its program is an agent runtime that connects to this machine's node; in a sandbox it gets a socket in its run directory (PERSONA_RUNTIME_SOCKET) that leads to the node's runtime.sock only. Needs runtime."},
+        "routine_facts": {"type": "boolean", "description": "The routine sends its local date and language to this extension and may include its facts and report sections in the briefing."},
         "error_reports": {"type": "boolean", "description": "It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens, user names, machine names or IP addresses). Needed by contributes.error_reports."},
         "storage": {"$ref": "#/$defs/StoragePermission"},
         "auth_relay": {"type": "boolean", "description": "It is handed the authorization links the user's Agents stop at (only links its contributes.auth_relay names, printed by the Agent's own command) to complete them with the account it is signed in with. Needed by contributes.auth_relay."}
@@ -372,10 +373,12 @@
         "triage_templates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TriageTemplateItem"}},
         "agent_filters": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AgentFilterItem"}},
         "tunnels": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TunnelItem"}},
+        "routine_facts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/RoutineFactsItem"}},
         "error_reports": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ErrorReportsItem"}},
         "auth_relay": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AuthRelayItem"}},
         "secret_providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/SecretProviderItem"}},
         "repository_providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/RepositoryProviderItem"}},
+        "text_lookup": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TextLookupItem"}},
         "memory_sources": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/MemorySourceItem"}},
         "disk_offload": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/DiskOffloadItem"}},
         "messaging": {"type": "array", "minItems": 1, "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
@@ -387,6 +390,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
+        "title": {"type": "string", "maxLength": 40, "description": "What the extension's contributions list calls it; the id when absent."},
         "dir": {"type": "string", "description": "The directory, relative to the package (or to the data directory with source data)."},
         "source": {"$ref": "#/$defs/ContentSource"}
       },
@@ -593,6 +597,23 @@
       },
       "required": ["id", "name", "hosts"]
     },
+    "TextLookupContributionID": {
+      "type": "string",
+      "x-id": "TextLookupContributionID",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "description": "Identifies one text_lookup dictionary within its extension."
+    },
+    "TextLookupItem": {
+      "description": "A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup, text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages [\"en\"]) for now.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/TextLookupContributionID"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 80, "description": "What the dictionary is called, in a few words."},
+        "languages": {"type": "array", "description": "The languages it looks up. Only \"en\" is accepted for now; omitted means [\"en\"].", "minItems": 1, "maxItems": 1, "items": {"type": "string", "enum": ["en"]}}
+      },
+      "required": ["id"]
+    },
     "DiskOffloadItem": {
       "description": "A provider that moves items from a computer to storage elsewhere, lists what it already holds and brings items back (docs/server/machine-usage-map.md \"Extension point disk_offload\"): the disk usage map draws its inventory beside the computer's disk and offers Offload; the manager asks the program (offload.inventory, offload.run, offload.job, offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak the protocol.",
       "type": "object",
@@ -643,6 +664,22 @@
       "description": "The kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).",
       "type": "string",
       "enum": ["issue", "pull_request"]
+    },
+    "RoutineContributionID": {
+      "type": "string",
+      "x-id": "RoutineContributionID",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+      "description": "Identifies one routine facts source within its extension."
+    },
+    "RoutineFactsItem": {
+      "description": "A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and permissions.routine_facts.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/RoutineContributionID"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 80}
+      },
+      "required": ["id", "title"]
     },
     "ErrorReportsItem": {
       "description": "It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the program to speak the protocol, on_startup and permissions.error_reports.",
@@ -765,7 +802,10 @@
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "name": {"type": "string", "minLength": 1},
-        "hosts": {"type": "array", "items": {"$ref": "#/$defs/Host"}}
+        "hosts": {"type": "array", "items": {"$ref": "#/$defs/Host"}},
+        "direct": {"type": "boolean"},
+        "remote_address": {"$ref": "#/$defs/ID"},
+        "remote_key": {"$ref": "#/$defs/ID"}
       },
       "required": ["id", "name"]
     },
@@ -820,6 +860,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
+        "title": {"type": "string", "maxLength": 40, "description": "What the extension's contributions list calls it; the id when absent."},
         "skills": {"type": "array", "items": {"type": "string"}},
         "instructions": {"type": "string"},
         "gate": {"type": "string"}
@@ -832,6 +873,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID", "description": "The server's name for the assistant; not persona or persona."},
+        "title": {"type": "string", "maxLength": 40, "description": "What the extension's contributions list calls it; the id when absent."},
         "command": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Looked up on PATH, then in ~/bin."},
         "env": {"type": "string", "pattern": "^PERSONA_[A-Z0-9_]{1,56}$", "description": "A PERSONA_ variable (PERSONA_ read too) that, when set, replaces the lookup: a path, or \"\" / 0 / off / false to leave the server out."},
         "args": {"type": "array", "items": {"type": "string"}},

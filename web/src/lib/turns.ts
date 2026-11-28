@@ -13,7 +13,7 @@ import { markModelChanges, type ModelChange } from "./model-change";
 import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
 import { attachedAgentNotices, taskCalls } from "./task-association";
 import { addUsage, countUsage, itemUsage, markFirstUsage, type TurnUsage } from "./turn-usage";
-import type { Injected, Item, MessageSource, TokenUsage } from "./types";
+import type { Botmux, Injected, Item, MessageSource, TokenUsage } from "./types";
 
 export type Step =
   | { kind: "tool"; id: string; use: Item; result?: Item; images: Item[] }
@@ -55,6 +55,8 @@ export interface UserMessage {
   promptHidden?: boolean;
   /** Inside an opened background round: drawn as its source block, not as the raw model input supervision shows. */
   sourceInTrace?: boolean;
+  /** What botmux wrapped, as the node read it (Item.botmux): drawn as written in Lark while the chip decodes (lib/botmux.ts). */
+  botmux?: Botmux;
   /** An explicitly promoted main-chat round keeps this conversation input behind its source disclosure by default. */
   promotedRelay?: boolean;
 }
@@ -100,6 +102,8 @@ export interface Segment {
   cut?: boolean;
   /** A settled user turn without a visible response or an explicit closing notice. */
   emptyResponse?: boolean;
+  /** The transcript recorded an assistant reply consisting of whitespace. */
+  blankReply?: boolean;
   /** What its items used (#5426, lib/turn-usage.ts): every item counts, those it does not show too (a tool's result, a
    *  Codex turn's duration, a stopped turn's notice); each subagent counts once in the chat, in the exchange that
    *  launched it (chatLines' lineUsage). Absent when none of them carries tokens. */
@@ -113,8 +117,7 @@ function blockPart(id: string) {
 }
 
 function blockOrder(a: Pick<Item, "id" | "seq">, b: Pick<Item, "id" | "seq">) {
-  if (a.seq !== b.seq) return a.seq - b.seq;
-  return blockPart(a.id) - blockPart(b.id);
+  return a.seq - b.seq || (blockPart(a.id) || 0) - (blockPart(b.id) || 0);
 }
 
 /** Fold bounds are seq + numeric block, not seq alone: a final answer can share the fold's last line. */
@@ -321,6 +324,7 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       cur.user!.client_msg_id ??= it.client_msg_id || undefined;
       if (it.kind === "image") cur.user!.images.push(it);
       else {
+        if (it.botmux) cur.user!.botmux ??= it.botmux;
         const p = parseUserText(it.text ?? "");
         if (p.text) {
           cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
@@ -376,6 +380,7 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
         break;
       case "text":
         if (it.text?.trim()) cur.steps.push({ kind: "text", id: it.id, item: it });
+        else if (it.role === "assistant" && it.text) cur.blankReply = true;
         break;
       case "notice":
         cur.steps.push({ kind: "notice", id: it.id, item: it });
@@ -986,9 +991,27 @@ export interface ChatLinesOptions {
   /** The items may predate what the transcript holds: a cached page shown before the hub's newest page landed, or after
    *  that read failed. A turn without an answer there may have one the page has not read, so none is called empty. */
   stale?: boolean;
+  /** The latest turn is paused waiting for the user (needs_you or an open interaction card on this session) and has not
+   *  finished yet, so it is not marked empty even while not actively working. */
+  needsYou?: boolean;
+  /** The session's live state is currently unknown (for example, a runtime summary lagging behind the transcript):
+   *  the latest turn may still be running or finalizing, so it is not marked empty until a definite settled state lands. */
+  statusUnknown?: boolean;
 }
 
-function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>, stale = false): ChatLine[] {
+const COMPACT_COMMAND_RE = /^\/compact(?:\s|$)/;
+const SLASH_COMMAND_RE = /^\/[a-zA-Z][\w:-]*(?:\s|$)/;
+
+/** Local slash commands (/compact with or without args, or another slash command answered only by non-error local
+ *  notices) never produce an assistant reply and must not be marked empty or offered for Retry. */
+function isLocalCommandTurn(user: UserMessage, steps: readonly Step[]): boolean {
+  const text = user.text.trim();
+  if (COMPACT_COMMAND_RE.test(text)) return true;
+  return !user.images.length && SLASH_COMMAND_RE.test(text) && steps.length > 0 &&
+    steps.every((step) => step.kind === "notice" && !step.item.task && !step.item.wake && !parseAPIError(step.item.text));
+}
+
+function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>, stale = false, waiting = false): ChatLine[] {
   const out: ChatLine[] = [];
   let ordered = t.ordered;
   // work a background task woke the agent for opens with that notice, where a message would be (a subagent's report
@@ -1012,7 +1035,8 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>, 
   const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
   if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && (!end.answer || n.seq > at))) end.cut = true;
   const user = end?.user;
-  if (end && user && !live && !stale && !end.answer && !t.trailing.length && isOwnMessage(user) && !user.queued && !isLoopTick(user) &&
+  if (end && user && !live && !waiting && !stale && !end.answer && !t.trailing.length && isOwnMessage(user) && !user.queued && !isLoopTick(user) &&
+      !isLocalCommandTurn(user, end.steps) &&
       !end.steps.some((step) => step.kind === "visualization" || (step.kind === "image" && step.item.role === "assistant") ||
         (step.kind === "tool" && !step.result && supervisionTool(step.use.tool_name) === "supervision_finish" && step.use.tool_input?.visibility === "silent")) &&
       !supervisionVisibility(ordered, results, false).completedSilent) {
@@ -1039,8 +1063,12 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   const source = feed.at(-1);
   // The live exchange is the owner of the latest source item, not the last drawn block.
   const attentionReply = opts.latestReplyNeedsAttention && opts.foldRoutineRelayReplies ? feed.findLast(isAnswerText)?.id : undefined;
-  const active = opts.live && source ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id))) : undefined;
-  const liveId = active && active.kind === "turn" ? active.turn.id : undefined;
+  const latestTurn = (opts.live || opts.needsYou || opts.statusUnknown) && source
+    ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id)))
+    : undefined;
+  const latestTurnId = latestTurn && latestTurn.kind === "turn" ? latestTurn.turn.id : undefined;
+  const liveId = opts.live ? latestTurnId : undefined;
+  const waitingId = (opts.needsYou || opts.statusUnknown) ? latestTurnId : undefined;
   const out: ChatLine[] = [];
   // A result can land after another segment or user input; associate it with its original call, not its position.
   const results = new Map(items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => [i.tool_use_id!, i]));
@@ -1085,7 +1113,8 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
       append([isCompaction(b.item) ? { kind: "compact", id: b.item.id, item: b.item } : { kind: "recaps", id: b.item.id, items: [b.item] }], [b.item], false);
     } else {
       const live = b.turn.id === liveId;
-      append(turnLines(b.turn, live, results, opts.stale), round ? [...b.turn.ordered, ...b.turn.trailing] : b.turn.ordered, live);
+      const waiting = b.turn.id === waitingId;
+      append(turnLines(b.turn, live, results, opts.stale, waiting), round ? [...b.turn.ordered, ...b.turn.trailing] : b.turn.ordered, live);
     }
   }
   // Working with nothing of this run yet (the last thing is a recap): retain the supervision round's visibility.

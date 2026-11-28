@@ -19,6 +19,9 @@ func TestHookEventPromptSource(t *testing.T) {
 		"also open a todo for the cap":    "user",
 		prompts.ProtectUserMessage(batch): "user",
 		"<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n</task-notification>": "notification",
+		prompts.RenderSideConversation("also check the flaky parser test"):                             proto.SourceSideConversation,
+		`<persona-context kind="side-conversation">separate request</persona-context>do that first`:    proto.SourceSideConversation,
+		`<persona-side-conversation />plain side request`:                                              proto.SourceSideConversation,
 	} {
 		p := hookEventParams(hookInput{HookEventName: "UserPromptSubmit", SessionID: "s1", Prompt: prompt}, "", false)
 		if p["prompt_source"] != want {

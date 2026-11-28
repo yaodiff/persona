@@ -98,8 +98,8 @@ export function parseTodoReason(raw: string): TodoReason | UnknownTodoReason {
  * unknown, and draws no line for that. TodoLine.key itself stays a string: a timeline entry's line takes the keys of
  * spec/fixtures/todo-rounds/README.md.
  */
-export type TodoLineKey = "failed_start" | "agent_asks" | "interrupted" | "decision" | "decision_default" | "cannot" | "awaits_reply" | "working" | "persona_working" | "starting" | "background" | "parked" | "finished" | "accepted" | "deployed" | "pr_open" | "usage_limit" | "run_waits" | "finished_seen" | "completed" | "canceled" | "reported" | "superseded" | "someday";
-export const TODO_LINE_KEYS: readonly TodoLineKey[] = ["failed_start", "agent_asks", "interrupted", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"];
+export type TodoLineKey = "failed_start" | "agent_asks" | "interrupted" | "stopped_unfinished" | "decision" | "decision_default" | "cannot" | "awaits_reply" | "working" | "persona_working" | "starting" | "background" | "parked" | "finished" | "accepted" | "deployed" | "pr_open" | "usage_limit" | "run_waits" | "finished_seen" | "completed" | "canceled" | "reported" | "superseded" | "someday";
+export const TODO_LINE_KEYS: readonly TodoLineKey[] = ["failed_start", "agent_asks", "interrupted", "stopped_unfinished", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"];
 
 /** A TodoLineKey this app does not know, kept as it came. */
 export interface UnknownTodoLineKey {
@@ -124,8 +124,8 @@ export function parseTodoLineKey(raw: string): TodoLineKey | UnknownTodoLineKey 
  * The argument names produced by this version of the projection. TodoLine.args remains an open string dictionary on
  * the wire.
  */
-export type TodoLineArg = "at" | "by" | "default_at" | "error" | "on" | "reason" | "recommend" | "resets_at" | "run" | "step" | "text" | "until" | (string & {});
-export const TODO_LINE_ARGS = ["at", "by", "default_at", "error", "on", "reason", "recommend", "resets_at", "run", "step", "text", "until"] as const;
+export type TodoLineArg = string;
+export const TODO_LINE_ARGS: readonly string[] = ["at", "by", "default_at", "error", "on", "reason", "recommend", "resets_at", "run", "step", "text", "until"];
 
 /**
  * The row's second line as a key and its arguments, never words: each client says it in its own language
@@ -172,15 +172,15 @@ export interface TodoRunRef {
  * failed), signin, steps_proposed, duplicate. A run's asks: question, plan, tool (an approval), secret, form. Open: a
  * newer hub may send other values.
  */
-export type OwnerAskKind = "decision" | "verify" | "retry" | "signin" | "steps_proposed" | "duplicate" | "question" | "plan" | "tool" | "secret" | "form" | (string & {});
-export const OWNER_ASK_KINDS = ["decision", "verify", "retry", "signin", "steps_proposed", "duplicate", "question", "plan", "tool", "secret", "form"] as const;
+export type OwnerAskKind = string;
+export const OWNER_ASK_KINDS: readonly string[] = ["decision", "verify", "retry", "signin", "steps_proposed", "duplicate", "question", "plan", "tool", "secret", "form"];
 
 /**
  * Where the ask's full card lives (proposal 3.7): todo, on the to-do's page under its state line; run, at the foot of
  * the run's session. Every other place that shows the ask is a door to that home.
  */
-export type OwnerAskHome = "todo" | "run" | (string & {});
-export const OWNER_ASK_HOMES = ["todo", "run"] as const;
+export type OwnerAskHome = string;
+export const OWNER_ASK_HOMES: readonly string[] = ["todo", "run"];
 
 /**
  * How risky answering an ask is (proposal 3.7, decision 4(a)): safe, the row, the card or a push may answer it in
@@ -193,16 +193,16 @@ export const OWNER_ASK_HOMES = ["todo", "run"] as const;
  * secret, or a run whose card the hub does not hold). Open: a newer hub may send other values, which clients read as
  * open.
  */
-export type OwnerAskRisk = "safe" | "open" | (string & {});
-export const OWNER_ASK_RISKS = ["safe", "open"] as const;
+export type OwnerAskRisk = string;
+export const OWNER_ASK_RISKS: readonly string[] = ["safe", "open"];
 
 /**
  * What a push about the ask may offer on the lock screen (proposal 3.7): answer, its answers as actions, each needing
  * the phone unlocked; open_only, no action, a tap opens it. open_only exactly when the risk is open. Open: a newer
  * hub may send other values, which clients read as open_only.
  */
-export type OwnerAskLockscreen = "answer" | "open_only" | (string & {});
-export const OWNER_ASK_LOCKSCREENS = ["answer", "open_only"] as const;
+export type OwnerAskLockscreen = string;
+export const OWNER_ASK_LOCKSCREENS: readonly string[] = ["answer", "open_only"];
 
 /**
  * One option of a decision, as its card lists it.
@@ -303,8 +303,8 @@ export interface TodoSummary {
  * What kind of place a To-dos place is (proposal 3.3): all (All To-dos), today, upcoming, or a project's. Open: a
  * newer hub may send other values.
  */
-export type TodoPlaceKind = "all" | "today" | "upcoming" | "project" | (string & {});
-export const TODO_PLACE_KINDS = ["all", "today", "upcoming", "project"] as const;
+export type TodoPlaceKind = string;
+export const TODO_PLACE_KINDS: readonly string[] = ["all", "today", "upcoming", "project"];
 
 /**
  * One place of the To-dos sidebar: All To-dos, Today, Upcoming, or a knowledge-base project with open to-dos.
@@ -371,8 +371,8 @@ export interface TodoPlaces {
  * timeline read from today's stores says only delivered, since a message is kept there only once its run took it.
  * Open: a newer hub may send other values.
  */
-export type TodoMessageState = "sending" | "processing" | "delivered" | "queued" | "not_delivered" | "unknown" | (string & {});
-export const TODO_MESSAGE_STATES = ["sending", "processing", "delivered", "queued", "not_delivered", "unknown"] as const;
+export type TodoMessageState = string;
+export const TODO_MESSAGE_STATES: readonly string[] = ["sending", "processing", "delivered", "queued", "not_delivered", "unknown"];
 
 /**
  * What an entry of a to-do's conversation records (spec/fixtures/todo-rounds/README.md "Entries" says what each is
@@ -411,8 +411,8 @@ export function parseTodoEntryType(raw: string): TodoEntryType | UnknownTodoEntr
  * direction's lead; run, one of the to-do's Agent sessions; hub, the hub itself (its done judge included); extension.
  * Open: a newer hub may send other values.
  */
-export type TodoActorKind = "owner" | "persona" | "lead" | "run" | "hub" | "extension" | (string & {});
-export const TODO_ACTOR_KINDS = ["owner", "persona", "lead", "run", "hub", "extension"] as const;
+export type TodoActorKind = string;
+export const TODO_ACTOR_KINDS: readonly string[] = ["owner", "persona", "lead", "run", "hub", "extension"];
 
 /**
  * Who an entry is by; never a runtime, engine, model or folder.
@@ -429,8 +429,8 @@ export interface TodoActor {
  * reply in the to-do's chat topic; briefing, a briefing's card; default, Persona took the recommendation at its
  * deadline. Open: a newer hub may send other values.
  */
-export type TodoEntryVia = "app" | "card" | "push" | "chat" | "thread" | "briefing" | "default" | (string & {});
-export const TODO_ENTRY_VIAS = ["app", "card", "push", "chat", "thread", "briefing", "default"] as const;
+export type TodoEntryVia = string;
+export const TODO_ENTRY_VIAS: readonly string[] = ["app", "card", "push", "chat", "thread", "briefing", "default"];
 
 /**
  * One thing that happened on a to-do: what someone said or did, or what the hub saw happen (proposal 3.6, 6.1
@@ -500,8 +500,8 @@ export interface TodoTimelineEntry {
  * followed it; start, what came before the owner's first, headed by the request that started the work when the owner
  * made it; background, one day's supervision nobody asked for, drawn folded. Open: a newer hub may send other values.
  */
-export type TodoRoundKind = "owner" | "start" | "background" | (string & {});
-export const TODO_ROUND_KINDS = ["owner", "start", "background"] as const;
+export type TodoRoundKind = string;
+export const TODO_ROUND_KINDS: readonly string[] = ["owner", "start", "background"];
 
 /**
  * One round of a to-do's conversation: a header and what followed it, as the hub groups them
@@ -537,15 +537,15 @@ export interface TodoTimeline {
  * change), deploy (the work went live), report (what the work came to, in words). Today's hub sends change, deploy
  * and report. Open: a newer hub may send other values.
  */
-export type TodoResultKind = "booking" | "doc" | "file" | "link" | "change" | "deploy" | "report" | (string & {});
-export const TODO_RESULT_KINDS = ["booking", "doc", "file", "link", "change", "deploy", "report"] as const;
+export type TodoResultKind = string;
+export const TODO_RESULT_KINDS: readonly string[] = ["booking", "doc", "file", "link", "change", "deploy", "report"];
 
 /**
  * How a code change stands as the hub last saw it: open, under review; draft, open but not ready for review; merged;
  * closed without merging. Open: a newer hub may send other values.
  */
-export type TodoChangeState = "open" | "draft" | "merged" | "closed" | (string & {});
-export const TODO_CHANGE_STATES = ["open", "draft", "merged", "closed"] as const;
+export type TodoChangeState = string;
+export const TODO_CHANGE_STATES: readonly string[] = ["open", "draft", "merged", "closed"];
 
 /**
  * Something a to-do's work produced, with how it stands: one chip of the paper's Results (proposal 3.5 row 9).
@@ -631,16 +631,16 @@ export interface TodoDecidePush {
  * and the ask still waits (the client keeps Later for its app session); undone, a Don't handle was undone and the ask
  * waits again. Open: a newer hub may send other values.
  */
-export type TodoAskOutcome = "answered" | "declined" | "later" | "undone" | (string & {});
-export const TODO_ASK_OUTCOMES = ["answered", "declined", "later", "undone"] as const;
+export type TodoAskOutcome = string;
+export const TODO_ASK_OUTCOMES: readonly string[] = ["answered", "declined", "later", "undone"];
 
 /**
  * An answer that is an outcome rather than an option, a fixed answer or words (TodoAskAnswer.outcome): later, not
  * now: nothing is written; decline, Don't handle a decision, kept with a receipt; undo, that Don't handle undone,
  * with its receipt.
  */
-export type TodoAskAnswerOutcome = "later" | "decline" | "undo" | (string & {});
-export const TODO_ASK_ANSWER_OUTCOMES = ["later", "decline", "undo"] as const;
+export type TodoAskAnswerOutcome = string;
+export const TODO_ASK_ANSWER_OUTCOMES: readonly string[] = ["later", "decline", "undo"];
 
 /**
  * The body of POST /api/v1/todos/{id}/asks/{ask}/answer (#10465), the answer to one of the to-do's own asks, named by
@@ -686,7 +686,7 @@ export interface TodoAskAnswered {
    * row lists it), read after the answer: it says whether the ask still waits, whatever the outcome; absent when it
    * could not be read.
    */
-  todo?: unknown;
+  todo?: Object;
 }
 
 /**

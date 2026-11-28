@@ -106,16 +106,39 @@ describe("how the gate let it through", () => {
     expect(ruleText({ connector: "github", action: "github_comment", decision: "allow" })).toBe("github · github_comment → allow");
     expect(ruleText(undefined)).toBe("");
     // a rule the hub did not give: still a rule
-    expect(allowedBy({ kind: "rule" })).toMatchObject({ label: "按规则", detail: "一条网关规则放行了它。" });
+    expect(allowedBy({ kind: "rule" })).toMatchObject({ label: "按规则", detail: "由网关规则自动放行。" });
   });
 
   it("always allowed in this chat", () => {
     expect(allowedBy({ kind: "conversation_always" })).toMatchObject({ label: "本对话始终允许", tone: "neutral" });
   });
 
+  it("shows an automatic send's exact authorization and does not call pending or failed delivery sent", () => {
+    const base = { kind: "standing_authorization", authorization_id: "sa_example", scenario: "inbox_reply" };
+    expect(allowedBy({ ...base, outcome: "sent" }).detail).toContain("sa_example");
+    expect(allowedBy({ ...base, outcome: "sent" }).tone).toBe("neutral");
+    for (const outcome of ["pending", "failed_or_unknown"] as const) {
+      const detail = allowedBy({ ...base, outcome });
+      expect(detail.tone).toBe("orange");
+      expect(detail.detail).toContain("sa_example");
+      expect(detail.label).not.toBe(allowedBy({ ...base, outcome: "sent" }).label);
+    }
+  });
+
+  it("does not label an already-delivered send ID as a new delivery of the attempted text", () => {
+    for (const kind of ["standing_authorization", "card"]) {
+      const base = { kind, authorization_id: "sa_example", scenario: "inbox_reply" };
+      const duplicate = allowedBy({ ...base, outcome: "already_delivered" });
+      expect(duplicate.label).toBe("未重复发送：该发送 ID 此前已投递");
+      expect(duplicate.label).not.toBe(allowedBy({ ...base, outcome: "sent" }).label);
+      expect(duplicate.detail).toContain("sa_example");
+      expect(duplicate.tone).toBe("orange");
+    }
+  });
+
   it("the card: the user's own answer says no more than that they agreed on a card (the ledger can't say which device)", () => {
-    expect(allowedBy({ kind: "card", interaction_id: "ix-1" })).toEqual({ label: "你在确认卡片上同意", tone: "neutral", detail: "弹出了确认卡片，你点了允许。" });
-    expect(allowedBy({ kind: "card" })).toMatchObject({ label: "你在确认卡片上同意", tone: "neutral" });
+    expect(allowedBy({ kind: "card", interaction_id: "ix-1" })).toEqual({ label: "你通过确认卡片同意", tone: "neutral", detail: "系统弹出了确认卡片，并已获你允许。" });
+    expect(allowedBy({ kind: "card" })).toMatchObject({ label: "你通过确认卡片同意", tone: "neutral" });
     expect(JSON.stringify(allowedBy({ kind: "card" }))).not.toContain("手机");
   });
 
@@ -125,7 +148,7 @@ describe("how the gate let it through", () => {
 
   it("the card answered by anyone else: named, in orange, and never as the user's confirmation", () => {
     const other = allowedBy({ kind: "card", answered_by: "bot-x" });
-    expect(other).toEqual({ label: "由 bot-x 代答", tone: "orange", detail: "确认卡片由 bot-x 作答。" });
+    expect(other).toEqual({ label: "由 bot-x 代答", tone: "orange", detail: "确认卡片由 bot-x 回复。" });
     expect(other.label).not.toBe(allowedBy({ kind: "card" }).label);
   });
 
@@ -231,7 +254,7 @@ describe("the connector chips", () => {
 describe("the hub's refusals", () => {
   it("no database is said as that, not as the hub being unavailable", () => {
     const e = new ApiError(503, "no database: there is no ledger", { error: "x", code: "no_database" });
-    expect(sentProblem(e)).toEqual({ kind: "no_database", text: "这台 hub 没有数据库，所以不记录以你的名义发出的内容。" });
+    expect(sentProblem(e)).toEqual({ kind: "no_database", text: "当前 hub 未启用数据库，因此不会记录以你的名义发出的内容。" });
     expect(sentProblem(e).text).not.toBe(errorText(e));
   });
 
@@ -278,13 +301,13 @@ describe("recall", () => {
 
   it("says the hub's refusals in plain words, and the hub's own reason when it refused or the code is new", () => {
     const err = (status: number, code?: string, error = "x") => new ApiError(status, error, code ? { error, code } : { error });
-    expect(recallProblem(err(409, "too_old"))).toContain("太久");
-    expect(recallProblem(err(409, "already_recalled"))).toContain("已经撤回");
-    expect(recallProblem(err(409, "not_recallable"))).toContain("不能撤回");
+    expect(recallProblem(err(409, "too_old"))).toContain("发送时间过长");
+    expect(recallProblem(err(409, "already_recalled"))).toContain("已被撤回");
+    expect(recallProblem(err(409, "not_recallable"))).toContain("无法撤回");
     expect(recallProblem(err(503, "connector_unavailable"))).toContain("连接器");
-    expect(recallProblem(err(504, "recall_unknown"))).toContain("不确定");
-    expect(recallProblem(err(403, "own_device_only"))).toContain("完整权限");
-    expect(recallProblem(err(404))).toContain("更新 Hub");
+    expect(recallProblem(err(504, "recall_unknown"))).toContain("无法确认");
+    expect(recallProblem(err(403, "own_device_only"))).toContain("完整访问权限");
+    expect(recallProblem(err(404))).toContain("升级 hub");
     expect(recallProblem(err(502, "recall_refused", "GitHub said no"))).toContain("GitHub said no");
     expect(recallProblem(err(409, "something_new", "a new reason"))).toBe("a new reason");
   });

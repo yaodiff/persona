@@ -3,14 +3,16 @@
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
 import { acceptanceStands, decisionDismissed, latestReview, reviewState } from "./supervision";
-import { heldDelivery, isCancelled, openAsk, todoDueBy, todoStatus, waitsForOwner, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { heldDelivery, isCancelled, normalizedPR, openAsk, openMergePRs, PR_STATUS_FRESH_MS, todoDueBy, todoStatus, waitsForOwner, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+export { normalizedPR, openMergePRs, PR_STATUS_FRESH_MS };
 import { TODO_LIST_SECTIONS, TODO_REASONS } from "./todo-view-wire";
 
 /** Where a to-do shows: merge waits join explicit holds on the web (#9325); cancelled stays apart from Done (#5732). */
-export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "other" | "shelved" | "done" | "cancelled";
+export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "other" | "shelved" | "done" | "cancelled" | "can_wait" | "todo";
 
-/** The page's order (#5707): unfinished work stays open; cancelled has its own section after Done (#5732). */
+/** The standard order (#5707). The server board provides its own order and two additional sections. */
 export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "parked", "other", "just_done", "shelved", "done", "cancelled"];
+export const ALL_TRIAGE_SECTIONS: readonly TriageSection[] = [...TRIAGE_SECTIONS, "can_wait", "todo"];
 
 /** Sections that start folded by default: unfinished to-dos stay open (#5707); cancelled folds apart from Done (#5732). */
 export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(TRIAGE_SECTIONS.slice(-3));
@@ -29,25 +31,6 @@ export function sectionStartsFolded(section: TriageSection, groups: readonly { l
     const outcome = group.lead.supervision?.state;
     return isCancelled(group.lead) || (group.lead.done_by !== "review" && group.lead.done_by !== "auto") || outcome === "accepted" || outcome === "cancelled";
   });
-}
-
-export const PR_STATUS_FRESH_MS = 15 * 60_000;
-
-export function normalizedPR(url: string | undefined): string {
-  return (url ?? "").trim().replace(/[#?].*$/, "").replace(/\/+$/, "").toLowerCase();
-}
-
-/** Its PRs with fresh facts saying open and non-draft: the current one first, then earlier ones newest first (#7935). */
-export function openMergePRs(todo: Todo, now: number): PRFacts[] {
-  const fresh = (f: PRFacts) => {
-    const checked = ms(f.checked_at);
-    return !!checked && now - checked >= 0 && now - checked <= PR_STATUS_FRESH_MS && f.state === "open" && !f.draft;
-  };
-  const out: PRFacts[] = [];
-  const current = todo.pr_status;
-  if (current && todo.pr_url && normalizedPR(todo.pr_url) === normalizedPR(current.url) && fresh(current)) out.push(current);
-  for (const f of todo.other_prs ?? []) if (normalizedPR(f.url) !== normalizedPR(todo.pr_url) && fresh(f)) out.push(f);
-  return out;
 }
 
 /** True only for a fresh open non-draft PR of the to-do with no active agent or owner decision. */
@@ -433,6 +416,17 @@ export function ownerNeeds(todos: Todo[], lookup: SessionLookup | undefined, now
     }
     const t = placed.get(td.id)!;
     if (td.quiet || !countsAsOpen(td, t)) continue;
+    // Completed tasks awaiting optional owner verification (`user_check`) and unescalated model errors on supervised
+    // tasks stay out of the urgent Needs you badge, matching the hub projection.
+    const rawStatus = todoStatus(td, lookup);
+    const userCheckUrgent =
+      rawStatus === "needs_you" ||
+      (rawStatus === "interrupted" && !td.supervision?.supervisor) ||
+      heldDelivery(td)?.unblock === "user" ||
+      waitsForOwner(td) ||
+      Boolean(openAsk(td)?.questions?.length);
+    if (!td.done_at && reviewState(td) === "user_check" && !userCheckUrgent) continue;
+    if (td.supervision?.supervisor && rawStatus === "interrupted" && !waitsForOwner(td) && heldDelivery(td)?.unblock !== "user") continue;
     const wait = waits(td, t);
     if (wait) counted.set(td.id, wait);
     else if (!td.origin && !agentOnIt(t) && !carried(td.id)) counted.set(td.id, "unattended");
@@ -572,8 +566,8 @@ export function triageTodos(
     else byRoot.set(r, [td]);
   }
 
-  const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
-  const todoCounts = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
+  const sections = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
+  const todoCounts = Object.fromEntries(ALL_TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
   let open = 0;
   for (const td of list) {
     const tr = placed.get(td.id)!;

@@ -25,6 +25,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import persona.core.contracts.api.*
 import persona.core.navigation.LocalDetailKey
+import persona.core.navigation.ExtensionRoute
 import persona.core.navigation.SettingsPage
 import persona.core.navigation.SettingsPageRoute
 import kotlinx.coroutines.CancellationException
@@ -207,7 +208,9 @@ private fun SettingsContent(
     // so the tab badge and the Extensions page stay current. Cards load only on the Extensions page when a tap can open them.
     val slots = services.extensionSlots.takeUnless { services.demo }
     val slotsState = slots?.state?.collectAsState()?.value ?: ExtensionSlotsState()
-    val slotCards = if (page == "plugins" && onNavigate != null) rememberExtensionCards(slots) { onNavigate(it) } else emptyList()
+    val slotCards = if (page == "plugins" && onNavigate != null) {
+        rememberExtensionCards(slots, onOpen = { onNavigate(it) }, onSettings = { id -> onNavigate(ExtensionRoute(id, manager = owner)) })
+    } else emptyList()
     LaunchedEffect(slots, page, connection) {
         if (slots != null && (page == "settings" || page == "plugins") && connection == ConnectionState.Online) slots.load()
     }
@@ -492,6 +495,7 @@ private fun SettingsPageContent(
             machines = services.machines.takeUnless { services.demo }, attempts = services.pairingAttempts,
             mainReadiness = services.readiness.takeUnless { services.demo }, skipWelcome = true)
         "capsule" -> CapsuleSettingsPage(services.capsule, back)
+        "digital-assistant" -> DigitalAssistantSettingsPage(services.digitalAssistantModel, connection, services.demo, back)
         "knowledge-selection" -> KnowledgeSelectionPage(knowledgeSelection, connectorsService, back)
         // The current assistant's computers alone: their Claude Code / Codex / Antigravity settings.
         "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, owns = { assistant.ownsOn(it.id, it.manager) })

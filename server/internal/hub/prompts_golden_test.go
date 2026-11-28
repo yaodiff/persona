@@ -250,6 +250,9 @@ func TestGoldenChannelMessage(t *testing.T) {
 	for _, l := range []struct{ name, language string }{{"zh-Hans", ""}, {"en", "English"}, {"ja", "日本語"}} {
 		golden(t, "channel_message.images_out."+l.name, prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "WeChat",
 			Plain: true, Asks: true, ImagesOut: true, Language: l.language, Text: "Show me the chart"}))
+		// The same for a public mention on a plain channel that sends pictures (review of #12158).
+		golden(t, "channel_mention_message.images_out."+l.name, prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true,
+			Name: "Example Chat", Public: true, Plain: true, ImagesOut: true, Language: l.language, Text: "Show me the chart"}))
 	}
 }
 

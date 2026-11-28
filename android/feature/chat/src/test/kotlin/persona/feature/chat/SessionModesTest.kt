@@ -32,6 +32,19 @@ class SessionModesTest {
         assertNull(SessionModes.modeLabel(null, res))
     }
 
+    // #17054: an Orca chat's modes are what its row reports (#17046's bridge): a Claude chat that takes full access at any
+    // time offers it, another provider's chat offers the modes Orca lists for it, Plan included only where listed.
+    @Test fun anOrcaChatOffersWhatItsRowReports() {
+        fun chat(agent: String, caps: persona.core.contracts.SessionCapabilities, bypass: Boolean = false) = Session(sessionId = "s", agent = agent,
+            permissionMode = "default", sourceKind = "runtime", sourceInstanceId = "orca", spaceKind = "orca", bypassAvailable = bypass, capabilities = caps)
+        val claude = chat("claude", persona.core.contracts.SessionCapabilities(read = true, send = true, modes = true), bypass = true)
+        assertEquals(listOf("default", "acceptEdits", "plan", "auto", "bypassPermissions"), SessionModes.switchable(claude).map { it.id })
+        val codex = chat("codex", persona.core.contracts.SessionCapabilities(read = true, send = true, modes = false,
+            permissionModes = listOf("default", "auto", "bypassPermissions")))
+        assertEquals(listOf("default", "auto", "bypassPermissions"), SessionModes.switchable(codex).map { it.id })
+        assertFalse(SessionModes.switchable(codex).any { it.id == "plan" })
+    }
+
     @Test fun aCodexThreadOffersItsOwnLevels() {
         val codex = Session(sessionId = "s", agent = "codex", effort = "high", efforts = listOf("low", "high", "ultra", "turbo"))
         assertEquals(listOf("low", "high", "ultra", "turbo"), SessionModes.effortOptions(codex).map { it.id })
@@ -53,13 +66,13 @@ class SessionModesTest {
 
     @Test fun theGptHintKeepsTheModesAndEveryVersionVariant() {
         val session = Session(sessionId = "s", model = "gpt-6.1-sol", permissionMode = "default", effort = "high")
-        assertEquals("6.1 Sol", chatModeHint(session, res))
-        assertEquals("6.1", chatModeHint(session.copy(model = "gpt-6.1"), res))
-        assertEquals("4o Mini", chatModeHint(session.copy(model = "gpt-4o-mini"), res))
-        assertEquals("6.1 Codex Max", chatModeHint(session.copy(model = "gpt-6.1-codex-max"), res))
-        assertEquals("允许编辑，思考很高，6.1 Sol", chatModeHint(session.copy(permissionMode = "acceptEdits", effort = "xhigh"), res))
+        assertEquals("GPT-6.1 Sol", chatModeHint(session, res))
+        assertEquals("GPT-6.1", chatModeHint(session.copy(model = "gpt-6.1"), res))
+        assertEquals("GPT-4o Mini", chatModeHint(session.copy(model = "gpt-4o-mini"), res))
+        assertEquals("GPT-6.1 Codex Max", chatModeHint(session.copy(model = "gpt-6.1-codex-max"), res))
+        assertEquals("允许编辑，思考很高，GPT-6.1 Sol", chatModeHint(session.copy(permissionMode = "acceptEdits", effort = "xhigh"), res))
         // The current model does not grant a session permission or effort controls.
-        assertEquals("6.1 Sol", chatModeHint(session.copy(permissionMode = "acceptEdits", effort = "xhigh"), res, includeModes = false))
+        assertEquals("GPT-6.1 Sol", chatModeHint(session.copy(permissionMode = "acceptEdits", effort = "xhigh"), res, includeModes = false))
         assertEquals("gpt-6.1-sol", session.model)
     }
 

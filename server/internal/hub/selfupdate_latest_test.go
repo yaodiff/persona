@@ -36,7 +36,7 @@ func TestDevelopmentPreviewAndLatestTarget(t *testing.T) {
 		var resolveErr error
 		var resume chan struct{}
 		resolves := 0
-		u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, op string, input map[string]any, result any, _ func(update.DevelopmentProgress)) error {
+		u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, op string, input map[string]any, result any, _ func(), _ func(update.DevelopmentProgress)) error {
 			switch op {
 			case "resolve":
 				resolves++
@@ -45,6 +45,8 @@ func TestDevelopmentPreviewAndLatestTarget(t *testing.T) {
 				}
 				*result.(*update.DevelopmentCandidate) = remote
 				return resolveErr
+			case "preflight":
+				return nil
 			case "build":
 				built = append(built, *input["candidate"].(*update.DevelopmentCandidate))
 			default:

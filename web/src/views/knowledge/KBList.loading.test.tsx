@@ -64,7 +64,7 @@ describe("the knowledge list's first paint", () => {
     expect(tablist()).not.toBeNull();
     expect(selectedTab()?.textContent).toBe("文档");
     expect(filter()).not.toBeNull();
-    expect(host.textContent).not.toContain("还没有文档");
+    expect(host.textContent).not.toContain("暂无文档");
 
     await answer(requests[0], { items: [entry], tags: ["example"] });
     expect(selectedTab()?.textContent).toBe("文档");
@@ -78,7 +78,7 @@ describe("the knowledge list's first paint", () => {
     await answer(requests[0], { items: null, tags: null });
     expect(selectedTab()?.textContent).toBe("文档");
     expect(filter()).not.toBeNull();
-    expect(host.textContent).toContain("还没有文档");
+    expect(host.textContent).toContain("暂无文档");
     expect(host.textContent).not.toContain("加载中");
   });
 
@@ -87,7 +87,7 @@ describe("the knowledge list's first paint", () => {
     lists.set(listKey("docs"), cached);
     render();
     expect(selectedTab()?.textContent).toBe("文档");
-    expect(host.textContent).toContain(items.length ? entry.name : "还没有文档");
+    expect(host.textContent).toContain(items.length ? entry.name : "暂无文档");
     expect(host.textContent).not.toContain("加载中");
     const ready = host.innerHTML;
 
@@ -104,8 +104,8 @@ describe("the knowledge list's first paint", () => {
     expect(tablist()).not.toBeNull();
     expect(host.querySelector('[role="tab"][href="/kb/people"]')).not.toBeNull();
     expect(filter()).not.toBeNull();
-    expect(host.textContent).toContain("连不上 hub");
-    expect(host.textContent).not.toContain("还没有文档");
+    expect(host.textContent).toContain("无法连接 hub");
+    expect(host.textContent).not.toContain("暂无文档");
 
     const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === "重试")!;
     act(() => retry.click());
@@ -115,7 +115,7 @@ describe("the knowledge list's first paint", () => {
     await answer(requests[1], { items: [entry], tags: [] });
     expect(selectedTab()?.textContent).toBe("文档");
     expect(host.textContent).toContain(entry.name);
-    expect(host.textContent).not.toContain("连不上 hub");
+    expect(host.textContent).not.toContain("无法连接 hub");
   });
 
   it("allows search before the list arrives and resumes loading when search is cleared", async () => {
@@ -159,7 +159,7 @@ describe("the kind chips", () => {
     expect(host.textContent).toContain("加载中");
     await answer(requests[2], { items: [], tags: [] });
     expect(chips()).toEqual(names);
-    expect(host.textContent).toContain("还没有会议");
-    expect(host.textContent).toContain("在手机上开的会议、记的笔记");
+    expect(host.textContent).toContain("暂无会议");
+    expect(host.textContent).toContain("你在手机上记录的会议与笔记");
   });
 });

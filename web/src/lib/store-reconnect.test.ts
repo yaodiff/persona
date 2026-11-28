@@ -5,6 +5,7 @@ import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getStat
 import { offlineNow } from "./feedback";
 import { liveEntry, resetLive } from "./live";
 import { messageFeedback } from "./message-send";
+import { clientInstance } from "./device-id";
 
 class FakeSocket {
   static OPEN = 1;
@@ -39,7 +40,7 @@ class FakeSocket {
 }
 
 const last = () => FakeSocket.all[FakeSocket.all.length - 1];
-const fetched = (fetcher: ReturnType<typeof vi.fn>) => fetcher.mock.calls.map((c) => String(c[0]));
+const fetched = (fetcher: ReturnType<typeof vi.fn>) => fetcher.mock.calls.map((c) => new URL(String(c[0]), "http://hub").pathname);
 
 let fetcher: ReturnType<typeof vi.fn>;
 
@@ -137,12 +138,12 @@ describe("reconnecting", () => {
   });
   it("first connect sends no resume point; reconnects resume from the last broadcast seen", () => {
     const s = online();
-    expect(s.url).toBe("ws://hub/api/v1/ws?token=tok&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1"); // the session list comes as deltas; status lines are pushed
+    expect(s.url).toBe("ws://hub/api/v1/ws?token=tok&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1,approval_mirrors"); // the session list comes as deltas; status lines are pushed
     s.push({ type: "todos", event_seq: 6 });
     s.push({ type: "items", machine_id: "m", session_id: "x", items: [] });
     s.drop();
     vi.advanceTimersByTime(600);
-    expect(last().url).toBe("ws://hub/api/v1/ws?token=tok&event_stream=s1&event_seq=6&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1");
+    expect(last().url).toBe("ws://hub/api/v1/ws?token=tok&event_stream=s1&event_seq=6&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1,approval_mirrors");
   });
 
   it("an ordinary drop stays invisible for 8 s, then shows as before", () => {
@@ -337,7 +338,7 @@ describe("a slow refresh() does not put back an older snapshot", () => {
     const turns: Held = Object.fromEntries(held.map((p) => [p, []]));
     const reply = (body: unknown) => ({ ok: true, status: 200, headers: new Headers(), text: async () => JSON.stringify(body) });
     fetcher.mockImplementation(async (url: string) => {
-      const path = String(url).replace(/^.*\/api\/v1/, "");
+      const path = new URL(String(url), "http://hub").pathname.replace(/^\/api\/v1/, "");
       if (turns[path]) return reply(await new Promise((r) => turns[path].push(r)));
       return reply(answers[path] ?? {});
     });
@@ -557,6 +558,14 @@ describe("client_hello heartbeat", () => {
     const hello = last().sent.map((m) => JSON.parse(m)).find((m) => m.type === "client_hello");
     expect(hello.device_id).toBeTruthy();
     expect(hello.device_id).toBe(localStorage.getItem("persona.notifyDevice"));
+  });
+
+  it("names this tab's instance, matching the REST capability binding", () => {
+    connect();
+    last().open();
+    const hello = last().sent.map((m) => JSON.parse(m)).find((m) => m.type === "client_hello");
+    expect(hello.instance).toBeTruthy();
+    expect(hello.instance).toBe(clientInstance);
   });
 });
 

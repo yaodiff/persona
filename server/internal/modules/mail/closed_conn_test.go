@@ -27,10 +27,11 @@ import (
 // that hangs up after some command does. QQ Mail does it after a keyword search: two accounts' searches failed
 // with "fetch: use of closed network connection" on every try, the retry on a new login included.
 type hangupProxy struct {
-	ln    net.Listener
-	after func(conn int, command string) bool // conn counts the connections from 1
-	conns atomic.Int32
-	hung  atomic.Int32
+	ln     net.Listener
+	after  func(conn int, command string) bool // conn counts the connections from 1
+	conns  atomic.Int32
+	hung   atomic.Int32
+	script imapProxyScript
 
 	mu   sync.Mutex
 	open []net.Conn
@@ -38,11 +39,23 @@ type hangupProxy struct {
 
 func newHangupProxy(t *testing.T, target string, after func(conn int, command string) bool) *hangupProxy {
 	t.Helper()
+	return newScriptedIMAPProxy(t, target, after, imapProxyScript{})
+}
+
+type imapProxyScript struct {
+	// before can answer a command on the proxy so the real server does not see it.
+	before func(line string) (answer string)
+	// reply can rewrite or drop server lines. A selected tagged reply still ends the connection.
+	reply func(line string, hangup bool) string
+}
+
+func newScriptedIMAPProxy(t *testing.T, target string, after func(int, string) bool, script imapProxyScript) *hangupProxy {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &hangupProxy{ln: ln, after: after}
+	p := &hangupProxy{ln: ln, after: after, script: script}
 	t.Cleanup(func() { ln.Close(); p.endAll() })
 	go func() {
 		for {
@@ -94,7 +107,15 @@ func (p *hangupProxy) serve(n int, client, server net.Conn) {
 				}
 				continue
 			}
-			if f := strings.Fields(line); len(f) > 1 && p.after(n, line) {
+			if p.script.before != nil {
+				if answer := p.script.before(line); answer != "" {
+					if _, werr := client.Write([]byte(answer)); werr != nil {
+						return
+					}
+					continue
+				}
+			}
+			if f := strings.Fields(line); len(f) > 1 && p.after != nil && p.after(n, line) {
 				mu.Lock()
 				tag = f[0]
 				mu.Unlock()
@@ -107,12 +128,20 @@ func (p *hangupProxy) serve(n int, client, server net.Conn) {
 	r := bufio.NewReader(server)
 	for {
 		line, err := r.ReadString('\n')
-		if _, werr := client.Write([]byte(line)); werr != nil || err != nil {
+		if err != nil {
 			return
 		}
 		mu.Lock()
 		hangup := tag != "" && strings.HasPrefix(line, tag+" ")
 		mu.Unlock()
+		if p.script.reply != nil {
+			line = p.script.reply(line, hangup)
+		}
+		if line != "" {
+			if _, werr := client.Write([]byte(line)); werr != nil {
+				return
+			}
+		}
 		if hangup {
 			p.hung.Add(1)
 			hungUp.Store(true)

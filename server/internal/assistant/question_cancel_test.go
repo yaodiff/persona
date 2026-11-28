@@ -22,7 +22,7 @@ func TestAssistantAskUserCancelReturnsNoAnswer(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		text, err := s.toolAskUser(ctx, "mac", "conversation", json.RawMessage(`{"questions":[{"question":"Which color?"}]}`))
+		text, err := s.toolAskUser(ctx, "mac", "conversation", json.RawMessage(`{"why_owner":"priority","questions":[{"question":"Which color?"}]}`))
 		done <- result{text, err}
 	}()
 	var ix proto.Interaction

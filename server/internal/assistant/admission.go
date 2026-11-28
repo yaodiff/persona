@@ -33,6 +33,13 @@ const admissionSettingsKey = "assistant.admission"
 // the setting, per machine, without naming any machine in code.
 const (
 	admissionLoadPerCore = 4.0
+	// admissionMaxSwapPercent is the swap line (#16757): a computer whose swap is at least this full while less than
+	// admissionSwapFreeShare of its memory is available takes no new Agent. Past physical memory a machine does not slow
+	// down evenly, it falls off a cliff (every build an Agent starts swaps), and the load line only sees that once load1
+	// is far past it. The memory condition keeps a computer whose swap holds stale pages but whose memory is free (a
+	// long-running Linux box) admitting.
+	admissionMaxSwapPercent = 80.0
+	admissionSwapFreeShare  = 4 // the swap line applies while available memory is under total / 4
 	// admissionDirectionCap is the code default every direction falls back to when neither direction_cap_by_direction
 	// nor direction_cap_by_project names it. The counts are taken per supervising conversation, so the default must fit
 	// the busiest charter direction (the main product line's charter is 8); narrower lines are configured per direction.
@@ -61,6 +68,9 @@ type AdmissionSettings struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	// LoadPerCore refuses when load1 exceeds cores times this (4 by default).
 	LoadPerCore *float64 `json:"load_per_core,omitempty"`
+	// MaxSwapPercent refuses when swap is at least this percent used (80 by default) while less than a quarter of the
+	// memory is available. Values outside (0, 100] keep the default; a computer reporting no swap skips the line.
+	MaxSwapPercent *float64 `json:"max_swap_percent,omitempty"`
 	// DirectionCap is the most running execution Agents one direction may have (8 by default). DirectionCapByDirection
 	// overrides it for one supervising conversation id or the direction's displayed name, and DirectionCapByProject for
 	// a knowledge-base project slug; the direction map wins over the project map.
@@ -112,6 +122,7 @@ type MachineAdmission struct {
 	MinMemoryBytes *int64   `json:"min_memory_bytes,omitempty"`
 	MaxClaudeProcs *int     `json:"max_claude_procs,omitempty"`
 	LoadPerCore    *float64 `json:"load_per_core,omitempty"`
+	MaxSwapPercent *float64 `json:"max_swap_percent,omitempty"`
 }
 
 // admissionLimits is the resolved line for one start decision.
@@ -119,6 +130,7 @@ type admissionLimits struct {
 	minMemory    int64
 	maxProcs     int
 	loadPerCore  float64
+	maxSwap      float64 // percent
 	directionCap int
 	// group is the launcher group of the start's launcher; grouped is false when none names it (no launcher line).
 	group   LauncherGroup
@@ -193,6 +205,14 @@ func positiveOrFloat(v *float64, def float64) float64 {
 	return def
 }
 
+// percentOr is v when it is a percentage in (0, 100], def otherwise.
+func percentOr(v *float64, def float64) float64 {
+	if v != nil && *v > 0 && *v <= 100 {
+		return *v
+	}
+	return def
+}
+
 // limitsFor resolves the lines for machineID and the starting task's direction and project.
 func (s *Service) limitsFor(ctx context.Context, machineID, direction, project string, cfg AdmissionSettings) admissionLimits {
 	hubMachine := s.settings(ctx).MachineID
@@ -208,10 +228,13 @@ func (s *Service) limitsFor(ctx context.Context, machineID, direction, project s
 	}
 	directionCap := s.directionCap(ctx, direction, project, cfg)
 	loadPerCore := positiveOrFloat(cfg.LoadPerCore, admissionLoadPerCore)
+	maxSwap := percentOr(cfg.MaxSwapPercent, admissionMaxSwapPercent)
 	if over, ok := cfg.Machines[machineID]; ok {
 		loadPerCore = positiveOrFloat(over.LoadPerCore, loadPerCore)
+		maxSwap = percentOr(over.MaxSwapPercent, maxSwap)
 	}
-	return admissionLimits{minMemory: minMemory, maxProcs: maxProcs, loadPerCore: loadPerCore, directionCap: directionCap}
+	return admissionLimits{minMemory: minMemory, maxProcs: maxProcs, loadPerCore: loadPerCore, maxSwap: maxSwap,
+		directionCap: directionCap}
 }
 
 // directionCap resolves one start's direction line. The count is taken per supervising conversation, so the first and
@@ -249,6 +272,10 @@ type admissionMachineFacts struct {
 	cores     int
 	load1     *float64 // nil: the node did not report a load average (e.g. Windows), so the load condition is skipped
 	available int64
+	memTotal  int64
+	// swapUsed and swapTotal are the swap reading; swapTotal 0 means none to judge (no swap configured, a platform
+	// that cannot read it, or a reading out of range), so the swap condition is skipped
+	swapUsed, swapTotal int64
 	// claudeProcs nil: the node did not report a count, so the process condition is skipped; replaced by the fleet's
 	// working-session count when a snapshot exists
 	claudeProcs *int
@@ -279,12 +306,19 @@ func (s *Service) machineFacts(machineID string) (facts admissionMachineFacts, m
 	if sample.MemTotal <= 0 || sample.MemUsed < 0 || sample.MemUsed > sample.MemTotal {
 		return admissionMachineFacts{}, true, admissionMessage("assistant-tasks.admission_memory_ambiguous")
 	}
-	return admissionMachineFacts{
+	facts = admissionMachineFacts{
 		cores:       m.System.Cores,
 		load1:       sample.Load, // nil on nodes without a load average, such as Windows: the load check skips it
 		available:   sample.MemTotal - sample.MemUsed,
+		memTotal:    sample.MemTotal,
 		claudeProcs: sample.ClaudeProcs,
-	}, true, nil
+	}
+	// Unlike memory, swap is optional: a computer without swap, or a reading that makes no sense, skips the swap line
+	// rather than failing admission.
+	if sample.SwapTotal > 0 && sample.SwapUsed >= 0 && sample.SwapUsed <= sample.SwapTotal {
+		facts.swapUsed, facts.swapTotal = sample.SwapUsed, sample.SwapTotal
+	}
+	return facts, true, nil
 }
 
 // workingSessions counts a machine's sessions the fleet last saw working a turn. ok is false only when the fleet has no
@@ -343,6 +377,12 @@ func (s *Service) machineViolationWith(p *placement, machineID string, lim admis
 		// sample, so claims deliberately do not decrement it the way they do the process and direction caps.
 		hit(admissionMessage("assistant-tasks.admission_memory", i18n.Args{
 			"available": humanBytes(facts.available), "limit": humanBytes(lim.minMemory)}))
+	}
+	if facts.swapTotal > 0 && float64(facts.swapUsed)*100 >= lim.maxSwap*float64(facts.swapTotal) &&
+		facts.available < facts.memTotal/admissionSwapFreeShare {
+		hit(admissionMessage("assistant-tasks.admission_swap", i18n.Args{
+			"percent": int(facts.swapUsed * 100 / facts.swapTotal), "used": humanBytes(facts.swapUsed),
+			"total": humanBytes(facts.swapTotal), "available": humanBytes(facts.available)}))
 	}
 	// The line bounds agents actually working a turn, not OS processes: a session that finished, parks or stays idle
 	// keeps its claude process alive for hours, and counting those fills the machine while nothing runs. The fleet's
@@ -481,6 +521,13 @@ func (s *Service) rerouteTarget(ctx context.Context, t *PlanTask) (Device, bool)
 			placementOf(ctx).hit(alt.ID, "launcher_missing", nil)
 			return false
 		}
+		if t.scratchWorkspace() {
+			if !alt.ScratchWorkspace {
+				placementOf(ctx).hit(alt.ID, "scratch_unsupported", nil)
+				return false
+			}
+			return true
+		}
 		return s.taskDirectoryExists(ctx, alt.ID, rehome(t.Cwd, from, alt))
 	})
 }
@@ -499,7 +546,11 @@ func (s *Service) reroutePlanTask(ctx context.Context, t *PlanTask, from, alt De
 	t.Reroute = &reroute
 	t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
 	t.Reroute.Reason = note
-	t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, from, alt)
+	if t.scratchWorkspace() {
+		t.Machine, t.Cwd, t.WorkspaceResolved = alt.ID, "", nil
+	} else {
+		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, from, alt)
+	}
 	t.noteWhy(note)
 }
 
@@ -833,15 +884,14 @@ func (s *Service) setAdmission(ctx context.Context, v json.RawMessage) (*ownChan
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
-	before, _ := json.Marshal(s.admissionSettings(ctx))
+	was := s.admissionSettings(ctx)
+	before, _ := json.Marshal(was)
 	after, _ := json.Marshal(in)
 	if bytes.Equal(before, after) {
 		return &ownChange{summary: "assistant.admission did not change"}, nil
 	}
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_admission", i18n.Args{
-			"before": clipped(l, string(before)), "after": clipped(l, string(after))})
-	},
+	hubMachine := s.settings(ctx).MachineID
+	return &ownChange{cardText: func(l i18n.Lang) string { return admissionChangeCard(l, was, in, hubMachine) },
 		apply: func(ctx context.Context) (string, error) {
 			if err := s.putSetting(ctx, admissionSettingsKey, &in); err != nil {
 				return "", err
@@ -851,6 +901,7 @@ func (s *Service) setAdmission(ctx context.Context, v json.RawMessage) (*ownChan
 			s.admission.mu.Lock()
 			s.admission.cached, s.admission.at = nil, time.Time{}
 			s.admission.mu.Unlock()
+			s.wakePendingPlacement()
 			return "assistant.admission updated; the next execution-agent start uses the new lines.", nil
 		}}, nil
 }

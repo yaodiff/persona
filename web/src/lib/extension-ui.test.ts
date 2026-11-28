@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
-  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, edgeLabels, extensionSettingsHref, extensionTrackRoute, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
+  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, composeText, edgeLabels, extensionSettingsHref, extensionTrackRoute, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
   percent, placesOf, pointText, readView, refreshDelay, renderUI, seriesColors, stackedShare, submitValues, thinLabels, toneOf, uiContext, uiIcon, uiPlaces, UI_VERSION, type UIPlace, type UIView,
 } from "./extension-ui";
 
@@ -52,6 +52,16 @@ describe("画一页", () => {
     expect(["positive", "caution", "danger", "neutral", "pink", undefined].map(toneOf)).toEqual(["positive", "caution", "danger", "neutral", "neutral", "neutral"]);
     expect([0.72, -1, 3, undefined, Number.NaN, 0.333].map(percent)).toEqual([72, 0, 100, 0, 0, 33.3]);
     expect(isHttps("https://example.com/a")).toBe(true);
+    expect(isHttps("https://example.com/a?email=me@example.com")).toBe(true);
+    expect(isHttps("https://example.com/@user")).toBe(true);
+    expect(isHttps("https://good.example@evil.example/a")).toBe(false);
+    expect(isHttps("https://me:pw@example.com/a")).toBe(false);
+    expect(isHttps("https://:pw@example.com/a")).toBe(false);
+    expect(isHttps("https:/admin")).toBe(false);
+    expect(isHttps("https://@evil.example/a")).toBe(false);
+    expect(isHttps("https://good.example\\@evil.example/a")).toBe(false);
+    expect(isHttps("https://example.com/\x00a")).toBe(false);
+    expect(isHttps("https://example.com/a b")).toBe(false);
     expect(isHttps("http://example.com")).toBe(false);
     expect(isHttps("javascript:alert(1)")).toBe(false);
     expect(isHttps(undefined)).toBe(false);
@@ -70,7 +80,7 @@ describe("画一页", () => {
     expect(submitValues(view, { note: "new", token: "s", extra: "no" })).toEqual({ note: "new", token: "s", auto: "true", off: "false", plan: "solo", limit: "20" });
     expect(numberProblem("12.5")).toBe("");
     expect(numberProblem("")).toBe("");
-    expect(numberProblem("abc")).toBe("要是一个数");
+    expect(numberProblem("abc")).toBe("必须为数字");
   });
   it("reads what a press answered", () => {
     expect(outcome({})).toEqual({ view: undefined, reload: true, toast: undefined, url: undefined });
@@ -166,7 +176,7 @@ describe("UI 版本 2：上下文", () => {
     vi.stubGlobal("navigator", { language: "zh-CN" });
     const c = uiContext({ machine: "m1", size: "compact" });
     expect(c).toMatchObject({ platform: "web", ui_version: UI_VERSION, locale: "zh-CN", machine: "m1", size: "compact" });
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
     expect(c.tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(uiContext()).not.toHaveProperty("launcher");
     expect(uiContext({ launcher: "work" }).launcher).toBe("work");
@@ -264,17 +274,40 @@ describe("收件箱条目（inbox_item）", () => {
     expect(uiContext({ assistant: "Claude" })).toMatchObject({ assistant: "Claude" });
     expect(uiContext()).not.toHaveProperty("assistant");
   });
+  it("reads an extension's own quick prompt for the composer (persona://compose?prompt=<id>)", () => {
+    expect(composeText("persona://compose?prompt=today&text=What%20happened%20today%3F")).toBe("What happened today?");
+    expect(composeText("jarvis://compose/?prompt=today%2Dplan&text=today-plan")).toBe("today-plan");
+    for (const bad of [
+      "persona://compose", "persona://compose?prompt=", "persona://compose?prompt=a", "persona://compose?text=a",
+      "persona://compose?prompt=%20&text=a", "persona://compose?prompt=a&text=", "persona://compose?prompt=a&text=%20",
+      "persona://compose?prompt=a&text=a&x=1", "persona://compose/x?prompt=a&text=a", "persona://user:pass@compose?prompt=a&text=a", "persona://compose?prompt=a&text=a#x",
+      "https://compose?prompt=a&text=a", "persona://compose?prompt=a&prompt=b&text=a",
+      "persona://compose?prompt=" + "a".repeat(65) + "&text=a", "persona://compose?prompt=a&text=" + "a".repeat(8001),
+    ]) {
+      expect(composeText(bad)).toBeUndefined();
+    }
+    expect(outcome({ open_url: "persona://compose?prompt=today&text=What%20happened%20today%3F" }, undefined, "example-gateway")).toMatchObject({ compose: "What happened today?", reload: false });
+    expect(outcome({ open_url: "persona://compose?prompt=today&text=What%20happened%20today%3F" }, undefined, "-subscriptions")).toMatchObject({ compose: "What happened today?" });
+  });
   it("opens an extension's own settings in the app (persona://settings/extensions/<id>)", () => {
     expect(extensionSettingsHref("persona://settings/extensions/example-gateway")).toBe("/settings?tab=extensions&extension=example-gateway");
     expect(extensionSettingsHref("persona://settings/extensions/a%20b")).toBe("/settings?tab=extensions&extension=a%20b");
+    const set = JSON.stringify({ machines: ["studio-pc"], repos: ["~/code"] });
+    const href = `/settings?tab=extensions&extension=example-gateway&set=${encodeURIComponent(set)}`;
+    expect(extensionSettingsHref(`persona://settings/extensions/example-gateway?set=${encodeURIComponent(set)}`)).toBe(href);
+    expect(extensionSettingsHref(`jarvis://settings/extensions/example-gateway?set=${encodeURIComponent(set)}`)).toBe(href);
     for (const bad of [
       "persona://settings/extensions/", "persona://settings/extensions/a/b", "persona://settings/extensions/a?x=1", "persona://settings/extensions/-market",
       "persona://settings/extensions/a%2Fb", "persona://settings/extensions/%E0", "persona://settings", "persona://inbox/a/source", "https://example.com/settings/extensions/a",
       "previous://settings/extensions/a",
+      "persona://settings/extensions/a?set=%5B%5D", "persona://settings/extensions/a?set=%7B%7D&x=1",
+      "persona://settings/extensions/a?set=%7B%7D&set=%7B%7D", "persona://settings/extensions/a?set=%7B%7D#x",
+      "persona://settings/extensions/a?set=",
     ]) {
       expect(extensionSettingsHref(bad)).toBeUndefined();
     }
     expect(outcome({ open_url: "persona://settings/extensions/example-gateway" })).toEqual({ view: undefined, reload: false, toast: undefined, url: undefined, settings: "/settings?tab=extensions&extension=example-gateway" });
+    expect(outcome({ open_url: `persona://settings/extensions/example-gateway?set=${encodeURIComponent(set)}` })).toMatchObject({ settings: href, reload: false });
     // any other persona:// link stays as it was: nothing opens, nothing is drawn again
     expect(outcome({ open_url: "persona://settings/other" })).toEqual({ view: undefined, reload: false, toast: undefined, url: undefined });
   });

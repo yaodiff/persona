@@ -1,17 +1,17 @@
 {
-  "footer": "被屏蔽的目录不再扫描、不再记住，里面的会话不出现在 Agents（文件不动）；取消屏蔽后恢复。适合用单独 CLAUDE_CONFIG_DIR 跑 claude 的自动化脚本。默认目录不能屏蔽。",
-  "save_failed": "没有改成：{error}",
+  "footer": "被屏蔽的目录不会被扫描或记录，其中的会话也会从 Agents 中隐藏（本地文件不受影响），取消屏蔽后即可恢复。这适用于使用独立 CLAUDE_CONFIG_DIR 运行 claude 的自动化脚本。默认目录无法屏蔽。",
+  "save_failed": "保存失败：{error}",
   "unblocked": "已取消屏蔽 {name}",
   "blocked": "已屏蔽 {name}",
   "rule_deleted": "已删除规则 {rule}",
-  "title": "屏蔽的配置目录 · {name}",
-  "load_failed": "读不到这台电脑的配置目录：{error}",
+  "title": "已屏蔽的配置目录 · {name}",
+  "load_failed": "无法读取这台电脑的配置目录：{error}",
   "retry": "重试",
   "unblock": "取消屏蔽",
   "block": "屏蔽",
   "rule": "规则",
   "delete": "删除",
   "input_placeholder": "~/.automation/* 或具体路径",
-  "input_label": "屏蔽目录或通配",
-  "offline_note": "这台电脑不在线或 node 较旧：列的是 hub 记下的目录，连上后会列出全部。"
+  "input_label": "屏蔽目录路径或通配符",
+  "offline_note": "这台电脑当前离线或 node 版本较旧，下方仅显示 hub 此前记录的目录，待其重新连接后会显示完整列表。"
 }

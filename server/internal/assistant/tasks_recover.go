@@ -71,13 +71,16 @@ func (s *Service) recoverTaskStarts(ctx context.Context, before time.Time) error
 	reason := i18n.T(s.lang(ctx), "assistant-tasks.start_interrupted")
 	var failures []error
 	for _, p := range plans {
-		if p.State != planStarted || p.UpdatedAt.Before(before.Add(-taskStartTimeout)) || p.UpdatedAt.After(before) {
+		if p.State != planStarted || p.UpdatedAt.After(before) {
 			continue
 		}
 		for i, pt := range p.Tasks {
 			// A queued task is deliberately waiting for the admission queue loop: leave it for that loop, do not fail
 			// it as an interrupted start (#6909).
 			if pt.TodoID == "" || pt.Error != "" || pt.Start != nil || pt.Queue != nil {
+				continue
+			}
+			if p.UpdatedAt.Before(before.Add(-pt.planStartTimeout())) || s.taskStartOnWay(pt.TodoID) {
 				continue
 			}
 			failed, err := s.failTodoIf(ctx, pt.TodoID, reason, func(t Todo) bool {

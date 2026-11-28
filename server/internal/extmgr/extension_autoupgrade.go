@@ -369,17 +369,29 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 		return up, rec, nil, false
 	}
 	rec, e, err := u.h.marketEntry(mid, p.Record.ID)
-	if err != nil || !extension.NewerVersion(e.Parsed.Version, p.Record.Version) {
+	if err != nil {
 		return up, rec, nil, false
 	}
 	m := e.Parsed
+	version, engineProblem := m.Version, e.EngineProblem(u.h.build.Number)
+	if !extension.NewerVersion(version, p.Record.Version) {
+		// The active release is already installed. A later release can still explain how to get an update.
+		version, engineProblem = e.LatestIncompatible()
+		if engineProblem == nil || !extension.NewerVersion(version, p.Record.Version) {
+			return up, rec, nil, false
+		}
+	}
 	if m.ID != p.Record.ID && (e.Replaces != p.Record.ID || p.Record.Origin != "market:"+mid+"/"+p.Record.ID || u.h.extensions.reg.Get(m.ID) != nil) {
 		return up, rec, nil, false
 	}
 	id := p.Record.StorageKey()
-	up = ExtensionUpgrade{ID: p.Record.ID, Name: p.Manifest.Name, Market: mid, From: p.Record.Version, To: m.Version}
+	up = ExtensionUpgrade{ID: p.Record.ID, Name: p.Manifest.Name, Market: mid, From: p.Record.Version, To: version}
 	if m.ID != p.Record.ID {
 		up.RenameFrom, up.RenameTo = p.Record.ID, m.ID
+	}
+	if engineProblem != nil {
+		up.State, up.Detail = upgradeIncompatible, i18n.Localize(engineProblem, l)
+		return up, rec, nil, true
 	}
 	bundleConsent := false
 	if len(m.Depends) > 0 || len(m.ExtensionPack) > 0 {
@@ -395,11 +407,9 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	s := u.settings
-	switch _, engines := extension.CheckEngines(m, u.h.build.Number); {
+	switch {
 	case e.PackageFor(extension.Platform()) == nil:
 		up.State, up.Detail = upgradeIncompatible, i18n.T(l, "hub-extension_autoupgrade.no_package", i18n.Args{"platform": extension.Platform()})
-	case engines != nil:
-		up.State, up.Detail = upgradeIncompatible, i18n.Localize(engines, l)
 	case u.h.cantRunHere(m) != nil:
 		up.State, up.Detail = upgradeIncompatible, i18n.Localize(u.h.cantRunHere(m), l)
 	case s.Skipped[id] == m.Version:

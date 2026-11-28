@@ -27,6 +27,7 @@ var inboxSendFailures = map[string]inboxSendFailure{
 	assistantwire.CodeInboxSourceUnavailable: {http.StatusServiceUnavailable, false, "inbox-errors.send_source_unavailable"},
 	assistantwire.CodeInboxSourceSignedOut:   {http.StatusServiceUnavailable, false, "inbox-errors.send_signed_out"},
 	assistantwire.CodeInboxSendDenied:        {http.StatusBadGateway, false, "inbox-errors.send_denied"},
+	assistantwire.CodeInboxBotNotInChat:      {http.StatusBadGateway, false, "inbox-errors.bot_not_in_chat"},
 	assistantwire.CodeInboxSendRateLimited:   {http.StatusTooManyRequests, true, "inbox-errors.send_rate_limited"},
 	assistantwire.CodeInboxSendFailed:        {http.StatusBadGateway, true, "inbox-errors.send_failed"},
 	assistantwire.CodeInboxSendUnrecorded:    {http.StatusServiceUnavailable, true, "inbox-errors.send_unrecorded"},

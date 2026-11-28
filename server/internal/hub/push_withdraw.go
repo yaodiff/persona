@@ -66,9 +66,15 @@ type cardPush struct {
 func (c cardPush) kept(now time.Time) bool { return now.Sub(c.at) <= cmp.Or(c.keep, withdrawKept) }
 
 type withdrawQueue struct {
-	ids   []string
+	cards []withdrawCard
 	timer *time.Timer
 	last  time.Time // when the last withdrawal push went
+}
+
+// withdrawCard keeps the legacy id list and the occurrence-aware entry in lockstep.
+type withdrawCard struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 func newWithdrawals() withdrawals {
@@ -138,10 +144,10 @@ func (p *Pusher) cardPushedFor(id, device string, keep time.Duration) {
 			delete(w.pushed, old)
 		}
 	}
-	if q := w.queue[device]; q != nil && len(q.ids) > 0 {
+	if q := w.queue[device]; q != nil && len(q.cards) > 0 {
 		// A fresh push for the same id (e.g. a superseded to-do decision's new round) supersedes any queued withdrawal
 		// from the earlier round so the delayed background push cannot wipe the new alert.
-		q.ids = slices.DeleteFunc(q.ids, func(queued string) bool { return queued == id })
+		q.cards = slices.DeleteFunc(q.cards, func(queued withdrawCard) bool { return queued.ID == id })
 	}
 	c, ok := w.pushed[id]
 	if !ok {
@@ -153,8 +159,9 @@ func (p *Pusher) cardPushedFor(id, device string, keep time.Duration) {
 }
 
 // withdraw: the card is over. The devices its push went to are told, unless it went to none (a muted session, a
-// quiet task, "Needs you" off) or so long ago that the hub forgot.
-func (p *Pusher) withdraw(id string) {
+// quiet task, "Needs you" off) or so long ago that the hub forgot. A known occurrence is carried separately from the
+// legacy ID list so a delayed withdrawal cannot take back a same-ID replacement's alert.
+func (p *Pusher) withdraw(id string, occurrence ...time.Time) {
 	if p == nil {
 		return
 	}
@@ -173,14 +180,18 @@ func (p *Pusher) withdraw(id string) {
 			q = &withdrawQueue{}
 			w.queue[device] = q
 		}
-		q.ids = append(q.ids, id)
+		card := withdrawCard{ID: id}
+		if len(occurrence) > 0 && !occurrence[0].IsZero() {
+			card.CreatedAt = occurrence[0].UTC().Format(time.RFC3339Nano)
+		}
+		q.cards = append(q.cards, card)
 		p.scheduleWithdrawLocked(device, q, now)
 	}
 }
 
 // scheduleWithdrawLocked sends q after the gathering wait, or once the device's minute is up if that is later.
 func (p *Pusher) scheduleWithdrawLocked(device string, q *withdrawQueue, now time.Time) {
-	if q.timer != nil || len(q.ids) == 0 {
+	if q.timer != nil || len(q.cards) == 0 {
 		return
 	}
 	w := &p.withdrawals
@@ -200,34 +211,40 @@ func (p *Pusher) flushWithdraw(device string) {
 		return
 	}
 	q.timer = nil
-	ids := q.ids
-	if n := withdrawBatch(ids); n < len(ids) {
-		ids, q.ids = ids[:n:n], ids[n:]
+	cards := q.cards
+	if n := withdrawBatch(cards); n < len(cards) {
+		cards, q.cards = cards[:n:n], cards[n:]
 	} else {
-		q.ids = nil
+		q.cards = nil
 	}
 	q.last = p.now()
 	p.scheduleWithdrawLocked(device, q, q.last) // what did not fit
 	w.mu.Unlock()
-	if len(ids) == 0 {
+	if len(cards) == 0 {
 		return
 	}
-	p.sendAs(map[string]any{"aps": map[string]any{"content-available": 1}, "resolved_interaction_ids": ids}, "", "background", "5",
+	ids := make([]string, len(cards))
+	for i, card := range cards {
+		ids[i] = card.ID
+	}
+	p.sendAs(map[string]any{"aps": map[string]any{"content-available": 1}, "resolved_interaction_ids": ids,
+		"resolved_interactions": cards}, "", "background", "5",
 		func(d Device) bool { return d.DeviceID == device && hasFeature(d, featureWithdraw) })
 }
 
-// withdrawBatch is how many of ids, from the first, go in one push: at most withdrawMost, and only as many as fit
-// withdrawIDBytes encoded. Always at least one, so the queue moves.
-func withdrawBatch(ids []string) int {
+// withdrawBatch is how many cards, from the first, go in one push: at most withdrawMost, and only as many as fit
+// withdrawIDBytes with both the legacy IDs and occurrence entries encoded. Always at least one, so the queue moves.
+func withdrawBatch(cards []withdrawCard) int {
 	size := 0
-	for i, id := range ids {
-		b, _ := json.Marshal(id)
-		size += len(b) + 1 // and its comma
+	for i, card := range cards {
+		id, _ := json.Marshal(card.ID)
+		entry, _ := json.Marshal(card)
+		size += len(id) + len(entry) + 2 // and their commas
 		if i == withdrawMost || i > 0 && size > withdrawIDBytes {
 			return i
 		}
 	}
-	return len(ids)
+	return len(cards)
 }
 
 func hasFeature(d Device, feature string) bool { return slices.Contains(d.Features, feature) }

@@ -47,7 +47,7 @@ func TestCodexSpeedNativeSettings(t *testing.T) {
 	if threadOf(c, remoteRaw).serviceTier != "priority" {
 		t.Fatal("thread/read erased the speed it does not report")
 	}
-	if err := n.setCodexSpeed(context.Background(), remoteRaw, "default"); err != nil {
+	if err := n.setSessionSpeed(context.Background(), remoteRaw, "default"); err != nil {
 		t.Fatal(err)
 	}
 	if threadOf(c, remoteRaw).serviceTier != "default" {
@@ -57,22 +57,50 @@ func TestCodexSpeedNativeSettings(t *testing.T) {
 
 func TestCodexSpeedRefusals(t *testing.T) {
 	n, f, c := speedPane(t)
-	if err := n.setCodexSpeed(context.Background(), remoteRaw, "invented"); err == nil || f.count("thread/settings/update") != 0 {
+	if err := n.setSessionSpeed(context.Background(), remoteRaw, "invented"); err == nil || f.count("thread/settings/update") != 0 {
 		t.Fatalf("unadvertised tier: %v", err)
 	}
 	for _, code := range []int{-32601, -32602, -32000} {
 		f.mu.Lock()
 		f.reject, f.rejectCode = "thread/settings/update", code
 		f.mu.Unlock()
-		if err := n.setCodexSpeed(context.Background(), remoteRaw, "priority"); err == nil {
+		if err := n.setSessionSpeed(context.Background(), remoteRaw, "priority"); err == nil {
 			t.Fatal("native refusal became success")
 		}
 		if threadOf(c, remoteRaw).serviceTier != "" {
 			t.Fatal("refused speed was advertised")
 		}
 	}
-	if err := n.setCodexSpeed(context.Background(), "missing", "priority"); err == nil {
+	if err := n.setSessionSpeed(context.Background(), "missing", "priority"); err == nil {
 		t.Fatal("unsupported session accepted speed")
+	}
+}
+
+func TestCodexSpeedAllAdvertisedTiers(t *testing.T) {
+	n, f, c := speedPane(t)
+	c.mu.Lock()
+	model := c.models["example"]
+	model.tiers = []proto.ServiceTier{
+		{ID: "standard", Name: "Standard"}, {ID: "fast", Name: "Fast"},
+		{ID: "ultrafast", Name: "Ultrafast"}, {ID: "flex", Name: "Flex"},
+	}
+	c.models["example"] = model
+	c.mu.Unlock()
+	for _, pick := range []struct{ id, native string }{
+		{"ultrafast", "ultrafast"}, {"flex", "flex"}, {"priority", "fast"}, {"default", "standard"},
+	} {
+		if err := n.setSessionSpeed(context.Background(), remoteRaw, pick.id); err != nil {
+			t.Fatal(err)
+		}
+		calls := f.sent("thread/settings/update")
+		if call := calls[len(calls)-1]; len(call) != 2 || call["serviceTier"] != pick.native {
+			t.Fatalf("speed %q requested as %v", pick.id, call)
+		}
+		row := proto.Session{SessionID: remoteRaw}
+		n.codexSpeedRow(&row)
+		if row.ServiceTier != pick.id || len(row.ServiceTiers) != 4 || row.ServiceTiers[1].ID != "priority" {
+			t.Fatalf("speed %q row: %q %v", pick.id, row.ServiceTier, row.ServiceTiers)
+		}
 	}
 }
 
@@ -126,7 +154,7 @@ func TestCodexSpeedTimeout(t *testing.T) {
 	f.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if err := n.setCodexSpeed(ctx, remoteRaw, "priority"); err == nil {
+	if err := n.setSessionSpeed(ctx, remoteRaw, "priority"); err == nil {
 		t.Fatal("timeout became success")
 	}
 	if threadOf(c, remoteRaw).serviceTier != "" {
@@ -140,7 +168,7 @@ func TestCodexSpeedPreservesNewerNativeSettings(t *testing.T) {
 	f.drop = "thread/settings/update"
 	f.mu.Unlock()
 	result := make(chan error, 1)
-	go func() { result <- n.setCodexSpeed(context.Background(), remoteRaw, "priority") }()
+	go func() { result <- n.setSessionSpeed(context.Background(), remoteRaw, "priority") }()
 	waitFor(t, "speed request", func() bool { return f.count("thread/settings/update") == 1 })
 	// Native state may change more than once before an older request's acknowledgment arrives.
 	for _, tier := range []string{"priority", "default"} {

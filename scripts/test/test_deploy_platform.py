@@ -135,30 +135,35 @@ class DeployBuildsEveryPlatformTests(unittest.TestCase):
         # "Redeploy" takes the node binary from the hub's bin/nodes, so the hub needs every platform a node can run.
         text = DEPLOY.read_text()
         self.assertIn('PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)', text)
-        self.assertIn('for plat in "${PLATFORMS[@]}"; do\n  GOOS=${plat%-*} GOARCH=${plat#*-}', text)
-        self.assertIn('for plat in "${PLATFORMS[@]}"; do\n        remote_state "$PERSONA_HUB_SSH"', text)
-        # persona-node is built for every platform too, beside personad; the hub gets it whole, its old version file
-        # gone first and the new one written last.
-        self.assertIn('-o "bin/persona-node-$plat" ./cmd/persona-node', text)
-        # Both binaries land whole: the old version file goes first, the binary is staged, then renamed over its final path.
-        self.assertIn('n="$PERSONA_HOME/bin/nodes/\'"personad-$plat"\'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"\' < "bin/personad-$plat"', text)
-        self.assertIn('rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"\' < "bin/persona-node-$plat"\n'
-                      '        printf \'%s\\n\' "$VERSION" | remote_state "$PERSONA_HUB_SSH" \'cat > "$PERSONA_HOME/bin/nodes/\'"persona-node-$plat.version"', text)
+        build = text.index('for plat in "${PLATFORMS[@]}"; do\n  for p in ')
+        loop = text[build:text.index('\ndone\n', build)]
+        # Every program a node, a manager or a switch to Persona Link runs is built for every platform, and each build is
+        # one of the packages the hub gets.
+        self.assertIn('for p in personad persona-node persona-manager persona-link; do\n'
+                      '    GOOS=${plat%-*} GOARCH=${plat#*-}', loop)
+        self.assertIn('-o "bin/$p-$plat" "./cmd/$p"\n    PACKAGES+=("$p-$plat")', loop)
+        self.assertIn('PACKAGES+=("$p-$plat.exe")', text)
+        # The hub publishes them with the same publisher as its own updates (update.PublishPackages), from a private
+        # staging directory: it lands each binary whole, its old version file gone first and the new one written last
+        # (server/internal/update/packages_test.go), so a deploy that stops half way never leaves a torn package.
+        hub = text.index('install_bin "$t" "bin/personad-$hub_plat"')
+        publish = text.index('COPYFILE_DISABLE=1 tar -C bin -cf - "${PACKAGES[@]}" |', hub)
+        upload = text[publish:text.index("'\n", text.index('hub publish-packages', publish)) + 1]
+        self.assertIn('staging=$(mktemp -d "$PERSONA_HOME/.node-packages.XXXXXXXX")', upload)
+        self.assertIn("trap '\\''rm -rf \"$staging\"'\\'' EXIT", upload)
+        self.assertIn('tar -xf - -C "$staging"', upload)
+        self.assertIn('"$PERSONA_HOME/bin/personad" hub publish-packages "$staging"\'', upload)
 
     def test_the_hub_carries_the_connector_of_its_version(self):
         # A switch of an ssh computer to Persona Link sends the hub's persona-link-<plat> only while its version file
-        # says the hub's (devices/connector_package.go): built for every platform, it lands whole with the old version
-        # file gone first and the new one written after the binary.
+        # says the hub's (devices/connector_package.go): it is built for every platform and is one of the packages the
+        # hub's publisher lands with its version file (update.PublishPackages).
         text = DEPLOY.read_text()
-        build = text.index('for plat in "${PLATFORMS[@]}"; do\n  GOOS=${plat%-*} GOARCH=${plat#*-}')
-        self.assertIn('-o "bin/persona-link-$plat" ./cmd/persona-link', text[build:text.index('\ndone\n', build)])
-        upload = text.index('for plat in "${PLATFORMS[@]}"; do\n        remote_state "$PERSONA_HUB_SSH"')
-        loop = text[upload:text.index('\n      done\n', upload)]
-        binary = loop.index('n="$PERSONA_HOME/bin/nodes/\'"persona-link-$plat"\'"; rm -f "$n.version"; '
-                            'cat > "$n.new" && mv "$n.new" "$n"\' < "bin/persona-link-$plat"')
-        version = loop.index('printf \'%s\\n\' "$VERSION" | remote_state "$PERSONA_HUB_SSH" '
-                             '\'cat > "$PERSONA_HOME/bin/nodes/\'"persona-link-$plat.version"\'"\'')
-        self.assertLess(binary, version, 'the version file must come after the binary')
+        build = text.index('for plat in "${PLATFORMS[@]}"; do\n  for p in ')
+        loop = text[build:text.index('\ndone\n', build)]
+        self.assertIn(' persona-link; do', loop.splitlines()[1])
+        self.assertIn('PACKAGES+=("$p-$plat")', loop)
+        self.assertIn('hub publish-packages', text[text.index('tar -C bin -cf - "${PACKAGES[@]}"'):])
 
     def test_the_hub_and_the_nodes_do_not_pick_a_build_from_os_alone(self):
         text = DEPLOY.read_text()

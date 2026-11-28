@@ -41,6 +41,18 @@ func (n *Node) taskTerminalReceipt(ctx context.Context, s *proto.Session, mark t
 		return nil
 	}
 	target := devicewire.TaskTerminal{SessionID: s.SessionID, PaneID: s.PaneID, TabID: s.TabID, WorkspaceID: s.WorkspaceID, Token: mark.token}
+	if host.ParsePane(target.PaneID).Kind == host.Orca {
+		h, ok := n.hosts.Get(host.Orca).(*orcaHost)
+		if !ok {
+			return nil
+		}
+		process := n.orcaTaskAgent(ctx, h, target, false)
+		if process.start == "" {
+			return nil
+		}
+		target.PID, target.Process = process.pid, process.start
+		return &target
+	}
 	route, ok := n.taskTerminalRoute(ctx, target)
 	if !ok {
 		return nil
@@ -89,6 +101,12 @@ func (n *Node) closeTaskTerminal(ctx context.Context, target devicewire.TaskTerm
 		return skipped
 	}
 	defer unlock()
+	if host.ParsePane(target.PaneID).Kind == host.Orca {
+		if h, ok := n.hosts.Get(host.Orca).(*orcaHost); ok {
+			return n.closeOrcaTaskTerminal(ctx, h, target, authorize)
+		}
+		return skipped
+	}
 	route, ok := n.taskTerminalRoute(ctx, target)
 	if !ok {
 		return skipped

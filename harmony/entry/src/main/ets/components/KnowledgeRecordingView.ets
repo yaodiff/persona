@@ -1,6 +1,11 @@
 import type { MeetingAsk } from '../models/MeetingRoom';
 import { Symbols } from '../design/Symbols';
 import { Colors } from '../design/Colors';
+import { PhoneStyle } from '../design/PhoneStyle';
+import { Motion } from '../design/Motion';
+import { Haptics } from '../platform/Haptics';
+import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
+import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
 import { KnowledgeRecording } from '../models/KnowledgeRecording';
 import type { KnowledgeRecordingEntry } from '../models/KnowledgeRecording';
 import { Tokens } from '../design/Tokens';
@@ -13,7 +18,9 @@ export struct KnowledgeRecordingView {
   @Event onStart:()=>void=()=>{};
   @Local roomQuestion:string='';
   @Require @Param model: KnowledgeRecording;
+  @Param recordingAllowed: boolean = true;
   @Event onDeleteLocal: () => void = () => {};
+  @Local private environment: NativeEnvironment = nativeEnvironment;
 
   @Local elapsed: number = 0;
   private tick: number = -1;
@@ -129,10 +136,12 @@ export struct KnowledgeRecordingView {
       }
       if (this.canWithdraw()) {
         Button(tr('meeting_audio_withdraw'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15))
-          .fontColor(Colors.danger).onClick(() => this.model.withdrawHubAudio()).id('recordings.hub.withdraw')
+          .fontColor(Colors.danger).onClick(() => { Haptics.attention(); this.model.withdrawHubAudio(); }).id('recordings.hub.withdraw')
         Text(tr('meeting_audio_withdraw_note')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
       }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(15).id('recordings.hub')
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('recordings.hub')
   }
 
   @Builder meetingRoom() {
@@ -143,13 +152,13 @@ export struct KnowledgeRecordingView {
       if (this.model.roomSpeechProblem) Text(tr(this.model.roomSpeechProblem)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary)
       if (this.model.room.problem) Row({space:8}) {
         Text(tr(this.model.room.problem)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary).layoutWeight(1)
-        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.link).onClick(() => this.model.room.sync())
+        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.link).onClick(() => { Haptics.tap(); this.model.room.sync(); })
       }.width('100%')
       if (!this.hasHubTranscription() && this.model.room.latest) Text(this.model.room.latest).fontSize(16).fontColor(Colors.ink).width('100%').id('recordings.room.line')
       if (this.model.captureState==='recording') Row({space:8}) {
         Text(tr('phone_meeting_speaker')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.ink).layoutWeight(1)
         Toggle({type:ToggleType.Switch,isOn:this.model.entry?.roomRole==='participant'}).enabled(!this.model.speakerChanging)
-          .accessibilityText(tr('phone_meeting_speaker')).onChange((on:boolean)=>this.model.setRoomSpeaker(on,meetingEcho.enabled && meetingEcho.supported))
+          .accessibilityText(tr('phone_meeting_speaker')).onChange((on:boolean)=>{ Haptics.selection(); this.model.setRoomSpeaker(on,meetingEcho.enabled && meetingEcho.supported); })
           .id('recordings.room.speaker')
       }.width('100%')
       ForEach(this.model.room.shownAsks,(ask:MeetingAsk) => {
@@ -162,59 +171,76 @@ export struct KnowledgeRecordingView {
         TextInput({text:this.roomQuestion,placeholder:tr('phone_meeting_question')}).layoutWeight(1)
           .onChange((v:string)=>this.roomQuestion=v).id('recordings.room.question')
         Button(tr('send'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).enabled(!!this.roomQuestion.trim()).fontColor(Colors.link)
-          .onClick(() => { const value=this.roomQuestion; this.roomQuestion=''; this.model.askRoom(value).then((ok:boolean) => { if (!ok && !this.roomQuestion) this.roomQuestion=value; }); })
+          .onClick(() => { Haptics.tap(); const value=this.roomQuestion; this.roomQuestion=''; this.model.askRoom(value).then((ok:boolean) => { if (!ok && !this.roomQuestion) this.roomQuestion=value; }); })
           .id('recordings.room.ask')
       }.width('100%')
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(15).id('recordings.room')
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('recordings.room')
   }
   build() {
-    Column({space:10}) {
+    Column({space:12}) {
       Column({space:8}) {
         Row({space:8}) {
-          SymbolGlyph($r('sys.symbol.mic_fill')).fontSize(19).fontColor([Colors.danger])
+          if (this.model.captureState === 'recording') {
+            NeedsYouPulseDot({ dotSize: 9, tint: Colors.danger, surface: Colors.surface, bordered: true })
+          }
+          SymbolGlyph($r('sys.symbol.mic_fill')).fontSize('19vp').fontColor([Colors.danger])
           Text(tr(this.statusKey())).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).layoutWeight(1)
             .id('knowledge.recording.status')
           if (this.model.captureState === 'requesting' || this.model.transcriptionState === 'transcribing' || this.model.uploadState === 'uploading')
-            LoadingProgress().width(20).height(20)
-        }.width('100%')
+            WorkingArcSpinner({ diameter: 16, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
+        }.width('100%').alignItems(VerticalAlign.Center)
         if (this.model.entry) {
           Text(this.model.entry.title || new Date(this.model.entry.startedAt).toLocaleString()).fontSize(18).maxFontScale(Tokens.interfaceScaleFor(18)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(2)
         }
-        Text(this.duration()).fontSize(32).maxFontScale(Tokens.interfaceScaleFor(32)).fontWeight(FontWeight.Bold).fontColor(Colors.ink).id('knowledge.recording.duration')
+        Text(this.duration()).fontSize(32).maxFontScale(Tokens.interfaceScaleFor(32)).fontWeight(FontWeight.Bold).fontFeature('tnum 1').fontColor(Colors.ink).id('knowledge.recording.duration')
         if (this.model.canStop()) Button(tr('knowledge_recording_stop')).maxFontScale(Tokens.interfaceFontMaxScale).width('100%').height(43).fontColor(Color.White).backgroundColor(Colors.danger)
-          .onClick(() => this.model.stop().catch(() => false)).id('knowledge.recording.stop')
-        else Button(tr('phone_record_start')).maxFontScale(Tokens.interfaceFontMaxScale).width('100%').height(43).fontColor(Color.White).backgroundColor(Colors.danger)
-          .enabled(this.model.canStart()).onClick(() => this.onStart()).id('knowledge.recording.start')
+          .onClick(() => { Haptics.attention(); this.model.stop().catch(() => false); }).id('knowledge.recording.stop')
+        else if (this.recordingAllowed) Button(tr('phone_record_start')).maxFontScale(Tokens.interfaceFontMaxScale).width('100%').height(43).fontColor(Color.White).backgroundColor(Colors.danger)
+          .enabled(this.model.canStart())
+          .onTouch((event: TouchEvent) => { if (event.type === TouchType.Down && this.model.canStart()) Haptics.tap(); })
+          .onClick(() => this.onStart()).id('knowledge.recording.start')
+        else Text(tr('xiaoyi_recording_module_off')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary).width('100%').id('knowledge.recording.module_off')
         if (this.model.hubAudio.phase==='device' && this.model.entry?.askedTranscription!=='hub') Text(tr('phone_record_audio_local')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%')
-      }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(15)
+      }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+        .border({width:this.model.captureState === 'recording' ? 0.8 : PhoneStyle.surfaceEdgeWidth(0.5),
+          color:this.model.captureState === 'recording' ? Colors.danger : PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+        .shadow(PhoneStyle.cardElevation(this.environment.dark))
+        .animation(Motion.state(this.environment.reduceMotion))
       if (this.hasHubTranscription()) this.hubTranscription()
       if (this.model.room.active && this.model.entry?.roomRole!=='off') this.meetingRoom()
       if (this.model.entries.length > 1) Select(this.recordingOptions()).selected(this.recordingIndex())
         .enabled(this.model.canSelectEntry()).onSelect((i:number) => {
+          Haptics.selection();
           const selected = this.model.entries[i]; if (selected) this.model.selectEntry(selected.id);
         }).width('100%').id('knowledge.recording.select')
       if (this.model.error) Text(trError(this.model.error)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.danger).width('100%').id('knowledge.recording.error')
       if (this.model.entry && this.model.captureState === 'stopped') Column({space:4}) {
         if (this.model.canPlay()) Button({type:ButtonType.Normal}) {
           Row({space:9}) {
-            SymbolGlyph(this.model.playingId ? Symbols.stop : $r('sys.symbol.play_fill')).fontSize(17).fontColor([Colors.link])
+            SymbolGlyph(this.model.playingId ? Symbols.stop : $r('sys.symbol.play_fill')).fontSize('17vp').fontColor([Colors.link])
             Text(tr(this.model.playingId ? 'stop' : 'phone_record_play')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
           }.width('100%').height(44)
         }.padding({left:12,right:12}).width('100%').backgroundColor(Colors.surface)
-          .onClick(() => this.model.playSelected().catch(() => false)).id('knowledge.recording.play')
+          .onClick(() => { Haptics.tap(); this.model.playSelected().catch(() => false); }).id('knowledge.recording.play')
         if (this.model.canTranscribe()) Button(this.transcribeLabel(),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16))
-          .width('100%').enabled(this.model.canTranscribe()).onClick(() => this.confirmTranscription()).id('knowledge.recording.transcribe')
+          .width('100%').enabled(this.model.canTranscribe()).onClick(() => { Haptics.tap(); this.confirmTranscription(); }).id('knowledge.recording.transcribe')
         if (this.model.transcriptionState === 'transcribing') Button(tr('cancel'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale)
-          .onClick(() => this.model.cancelTranscription().catch(() => undefined)).id('knowledge.recording.cancel')
+          .onClick(() => { Haptics.tap(); this.model.cancelTranscription().catch(() => undefined); }).id('knowledge.recording.cancel')
         if (this.model.canRetryUpload()) Button(tr('knowledge_recording_retry_upload'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale)
-          .onClick(() => this.model.retryUpload().catch(() => false)).id('knowledge.recording.retry_upload')
-      }.width('100%').padding(6).backgroundColor(Colors.surface).borderRadius(13)
+          .onClick(() => { Haptics.tap(); this.model.retryUpload().catch(() => false); }).id('knowledge.recording.retry_upload')
+      }.width('100%').padding(6).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+        .shadow(PhoneStyle.cardElevation(this.environment.dark))
       if (this.model.entry?.transcript) Column({space:6}) {
         Text(tr('knowledge_transcript')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
         Text(this.model.entry!.transcript).fontSize(17).fontColor(Colors.ink).copyOption(CopyOptions.LocalDevice).id('knowledge.recording.transcript')
-      }.width('100%').alignItems(HorizontalAlign.Start).padding(13).backgroundColor(Colors.surface).borderRadius(13)
+      }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+        .shadow(PhoneStyle.cardElevation(this.environment.dark))
       if (this.model.canDeleteLocal()) Button(tr('knowledge_recording_delete_local'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.danger)
-        .onClick(() => this.onDeleteLocal()).id('knowledge.recording.delete_local')
+        .onClick(() => { Haptics.attention(); this.onDeleteLocal(); }).id('knowledge.recording.delete_local')
     }.padding({left:16,right:16,top:8,bottom:18}).width('100%').alignItems(HorizontalAlign.Start)
   }
 }

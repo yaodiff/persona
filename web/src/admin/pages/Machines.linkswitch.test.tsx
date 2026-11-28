@@ -49,7 +49,7 @@ describe("admin Machines: switching to Persona Link", () => {
     await act(async () => root.render(<Machines />));
     await flush();
     expect(host.querySelectorAll("[data-link-switch]")).toHaveLength(2);
-    expect(host.textContent).toContain("只有 Linux 电脑可以在这里切换");
+    expect(host.textContent).toContain("仅支持在此切换 Linux 电脑");
     const starts = button("切换到 Persona Link…");
     expect(starts).toHaveLength(1);
     await act(async () => starts[0]!.click());

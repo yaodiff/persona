@@ -17,7 +17,7 @@ import (
 )
 
 func TestWorkspaceNamingSettingsWireRoundTrip(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestWorkspaceNamingSampleUsesRepositoryDefaultAndDescribesOldNode(t *testin
 
 func namingHTTPFixture(t *testing.T) (*Service, *repositorystore.Store, *atomic.Int32) {
 	t.Helper()
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestWorkspaceNamingCrossTodoOperationConflictsBeforeNode(t *testing.T) {
 }
 
 func TestWorkspaceNamingSettingsPersistAndOldClientsKeepWorking(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestWorkspaceNamingSettingsPersistAndOldClientsKeepWorking(t *testing.T) {
 }
 
 func TestWorkspaceNamingAndDispatchPolicySettingsAreAtomic(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestWorkspaceNamingAndDispatchPolicySettingsAreAtomic(t *testing.T) {
 }
 
 func TestWorkspaceNamingHTTPOverridesAndStableOperationRetry(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

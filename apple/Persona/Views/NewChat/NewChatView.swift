@@ -23,12 +23,43 @@ nonisolated struct SpacePreset {
     }
 }
 
+/// A project heading can preselect a folder in the ordinary New Agent form.
+nonisolated struct AgentProjectFolder: Identifiable, Hashable, Sendable {
+    var machine: MachineRef
+    var cwd: String
+    var qualifier: String?
+    var id: Self { self }
+
+    static func parentLabel(_ folder: String, home: String?) -> String? {
+        func separator(_ char: Character) -> Bool { char == "/" || char == "\\" }
+        func withoutTrailingSeparators(_ value: String) -> Substring {
+            var path = value[...]
+            while let last = path.last, separator(last) { path = path.dropLast() }
+            return path
+        }
+        let path = withoutTrailingSeparators(folder)
+        guard let split = path.lastIndex(where: separator) else { return nil }
+        let prefix = path[..<split]
+        let driveRoot = prefix.count == 2 && prefix.last == ":"
+        let parent = String(path[..<(split == path.startIndex || driveRoot ? path.index(after: split) : split)])
+        let homePath = String(withoutTrailingSeparators(home ?? ""))
+        guard !homePath.isEmpty else { return parent }
+        let windows = folder.contains("\\") || path.dropFirst().first == ":"
+        let a = windows ? parent.lowercased() : parent
+        let b = windows ? homePath.lowercased() : homePath
+        if a == b { return "~" }
+        let tail = parent.dropFirst(homePath.count)
+        return a.hasPrefix(b) && tail.first.map(separator) == true ? "~" + tail : parent
+    }
+}
+
 /// Pick a machine, a project directory and a launcher (model), optionally with a first message.
 struct NewChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     var initialPrompt = ""
     var preset: SpacePreset?
+    var projectFolder: AgentProjectFolder? = nil
     var todoID: String? = nil
     /// A todo handed to a new Agent (TodoHandoffSheet): the todo's context block goes ahead of the first message, the
     /// session is named after the todo, and only the todo's hub's machines are offered.
@@ -51,6 +82,7 @@ struct NewChatView: View {
     /// The folder was picked on this sheet (a row, the browser, a card, a workspace), not filled in from the last start: a
     /// start in Claude's desktop app with none goes to the app's scratch folder (`desktopScratch`, #5480).
     @State private var cwdPicked = false
+    @State private var projectApplied = false
     /// Where browsing starts for a start in the desktop app: the folder holding the app's projects on this computer
     /// (`DesktopStart.projectsFolder`), worked out when the computer or the launcher changes, not as the sheet draws.
     @State private var desktopProjects = ""
@@ -181,7 +213,7 @@ struct NewChatView: View {
         return LauncherModelChoice(list: models ?? LauncherModels(agent: startAgent, models: []),
                                    picked: pickedModel, configured: followsModelSettings ? configuredModel : "",
                                    presetDefault: pickedTier != nil, startLauncher: runEntry,
-                                   startsInHerdr: machine?.startsInHerdr(host: targetPreset?.host) == true)
+                                   startsInOmpModelHost: machine?.supportsOmpStartModel(host: targetPreset?.host) == true)
     }
     private var modelChoice: LauncherModelChoice? { models == nil ? nil : startModelChoice }
 
@@ -652,7 +684,7 @@ struct NewChatView: View {
                 .padding(.horizontal, Theme.Space.xl)
                 .padding(.bottom, Theme.Space.s)
             }
-            .task(id: machineID) { await loadMachine() }
+            .task(id: [machineID, String(projectApplied)]) { await loadMachine() }
             .task(id: "\(machineID)|\(desktopStart)|\(codex)") {
                 desktopProjects = desktopStart ? DesktopStart.projectsFolder(model.sessionsByMachine[ref] ?? [], codex: codex) ?? "" : ""
             }
@@ -692,9 +724,21 @@ struct NewChatView: View {
                     // no computer picked yet: past the hub's pictures one is turned away with a word, never dropped silently
                     for img in forwardedImages { attachments.add(img, model: model, to: nil) }
                 }
-                if let preset { machineID = preset.machineID; cwd = preset.cwd } else { pickDefaultMachine() }
+                if let preset {
+                    machineID = preset.machineID
+                    cwd = preset.cwd
+                } else if let projectFolder {
+                    if !projectApplied {
+                        machineID = projectFolder.machine.path
+                        cwd = projectFolder.cwd
+                        cwdPicked = true
+                        projectApplied = true
+                    }
+                } else {
+                    pickDefaultMachine()
+                }
             }
-            .onChange(of: model.machines) { _, _ in if preset == nil { pickDefaultMachine() } }
+            .onChange(of: model.machines) { _, _ in if preset == nil && projectFolder == nil { pickDefaultMachine() } }
             // A file is on the computer it was uploaded to (#2321): another one picked takes the files out.
             .onChange(of: machineID) { _, now in
                 attachments.computerChanged(to: now) { model.machine(MachineRef(path: $0))?.name }
@@ -937,6 +981,7 @@ struct NewChatView: View {
 
     private func loadMachine() async {
         let id = machineID
+        if projectFolder != nil && !projectApplied { return }
         // Another machine: the last one's directories and launchers go now, not when this one's hub answers. Until then
         // they were offered under this machine's card, and stayed there when its hub could not be reached.
         if shownFor != id {
@@ -987,7 +1032,9 @@ struct NewChatView: View {
                 effort = UserDefaults.standard.string(forKey: "effort.\(machineID)") ?? ""
                 if unifiedModels { launcher = ""; effort = "" }
                 else { launcher = LauncherChoices.initial(saved: saved, in: ls) }
-                if let preset = targetPreset { cwd = preset.cwd } else {
+                if let preset = targetPreset {
+                    cwd = preset.cwd
+                } else if projectFolder?.machine.path != id || !cwdPicked {
                     cwd = UserDefaults.standard.string(forKey: "cwd.\(machineID)") ?? recent.first?.path ?? ""
                 }
             }

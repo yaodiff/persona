@@ -9,6 +9,7 @@ data class RepoPlace(val repo: String, val name: String, val worktree: String, v
 
 // The layouts a working tree commonly lives in (herdr, Claude Code, a home-level collection), as on web and iOS.
 private val WorktreeMarkers = listOf("/.worktrees/", "/.claude/worktrees/", "/.herdr/worktrees/")
+private val HomeWorktreeMarkers = listOf("/.worktrees/", "/.herdr/worktrees/")
 
 private fun baseName(path: String) = path.split('/').lastOrNull { it.isNotEmpty() }.orEmpty()
 
@@ -55,17 +56,26 @@ data class AgentWorktree(
     /** Exact source workspace, when known; its pin is independent of Persona's session/project pins. */
     val workspace: AgentWorkspace? = null,
     val pinnedAt: Instant? = null,
+    val hasChildren: Boolean = false,
 )
 
 /** One repository on one computer: native pinned workspaces first, then the main checkout and names. */
-data class AgentRepo(val id: String, val machineId: String, val name: String, val path: String, val worktrees: List<AgentWorktree>) {
+data class AgentRepo(
+    val id: String, val machineId: String, val name: String, val path: String, val worktrees: List<AgentWorktree>,
+    internal val apart: Boolean = false,
+    internal val catalogProject: Boolean = false,
+) {
     val members: List<AgentSession> get() = worktrees.flatMap { it.members }
     val pinnedAt: Instant? get() = worktrees.mapNotNull { it.pinnedAt }.maxOrNull()
     /**
-     * Only its main checkout and no branch the node named: its sessions sit right under the repository, without a
-     * working-tree heading. A named branch keeps its heading (#1805: machine → project → branch → sessions).
+     * A lone unnamed checkout, or a herdr workspace that repeats the repository's name, shares its heading.
      */
-    val flat: Boolean get() = worktrees.size == 1 && worktrees[0].main && worktrees[0].branch == null && worktrees[0].workspace == null
+    val flat: Boolean get() {
+        val tree = worktrees.singleOrNull() ?: return false
+        if (tree.branch != null || tree.hasChildren) return false
+        if (tree.workspace?.source == "herdr") return tree.name == name && tree.members.isNotEmpty()
+        return tree.main && tree.workspace == null
+    }
 }
 
 /**
@@ -103,6 +113,10 @@ internal val NaturalOrder = Comparator<String> { a, b ->
 }
 
 private val byName = compareBy<Pair<String, String>, String>(NaturalOrder) { it.first }.thenBy { it.second }
+private val worktreeOrder = compareByDescending<AgentWorktree> { it.pinnedAt }.thenBy { !it.main }
+    .thenComparing({ it.name to it.path }, byName).thenBy { it.id }
+private val repositoryOrder = compareByDescending<AgentRepo> { it.pinnedAt }
+    .thenComparing({ it.name to it.path }, byName).thenBy { it.id }
 
 /**
  * Where the node placed a session in git (#1805, web's `gitPlaceOf`, iOS's `RepoPlace.git`): its project (`repo_root`,
@@ -127,18 +141,32 @@ private fun hostPlaceName(members: List<AgentSession>): String? =
     members.mapNotNullTo(mutableSetOf()) { m -> m.session.slotName?.trim()?.takeIf { it.isNotEmpty() && m.session.slotId.isNullOrBlank() } }
         .singleOrNull()
 
-/** Each computer's repositories, native pins first, then names in natural order. Source IDs override path inference. */
-fun agentRepos(rows: List<AgentSession>, workspaces: List<AgentWorkspace> = emptyList()): List<AgentRepo> {
-    if (workspaces.isEmpty()) return inferredAgentRepos(rows)
-    // Paseo's project may contain several workspaces at the same folder. Their source IDs, never cwd, own the rows
-    // and pins. Other engines retain the existing projection until they expose the same catalog behavior.
-    val catalog = workspaces.filter { it.source == "paseo" && it.machineId.isNotEmpty() && it.sourceId.isNotEmpty() }
-        .distinctBy { it.machineId to it.sourceId }
-    val byID = catalog.associateBy { it.machineId to it.sourceId }
-    val assigned = rows.groupBy { row ->
-        row.session.paseoWorkspaceKey()?.let(byID::get)
+val AgentWorkspace.inRepositoryCatalog: Boolean get() = source == "paseo" || source == "herdr"
+
+internal val AgentWorkspace.repoWorkspaceKey: Triple<String, String, String>
+    get() = Triple(machineId, source, sourceId)
+
+internal fun Session.repoWorkspaceKey(): Triple<String, String, String>? =
+    if (spaceKind == "herdr") {
+        (workspaceId?.takeIf(String::isNotBlank) ?: spaceId?.takeIf(String::isNotBlank))?.let { Triple(machineId, "herdr", it) }
+    } else {
+        paseoWorkspaceKey()?.let { (machine, id) -> Triple(machine, "paseo", id) }
     }
-    val native = catalog.filter { assigned[it].orEmpty().isNotEmpty() || it.nativePinTime != null }
+
+/** Each computer's repositories, native pins first, then names in natural order. Source IDs override path inference. */
+fun agentRepos(
+    rows: List<AgentSession>,
+    workspaces: List<AgentWorkspace> = emptyList(),
+    homes: Map<String, String?> = emptyMap(),
+    knownRows: List<AgentSession> = rows,
+): List<AgentRepo> {
+    val catalog = workspaces.filter { it.inRepositoryCatalog && it.machineId.isNotEmpty() && it.sourceId.isNotEmpty() }
+        .distinctBy { it.repoWorkspaceKey }
+    val byID = catalog.associateBy { it.repoWorkspaceKey }
+    val assigned = rows.groupBy { it.session.repoWorkspaceKey()?.let(byID::get) }
+    val visible = catalog.filter { assigned[it].orEmpty().isNotEmpty() || it.nativePinTime != null }
+    // Paseo project keys own their workspaces even if several projects use the same folder.
+    val paseo = visible.filter { it.source == "paseo" }
         .groupBy { it.machineId to (it.projectId?.takeIf(String::isNotBlank) ?: it.sourceId) }.map { (key, entries) ->
         val first = entries.first()
         val path = first.projectPath?.takeIf(String::isNotBlank) ?: first.cwd
@@ -150,11 +178,76 @@ fun agentRepos(rows: List<AgentSession>, workspaces: List<AgentWorkspace> = empt
                 pinnedAt = w.nativePinTime)
         }.sortedWith(compareByDescending<AgentWorktree> { it.pinnedAt }.thenBy { !it.main }
             .thenComparing({ it.name to it.id }, byName))
-        AgentRepo("repo/catalog/${key.first}/paseo/${key.second}", key.first, name, path, trees)
+        AgentRepo("repo/catalog/${key.first}/paseo/${key.second}", key.first, name, path, trees, catalogProject = true)
     }
-    return (inferredAgentRepos(assigned[null].orEmpty()) + native)
-        .sortedWith(compareByDescending<AgentRepo> { it.pinnedAt }
-            .thenComparing({ it.name to it.path }, byName).thenBy { it.id })
+    val parents = catalog.mapNotNull { w -> w.parentSourceId?.let { Triple(w.machineId, w.source, it) } }.toSet()
+    val herdr = visible.filter { it.source == "herdr" }.map { w ->
+        val members = assigned[w].orEmpty()
+        val roots = members.mapNotNullTo(mutableSetOf()) { knownRepo(it.session) }
+        val project = w.projectId?.takeIf(String::isNotBlank)
+        val explicitPath = w.projectPath?.trimEnd('/')?.takeIf(String::isNotBlank)
+        val inferredPath = repoOf(w.cwd).repo
+        val path = explicitPath ?: roots.singleOrNull() ?: inferredPath
+        val ownProject = project != null || (explicitPath == null && roots.size > 1) || path.isEmpty()
+        val name = w.projectName?.takeIf(String::isNotBlank) ?: baseName(path).ifEmpty { w.title }
+        val branch = w.branch?.takeIf(String::isNotBlank)
+        val checkout = explicitPath ?: path.takeUnless { ownProject }
+        val tree = AgentWorktree(
+            "tree/catalog/${w.machineId}/herdr/${w.sourceId}", w.title.ifBlank { branch ?: baseName(w.cwd) }, w.cwd,
+            w.isMain ?: (w.cwd.trimEnd('/') == checkout), members, branch,
+            detached = w.workspaceKind == "git" && branch == null, workspace = w, pinnedAt = w.nativePinTime,
+            hasChildren = w.repoWorkspaceKey in parents,
+        )
+        val id = if (ownProject) "repo/catalog/${w.machineId}/herdr/${project ?: w.sourceId}" else "repo/${w.machineId}/$path"
+        val apart = !ownProject && explicitPath == null && roots.isEmpty() && apartRepository(w.cwd, homes[w.machineId]) == path
+        AgentRepo(id, w.machineId, name, path, listOf(tree), apart, catalogProject = ownProject)
+    }
+    val projected = (inferredAgentRepos(assigned[null].orEmpty(), homes) + paseo + herdr)
+        .groupBy { it.id }.values.map { same ->
+            val heading = same.firstOrNull { it.worktrees.any { tree -> tree.workspace != null } } ?: same.first()
+            if (same.size == 1) heading else heading.copy(
+                worktrees = same.flatMap { it.worktrees }.sortedWith(worktreeOrder), apart = same.all { it.apart },
+            )
+        }
+    return joinApartRepositories(projected, homes, knownRows).sortedWith(repositoryOrder)
+}
+
+private fun knownRepo(session: Session): String? =
+    gitPlaceOf(session.repoRoot, session.worktree)?.repo ?: session.repoRoot?.trimEnd('/')?.takeIf(String::isNotBlank)
+
+/** A separate worktree collection is anchored to a known home, including when a tree has disappeared from Git. */
+private fun apartRepository(path: String, home: String?): String? {
+    val root = home?.trimEnd('/')?.takeIf(String::isNotEmpty) ?: return null
+    val prefix = HomeWorktreeMarkers.firstNotNullOfOrNull { marker -> (root + marker).takeIf(path::startsWith) } ?: return null
+    val parts = path.removePrefix(prefix).split('/', limit = 3)
+    return if (parts.size > 1 && parts[0].isNotEmpty() && parts[1].isNotEmpty()) prefix + parts[0] else null
+}
+
+private fun joinApartRepositories(repos: List<AgentRepo>, homes: Map<String, String?>, knownRows: List<AgentSession>): List<AgentRepo> {
+    val apart = repos.filter { it.apart }
+    if (apart.isEmpty()) return repos
+    val learned = knownRows.mapNotNull { row ->
+        val session = row.session
+        val git = gitPlaceOf(session.repoRoot, session.worktree)?.takeUnless { it.main } ?: return@mapNotNull null
+        val folder = apartRepository(git.worktree, homes[session.machineId]) ?: return@mapNotNull null
+        (session.machineId to folder) to git.repo
+    }.groupBy({ it.first }, { it.second })
+    val placed = repos.filterNot { it.apart }
+    val byPath = placed.groupBy { it.machineId to it.path }
+    val byName = placed.groupBy { it.machineId to it.name }
+    val result = placed.associateByTo(linkedMapOf()) { it.id }
+    for (repo in apart) {
+        val roots = learned[repo.machineId to repo.path]?.toSet()
+        val candidates = if (roots == null) byName[repo.machineId to repo.name] else roots.singleOrNull()?.let { byPath[repo.machineId to it] }
+        val into = candidates?.singleOrNull()?.takeUnless { it.catalogProject }
+        if (into == null) {
+            result[repo.id] = repo
+        } else {
+            val current = result.getValue(into.id)
+            result[into.id] = current.copy(worktrees = (current.worktrees + repo.worktrees).sortedWith(worktreeOrder))
+        }
+    }
+    return result.values.toList()
 }
 
 /** Invalid or cleared source timestamps are not pins. */
@@ -166,7 +259,7 @@ internal fun Session.paseoWorkspaceKey(): Pair<String, String>? = workspaceId?.t
     if (sourceKind == "runtime" && (sourceInstanceId?.takeIf(String::isNotBlank) ?: spaceKind) == "paseo") machineId to it else null
 }
 
-private fun inferredAgentRepos(rows: List<AgentSession>): List<AgentRepo> =
+private fun inferredAgentRepos(rows: List<AgentSession>, homes: Map<String, String?>): List<AgentRepo> =
     rows.groupBy { it.session.machineId to it.place.repo }.map { (key, members) ->
         val (machine, repo) = key
         val place = members.first().place
@@ -184,5 +277,6 @@ private fun inferredAgentRepos(rows: List<AgentSession>): List<AgentRepo> =
             AgentWorktree(id, hostName ?: branch ?: if (path == repo) name else baseName(path), path, main, inTree, branch,
                 detached = branch == null && inTree.any { !it.session.worktree.isNullOrBlank() })
         }.sortedWith(compareBy<AgentWorktree> { !it.main }.thenComparing({ it.name to it.path }, byName))
-        AgentRepo("repo/$machine/$repo", machine, name, repo, trees)
+        val apart = members.all { knownRepo(it.session) == null && apartRepository(it.session.cwd, homes[machine]) == repo }
+        AgentRepo("repo/$machine/$repo", machine, name, repo, trees, apart = apart)
     }.sortedWith(compareBy<AgentRepo, Pair<String, String>>(byName) { it.name to it.path }.thenBy { it.machineId })

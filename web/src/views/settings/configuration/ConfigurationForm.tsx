@@ -46,7 +46,7 @@ export function ConfigurationForm({ source, guidance, fieldBadge, afterFields }:
   }, [source.key]);
   useLayoutEffect(() => ctl?.setGuidance(guidance), [ctl, guidance]);
   if (!ctl || ctl.source.key !== source.key) return <FormLoading />;
-  return <Form ctl={ctl} fieldBadge={fieldBadge} afterFields={afterFields} />;
+  return <ConfigurationFormView ctl={ctl} fieldBadge={fieldBadge} afterFields={afterFields} />;
 }
 
 function FormLoading() {
@@ -59,7 +59,12 @@ function FormLoading() {
   );
 }
 
-function Form({ ctl, fieldBadge, afterFields }: { ctl: ConfigurationController; fieldBadge?: FieldBadge; afterFields?: ReactNode }) {
+export function ConfigurationFormView({ ctl, fieldBadge, afterFields, onReload = () => ctl.reload() }: {
+  ctl: ConfigurationController;
+  fieldBadge?: FieldBadge;
+  afterFields?: ReactNode;
+  onReload?: () => void;
+}) {
   const s = useSyncExternalStore(ctl.subscribe, ctl.snapshot);
   const heading = useRef<HTMLHeadingElement>(null);
   const previouslyConfirming = useRef(false);
@@ -75,7 +80,7 @@ function Form({ ctl, fieldBadge, afterFields }: { ctl: ConfigurationController; 
     if (s.phase !== "failed") return <FormLoading />;
     return (
       <Group>
-        <RowFailed text={problemText(s.readError ?? { code: "failed" })} retry={t("settings-configuration.retry")} onRetry={() => ctl.reload()} />
+        <RowFailed text={problemText(s.readError ?? { code: "failed" })} retry={t("settings-configuration.retry")} onRetry={onReload} />
       </Group>
     );
   }
@@ -89,12 +94,12 @@ function Form({ ctl, fieldBadge, afterFields }: { ctl: ConfigurationController; 
       </div>
       {!s.writable && <Banner tone="caution">{t("settings-configuration.unsupported_version")}</Banner>}
       {s.blocked && (
-        <Banner tone="alert" action={<Button size="sm" icon="retry" onClick={() => ctl.reload()}>{t("settings-configuration.reload")}</Button>}>
+        <Banner tone="alert" action={<Button size="sm" icon="retry" onClick={onReload}>{t("settings-configuration.reload")}</Button>}>
           {problemText(s.blocked)}
         </Banner>
       )}
       {s.readError && (
-        <Banner tone="alert" action={<Button size="sm" icon="retry" onClick={() => ctl.reload()}>{t("settings-configuration.retry")}</Button>}>
+        <Banner tone="alert" action={<Button size="sm" icon="retry" onClick={onReload}>{t("settings-configuration.retry")}</Button>}>
           {t("settings-configuration.refresh_failed", { error: problemText(s.readError) })}
         </Banner>
       )}

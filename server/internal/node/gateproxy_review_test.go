@@ -577,9 +577,32 @@ func TestGateURLQueryVariableReferencesCannotBeConfirmed(t *testing.T) {
 	}
 }
 
+func TestGateCallBindsTheActualAgentAPIAccount(t *testing.T) {
+	g := proxiedGate("http://example.invalid")
+	g.PathPrefix = "/agent/v1"
+	for _, tc := range []struct {
+		name    string
+		env     []string
+		args    []string
+		account string
+	}{
+		{name: "query", args: []string{"POST", "/messages?ol_account=2", `{}`}, account: "2"},
+		{name: "environment", env: []string{"EXAMPLE_ACCOUNT=2"}, args: []string{"POST", "/messages?ol_account=3", `{}`}, account: "2"},
+		{name: "header first", env: []string{"EXAMPLE_ACCOUNT=2"}, args: []string{"POST", "/messages?ol_account=4", `{}`, "-H", "x-example-account: 3"}, account: "3"},
+		{name: "primary", env: []string{"EXAMPLE_ACCOUNT=1"}, args: []string{"POST", "/messages", `{}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			call, deny, ok := parseGateCall(g, tc.args, nil, tc.env, t.TempDir())
+			if !ok || deny != "" || call.Account != tc.account {
+				t.Fatalf("parseGateCall = %+v, ok=%v deny=%q, want account %q", call, ok, deny, tc.account)
+			}
+		})
+	}
+}
+
 func TestGateURLQueryLiteralDollarNeedsNoExpansion(t *testing.T) {
 	c, deny, ok := parseGateCall(proxiedGate("http://example.invalid"),
-		[]string{"POST", "/notes/N1", `{"text":"n"}`, "--url-query", "a=cost$"}, nil, t.TempDir())
+		[]string{"POST", "/notes/N1", `{"text":"n"}`, "--url-query", "a=cost$"}, nil, nil, t.TempDir())
 	if !ok || deny != "" {
 		t.Fatalf("parseGateCall = ok %v, deny %q", ok, deny)
 	}

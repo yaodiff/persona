@@ -57,7 +57,7 @@ func (h *a2aTestHub) sentCalls() []DeviceCall {
 
 func a2aFixture(t *testing.T) (*Service, *a2aTestHub, *db.DB, assistantwire.A2AConfig, a2aCaller, a2aRef) {
 	t.Helper()
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

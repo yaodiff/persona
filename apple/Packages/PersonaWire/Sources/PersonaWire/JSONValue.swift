@@ -128,6 +128,28 @@ public nonisolated enum JSON {
     /// `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)` (RFC 3339, as Go writes it), the same `Date` the formatters give: the
     /// fraction cut to milliseconds. nil for any other shape, an impossible field (Feb 30, a leap second) or a year
     /// before 1900 (the formatters use the Julian calendar before 1582): those go to the formatters as before.
+    /// Compares two RFC3339 instants without discarding fractions past Date's
+    /// millisecond wire precision. The existing parser validates the instants;
+    /// fractional digits are needed only when those instants land in one millisecond.
+    public static func compareOccurrenceTimes(_ lhs: String, _ rhs: String) -> ComparisonResult? {
+        guard let left = parseDate(lhs), let right = parseDate(rhs) else { return nil }
+        if left < right { return .orderedAscending }
+        if left > right { return .orderedDescending }
+        let a = occurrenceFraction(lhs), b = occurrenceFraction(rhs)
+        let count = max(a.count, b.count)
+        let af = a + String(repeating: "0", count: count - a.count)
+        let bf = b + String(repeating: "0", count: count - b.count)
+        if af == bf { return .orderedSame }
+        return af < bf ? .orderedAscending : .orderedDescending
+    }
+
+    private static func occurrenceFraction(_ text: String) -> String {
+        guard let dot = text.firstIndex(of: ".") else { return "" }
+        var end = text.index(after: dot)
+        while end < text.endIndex, text[end].isNumber { end = text.index(after: end) }
+        return String(text[text.index(after: dot)..<end])
+    }
+
     public static func internetDate(_ s: String) -> Date? {
         var s = s
         return s.withUTF8 { internetDate(bytes: $0) }

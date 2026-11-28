@@ -26,6 +26,7 @@ type TodoCheck struct {
 // Reasons the hub gives itself when it decides without the model (taskDoneWithoutModel), by i18n key: what is kept
 // on the check is in the user's language, while the judgment's own Reason stays as the supervisor reads it.
 const (
+	checkReasonAgyUnlinked = "assistant-tasks.check_agy_unlinked"
 	checkReasonNoReply     = "assistant-tasks.check_no_reply"
 	checkReasonSideTurn    = "assistant-tasks.check_side_turn"
 	checkReasonInterrupted = "assistant-tasks.interrupted"

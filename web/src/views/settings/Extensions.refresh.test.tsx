@@ -133,7 +133,7 @@ describe("an extension's page after an operation", () => {
     expect(hub.detailReads).toBe(1);
     expect(host.textContent).not.toContain("Network access");
     typeInto(input(), "typed");
-    expect(host.textContent).toContain("设置改了还没保存");
+    expect(host.textContent).toContain("还有 1 项待保存");
 
     hub.detail = detail({ permissions: [{ key: "net", title: "Network access" }] as HubExtensionDetail["permissions"] });
     await pushOp("other-ext", "upgrade");
@@ -182,14 +182,16 @@ describe("an extension's page after an operation", () => {
     hub.saved = detail({ config: { greeting: "typed" } });
     const save = [...host.querySelectorAll("button")].find((b) => b.textContent === "保存")!;
     await act(async () => save.click());
+    const [, preflight] = hub.held;
+    await act(async () => preflight(detail({ config: { greeting: "hello" } })));
     await flush();
-    expect(host.textContent).not.toContain("设置改了还没保存");
+    expect(save.isConnected).toBe(false);
     await act(async () => again(detail({ config: { greeting: "hello" } })));
     await flush();
     expect(input().value).toBe("typed");
   });
 
-  it("a save that answers after a newer read does not put back the version it read", async () => {
+  it("reconciles a refresh requested while an older save is in flight", async () => {
     hub.detail = detail({ version: "1.0.0" });
     act(() => root.render(<Extensions open="example-ext" onOpen={() => {}} />));
     await flush();
@@ -200,8 +202,8 @@ describe("an extension's page after an operation", () => {
     await flush();
     const [answerSave] = hub.saveHeld;
     hub.detail = detail({ version: "2.0.0", config: { greeting: "typed" } });
-    await pushOp("example-ext", "upgrade"); // left after the save and answers first
-    expect(host.textContent).toContain("2.0.0");
+    await pushOp("example-ext", "upgrade");
+    expect(host.textContent).toContain("1.0.0");
     await act(async () => answerSave(detail({ version: "1.0.0", config: { greeting: "typed" } })));
     await flush();
     expect(host.textContent).toContain("2.0.0");
@@ -232,8 +234,23 @@ describe("an extension's page after an operation", () => {
 
     expect(retries.value).toBe("03");
     expect(input().value).toBe("authoritative");
-    expect(host.textContent).toContain("设置改了还没保存");
+    expect(host.textContent).toContain("还有 1 项待保存");
     expect(hub.saveSent).toHaveLength(1);
+  });
+
+  it("keeps an edit back to the previous value while the first save is pending", async () => {
+    hub.detail = detail({});
+    await act(async () => root.render(<Extensions open="example-ext" onOpen={() => {}} />));
+    typeInto(input(), "submitted");
+    hub.saveHeld = [];
+    const save = [...host.querySelectorAll("button")].find((b) => b.textContent === "保存")!;
+    await act(async () => save.click());
+    typeInto(input(), "hello");
+    const [finish] = hub.saveHeld;
+    await act(async () => finish(detail({ config: { greeting: "submitted" } })));
+    expect(input().value).toBe("hello");
+    expect(host.textContent).toContain("还有 1 项待保存");
+    expect(hub.saveSent).toEqual([{ greeting: "submitted" }]);
   });
 
   it("goes back to the list when it is uninstalled", async () => {

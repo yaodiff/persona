@@ -29,6 +29,10 @@ _terminated = False
 _config = None
 
 
+class MalformedTranscriptResult(RuntimeError):
+    """A final transcript result that cannot become valid by appending records."""
+
+
 def socket_request(request, timeout=90, socket_factory=socket.socket):
     """Keep long prompts in Herdr's JSON body, not an operating-system argv."""
     payload = json.dumps(request, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
@@ -363,29 +367,31 @@ def transcript_result(path, marker, schema):
             continue
         marked.append((text, message.get("stop_reason")))
     if len(marked) > 1:
-        raise RuntimeError("interactive reviewer transcript result is not unique")
+        raise MalformedTranscriptResult("interactive reviewer transcript result is not unique")
     if not marked:
         raise RuntimeError("interactive reviewer transcript has no final result yet")
     text, stop_reason = marked[0]
     if stop_reason != "end_turn":
+        # A tool-use message may be split across transcript writes. Wait for its
+        # final assistant message instead of rejecting a partial marked text.
         raise RuntimeError("interactive reviewer transcript result is not final")
     matches = list(re.finditer(re.escape(marker), text))
     if len(matches) != 2:
-        raise RuntimeError("interactive reviewer transcript markers are not unique")
+        raise MalformedTranscriptResult("interactive reviewer transcript markers are not unique")
     body = text[matches[0].end():matches[1].start()].strip()
     if not body or text[:matches[0].start()].strip() or text[matches[1].end():].strip():
-        raise RuntimeError("interactive reviewer result must contain only its marked JSON")
+        raise MalformedTranscriptResult("interactive reviewer result must contain only its marked JSON")
     try:
         value = json.loads(body)
     except json.JSONDecodeError as error:
-        raise RuntimeError("interactive reviewer returned invalid marked JSON") from error
+        raise MalformedTranscriptResult("interactive reviewer returned invalid marked JSON") from error
     try:
         import jsonschema
         jsonschema.validate(value, json.loads(schema))
     except ImportError as error:
         raise RuntimeError("interactive reviewer requires the jsonschema validator") from error
     except (ValueError, jsonschema.ValidationError) as error:
-        raise RuntimeError("interactive reviewer result does not match the watcher schema") from error
+        raise MalformedTranscriptResult("interactive reviewer result does not match the watcher schema") from error
     return value
 
 
@@ -395,9 +401,14 @@ def wait_transcript(path, marker, schema, pane, unit, timeout, accepted_stall=Fa
         if path.is_file():
             try:
                 return transcript_result(path, marker, schema)
-            except RuntimeError as error:
-                if "invalid marked JSON" in str(error) or "does not match" in str(error):
-                    raise
+            except MalformedTranscriptResult:
+                # A final malformed answer occupies no useful review work. Fail
+                # now so the owned scope closes and another PR can use the slot.
+                raise
+            except RuntimeError:
+                # Missing or unfinished transcript records are not review evidence;
+                # keep waiting for this same invocation's final assistant message.
+                pass
         agents = command("agent", "list", timeout=20).get("agents", [])
         agent = next((item for item in agents if item.get("pane_id") == pane), None)
         blocked = agent and agent.get("agent_status") == "blocked"

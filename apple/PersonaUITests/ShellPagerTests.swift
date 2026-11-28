@@ -193,7 +193,7 @@ final class ShellPagerTests: XCTestCase {
         let pin = app.buttons.matching(NSPredicate(format: "label IN {'置顶', '取消置顶'}")).firstMatch
         XCTAssertTrue(pin.waitForExistence(timeout: 3), "the row's menu did not open")
         attachScreen("row menu" + look)
-        XCTAssertTrue(app.buttons["关闭 Agent…"].exists || app.buttons["重命名…"].exists, "not the row's menu: \(app.debugDescription)")
+        XCTAssertTrue(app.buttons["关闭 Agent"].exists || app.buttons["重命名 Agent"].exists, "not the row's menu: \(app.debugDescription)")
         // Closed without choosing: still the list, no chat pushed.
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.12)).tap()
         XCTAssertTrue(pin.waitForNonExistence(timeout: 3), "the menu did not close")

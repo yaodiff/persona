@@ -1,28 +1,35 @@
 // Small pieces the files / Git panels and the file viewer share: a sub-view header with a back button, status
 // badges, a two-way switch, empty states, file glyphs, and a windowed list for long code / diffs.
 import { useEffect, useLayoutEffect, useState } from "react";
-import { gitTone, glyphOf } from "../../../lib/files";
+import { gitTone } from "../../../lib/files";
 import { cx, IconButton } from "../../../ui/atoms";
-import { Icon, type IconName } from "../../../ui/icons";
 import { t } from "../../../i18n";
 import { SegmentedTrack } from "../../../ui/Segmented";
+
+// Empty and FileGlyph live in their own files, so the app shell (Empty) and the palette (FileGlyph) do not carry the
+// rest of these parts on the first screen and the idle tier (#17321).
+export { Empty } from "./empty";
+export { FileGlyph } from "./file-glyph";
 
 /** A panel header whose leading square is a back button (sub-views); PanelHeader's look otherwise. */
 export function BackHeader({
   title,
   subtitle,
+  leading,
   actions,
   onBack,
   onClose,
 }: {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
   onBack: () => void;
   onClose: () => void;
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
+      {leading}
       <IconButton icon="chevronLeft" label={t("session-files-parts.back")} onClick={onBack} iconSize={16} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13.5px] font-semibold text-ink">{title}</div>
@@ -91,46 +98,6 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
       ))}
     </SegmentedTrack>
   );
-}
-
-export function Empty({ icon, title, detail, action }: { icon: IconName; title: string; detail?: React.ReactNode; action?: React.ReactNode }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-12 text-center" style={{ animation: "fade-in 200ms ease-out both" }}>
-      <span className="mb-1 flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
-        <Icon name={icon} size={18} />
-      </span>
-      <div className="text-[13.5px] font-medium text-ink">{title}</div>
-      {/* words wrap between words; only a string too long for a line on its own (a path, an id) breaks inside it */}
-      {detail && <div className="max-w-80 text-[12px] leading-relaxed [overflow-wrap:anywhere] text-ink-3">{detail}</div>}
-      {action && <div className="mt-2">{action}</div>}
-    </div>
-  );
-}
-
-// File-type glyphs not in the shared icon set (same 24-unit stroke grammar as ui/icons.tsx).
-const GLYPH = {
-  code: <path d="m16 18 6-6-6-6M8 6l-6 6 6 6" />,
-  sheet: (
-    <>
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M3 9h18M3 15h18M9 3v18" />
-    </>
-  ),
-  data: <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />,
-};
-
-/** The icon of a name in a listing: folders filled in the accent color, files by kind. */
-export function FileGlyph({ name, dir, size = 16 }: { name: string; dir?: boolean; size?: number }) {
-  if (dir) return <Icon name="folder" size={size} className="shrink-0 text-accent" style={{ fill: "color-mix(in srgb, currentColor 18%, transparent)" }} />;
-  const g = glyphOf(name);
-  if (g === "code" || g === "data" || g === "sheet") {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0 text-ink-3">
-        {GLYPH[g]}
-      </svg>
-    );
-  }
-  return <Icon name={g === "image" ? "image" : g === "doc" ? "book" : "read"} size={size} className="shrink-0 text-ink-3" />;
 }
 
 /**

@@ -36,11 +36,37 @@ export class LaunchChoice {
     this.id = id; this.title = title; this.detail = detail; this.disabled = disabled; this.description = description;
   }
 }
+export function builtinLauncherTitle(name: string, displayName: string = ''): string {
+  const custom = displayName.trim();
+  const key = name.trim().toLowerCase();
+  if (custom && custom.toLowerCase() !== key) {
+    if (!(key === 'traex' || key === 'traecli' || key === 'trae-cli') ||
+      !['traex', 'traecli', 'trae cli', 'trae-cli'].includes(custom.toLowerCase())) {
+      return custom;
+    }
+  }
+  switch (key) {
+    case 'claude': return 'Claude Code';
+    case 'codex': return 'Codex';
+    case 'claude-desktop': return 'Claude Desktop';
+    case 'codex-app': return 'Codex App';
+    case 'traex':
+    case 'traecli':
+    case 'trae-cli':
+      return 'TRAE CLI';
+    case 'agy': return 'Antigravity CLI';
+    case 'omp': return 'Oh My Pi';
+    case 'cursor': return 'Cursor';
+    case 'gemini': return 'Gemini CLI';
+    default: return custom || name;
+  }
+}
+
 export function launchModelName(id: string, name: string): string {
   const raw = name.trim(), bare = id.split('/').pop() || id;
   if (raw && raw.toLowerCase() !== id.toLowerCase() && raw.toLowerCase() !== bare.toLowerCase()) return raw;
   if (!/^gpt-[a-z0-9.]+(?:-[a-z0-9.]+)*$/i.test(bare)) return raw || bare;
-  return bare.slice(4).split('-').map((part:string) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()).join(' ');
+  return 'GPT-' + bare.slice(4).split('-').map((part:string) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()).join(' ');
 }
 
 export function recentLaunchDirectories(value: Record<string,Object>): LaunchChoice[] {

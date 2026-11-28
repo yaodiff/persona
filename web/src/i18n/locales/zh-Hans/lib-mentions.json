@@ -1,7 +1,7 @@
 {
   "quote_session": "另一个会话：{title}（{agent}）",
   "quote_cwd": "目录：{cwd}",
-  "quote_last": "它最近说：{text}",
+  "quote_last": "最近回复：{text}",
   "workspace_title": "工作区：{title}",
   "workspace_machine": "电脑：{machine}",
   "workspace_branch": "分支：{branch}"

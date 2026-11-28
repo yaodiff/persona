@@ -14,5 +14,7 @@
   "node_too_old": "このコンピューターの Persona が古いため herdr を起動できません。更新してからもう一度お試しください",
   "offline": "このコンピューターはオフラインです",
   "timeout": "herdr の起動に時間がかかっています。しばらくしてから確認してください",
-  "no_answer_after_start": "起動を指示しましたが、herdr はまだ応答していません"
+  "no_answer_after_start": "起動を指示しましたが、herdr はまだ応答していません",
+  "orca_not_running": "{machine} の Orca が動いていません",
+  "orca_hint": "そのコンピューターで Orca を開くと、Agent が再び表示され、新しく開始できるようになります。"
 }

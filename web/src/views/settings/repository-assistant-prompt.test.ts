@@ -10,7 +10,7 @@ afterEach(async () => { await initI18n("zh-Hans"); });
 it.each([
   { lang: "en", binding: "prepare to bind this repository", source: "ask which host I want to connect", host: "Host: code.example.test" },
   // i18n-ignore: localized prompt fixtures
-  { lang: "zh-Hans", binding: "准备绑定这个仓库", source: "请先问我要接入哪个主机", host: "主机：code.example.test" },
+  { lang: "zh-Hans", binding: "协助绑定此仓库", source: "请先询问我要接入哪个主机", host: "主机：code.example.test" },
   // i18n-ignore: localized prompt fixtures
   { lang: "ja", binding: "このリポジトリのバインドを準備", source: "接続したいホストを私に確認", host: "ホスト：code.example.test" },
 ])("onboards in $lang without naming CLI tools or a specific platform", async ({ lang, binding, source, host }) => {

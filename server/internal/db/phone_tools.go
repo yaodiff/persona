@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"time"
@@ -36,7 +37,8 @@ func (d *DB) ReplacePhoneTools(ctx context.Context, registration PhoneToolRegist
 		b.Queue(`DELETE FROM phone_tools WHERE device_id = $1`, registration.DeviceID)
 		for i, t := range registration.Tools {
 			schema := t.InputSchema
-			if len(schema) == 0 {
+			// A missing schema can arrive as JSON null when a client marshals a nil RawMessage.
+			if len(schema) == 0 || bytes.Equal(bytes.TrimSpace(schema), []byte("null")) {
 				schema = json.RawMessage(`{}`)
 			}
 			b.Queue(`INSERT INTO phone_tools (device_id, platform, credential_id, name, description, input_schema, position)

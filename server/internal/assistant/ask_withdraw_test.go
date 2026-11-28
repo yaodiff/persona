@@ -29,7 +29,7 @@ func TestAskUserWithdrawWaitingOwnCardDeliversReasonAndIsIdempotent(t *testing.T
 	}
 	done := make(chan askResult, 1)
 	go func() {
-		text, err := ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"questions":[{"header":"Deploy","question":"Deploy release v2 now?","options":[{"label":"Yes"},{"label":"No"}]}]}`))
+		text, err := ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"why_owner":"priority","questions":[{"header":"Deploy","question":"Deploy release v2 now?","options":[{"label":"Yes"},{"label":"No"}]}]}`))
 		done <- askResult{text: text, err: err}
 	}()
 
@@ -96,7 +96,7 @@ func TestAskUserWithdrawNoWaitOwnCardCancelsWithoutDuplicateRelay(t *testing.T) 
 	ft := newFleetTest(t)
 	preparedTestConversation(ft)
 
-	text, err := ft.s.toolAskUser(context.Background(), "mac", "s1", json.RawMessage(`{"wait":false,"questions":[{"header":"Merge","question":"Merge the PR now?","options":[{"label":"Merge"},{"label":"Wait"}]}]}`))
+	text, err := ft.s.toolAskUser(context.Background(), "mac", "s1", json.RawMessage(`{"why_owner":"priority","wait":false,"questions":[{"header":"Merge","question":"Merge the PR now?","options":[{"label":"Merge"},{"label":"Wait"}]}]}`))
 	if err != nil {
 		t.Fatalf("ask_user wait:false: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestAskUserWithdrawRejectsCrossOriginAndUserOwnedCards(t *testing.T) {
 
 	// 1. Another conversation's ask_user card (different session and different machine).
 	go func() {
-		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"questions":[{"question":"Keep going?","options":[{"label":"Yes"},{"label":"No"}]}]}`))
+		_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"why_owner":"priority","questions":[{"question":"Keep going?","options":[{"label":"Yes"},{"label":"No"}]}]}`))
 	}()
 	ownAsk := ft.waitPending(1)[0]
 
@@ -204,7 +204,7 @@ func TestAskUserWithdrawAlreadyAnsweredIsIdempotent(t *testing.T) {
 
 	done := make(chan string, 1)
 	go func() {
-		text, _ := ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"questions":[{"question":"Ship today?","options":[{"label":"Yes"},{"label":"Later"}]}]}`))
+		text, _ := ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"why_owner":"priority","questions":[{"question":"Ship today?","options":[{"label":"Yes"},{"label":"Later"}]}]}`))
 		done <- text
 	}()
 	asked := ft.waitPending(1)[0]
@@ -235,7 +235,7 @@ func TestRestartInvalidationDeliversSafeContextForAskUserAndApproval(t *testing.
 		t.Cleanup(cancel)
 
 		go func() {
-			_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"questions":[{"header":"Rollout","question":"Roll out the new billing flag?","options":[{"label":"Roll out"},{"label":"Hold"}]}]}`))
+			_, _ = ft.s.toolAskUser(ctx, "mac", "s1", json.RawMessage(`{"why_owner":"priority","questions":[{"header":"Rollout","question":"Roll out the new billing flag?","options":[{"label":"Roll out"},{"label":"Hold"}]}]}`))
 		}()
 		asked := ft.waitPending(1)[0]
 
@@ -300,7 +300,7 @@ func TestRestartInvalidationDeliversSafeContextForAskUserAndApproval(t *testing.
 	t.Run("resumable ask_user wait:false keeps restart behavior without invalidation notice", func(t *testing.T) {
 		ft := newFleetTest(t)
 		preparedTestConversation(ft)
-		_, err := ft.s.toolAskUser(context.Background(), "mac", "s1", json.RawMessage(`{"wait":false,"questions":[{"question":"Keep pending across restart?","options":[{"label":"Yes"},{"label":"No"}]}]}`))
+		_, err := ft.s.toolAskUser(context.Background(), "mac", "s1", json.RawMessage(`{"why_owner":"priority","wait":false,"questions":[{"question":"Keep pending across restart?","options":[{"label":"Yes"},{"label":"No"}]}]}`))
 		if err != nil {
 			t.Fatal(err)
 		}

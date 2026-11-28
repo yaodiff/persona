@@ -137,7 +137,7 @@ func TestSavedAgentSearchRealDatabaseWriteFailure(t *testing.T) {
 	for _, stage := range []string{"INSERT", "UPDATE"} {
 		t.Run(stage, func(t *testing.T) {
 			ctx := context.Background()
-			dsn := newDatabase(t)
+			dsn := newMigratedDatabase(t, db.ManagerSet)
 			database, err := db.Open(ctx, dsn, db.ManagerSet)
 			if err != nil {
 				t.Fatal(err)

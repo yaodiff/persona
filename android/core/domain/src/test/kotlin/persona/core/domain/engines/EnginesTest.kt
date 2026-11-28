@@ -3,6 +3,7 @@ package persona.core.domain.engines
 import persona.core.domain.zhAny
 
 import persona.core.domain.zh
+import persona.core.domain.ja
 import persona.core.contracts.DetectedEngine
 import persona.core.contracts.Machine
 import org.junit.Assert.*
@@ -67,6 +68,38 @@ class EnginesTest {
         assertEquals("Cindy 里的 Agent", (Engines.detail("cindy")).zhAny())
         assertTrue(Engines.canSelect("t3code", machine(online = false)))
         assertEquals("T3 Code 里的 Agent", (Engines.detail("t3code")).zhAny())
+    }
+
+    /** A closed Orca is not "Not detected"; an incompatible one shows its version (its note is shown under it, #17037). */
+    @Test fun detectionTellsAClosedOrcaFromAMissingOne() {
+        fun on(o: DetectedEngine) = machine(engines = listOf(o))
+        assertEquals("已安装，没在运行", (Engines.detection("orca", on(orca.copy(state = "stopped")))).zhAny())
+        assertEquals("已安装，没在运行，版本 1.4.277", (Engines.detection("orca", on(orca.copy(state = "stopped", version = "1.4.277")))).zhAny())
+        assertEquals("不兼容，版本 1.4.100", (Engines.detection("orca", on(orca.copy(state = "incompatible", version = "1.4.100")))).zhAny())
+        assertEquals("没检测到", (Engines.detection("orca", on(orca.copy(state = "missing")))).zhAny())
+        assertEquals("没检测到", (Engines.detection("orca", on(orca.copy(state = "from-the-future")))).zhAny())
+        assertEquals("检测到可用，版本 1.4.277",
+            (Engines.detection("orca", on(orca.copy(available = true, state = "running", version = "1.4.277")))).zhAny())
+        assertEquals(Engines.State.Unknown, Engines.state(orca.copy(state = "sleeping")))
+        assertEquals(Engines.State.Unknown, Engines.state(null))
+        assertEquals(Engines.State.Stopped, Engines.state(orca.copy(state = "stopped")))
+    }
+
+    /** One rule for "Orca isn't running": online, Orca in the engine set, and its node says installed and stopped (#17037). */
+    @Test fun orcaIsStoppedOnlyWhereItIsEnabledAndSaidSo() {
+        val stopped = orca.copy(note = null, state = "stopped")
+        val m = Machine(id = "m1", online = true, engine = "herdr", engineHosts = listOf("herdr", "orca"), engineDefault = "herdr",
+            engines = listOf(herdr, stopped))
+        assertTrue("in the set, not the default", Engines.orcaStopped(m))
+        assertTrue(Engines.orcaStopped(m.copy(engine = "orca", engineHosts = listOf("orca"), engineDefault = "orca")))
+        assertFalse("not enabled", Engines.orcaStopped(m.copy(engineHosts = listOf("herdr"))))
+        assertFalse(Engines.orcaStopped(m.copy(online = false)))
+        assertFalse(Engines.orcaStopped(m.copy(engines = listOf(herdr, stopped.copy(available = true, state = "running")))))
+        assertFalse(Engines.orcaStopped(m.copy(engines = listOf(herdr, stopped.copy(state = "incompatible", note = "update")))))
+        assertFalse("an older node", Engines.orcaStopped(m.copy(engines = listOf(herdr, stopped.copy(state = null)))))
+        assertTrue("an older hub: its single engine", Engines.orcaStopped(m.copy(engine = "orca", engineHosts = null)))
+        assertEquals(listOf("herdr", "herdr-core"), Engines.hosts(m.copy(engine = "herdr-both", engineHosts = null)))
+        assertEquals(emptyList<String>(), Engines.hosts(m.copy(engineHosts = emptyList())))
     }
 
     @Test fun detectionNamesAndNotes() {
@@ -142,5 +175,72 @@ class EnginesTest {
         assertTrue(Engines.footer(herdrNow, Engines.NONE).zh().startsWith("显示桌面 App 的会话"))
         assertTrue(Engines.footer(none, "herdr").zh().startsWith("只显示所选引擎里的会话"))
         assertEquals("已保存，连上后生效", Engines.saved(withHosts(emptyList(), online = false)).zh())
+    }
+
+    // #17052: several engines set up on the web, which the hub reports with `engine` its default.
+    private val orcaOn = DetectedEngine("orca", "Orca", available = true)
+    private val paseo = DetectedEngine("paseo", "Paseo", available = true)
+    private fun set(hosts: List<String>, default: String, engine: String = default, online: Boolean = true) =
+        machine(engine = engine, online = online, engines = listOf(herdr, core, orcaOn, paseo)).copy(engineHosts = hosts, engineDefault = default)
+
+    @Test fun aSetIsSeveralEnginesNoOptionStandsFor() {
+        assertTrue(Engines.isSet(set(listOf("herdr", "orca", "paseo"), "herdr")))
+        assertTrue(Engines.isSet(set(listOf("herdr", "orca"), "orca")))
+        // herdr with Herdr App by herdr is the herdr-both option; by Herdr App it is not.
+        assertFalse(Engines.isSet(set(listOf("herdr", "herdr-core"), "herdr", engine = "herdr-both")))
+        assertTrue(Engines.isSet(set(listOf("herdr", "herdr-core"), "herdr-core", engine = "herdr-both")))
+        // One engine, none, and an older hub without sets are not.
+        assertFalse(Engines.isSet(set(listOf("orca"), "orca")))
+        assertFalse(Engines.isSet(withHosts(emptyList())))
+        assertFalse(Engines.isSet(withHosts(null)))
+    }
+
+    @Test fun aSetShowsItsEnginesAndDefaultAndStartsOnTheDefault() {
+        val web = set(listOf("herdr", "orca", "paseo"), "orca")
+        assertEquals("orca", Engines.current(web))
+        assertEquals("orca", Engines.initialChoice(web))
+        assertEquals("herdr-core", Engines.current(set(listOf("herdr", "herdr-core"), "herdr-core", engine = "herdr-both")))
+        assertEquals("herdr + Orca + Paseo", Engines.summary(web).zh())
+        assertEquals("Orca", Engines.summary(set(listOf("orca"), "orca")).zh())
+        assertEquals("没有终端引擎", Engines.summary(withHosts(emptyList())).zh())
+        assertEquals("这台电脑同时使用 herdr + Orca + Paseo，默认是 Orca。要更改使用哪些引擎，请在网页版 Persona 里打开这台电脑。", Engines.setNotice(web)?.zh())
+        assertTrue(Engines.setNotice(web)!!.ja().startsWith("このコンピューターはherdr + Orca + Paseoを併用していて、既定はOrcaです。"))
+        assertTrue(Engines.setNotice(web)!!.english().startsWith("This computer uses herdr + Orca + Paseo together, with Orca as the default."))
+        assertNull(Engines.setNotice(set(listOf("orca"), "orca")))
+    }
+
+    @Test fun aPickInsideTheSetOnlyMovesTheDefault() {
+        val web = set(listOf("herdr", "orca", "paseo"), "orca")
+        assertEquals(Engines.Save.Default(listOf("herdr", "orca", "paseo"), "herdr"), Engines.saveOf("herdr", web))
+        assertEquals(Engines.Save.Engine("herdr-core"), Engines.saveOf("herdr-core", web))
+        assertEquals(Engines.Save.Engine(Engines.NONE), Engines.saveOf(Engines.NONE, web))
+        // herdr-both inside a set holding both is a new default, herdr.
+        val withCore = set(listOf("herdr", "herdr-core", "orca"), "orca")
+        assertEquals(Engines.Save.Default(listOf("herdr", "herdr-core", "orca"), "herdr"), Engines.saveOf("herdr-both", withCore))
+        assertEquals(Engines.Save.Engine("herdr-both"), Engines.saveOf("herdr-both", web))
+        // One engine is replaced as before.
+        assertEquals(Engines.Save.Engine("herdr"), Engines.saveOf("herdr", set(listOf("orca"), "orca")))
+        // The note says which: a new default, or that the others go.
+        assertEquals("显示这台电脑所有引擎里的会话。从手机新建的会话在 herdr 里打开。", Engines.footer(web, "herdr").zh())
+        assertEquals("只使用 Herdr App：其他引擎会关闭，只显示它里面的会话。", Engines.footer(web, "herdr-core").zh())
+        assertTrue(Engines.footer(set(listOf("herdr", "orca"), "orca", online = false), "orca").zh().startsWith("机器离线，选择会在连接后生效。从手机新建的会话将在 Orca"))
+        assertTrue(Engines.footer(set(listOf("herdr", "orca"), "orca", online = false), "paseo").zh().startsWith("机器离线，选择会在连接后生效。只使用 Paseo"))
+        assertTrue(Engines.footer(web, Engines.NONE).zh().startsWith("显示桌面 App 的会话"))
+        assertEquals("已更改默认引擎", Engines.saved(web, Engines.Save.Default(listOf("herdr", "orca", "paseo"), "herdr")).zh())
+        assertEquals("已切换引擎", Engines.saved(web, Engines.Save.Engine("herdr-core")).zh())
+        assertEquals("已保存，连上后生效", Engines.saved(web.copy(online = false), Engines.Save.Default(listOf("herdr"), "herdr")).zh())
+    }
+
+    @Test fun onlyAChangeCanBeSavedOutsidePairing() {
+        val web = set(listOf("herdr", "orca", "paseo"), "herdr")
+        assertFalse(Engines.canSave("herdr", web, pairing = false))
+        assertTrue(Engines.canSave("orca", web, pairing = false))
+        assertTrue(Engines.canSave("herdr", web, pairing = true))
+        assertFalse(Engines.canSave("orca", machine(engine = "orca"), pairing = false))
+        assertTrue(Engines.canSave("herdr", machine(engine = "orca"), pairing = false))
+        assertFalse(Engines.canSave(Engines.NONE, withHosts(emptyList()), pairing = false))
+        assertTrue(Engines.canSave(Engines.NONE, withHosts(listOf("herdr")), pairing = false))
+        // What can't be chosen can't be saved either.
+        assertFalse(Engines.canSave("gone", machine(), pairing = true))
     }
 }

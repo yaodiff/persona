@@ -124,6 +124,9 @@ func (h *Manager) contributionRoutes(api *http.ServeMux) {
 				return
 			}
 		}
+		if point == "text_lookup" {
+			h.textLookupChanged()
+		}
 		writeJSON(w, detailOut(r, ps.detail(r.Context(), ps.reg.Get(p.Record.ID))))
 	})
 }

@@ -2,8 +2,9 @@
 // AskUserDetail; Android PlanDetail, QuestionsDetail): the plan as Markdown; the questions with their options; for the
 // assistant's ask_user also what the user picked, ticked (its card is gone once answered, so the conversation keeps
 // what was asked and what came back here).
-import { askUserAnswers, baseToolName, optionDisplay, pickedOption, toolQuestions, typedAnswer, type ToolQuestion } from "../../lib/tool-detail";
-import { canonicalMcpToolName, stripToolResultTimestampHeaders } from "../../lib/turns";
+import { askUserAnswers, optionDisplay, pickedOption, toolQuestions, typedAnswer, type ToolQuestion } from "../../lib/tool-detail";
+import { stripToolResultTimestampHeaders } from "../../lib/turns";
+import { stepToolName } from "./step-detail-kind";
 import type { Item } from "../../lib/types";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -11,22 +12,7 @@ import { Markdown } from "../../ui/Markdown";
 import { t } from "../../i18n";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 
-const STRUCTURED = new Set(["ExitPlanMode", "AskUserQuestion", "ask_user"]);
-
-const stepToolName = (name?: string): string => baseToolName(canonicalMcpToolName(name) ?? "");
-
-/** The step draws its own detail (StepDetail) instead of its input as text: a plan, or questions, to show. */
-export function hasStepDetail(use: Item): boolean {
-  const name = stepToolName(use.tool_name);
-  if (!STRUCTURED.has(name)) return false;
-  const input = (use.tool_input ?? {}) as Record<string, unknown>;
-  return name === "ExitPlanMode" ? typeof input.plan === "string" && input.plan.trim() !== "" : toolQuestions(input).length > 0;
-}
-
-/** ask_user's result is what the detail ticks: it is not shown again under it, unless it failed. */
-export function showsResult(name: string, result: Item | undefined): boolean {
-  return stepToolName(name) !== "ask_user" || Boolean(result?.is_error);
-}
+export { hasStepDetail, showsResult } from "./step-detail-kind";
 
 export function StepDetail({ use, result }: { use: Item; result?: Item }) {
   const name = stepToolName(use.tool_name);

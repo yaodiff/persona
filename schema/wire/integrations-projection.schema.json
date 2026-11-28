@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "integrations-projection.schema.json",
+  "title": "Assistant integrations projection",
+  "description": "The settings catalog and on-demand detail for one assistant.",
+  "x-out": {
+    "go": "server/internal/assistantwire/integrations_projection_gen.go",
+    "ts": "web/src/lib/integrations-projection-wire.ts"
+  },
+  "x-guard": ["swift", "kotlin", "arkts", "rust"],
+  "$defs": {
+    "IntegrationManagerID": { "type": "string", "x-id": "IntegrationManagerID" },
+    "IntegrationResourceID": { "type": "string", "x-id": "IntegrationResourceID" },
+    "IntegrationKind": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["service", "extension", "channel", "connector", "push_source", "subscription"]
+    },
+    "IntegrationRef": {
+      "type": "object",
+      "required": ["manager", "kind", "id"],
+      "properties": {
+        "manager": { "$ref": "#/$defs/IntegrationManagerID" },
+        "kind": { "$ref": "#/$defs/IntegrationKind" },
+        "id": { "$ref": "#/$defs/IntegrationResourceID" }
+      }
+    },
+    "IntegrationOrigin": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["builtin_service", "builtin_extension", "installed_extension", "configured_extension", "standalone_channel", "standalone_connector", "standalone_push_source", "standalone_subscription"]
+    },
+    "IntegrationFilterCapability": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["channels", "data", "tools"]
+    },
+    "IntegrationState": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["available", "module_off", "needs_setup", "disabled", "read_only", "unavailable"]
+    },
+    "IntegrationReason": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["read_failed", "not_connected", "runtime_error", "managed_elsewhere", "rate_limited", "incompatible"]
+    },
+    "IntegrationAvailability": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "$ref": "#/$defs/IntegrationState" },
+        "reason": { "$ref": "#/$defs/IntegrationReason" }
+      }
+    },
+    "IntegrationCapabilityAvailability": {
+      "type": "object",
+      "required": ["capability", "availability"],
+      "properties": {
+        "capability": { "$ref": "#/$defs/IntegrationFilterCapability" },
+        "availability": { "$ref": "#/$defs/IntegrationAvailability" }
+      }
+    },
+    "IntegrationSource": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["extensions", "channels", "connectors", "subscriptions", "service"]
+    },
+    "IntegrationSourceAvailability": {
+      "type": "object",
+      "required": ["source", "availability"],
+      "properties": {
+        "source": { "$ref": "#/$defs/IntegrationSource" },
+        "ref": { "$ref": "#/$defs/IntegrationRef" },
+        "module_feature": { "type": "string", "description": "The host's module flag for this service." },
+        "availability": { "$ref": "#/$defs/IntegrationAvailability" }
+      }
+    },
+    "IntegrationRelationshipIssue": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["ambiguous_owner", "owner_missing", "owner_unavailable", "owner_conflict"]
+    },
+    "IntegrationCatalogItem": {
+      "type": "object",
+      "required": ["ref", "name", "origin", "capabilities", "availability"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/IntegrationRef" },
+        "name": { "type": "string" },
+        "origin": { "$ref": "#/$defs/IntegrationOrigin" },
+        "capabilities": { "type": "array", "items": { "$ref": "#/$defs/IntegrationFilterCapability" } },
+        "availability": { "$ref": "#/$defs/IntegrationAvailability" },
+        "capability_availability": { "type": "array", "items": { "$ref": "#/$defs/IntegrationCapabilityAvailability" } },
+        "relationship_issue": { "$ref": "#/$defs/IntegrationRelationshipIssue" }
+      }
+    },
+    "IntegrationCounts": {
+      "type": "object",
+      "required": ["all", "channels", "data", "tools"],
+      "properties": {
+        "all": { "type": "integer", "minimum": 0 },
+        "channels": { "type": "integer", "minimum": 0 },
+        "data": { "type": "integer", "minimum": 0 },
+        "tools": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "IntegrationCatalog": {
+      "type": "object",
+      "required": ["items", "counts", "availability"],
+      "properties": {
+        "items": { "type": "array", "items": { "$ref": "#/$defs/IntegrationCatalogItem" } },
+        "counts": { "$ref": "#/$defs/IntegrationCounts" },
+        "availability": { "type": "array", "items": { "$ref": "#/$defs/IntegrationSourceAvailability" } }
+      }
+    },
+    "IntegrationSectionKind": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["connection", "conversation_and_push", "inbox_and_sync", "external_sources", "extension_configuration", "information_access", "lifecycle"]
+    },
+    "IntegrationConfigurationGroup": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["connection", "channel", "inbox", "advanced", "general"]
+    },
+    "IntegrationSectionEdit": {
+      "type": "string",
+      "x-enum": "closed",
+      "enum": ["settings", "read_only"]
+    },
+    "IntegrationSection": {
+      "type": "object",
+      "required": ["kind", "ref", "availability", "edit"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/IntegrationSectionKind" },
+        "ref": { "$ref": "#/$defs/IntegrationRef" },
+        "availability": { "$ref": "#/$defs/IntegrationAvailability" },
+        "edit": { "$ref": "#/$defs/IntegrationSectionEdit" },
+        "configuration_groups": { "type": "array", "items": { "$ref": "#/$defs/IntegrationConfigurationGroup" } }
+      }
+    },
+    "IntegrationDetail": {
+      "type": "object",
+      "required": ["item", "sections", "availability"],
+      "properties": {
+        "item": { "$ref": "#/$defs/IntegrationCatalogItem" },
+        "sections": { "type": "array", "items": { "$ref": "#/$defs/IntegrationSection" } },
+        "availability": { "type": "array", "items": { "$ref": "#/$defs/IntegrationSourceAvailability" } }
+      }
+    }
+  }
+}

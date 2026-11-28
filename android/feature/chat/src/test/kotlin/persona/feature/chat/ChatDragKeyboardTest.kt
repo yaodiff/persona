@@ -48,7 +48,6 @@ class ChatDragKeyboardTest {
     }
     private val question = Interaction("ask", machineId = agent.machineId, sessionId = agent.sessionId, kind = "question", createdAt = "2026-11-12T02:00:00Z",
         questions = listOf(Question("Which branch should I push to?", options = listOf(QuestionOption("main"), QuestionOption("release/1.4")))))
-    private val personaQuestion = question.copy(id = "own-ask", sessionId = persona.sessionId)
 
     private fun history() = (1..30).map {
         Item("m$it", it, role = if (it % 2 == 1) "user" else "assistant", kind = "text", text = "Message number $it", ts = "2026-11-12T01:%02d:00Z".format(it))
@@ -131,7 +130,6 @@ class ChatDragKeyboardTest {
     }
 
     @Test fun draggingAnAgentsChatTakesTheKeyboardFromACardsField() = draggingPutsTheKeyboardAwayFromACard(agent, question)
-    @Test fun draggingPersonasConversationTakesTheKeyboardFromACardsField() = draggingPutsTheKeyboardAwayFromACard(persona, personaQuestion)
 
     // The page follows the newest message by itself: no finger, so the person typing keeps the keyboard.
     private fun aNewMessageWhileTypingKeepsTheKeyboard(key: SessionKey) {

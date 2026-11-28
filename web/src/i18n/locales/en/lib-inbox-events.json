@@ -20,5 +20,9 @@
   "filed": "Marked as done",
   "kind_todo": "Suggested to-do",
   "add_todo": "Add to to-dos",
-  "todo_added": "Added to your to-dos"
+  "todo_added": "Added to your to-dos",
+  "kind_handoff": "Suggested handoff to {target}",
+  "hand_off": "Hand off",
+  "handed_off": "Handed off",
+  "handoff_unavailable": "The target conversation is no longer available. The item was not handed off."
 }

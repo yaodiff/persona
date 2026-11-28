@@ -10,8 +10,11 @@
   "bad_agent_naming_max": "改名次数请填写 1 至 1000 的整数。",
   "bad_agent_naming_interval": "更新间隔请填写 1 至 8760 的整数小时，或关闭定期更新。",
   "bad_minutes_days": "minutes_days 必须为 0（永久保留）或 1 至 3650 的整数天数。",
+  "bad_recording_days": "recording_audio_days 和 recording_text_days 必须为 0（永久保留）或 1 至 3650 的整数天数。",
   "bad_idle_auto_compact_minutes": "idle_auto_compact_minutes 必须为 1 至 1440 的整数分钟。",
   "bad_idle_auto_compact_tokens": "idle_auto_compact_tokens 必须为 10000 至 10000000 的整数。",
+  "bad_agy_idle_auto_compact_minutes": "agy_idle_auto_compact_minutes 必须为 1 至 1440 的整数分钟。",
+  "bad_agy_idle_auto_compact_tokens": "agy_idle_auto_compact_tokens 必须为 10000 至 10000000 的整数。",
   "bad_idle_release_minutes": "idle_release_minutes 必须为 5 至 55 的整数分钟。",
   "bad_supervision_batch_minutes": "supervision_batch_minutes 必须为 0 至 1440 的整数分钟。",
   "bad_cache_keepalive": "缓存保温间隔须为 1 至 55 分钟的整数，连续次数须为 1 至 144 的整数。"

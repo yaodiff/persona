@@ -3,5 +3,11 @@
   "disabled": "This assistant has turned off the knowledge base.",
   "read_only": "The knowledge base is read-only. Changes are unavailable.",
   "source_settings_forbidden": "Only the owner can change a project’s source settings.",
-  "unknown_kind": "Unknown kind: search one of projects, chats, people, docs, meetings, events, recordings or topics."
+  "unknown_kind": "Unknown kind: search one of projects, chats, people, docs, meetings, events, recordings or topics.",
+  "parent_self": "A project can’t sit under itself.",
+  "parent_cycle": "That project is already under this one, so this one can’t go under it.",
+  "parent_not_found": "That parent project doesn’t exist, was merged into another or isn’t a project.",
+  "parent_with_merge": "Change the parent or milestones separately from a merge or unmerge.",
+  "milestone_invalid": "That milestone isn’t valid: it needs a title, a date like 2026-12-31 if any, and the state open, accepted or not accepted.",
+  "milestone_not_found": "That milestone isn’t on this project any more."
 }

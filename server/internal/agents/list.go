@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
@@ -37,7 +36,7 @@ func (s *Service) indexSessions(source string, list []Session) {
 		items = append(items, sessionlist.Item{
 			ID: row.ID, Source: source, Provider: row.Provider, Group: row.AccountID,
 			State: state, UpdatedAt: time.UnixMilli(row.RankTimeMs),
-			SearchText: strings.Join([]string{row.Title, row.Provider, row.AccountID}, "\n"),
+			SearchText: strings.Join([]string{row.Title, row.Provider, row.AccountID, row.PreviewText}, "\n"),
 			Summary:    json.RawMessage(raw), Full: json.RawMessage(raw),
 		})
 	}
@@ -50,10 +49,10 @@ func (s *Service) refreshListIndex(ctx context.Context, opts sessionlist.Options
 			continue
 		}
 		_, err := s.sessionsOf(ctx, src, false)
-		if errors.Is(err, context.Canceled) {
-			return err
-		}
 		if err != nil {
+			if callerEnded(ctx, err) {
+				return err
+			}
 			s.logf("agents: %s: paginated sessions: %v", src.Name(), err)
 			if opts.Source == "" && s.skipsFailed(src.Name()) {
 				s.listIndex.RemoveSource(src.Name()) // match legacy aggregate behavior: unavailable sources are omitted

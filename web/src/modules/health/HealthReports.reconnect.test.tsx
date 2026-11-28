@@ -50,19 +50,19 @@ describe("the reports card", () => {
     await act(async () => root.render(<HealthReports mid="mac" version={0} />));
     expect(reads()).toHaveLength(1);
     await act(async () => reads()[0].reject(new TypeError("Failed to fetch")));
-    expect(card()).toContain("没读到");
+    expect(card()).toContain("加载失败");
 
     await act(async () => hub.hello.forEach((l) => l()));
     expect(reads()).toHaveLength(2);
     await act(async () => reads()[1].resolve({ reports: [report] }));
-    expect(card()).not.toContain("没读到");
+    expect(card()).not.toContain("加载失败");
     expect(card()).toContain("Blood test");
   });
 
   it("reads it again on a hello after a good read too, so a report added or deleted elsewhere shows", async () => {
     await act(async () => root.render(<HealthReports mid="mac" version={0} />));
     await act(async () => reads()[0].resolve({ reports: [] }));
-    expect(card()).toContain("还没有");
+    expect(card()).toContain("暂无体检报告");
     await act(async () => hub.hello.forEach((l) => l()));
     await act(async () => reads()[1].resolve({ reports: [report] }));
     expect(card()).toContain("Blood test");

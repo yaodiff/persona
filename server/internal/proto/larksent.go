@@ -17,6 +17,46 @@ const (
 	LarkThroughBypass = "permission_mode"     // the assistant conversation runs in bypassPermissions
 )
 
+// agentAPIWriteGETRoutes are the GET/HEAD routes that mint or hand out
+// credentials, export the local database, or sign in as the user. The node gate
+// and the sent-as-user ledger share this contract so neither calls them reads.
+var agentAPIWriteGETRoutes = []string{
+	"/conversations/*/qr-code",
+	"/calendar/event/*/share-link",
+	"/contacts/my-link",
+	"/documents/share/password",
+	"/links/open",
+	"/meetings/participants/*/audio",
+	"/maintenance/export",
+}
+
+// AgentAPIWriteGET reports whether method/path is one of the Agent API's
+// side-effecting GET/HEAD routes. Other methods have their ordinary HTTP
+// classification; other GET/HEAD routes are reads.
+func AgentAPIWriteGET(method, path string) bool {
+	if !strings.EqualFold(method, "GET") && !strings.EqualFold(method, "HEAD") {
+		return false
+	}
+	for _, route := range agentAPIWriteGETRoutes {
+		pattern := strings.Split(strings.Trim(route, "/"), "/")
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(pattern) != len(parts) {
+			continue
+		}
+		match := true
+		for i := range pattern {
+			if pattern[i] != "*" && pattern[i] != parts[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // LarkSent is one write the gate proxy forwarded and the API answered with a 2xx. Which machine it happened on is not
 // in it: the manager takes that from the connection the request came in on.
 type LarkSent struct {

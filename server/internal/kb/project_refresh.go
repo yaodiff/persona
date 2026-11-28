@@ -170,6 +170,12 @@ func (e *Engine) refreshProject(ctx context.Context, p *Project) error {
 	return err
 }
 
+// projectRefreshTimeout bounds one kb.project digest model call. Large projects ask for up to 8000 output tokens and
+// often reach the ceiling, and JSONMax's larger retry shares this same context, so 3 minutes cut long replies mid-read
+// ("ai: read stream: context deadline exceeded") and parked the project in the retry backoff. Project refreshes run
+// serially in their own lane, so the longer background budget is cheap; set it back to 3*time.Minute to roll back.
+const projectRefreshTimeout = 6 * time.Minute
+
 // refreshProjectCall rewrites p's summary; called: the model was asked (not for a project gone meanwhile).
 func (e *Engine) refreshProjectCall(ctx context.Context, p *Project) (called bool, err error) {
 	current, ok := e.Store.Project(p.Slug)
@@ -181,7 +187,7 @@ func (e *Engine) refreshProjectCall(ctx context.Context, p *Project) (called boo
 	in := e.projectInput(p)
 	in.Language = owner.Language
 	var d projectDigest
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	cctx, cancel := context.WithTimeout(ctx, projectRefreshTimeout)
 	defer cancel()
 	if err := e.modelFor("kb.project").JSONMax(cctx, prompts.RenderKBProject(owner), prompts.RenderKBProjectInput(in.KBProjectInput), 8000, &d); err != nil {
 		return true, err

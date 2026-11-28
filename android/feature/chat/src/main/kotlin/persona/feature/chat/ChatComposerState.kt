@@ -1,16 +1,25 @@
 package persona.feature.chat
 
+import android.content.res.Resources
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import persona.core.contracts.ProtocolCompatibility
 import persona.core.contracts.api.*
 import persona.core.contracts.JsonCodec
+import persona.core.designsystem.resolve
 import persona.core.domain.AttachedFile
 import persona.core.domain.ComposerMessage
+import persona.core.domain.MessageContext
+import persona.core.domain.contextSummary
+import persona.core.domain.hasContextTag
+import persona.core.domain.isInterjectContext
 import persona.core.domain.parseAttachedFiles
+import persona.core.domain.parseContexts
 import kotlinx.serialization.encodeToString
 
 data class ComposerAttachment(
@@ -166,15 +175,16 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
 
     fun editMessage(text: String) {
         beginEdit()
-        val paths = composerImagePaths(text)
+        val masked = maskComposerContexts(text)
+        val paths = composerImagePaths(masked.text)
         // Videos and ordinary files come back already on the machine; kinds this composer does not own keep their tags.
-        val (files, rest) = parseComposerFileTags(text)
+        val (files, rest) = parseAttachedFiles(masked.text)
         // The media cap limits new picks; older or hand-written messages keep every video and document on edit.
         val videos = files.filter { it.kind == "video" }
         val documents = files.filter { it.kind == "file" }
         val restored = files.filter { it.kind == "video" || it.kind == "file" }
-        val source = if (restored.isEmpty()) text else rest + files.filter { it !in restored }.joinToString("") { "\n\n" + it.toXml() }
-        val plain = source.replace(composerImagePlaceholders, "").replace(composerImageTags, "").trimEnd()
+        val source = if (restored.isEmpty()) masked.text else rest + files.filter { it !in restored }.joinToString("") { "\n\n" + it.toXml() }
+        val plain = masked.unmask(source.replace(composerImagePlaceholders, "").replace(composerImageTags, "")).trimEnd()
         value = TextFieldValue(plain, TextRange(plain.length))
         attachments = paths.mapIndexed { index, path ->
             ComposerAttachment("restored-$index-$path", path.substringAfterLast('/'), "", true, path,
@@ -197,16 +207,22 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
     }
 
     /**
-     * A queued message pulled back (the queue strip's "Take back to edit"): the draft if empty, else after it on a new line (iOS); photos it
-     * carried come back as attachments rather than as their tag.
+     * A queued message pulled back (the queue strip's "Take back to edit"): the draft if empty, else after it on a new line (iOS);
+     * photos and files it carried come back as attachments rather than as tags, and its context blocks are returned for the
+     * composer's context bar rather than dumped into the text field.
      */
-    internal fun restoreQueued(text: String) {
+    internal fun restoreQueued(text: String, photosBeside: Int = 0): List<ChatLinkContext> {
         beginEdit()
-        val restored = ChatComposerState().apply { editMessage(text) }
-        val words = restored.value.text.let {
-            if (restored.attachments.isNotEmpty() && (it.trim() in composerPhotoStandIns || it.trim() == photosOnlyText ||
-                    it.trim() == videosOnlyText || it.trim() == filesOnlyText)) "" else it
-        }
+        val (parsedContexts, withoutContexts) = parseComposerContexts(text)
+        val contexts = parsedContexts.map { it.toChatLinkContext() }
+        val restored = ChatComposerState().apply { editMessage(withoutContexts) }
+        val trimmed = restored.value.text.trim()
+        val hasMediaOrFiles = restored.attachments.isNotEmpty() || photosBeside > 0
+        val hasContexts = contexts.isNotEmpty()
+        val isStandIn = (hasMediaOrFiles && (trimmed in composerPhotoStandIns ||
+            trimmed == photosOnlyText || trimmed == videosOnlyText || trimmed == filesOnlyText)) ||
+            (hasContexts && trimmed in composerContextStandIns)
+        val words = if (isStandIn) "" else restored.value.text
         val combined = when {
             value.text.isEmpty() -> words
             words.isEmpty() -> value.text
@@ -214,6 +230,7 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
         }
         value = TextFieldValue(combined, TextRange(combined.length))
         attachments = attachments + restored.attachments.filter { item -> attachments.none { it.id == item.id } }
+        return contexts
     }
 
     /**
@@ -253,20 +270,35 @@ fun rememberChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()):
 
 internal fun quoteComposerPath(path: String): String = ComposerMessage.quotePath(path)
 
-private val composerContextTags = Regex("<persona-context\\b[^>]*>[\\s\\S]*?</persona-context>")
+private val composerContextTags = ProtocolCompatibility.contextTag
 
-/** Parse only this message's own file tags; a forwarded context's tags stay inside that context, byte for byte. */
-private fun parseComposerFileTags(text: String): Pair<List<AttachedFile>, String> {
-    val contexts = mutableListOf<Pair<String, String>>()
+private data class MaskedContexts(val text: String, val blocks: List<Pair<String, String>>) {
+    fun unmask(value: String): String {
+        var restored = value
+        blocks.forEach { (marker, context) -> restored = restored.replace(marker, context) }
+        return restored
+    }
+}
+
+/** Mask canonical and legacy context blocks so nested file or image tags stay inside their context, byte for byte. */
+private fun maskComposerContexts(text: String): MaskedContexts {
+    if (!hasContextTag(text)) return MaskedContexts(text, emptyList())
+    val blocks = mutableListOf<Pair<String, String>>()
+    var nonce = 0
     val masked = composerContextTags.replace(text) { match ->
-        val marker = "\u0000${contexts.size}\u0000"
-        contexts += marker to match.value
+        var marker: String
+        do { marker = "\u0000${nonce++}\u0000" } while (marker in text)
+        blocks += marker to match.value
         marker
     }
-    val (files, rest) = parseAttachedFiles(masked)
-    var restored = rest
-    contexts.forEach { (marker, context) -> restored = restored.replace(marker, context) }
-    return files to restored
+    return MaskedContexts(masked, blocks)
+}
+
+/** Parse user-visible context blocks (both canonical and legacy) while dropping internal hub metadata blocks. */
+private fun parseComposerContexts(text: String): Pair<List<MessageContext>, String> {
+    if (!hasContextTag(text)) return emptyList<MessageContext>() to text
+    val (contexts, rest) = parseContexts(text)
+    return contexts.filterNot { it.isInterjectContext() || it.kind == "skill-instructions" } to rest
 }
 
 private val composerImageTags = Regex("<attached_images>([\\s\\S]*?)</attached_images>")
@@ -282,9 +314,21 @@ private val composerPhotoStandIns = setOf(
     "動画を見てください", // i18n-ignore
     "添付ファイルを見てください", // i18n-ignore
 )
+// Context- and forward-only stand-in words sent by current and older clients: wire data, not interface copy.
+private val composerContextStandIns = setOf(
+    "See the content above.", "See the context above.", "Refer to the content above.",
+    "Please look at the forwarded message above.", "Please look at the forwarded messages above.",
+    "参考上面的内容。", // i18n-ignore
+    "请看上面转发的消息。", // i18n-ignore
+    "请看上面转发的这些消息。", // i18n-ignore
+    "上の内容を参考にしてください。", // i18n-ignore
+    "上の内容を参照してください。", // i18n-ignore
+    "上の転送されたメッセージを見てください。", // i18n-ignore
+    "上に転送したメッセージを確認してください。", // i18n-ignore
+)
 
 /** How many photos a message carries as paths on the computer (its `<attached_images>` block): what a queued row says it carries. */
-internal fun composerPhotoCount(text: String): Int = composerImagePaths(text).size
+internal fun composerPhotoCount(text: String): Int = composerImagePaths(parseComposerContexts(text).second).size
 
 private fun composerImagePaths(text: String): List<String> =
     composerImageTags.findAll(text).flatMap { it.groupValues[1].lineSequence() }
@@ -292,25 +336,85 @@ private fun composerImagePaths(text: String): List<String> =
         .filter { it.startsWith('/') || it.startsWith("~/") }.distinct().toList()
 
 /**
- * [text] with its photos as one [photo] mark ("[Image]") and, given a [video] mark ("[Video]"), each `<persona-file>` tag as
- * that mark (a video) or its name, on lines of their own: the words that only stand in for them are left out.
+ * [text] with its context blocks stripped, its photos as one [photo] mark ("[Image]") and, given a [video] mark ("[Video]"),
+ * each `<persona-file>` (or legacy file) tag as that mark (a video) or its name, on lines of their own: the words that only
+ * stand in for attachments or contexts are left out. When nothing besides contexts remains, falls back to [contextText].
  */
-internal fun composerMessagePreview(text: String, photo: String, video: String? = null): String {
-    val (files, rest) = if (video == null) emptyList<AttachedFile>() to text else parseAttachedFiles(text)
+internal fun composerMessagePreview(
+    text: String,
+    photo: String,
+    video: String? = null,
+    contextText: (List<MessageContext>) -> String = { contextSummary(it).shown },
+): String {
+    val (contexts, withoutContexts) = parseComposerContexts(text)
+    val (files, rest) = if (video == null) emptyList<AttachedFile>() to withoutContexts else parseAttachedFiles(withoutContexts)
     val marks = files.map { if (it.kind == "video") video.orEmpty() else it.name }
     val clean = rest.replace(composerImagePlaceholders, "")
+    val hasImages = composerImagePaths(clean).isNotEmpty()
     val plain = clean.replace(composerImageTags, "").trim()
+    val standIn = (plain in composerPhotoStandIns && (hasImages || marks.isNotEmpty())) ||
+        (plain in composerContextStandIns && contexts.isNotEmpty())
     val body = when {
-        plain in composerPhotoStandIns && composerImagePaths(clean).isNotEmpty() -> photo
-        plain in composerPhotoStandIns && marks.isNotEmpty() -> ""
+        standIn && hasImages -> photo
+        standIn -> ""
         else -> clean.replace(composerImageTags, photo).trim()
     }
-    return if (marks.isEmpty()) body else (listOf(body) + marks).filter(String::isNotBlank).joinToString("\n")
+    val shown = if (marks.isEmpty()) body else (listOf(body) + marks).filter(String::isNotBlank).joinToString("\n")
+    return shown.ifBlank { if (contexts.isNotEmpty()) contextText(contexts) else "" }
 }
 
+internal fun composerMessagePreview(text: String, photo: String, video: String? = null, resources: Resources): String =
+    composerMessagePreview(text, photo, video) { contextSummary(it).resolve(resources) }
+
+/** Secondary context caption for a queued row whose [preview] already shows user words or attachments. */
+internal fun composerContextNote(
+    text: String,
+    preview: String,
+    contextText: (List<MessageContext>) -> String = { contextSummary(it).shown },
+): String? {
+    val (contexts, _) = parseComposerContexts(text)
+    if (contexts.isEmpty()) return null
+    val summary = contextText(contexts)
+    return summary.takeIf { it.isNotBlank() && it != preview }
+}
+
+/**
+ * Clean text copied from a queued message (never raw internal context, file, or image XML tags): prefers what the user
+ * wrote, else quoted context text (skipping whole-page markers), else the localized preview.
+ */
+internal fun composerMessageCopyText(
+    text: String,
+    photo: String,
+    video: String? = null,
+    contextText: (List<MessageContext>) -> String = { contextSummary(it).shown },
+): String {
+    val (contexts, withoutContexts) = parseComposerContexts(text)
+    val (files, rest) = if (video == null) emptyList<AttachedFile>() to withoutContexts else parseAttachedFiles(withoutContexts)
+    val clean = rest.replace(composerImagePlaceholders, "")
+    val hasImages = composerImagePaths(clean).isNotEmpty()
+    val plain = clean.replace(composerImageTags, "").trim()
+    val standIn = (plain in composerPhotoStandIns && (hasImages || files.isNotEmpty())) ||
+        (plain in composerContextStandIns && contexts.isNotEmpty())
+    if (!standIn && plain.isNotEmpty()) return plain
+    val quotedBodies = contexts.mapNotNull { it.body.takeIf { body -> body.isNotBlank() && body != ChatLinkContext.WHOLE } }
+        .joinToString("\n\n")
+    if (quotedBodies.isNotEmpty()) return quotedBodies
+    return composerMessagePreview(text, photo, video, contextText)
+}
+
+internal fun composerMessageCopyText(text: String, photo: String, video: String? = null, resources: Resources): String =
+    composerMessageCopyText(text, photo, video) { contextSummary(it).resolve(resources) }
+
 @Composable
-internal fun composerMessagePreview(text: String): String =
-    composerMessagePreview(text, stringResource(R.string.chat_composer_photo_placeholder), stringResource(R.string.chat_composer_video_placeholder))
+internal fun composerMessagePreview(text: String): String {
+    val resources = LocalResources.current
+    return composerMessagePreview(
+        text,
+        stringResource(R.string.chat_composer_photo_placeholder),
+        stringResource(R.string.chat_composer_video_placeholder),
+        resources,
+    )
+}
 
 /** A video or ordinary file on the session's machine as the tag its message carries; null for a photo or until uploaded. */
 fun ComposerAttachment.attachedFile(): AttachedFile? =

@@ -73,11 +73,12 @@ func (m *memOutbox) len() int {
 
 // outboxHub is a hub on the bus that can be away (dials refused), and records what reaches it, in order.
 type outboxHub struct {
-	srv    *httptest.Server
-	up     atomic.Bool
-	legacy bool // answers manager.outbox unknown_method, like a hub from before it
-	failN  atomic.Int32
-	freeze bool // guarded by mu: notify.request gets no answer
+	srv         *httptest.Server
+	up          atomic.Bool
+	legacy      bool // answers manager.outbox unknown_method, like a hub from before it
+	notifyReply json.RawMessage
+	failN       atomic.Int32
+	freeze      bool // guarded by mu: notify.request gets no answer
 
 	mu   sync.Mutex
 	got  []string // "push <id>", "broadcast <type>", in the order taken
@@ -85,7 +86,7 @@ type outboxHub struct {
 }
 
 func newOutboxHub(t *testing.T) *outboxHub {
-	h := &outboxHub{}
+	h := &outboxHub{notifyReply: json.RawMessage(`{"ok":true}`)}
 	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !h.up.Load() {
 			http.Error(w, "away", http.StatusServiceUnavailable)
@@ -112,9 +113,11 @@ func newOutboxHub(t *testing.T) *outboxHub {
 					time.Sleep(time.Second) // longer than the caller waits
 				}
 				var n NotifyRequest
-				_ = json.Unmarshal(params, &n)
+				if err := json.Unmarshal(params, &n); err != nil {
+					return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
+				}
 				h.take("push " + n.Notification.ID)
-				return map[string]bool{"ok": true}, nil
+				return h.notifyReply, nil
 			case assistantwire.MethodOutbox:
 				if h.legacy {
 					return nil, &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method " + method}
@@ -263,18 +266,41 @@ func TestTheOutboxKeepsWhatTheHubMissed(t *testing.T) {
 	h.waitFor(t, []string{"push ntf_1", "broadcast todos", "push ntf_2", "push ntf_3", "push ntf_4"})
 }
 
+func TestNotifyRequestReturnsHubResult(t *testing.T) {
+	h := newOutboxHub(t)
+	h.notifyReply = json.RawMessage(`{"devices":0,"kept":1,"ok":true,"reason":"no_device"}`)
+	h.up.Store(true)
+	out := &memOutbox{}
+	b := startOutboxManager(t, h, out)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := b.client.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	res, err := b.NotifyRequest(ctx, push("ntf_live"))
+	if err != nil || !res.OK || res.Devices == nil || *res.Devices != 0 || res.Kept != 1 || res.Reason != "no_device" || res.Queued {
+		t.Fatalf("live notify.request = %+v, %v, want the hub's delivery counts", res, err)
+	}
+	h.waitFor(t, []string{"push ntf_live"})
+	if out.len() != 0 {
+		t.Fatalf("outbox kept %d items after a live reply", out.len())
+	}
+}
+
 // A hub from before manager.outbox gets the items one by one, as notify.request and ws.broadcast.
 func TestTheOutboxToAnOlderHub(t *testing.T) {
 	h := newOutboxHub(t)
 	h.legacy = true
-	b := startOutboxManager(t, h, &memOutbox{})
+	out := &memOutbox{}
+	b := startOutboxManager(t, h, out)
 	ctx := context.Background()
-	if _, err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
-		t.Fatal(err)
+	if res, err := b.NotifyRequest(ctx, push("ntf_1")); err != nil || !res.Queued {
+		t.Fatalf("notify.request offline = %+v, %v, want queued", res, err)
 	}
 	b.Broadcast(ctx, live("assistant_feed"))
 	h.up.Store(true)
 	h.waitFor(t, []string{"push ntf_1", "broadcast assistant_feed"})
+	waitFor(t, "the legacy hub to drain the outbox", func() bool { return out.len() == 0 })
 }
 
 // Items too old to be news are not handed over; ones whose answer was lost are sent again (the hub takes each once).

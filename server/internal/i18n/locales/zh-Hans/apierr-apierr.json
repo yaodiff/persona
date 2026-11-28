@@ -18,6 +18,8 @@
   "assistant_control_failed": "Claude 未能应用这项设置：{reason}",
   "shell_waiting": "{machine} 上新开的终端标签停在一个提问上，Agent 没能启动：“{line}”。什么都没运行。如果 Persona 里列出了这个提问的回答，选一个，Agent 就会在那个标签里启动；也可以去 {machine} 上的那个标签里回答，再重新启动 Agent。标签会再留几分钟。",
   "shell_waiting_here": "这台电脑上新开的终端标签停在一个提问上，Agent 没能启动：“{line}”。什么都没运行。如果 Persona 里列出了这个提问的回答，选一个，Agent 就会在那个标签里启动；也可以在这台电脑上的那个标签里回答，再重新启动 Agent。标签会再留几分钟。",
+  "codex_not_logged_in": "{machine} 上的 Codex 还没登录，Agent 没有启动。在 {machine} 的终端里运行 codex login 登录，再重新启动 Agent。",
+  "codex_not_logged_in_here": "这台电脑上的 Codex 还没登录，Agent 没有启动。在这台电脑的终端里运行 codex login 登录，再重新启动 Agent。",
   "start_line_rejected": "{machine} 上新开的终端标签两次都没接住启动命令（它显示“{line}”）。什么都没运行；看看那个 shell 启动时做了什么，再重试。",
   "start_line_rejected_here": "这台电脑上新开的终端标签两次都没接住启动命令（它显示“{line}”）。什么都没运行；看看那个 shell 启动时做了什么，再重试。",
   "session_no_transcript": "这台电脑上记着这个对话，但 Persona 在那里找不到它的对话记录。",

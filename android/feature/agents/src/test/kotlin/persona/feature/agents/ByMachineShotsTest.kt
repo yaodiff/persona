@@ -9,15 +9,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +31,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
+import persona.core.contracts.api.AgentCreationService
+import persona.core.contracts.api.AgentDirectories
+import persona.core.contracts.api.AgentLauncher
+import persona.core.contracts.api.AgentStartRequest
+import persona.core.contracts.api.AgentStartResult
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.HomeChrome
 import persona.core.designsystem.LocalHomeChrome
@@ -75,6 +86,59 @@ class ByMachineShotsTest {
 
     @Config(sdk = [35], qualifiers = "zh-w400dp-h1200dp-xhdpi")
     @Test fun everyStyleChinese() = everyStyle("zh", "按机器", "MacBook Pro", "Build server", "还有 2 个空闲")
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1000dp-xhdpi")
+    @Test fun projectHeadingOpensTheExistingNewAgentDialog() {
+        val computers = listOf(Machine("mac", "Fixture laptop", online = true, home = "/Users/sample"),
+            Machine("box", "Offline server", online = false, home = "/home/sample"))
+        val rows = listOf(
+            Session("mac", "desktop", title = "Check the desktop site", cwd = "/tmp/site", state = "working", spaceId = "desktop",
+                spaceName = "site", workspaceCwd = "/Users/sample/Desktop/site"),
+            Session("mac", "code", title = "Check the code site", cwd = "/Users/sample/code/site", state = "working",
+                spaceId = "code", spaceName = "site"),
+            Session("mac", "loose", title = "Loose agent", cwd = "/Users/sample/tmp", state = "working", spaceName = "No project"),
+            Session("box", "unavailable", title = "Offline agent", cwd = "/home/sample/source", state = "working",
+                spaceId = "offline", spaceName = "Offline project"),
+        )
+        val model = agentsModel(rows, computers)
+        val service = object : AgentCreationService {
+            override val scope = "project-heading-fixture"
+            override suspend fun launchers(machineId: String) = listOf(AgentLauncher("codex"))
+            override suspend fun directories(machineId: String, path: String) = AgentDirectories("/unrelated")
+            override suspend fun start(request: AgentStartRequest, operationId: String) = error("The dialog only opens")
+            override suspend fun operation(operationId: String): AgentStartResult = AgentStartResult.Unknown
+        }
+        val creation = NewAgentViewModel(service, AgentCreationPreferences(rule.activity), MutableStateFlow(computers))
+        var dark by mutableStateOf(false)
+        try {
+            rule.setContent {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                    CompositionLocalProvider(LocalHomeChrome provides HomeChrome(emptyList(), "Agents", onSelect = {}, leading = {})) {
+                        AgentsScreen(model, NoNavigation, AgentsMetadata(), creationModel = creation)
+                    }
+                }
+            }
+            rule.waitUntil(5_000) { model.page.value.loaded }
+            rule.runOnIdle { model.grouping(AgentGrouping.MachineSpace) }
+            rule.waitUntil(5_000) { model.page.value.list.groups.any { it.projectFolder?.qualifier == "~/Desktop" } }
+            val desktop = rule.onNodeWithContentDescription("New Agent in site · ~/Desktop")
+            for (appearance in listOf(false, true)) {
+                rule.runOnIdle { dark = appearance }
+                desktop.assertIsDisplayed()
+                rule.onNodeWithContentDescription("New Agent in site · ~/code").assertIsDisplayed()
+                rule.onNodeWithContentDescription("New Agent in No project").assertDoesNotExist()
+                rule.onNodeWithContentDescription("New Agent in Offline project").assertDoesNotExist()
+                save("by-project", AppStyle.Glass, appearance)
+            }
+            desktop.performClick()
+            rule.waitUntil(5_000) { creation.state.value.selection.cwd == "/Users/sample/Desktop/site" }
+            assertEquals("mac", creation.state.value.machineId)
+            assertEquals("codex", creation.state.value.selection.launcher)
+            rule.onNode(isDialog()).assertExists()
+        } finally {
+            creation.viewModelScope.cancel()
+        }
+    }
 
     private fun everyStyle(lang: String, groupingLabel: String, mac: String, box: String, idle: String) {
         val model = agentsModel(sessions, machines)

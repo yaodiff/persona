@@ -34,6 +34,8 @@ type taskNode struct {
 	gate chan struct{}
 	// items: what session.items answers (the agent's latest turn).
 	items []proto.Item
+	// prOwnership answers an independent GitHub ownership readback for a test PR.
+	prOwnership json.RawMessage
 }
 
 func (tn *taskNode) calls() (starts, sends []map[string]any) {
@@ -77,6 +79,10 @@ func connectTaskNode(t *testing.T, h *Hub, id string) *taskNode {
 			tn.sends = append(tn.sends, p)
 		case "session.items":
 			return map[string]any{"items": tn.items}, nil
+		case "git.pr":
+			if p["ownership"] == true && tn.prOwnership != nil {
+				return tn.prOwnership, nil
+			}
 		case "launchers.check":
 			return proto.LauncherCheck{OK: true, Agent: "claude", Answer: "ok"}, nil
 		}

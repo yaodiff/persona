@@ -41,12 +41,12 @@ describe("the example cards", () => {
 
   it("describes navigation without turning opaque ids into reply text", () => {
     const compare = example("compare")!;
-    expect(previewAction(compare.raw, "details")).toEqual({ sends: false, text: "真实对话里会打开详情页「详细依据」" });
-    expect(previewAction(compare.raw, "back")).toEqual({ sends: false, text: "真实对话里会返回上一页" });
+    expect(previewAction(compare.raw, "details")).toEqual({ sends: false, text: "在真实对话中，这里会打开详情页「详细依据」。" });
+    expect(previewAction(compare.raw, "back")).toEqual({ sends: false, text: "在真实对话中，这里会返回上一页。" });
     expect(previewAction(compare.raw, "unknown")).toBeNull();
     expect(previewAction(example("decision")!.raw, "choose-b")).toEqual({ sends: true, text: "选 B：队列去重" });
     expect(previewAction({ sections: [{ items: [{ action: { id: "open", open: "https://example.com" } }] }] }, "open"))
-      .toEqual({ sends: false, text: "真实对话里会在 App 内打开「https://example.com」" });
+      .toEqual({ sends: false, text: "在真实对话中，这里会在 App 内打开「https://example.com」。" });
   });
 
   it("reads a submitted form as people would", () => {

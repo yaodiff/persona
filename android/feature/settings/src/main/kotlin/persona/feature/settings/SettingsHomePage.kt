@@ -7,6 +7,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.navigation3.runtime.NavKey
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
@@ -14,8 +16,17 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.navigation.*
 
-private data class HomeEntry(val key: NavKey, val title: Int, val icon: PhIcon, val subtitle: Int? = null,
-    val aliases: Int? = null, val value: String? = null)
+private data class HomeEntry(
+    val key: NavKey?,
+    val title: Int,
+    val icon: PhIcon,
+    val subtitle: Int? = null,
+    val aliases: Int? = null,
+    val value: String? = null,
+    val itemKey: String = key.toString(),
+    val onClick: (() -> Unit)? = null,
+    val subtitleText: String? = null,
+)
 
 /** The active modules' Settings pages (#13847), at the end of the assistant's group; each opens its module's page. */
 private fun moduleEntries(pages: List<persona.core.moduleapi.ModuleSettingsPage>): List<HomeEntry> =
@@ -32,9 +43,18 @@ internal fun SettingsHomePage(
     onDemo: (() -> Unit)?, onExitDemo: (() -> Unit)?,
     footer: @Composable () -> Unit,
 ) {
-    val resources = LocalContext.current.resources
+    val context = LocalContext.current
+    val resources = context.resources
     val assistant = currentAssistant()
     val styleStore = LocalAppStyleStore.current
+    var defaultDigitalAssistant by remember(context) { mutableStateOf(DigitalAssistantSettings.isDefaultAssistant(context)) }
+    val digitalAssistantChoice = services.digitalAssistantModel?.choice?.collectAsState()?.value
+    val digitalAssistantSubtitle = digitalAssistantChoice?.takeUnless { it.isDefault }?.fullLabel
+        ?.takeIf(String::isNotBlank)
+        ?.let { stringResource(R.string.settings_digital_assistant_model_summary, it) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        defaultDigitalAssistant = DigitalAssistantSettings.isDefaultAssistant(context)
+    }
     fun entry(page: SettingsPage, title: Int, icon: PhIcon, subtitle: Int? = null, aliases: Int? = null, value: String? = null) =
         HomeEntry(SettingsPageRoute(page), title, icon, subtitle, aliases, value)
     val assistantEntries = listOfNotNull(
@@ -58,6 +78,19 @@ internal fun SettingsHomePage(
         entry(SettingsPage.Language, R.string.settings_language_title, PersonaIcons.servedPage),
         entry(SettingsPage.NotificationBackground, R.string.settings_notification_background_title, PersonaIcons.notifications,
             R.string.settings_home_notifications_detail, R.string.settings_search_notifications_aliases),
+        HomeEntry(
+            key = SettingsPageRoute(SettingsPage.DigitalAssistant),
+            title = R.string.settings_digital_assistant_title,
+            icon = PersonaIcons.ai,
+            subtitle = R.string.settings_digital_assistant_detail,
+            aliases = R.string.settings_search_digital_assistant_aliases,
+            value = stringResource(
+                if (defaultDigitalAssistant) R.string.settings_digital_assistant_active
+                else R.string.settings_digital_assistant_inactive,
+            ),
+            itemKey = "device-digital-assistant",
+            subtitleText = digitalAssistantSubtitle,
+        ),
         entry(SettingsPage.Translation, R.string.settings_translation_title, PersonaIcons.translate, R.string.settings_row_translation_subtitle, value = translationValue),
         entry(SettingsPage.Storage, R.string.settings_storage_title, PersonaIcons.archive),
         entry(SettingsPage.About, R.string.settings_home_about, PersonaIcons.info, R.string.settings_home_about_detail, R.string.settings_search_about_aliases, updateValue),
@@ -93,12 +126,18 @@ internal fun SettingsHomePage(
             onExitDemo?.let { exit -> item { JButton(stringResource(R.string.settings_demo_connect), exit, Modifier.fillMaxWidth().padding(top = Tokens.Space.m)) } }
         }
         fun group(rows: List<HomeEntry>) = rows.forEachIndexed { index, row ->
-            item(row.key.toString()) {
+            item(row.itemKey) {
                 if (row.key == SettingsPageRoute(SettingsPage.Channels)) ChannelsSettingsRow(channelList, GroupPosition.of(index, rows.size),
                     selected == row.key, onClick = { onOpen(SettingsPage.Channels) })
                 else JGroupItem(GroupPosition.of(index, rows.size)) {
-                JRow(title = stringResource(row.title), leadingIcon = row.icon, subtitle = row.subtitle?.let { stringResource(it) }, value = row.value,
-                    selected = selected == row.key, onClick = { if (row.key is SettingsPageRoute) onOpen(row.key.page) else onNavigate?.invoke(row.key) })
+                JRow(title = stringResource(row.title), leadingIcon = row.icon, subtitle = row.subtitleText ?: row.subtitle?.let { stringResource(it) }, value = row.value,
+                    selected = row.key != null && selected == row.key, onClick = {
+                        when {
+                            row.onClick != null -> row.onClick.invoke()
+                            row.key is SettingsPageRoute -> onOpen(row.key.page)
+                            row.key != null -> onNavigate?.invoke(row.key)
+                        }
+                    })
             } }
         }
         if (a.isNotEmpty()) {

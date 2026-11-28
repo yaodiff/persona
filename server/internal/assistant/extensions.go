@@ -10,6 +10,7 @@ import (
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -141,6 +142,7 @@ type domainTrackKinds interface {
 // SetExtensions gives the service the extensions' tools (before Run).
 func (s *Service) SetExtensions(e ExtensionTools) {
 	s.ext = e
+	s.integrationReads, _ = e.(integrationReads)
 	s.trackKindsExt, _ = e.(domainTrackKinds)
 	s.heard, _ = e.(ownerHeard)
 	if r, ok := e.(launcherSecrets); ok {
@@ -176,8 +178,8 @@ func (b *BusHub) askPreparedHub(ctx context.Context, ix proto.Interaction, repla
 		Denied:      "The user declined the change: nothing changed.",
 		Unanswered:  prompts.RenderSettingUnanswered(),
 		Apply: func(ctx context.Context, r proto.Resolution) (string, error) {
-			var out assistantwire.FleetApprovalApplyResult
-			err := b.client.Call(ctx, assistantwire.MethodFleetApprovalApply, assistantwire.FleetApprovalApply{InteractionID: ix.ID, Resolution: r}, &out)
+			out, err := buswire.Call(ctx, b.client, assistantwire.FleetApprovalApplyMethod,
+				assistantwire.FleetApprovalApply{InteractionID: ix.ID, Resolution: r})
 			if err != nil {
 				return "", busError(err)
 			}
@@ -189,7 +191,8 @@ func (b *BusHub) askPreparedHub(ctx context.Context, ix proto.Interaction, repla
 		Discard: func(ctx context.Context, status string) {
 			ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
-			_ = b.client.Call(ctx, assistantwire.MethodFleetApprovalDiscard, assistantwire.FleetApprovalDiscard{InteractionID: ix.ID, Status: status}, nil)
+			_, _ = buswire.Call(ctx, b.client, assistantwire.FleetApprovalDiscardMethod,
+				assistantwire.FleetApprovalDiscard{InteractionID: ix.ID, Status: status})
 		},
 	}
 	return b.svc.waitPreparedCard(ctx, ix, op)

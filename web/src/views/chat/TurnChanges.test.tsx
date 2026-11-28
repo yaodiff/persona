@@ -229,11 +229,11 @@ describe("the card in the chat", () => {
   it("lists three files, then Show N more files, and Show less", async () => {
     await draw(five());
     expect(rows()).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
-    const more = button("再显示 2 个文件")!;
+    const more = button("显示其余 2 个文件")!;
     expect(more.getAttribute("aria-expanded")).toBe("false");
     act(() => more.click());
     expect(rows()).toHaveLength(5);
-    expect(button("再显示")).toBeUndefined();
+    expect(button("显示其余")).toBeUndefined();
     act(() => button("收起")!.click());
     expect(rows()).toHaveLength(3);
   });

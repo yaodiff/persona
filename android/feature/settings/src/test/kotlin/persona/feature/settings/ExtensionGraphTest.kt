@@ -379,7 +379,7 @@ class ExtensionGraphTest {
                 LazyColumn {
                     extensionViewItems("machine", ExtensionViewState(view = view), ExtensionViewHandle(
                         press = { _, _ -> }, edit = { _, _ -> }, choose = {}, open = {},
-                    ), compactGraph = true)
+                    ), compactPreview = true)
                 }
             }
         }

@@ -402,6 +402,7 @@ func TestDispatchStandInKeepsTheTasksModel(t *testing.T) {
 	f.mu.Lock()
 	f.hostLaunchers["pbox"] = host
 	f.mu.Unlock()
+	s.invalidateLauncherListCache("pbox")
 	if _, err := s.startPlan(ctx, id, nil, false); err != nil {
 		t.Fatal(err)
 	}

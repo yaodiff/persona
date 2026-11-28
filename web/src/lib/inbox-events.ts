@@ -28,18 +28,76 @@ export interface InboxHandling {
   error?: string;
 }
 
-export type SuggestionKind = "reply" | "agent" | "conclusion" | "todo";
+export type SuggestionKind = "reply" | "handoff" | "agent" | "conclusion" | "todo";
+
+export interface InboxMention {
+  id: string;
+  name: string;
+}
+
+const MENTION_FENCE_OPEN_RE = /^```[a-zA-Z0-9_+#-]*\s*$/;
+const MENTION_FENCE_CLOSE_RE = /^```\s*$/;
+const MENTION_CODE_OR_LINK_RE = /`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s<>()]+\)/g;
+const MENTION_WORD_CHAR_RE = /^[\p{L}\p{N}_-]/u;
+
+function mentionPresentInSegment(segment: string, needle: string): boolean {
+  let offset = 0;
+  while (offset <= segment.length - needle.length) {
+    const idx = segment.indexOf(needle, offset);
+    if (idx < 0) return false;
+    const rest = segment.slice(idx + needle.length);
+    if (!rest || !MENTION_WORD_CHAR_RE.test(rest)) return true;
+    offset = idx + 1;
+  }
+  return false;
+}
+
+function mentionPresentInText(text: string, name: string): boolean {
+  if (!text || !name) return false;
+  const needle = `@${name}`;
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  for (let i = 0; i < lines.length; ) {
+    if (MENTION_FENCE_OPEN_RE.test(lines[i])) {
+      let j = i + 1;
+      while (j < lines.length && !MENTION_FENCE_CLOSE_RE.test(lines[j])) j++;
+      if (j < lines.length) {
+        i = j + 1;
+        continue;
+      }
+    }
+    const line = lines[i];
+    MENTION_CODE_OR_LINK_RE.lastIndex = 0;
+    let pos = 0;
+    let match: RegExpExecArray | null;
+    while ((match = MENTION_CODE_OR_LINK_RE.exec(line)) !== null) {
+      if (match.index > pos && mentionPresentInSegment(line.slice(pos, match.index), needle)) return true;
+      pos = match.index + match[0].length;
+    }
+    if (pos < line.length && mentionPresentInSegment(line.slice(pos), needle)) return true;
+    i++;
+  }
+  return false;
+}
+
+export function activeMentions(text: string, mentions?: InboxMention[]): InboxMention[] {
+  if (!text || !mentions?.length) return [];
+  return mentions.filter((m) => m.id && m.name && mentionPresentInText(text, m.name));
+}
 
 export interface InboxSuggestion {
   version: number;
   kind: SuggestionKind | string;
   text: string;
+  mentions?: InboxMention[];
   note?: string;
   /** A to-do suggestion's due: a day (2006-01-02, all day) or a moment (RFC 3339); absent: no due date. */
   due?: string;
   /** Needs judgment: confirming hands it back to the processing conversation instead of running it. */
   handback?: boolean;
   machine_id?: string;
+  /** The existing conversation proposed by a handoff suggestion. */
+  session_id?: string;
+  target_title?: string;
   changes?: DocChange[];
   at?: string;
   /** The conversation the item was handed to that handed it in (Hand to AI); absent for the item's own AI twin. */
@@ -54,6 +112,7 @@ export interface InboxSuggestionAttempt {
   code?: string;
   retry_after?: number;
   text: string;
+  mentions?: InboxMention[];
   at: string;
   conversation?: { machine_id: string; session_id: string };
 }
@@ -126,10 +185,12 @@ export function handlingFailed(it: InboxItem): boolean {
 }
 
 /** The suggestion's name: "Suggested reply" / "Suggested Agent" / "Conclusion" (an unknown kind: "Suggestion"). */
-export function suggestionTitle(s: InboxSuggestion): string {
+export function suggestionTitle(s: InboxSuggestion, isMainTarget = false): string {
   switch (s.kind) {
     case "reply":
       return t("lib-inbox-events.kind_reply");
+    case "handoff":
+      return t("lib-inbox-events.kind_handoff", { target: s.target_title || (isMainTarget ? t("sidebar.main_chat") : t("lib-format.untitled_session")) });
     case "agent":
       return t("lib-inbox-events.kind_agent");
     case "conclusion":
@@ -152,6 +213,8 @@ export function suggestionButtons(s: InboxSuggestion): { confirm: string; edit: 
   switch (s.kind) {
     case "reply":
       return { confirm: t("lib-inbox-events.send"), edit: true };
+    case "handoff":
+      return { confirm: t("lib-inbox-events.hand_off"), edit: true };
     case "agent":
       return { confirm: t("lib-inbox-events.start"), edit: true };
     case "conclusion":

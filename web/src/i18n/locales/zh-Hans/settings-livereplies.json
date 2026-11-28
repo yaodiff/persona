@@ -1,10 +1,10 @@
 {
   "title": "实时回复 · {name}",
-  "label": "边写边发回复",
-  "detail_on": "网页和 iPhone、Mac 上的 App 逐行收到回复，更早看到文字",
-  "detail_off": "Claude 存下回复后才显示",
-  "footer": "开着时，Persona 在这台电脑上启动的 Claude Code 会话会边写边把回复发出来，网页和 iPhone、Mac 上的 Persona App 更早看到文字；代价是这台电脑终端里的回复会按行显示（一次几行），而不是逐字出现。这个开关存在 hub 上，不改 ~/.claude/settings.json；打开上面的「同时改所有在线机器」时，其他在线的电脑也一起改。改动对之后启动的会话生效，已经开着的会话要等 Claude 重启后才变。",
-  "load_failed": "读不到这台电脑的设置：{error}",
+  "label": "在 Claude 输出时实时发送回复",
+  "detail_on": "网页端及 iPhone、Mac 上的 App 将逐行接收回复，更快看到输出内容",
+  "detail_off": "待 Claude 保存回复后再完整显示",
+  "footer": "开启后，Persona 在这台电脑上启动的 Claude Code 会话会在生成回复时实时发送，网页端以及 iPhone 和 Mac 上的 Persona App 都能更快看到内容；代价是本机终端中的回复会按块（一次数行）而非逐字显示。此开关保存在 hub 上，不会修改 ~/.claude/settings.json；若开启了上方的「同时修改所有在线机器」，其他在线电脑也会同步更改。更改仅对之后启动的新会话生效，运行中的会话需待 Claude 重启后才会生效。",
+  "load_failed": "无法读取这台电脑的设置：{error}",
   "retry": "重试",
   "toast_value": "{title}：{value} · {summary}",
   "toast_failed": "{title}：{summary}"

@@ -262,12 +262,12 @@ func TestTaskPlanTodoIDIsNotItsOwnDuplicate(t *testing.T) {
 	todo := onlyTodo(e.s)
 	putTodo(e.s, Todo{ID: "todo_else", Title: "也是 #1234", Origin: "c1x1x1"})
 	task := PlanTask{Title: "修 #1234", Prompt: "修好登录崩溃", Machine: "box", Cwd: "/code/app"}
-	got := e.s.planDuplicates(context.Background(), []PlanTask{task})
+	got := e.s.planDuplicates(context.Background(), []PlanTask{task}, nil)
 	if !strings.Contains(got, todo.ID) || !strings.Contains(got, "todo_else") {
 		t.Fatalf("without todo_id both todos are hinted: %q", got)
 	}
 	task.ReuseTodo = todo.ID
-	got = e.s.planDuplicates(context.Background(), []PlanTask{task})
+	got = e.s.planDuplicates(context.Background(), []PlanTask{task}, nil)
 	if strings.Contains(got, todo.ID) || !strings.Contains(got, "todo_else") {
 		t.Fatalf("with todo_id only the other todo is hinted: %q", got)
 	}

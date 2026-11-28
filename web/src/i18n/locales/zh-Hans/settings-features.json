@@ -1,14 +1,14 @@
 {
   "module_mail": "邮件",
-  "module_mail_hint": "使用已连接的账户收发邮件。",
+  "module_mail_hint": "使用已连接的账号收发邮件。",
   "module_office": "办公文件预览",
   "module_office_hint": "预览文档、电子表格和演示文稿。",
   "area_features": "功能",
   "features_group": "可选功能",
-  "features_hint": "关掉不用的功能：它会从侧边栏和页面里消失，这个浏览器也不再加载它。你的数据原样保留。",
-  "features_not_offered": "你的 hub 没有提供这个功能。",
-  "features_activation": "立即生效，这个浏览器的所有标签页都会跟着变。",
-  "features_rollback": "重新打开即可。没有删除任何东西，一切都还在原处。",
+  "features_hint": "你可以关闭不需要的功能。关闭后，该功能会从侧边栏与相关页面中隐藏，且当前浏览器不再加载其资源，但你的数据会完整保留。",
+  "features_not_offered": "当前 hub 未提供此功能。",
+  "features_activation": "立即生效，并同步应用于当前浏览器的所有标签页。",
+  "features_rollback": "随时可以重新开启。关闭期间不会删除任何数据，重新开启后一切原样恢复。",
   "module_voice": "语音对话",
-  "module_voice_hint": "从输入框与 Persona 或 Agent 语音对话，带实时字幕。"
+  "module_voice_hint": "可直接从输入框向 Persona 或 Agent 发起语音对话，并支持实时字幕。"
 }

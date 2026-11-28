@@ -4,7 +4,7 @@ package node
 // #4336; docs/extensions/computer-use.md "c) Per-App approval"). The assistant's computer_run goes through the
 // manager, which refuses those (extmgr/computer_protected.go). An Agent Persona starts may have Cua Driver's own MCP
 // server, or run `cua-driver call` in Bash; neither goes through the hub. The sessions Persona starts load PreToolUse
-// hooks for both (doctor.go hookSettingsForOS, on a Mac): this decides them here, at once, with no card, by the same
+// hooks for both (generated.go hookSettingsForOS, on a Mac): this decides them here, at once, with no card, by the same
 // rules (protectedapps.Look.Check): a call is refused when it could reach System Settings or a prompt, not because
 // one is open (#7560). Reads pass. What a script does once it runs, the sessions the user starts themselves (their
 // global hooks only report, globalhooks.go), and any other program driving the screen are not covered.

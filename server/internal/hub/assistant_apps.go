@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 )
 
 // The hub's plain capabilities the assistant asks for its directory and its settings (app.call, assistantwire): the
@@ -35,9 +36,9 @@ func (h *Hub) assistantAppCall(ctx context.Context, from string, p assistantwire
 		if from == owner {
 			return json.RawMessage(`{}`), true, nil // the caller owns the settings
 		}
-		var res assistantwire.HTTPResponse
 		req := assistantwire.HTTPRequest{Method: http.MethodGet, Path: "/api/v1/agents/display-settings"}
-		if err := h.callBus(ctx, owner, assistantwire.MethodHTTP, req, &res); err != nil {
+		res, err := buswire.Call(ctx, h.managerCaller(owner), assistantwire.HTTPMethod, req)
+		if err != nil {
 			return nil, true, err
 		}
 		if res.Status != http.StatusOK {

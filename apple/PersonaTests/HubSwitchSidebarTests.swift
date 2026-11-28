@@ -20,9 +20,9 @@ import PersonaWire
     }
 
     /// Home and Work paired, Home current, each listing its Persona chat and an Agent.
-    private func twoHubs() throws -> AppModel {
+    private func twoHubs(_ hub: FakeHub = FakeHub()) throws -> AppModel {
         let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "hub-switch-sidebar-" + UUID().uuidString))
-        model.linkHooksForTests = (transport: try #require(FakeHub().client.transport), socket: { SyncSocket() })
+        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
         model.registry = HubRegistry(hubs: [Self.hub("home", group: "", port: 1), Self.hub("work", group: "g1", port: 2)])
         model.buildLinks()
         var byMachine: [MachineRef: [Session]] = [:]
@@ -77,6 +77,42 @@ import PersonaWire
         #expect(HubFilter.machine("mac", shown: HubFilter.value("")) == "mac")
         #expect(HubFilter.machine("g1|mac", shown: "") == "g1|mac", "All Hubs keeps any computer")
         #expect(HubFilter.machine("", shown: HubFilter.value("g1")) == "", "every computer stays every computer")
+    }
+
+    /// A delayed response from the first visit to Home must not replace the current visit's settings.
+    @Test func returningToAHubRejectsItsEarlierAssistantResponse() async throws {
+        let hub = FakeHub()
+        let model = try twoHubs(hub)
+        defer { for link in model.links { link.live.disconnect() } }
+
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer {
+            started.continuation.finish()
+            release.continuation.finish()
+        }
+        var first = true
+        hub.onAsync("GET", "/api/v1/assistant") { _ in
+            let launcher: String
+            if first {
+                first = false
+                started.continuation.yield(())
+                for await _ in release.stream { break }
+                launcher = "old"
+            } else {
+                launcher = "current"
+            }
+            return Data(#"{"machine_id":"box","launcher":"\#(launcher)","cwd":"/","conversations":[],"timezone_picked":true}"#.utf8)
+        }
+        let pending = Task { await model.refreshAssistant() }
+        for await _ in started.stream { break }
+        model.selectHub("g1")
+        model.selectHub("")
+        await model.refreshAssistant()
+        #expect(model.assistantConfig?.launcher == "current")
+        release.continuation.yield(())
+        await pending.value
+        #expect(model.assistantConfig?.launcher == "current")
     }
 
     /// A computer of the hub before, stored while the list was not there to see the switch (another page in front, the

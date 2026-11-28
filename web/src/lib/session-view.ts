@@ -3,7 +3,7 @@
 // `?view=chat|term`; an address without it shows what that agent's page showed last (kept per browser), else the
 // conversation. Pure helpers here, so they are tested without a DOM; the hook is the page's side of it.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isStoppedAgent, sessionCan, stateOf } from "./format";
+import { isStoppedAgent, sessionCan, activityOf } from "./format";
 import { paneRoute } from "./herdr-tree";
 import { navigate, useRoute, type Route, type SessionView } from "./router";
 import { isPaneAddress } from "./terminals";
@@ -21,7 +21,7 @@ export const otherView = (v: SessionView): SessionView => (v === "term" ? "chat"
 /** The agent has a terminal to show in place: its source lets a terminal open, and its pane is live or it is a stopped
  *  Agent (#4754), whose terminal is the shell it left, or Resume when that is gone. */
 export function canShowTerminal(s: Session | undefined): boolean {
-  return Boolean(s && sessionCan(s, "terminal") && (stateOf(s) !== "offline" || isStoppedAgent(s)));
+  return Boolean(s && sessionCan(s, "terminal") && (activityOf(s) !== "offline" || isStoppedAgent(s)));
 }
 
 /** The agent's terminal waits on a dialog (#7343): herdr calls the agent blocked, a screen card stands for what its

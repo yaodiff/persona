@@ -282,6 +282,10 @@ Unchanged: Docker deployment (`deploy/docker/`, no `LISTEN_FDS`, still listens i
 
 After blue-green switching ("Blue-green switching" above):
 
+- A successful `personad hub switch` checks the resident node service under the same state root. When the running
+  executable and the verified installed executable have different inodes, it sends one SIGHUP to the main process.
+  The node finishes active work before handing over its listener. `--hub-only` skips that request. An automatic Hub
+  update makes the same check after confirmation when automatic node updates are enabled.
 - Before replacing the hub binary, deploy.sh saves the old one as `personad.prev` (and `persona-hub.prev`, `persona-manager.prev` for the two programs it puts beside it).
 - When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --binary <personad> --prev …` (the program it means, not the default):
   - Exit code 0: switch complete, restart nothing;

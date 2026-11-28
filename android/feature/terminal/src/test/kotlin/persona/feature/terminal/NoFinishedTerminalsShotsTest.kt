@@ -69,7 +69,7 @@ class NoFinishedTerminalsShotsTest {
             rule.waitForIdle()
             rule.mainClock.advanceTimeBy(400)
             rule.onNodeWithText("Weather widget").assertExists()
-            rule.onNodeWithText("Close finished terminals").assertDoesNotExist()
+            rule.onNodeWithText("Close leftover shells").assertDoesNotExist()
             rule.onNodeWithContentDescription("Close terminal").assertDoesNotExist()
             File(out, "no-finished-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream().use {
                 assertTrue(rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))

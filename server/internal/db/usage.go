@@ -22,17 +22,26 @@ const (
 	UsageHourStep   = 3600
 )
 
-const putUsageSQL = `INSERT INTO machine_usage (machine_id, ts, step, model, launcher, agent, input, cache_write,
+const putUsageSQL = `INSERT INTO machine_usage (machine_id, ts, step, model, launcher, agent, dir, input, cache_write,
 		cache_read, output, requests)
-	VALUES ($1, to_timestamp($2), 60, $3, $4, $5, $6, $7, $8, $9, $10)
-	ON CONFLICT (machine_id, ts, step, model, launcher, agent) DO UPDATE SET input = $6, cache_write = $7,
+	VALUES ($1, to_timestamp($2), 60, $3, $4, $5, $11, $6, $7, $8, $9, $10)
+	ON CONFLICT (machine_id, ts, step, model, launcher, agent, dir) DO UPDATE SET input = $6, cache_write = $7,
 		cache_read = $8, output = $9, requests = $10`
 
-const addUsageSQL = `INSERT INTO machine_usage AS u (machine_id, ts, step, model, launcher, agent, input, cache_write,
-cache_read, output, requests) VALUES ($1, to_timestamp($2), 60, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (machine_id, ts, step, model, launcher, agent) DO UPDATE SET input = u.input + excluded.input,
+const addUsageSQL = `INSERT INTO machine_usage AS u (machine_id, ts, step, model, launcher, agent, dir, input, cache_write,
+cache_read, output, requests) VALUES ($1, to_timestamp($2), 60, $3, $4, $5, $11, $6, $7, $8, $9, $10)
+ON CONFLICT (machine_id, ts, step, model, launcher, agent, dir) DO UPDATE SET input = u.input + excluded.input,
 cache_write = u.cache_write + excluded.cache_write, cache_read = u.cache_read + excluded.cache_read,
 output = u.output + excluded.output, requests = u.requests + excluded.requests`
+
+// putUsageDirSQL keeps a node's latest resolution of a directory (proto.UsageDir; docs/server/machines.md "Token usage
+// by project"), except that a temporary folder's "temp" never replaces another resolution (#16827: a node says it for
+// a folder that is gone too, and a worktree removed since keeps its repository; devices' replacesResolution).
+const putUsageDirSQL = `INSERT INTO usage_dirs AS d (machine_id, dir, project, name, host, place, worktree)
+	VALUES ($1, $2, $3, $4, $5, $6, $7)
+	ON CONFLICT (machine_id, dir) DO UPDATE SET project = excluded.project, name = excluded.name, host = excluded.host,
+		place = excluded.place, worktree = excluded.worktree, updated_at = now()
+	WHERE excluded.project <> 'temp' OR d.project = 'temp'`
 
 // AddUsage stores usage that has no local record to reconstruct on reconnect.
 func (d *DB) AddUsage(ctx context.Context, machine string, buckets []proto.UsageBucket) error {
@@ -45,7 +54,7 @@ func (d *DB) AddUsage(ctx context.Context, machine string, buckets []proto.Usage
 
 // RecentRuntimeUsage restores the minute buckets the nodes cannot reconstruct.
 func (d *DB) RecentRuntimeUsage(ctx context.Context, from time.Time) (map[string][]proto.UsageBucket, error) {
-	rows, err := d.pool.Query(ctx, `SELECT machine_id, extract(epoch FROM ts)::bigint, model, launcher, agent,
+	rows, err := d.pool.Query(ctx, `SELECT machine_id, extract(epoch FROM ts)::bigint, model, launcher, agent, dir,
 		input, cache_write, cache_read, output, requests FROM machine_usage
 		WHERE step = 60 AND ts >= $1 AND agent <> ALL($2)`, from, append(tokenuse.FileAgents(), ""))
 	if err != nil {
@@ -56,7 +65,7 @@ func (d *DB) RecentRuntimeUsage(ctx context.Context, from time.Time) (map[string
 	for rows.Next() {
 		var machine string
 		var b proto.UsageBucket
-		if err := rows.Scan(&machine, &b.Minute, &b.Model, &b.Launcher, &b.Agent, &b.Input, &b.CacheWrite, &b.CacheRead, &b.Output, &b.Requests); err != nil {
+		if err := rows.Scan(&machine, &b.Minute, &b.Model, &b.Launcher, &b.Agent, &b.Dir, &b.Input, &b.CacheWrite, &b.CacheRead, &b.Output, &b.Requests); err != nil {
 			return nil, err
 		}
 		out[machine] = append(out[machine], b)
@@ -70,9 +79,14 @@ type UsageWrite struct {
 	Buckets     []proto.UsageBucket
 	ReplaceFrom time.Time
 	Add         bool // runtime-only deltas, never reconstructed by a file scan
+	// Dirs: what the node resolved directories to (the notification's "dirs"), kept before the buckets.
+	Dirs []proto.UsageDir
 }
 
 func queueUsage(b *pgx.Batch, w UsageWrite) {
+	for _, x := range w.Dirs {
+		b.Queue(putUsageDirSQL, w.Machine, x.Dir, x.Project, x.Name, x.Host, x.Place, x.Worktree)
+	}
 	if !w.ReplaceFrom.IsZero() {
 		b.Queue(`DELETE FROM machine_usage WHERE machine_id = $1 AND step = 60 AND ts >= to_timestamp($2) AND agent = ANY($3)`,
 			w.Machine, w.ReplaceFrom.Unix(), append(tokenuse.FileAgents(), ""))
@@ -83,7 +97,7 @@ func queueUsage(b *pgx.Batch, w UsageWrite) {
 	}
 	for _, x := range w.Buckets {
 		b.Queue(sql, w.Machine, x.Minute, x.Model, x.Launcher, x.Agent, x.Input, x.CacheWrite, x.CacheRead, x.Output,
-			x.Requests)
+			x.Requests, x.Dir)
 	}
 }
 
@@ -104,14 +118,14 @@ func (d *DB) PutUsages(ctx context.Context, writes []UsageWrite) (rejected []err
 }
 
 // RollupUsage sums the minute rows before before (rounded down to ten minutes) into one row a machine, ten minutes,
-// model, launcher and agent. Moving and summing is one statement, so a minute is rolled up once; a ten-minute row already
+// model, launcher, agent and dir. Moving and summing is one statement, so a minute is rolled up once; a ten-minute row already
 // there (a node that sent an old minute again) is added to.
 func (d *DB) RollupUsage(ctx context.Context, before time.Time) (int64, error) {
 	return d.rollupUsage(ctx, UsageMinuteStep, UsageRolledStep, before)
 }
 
 // RollupUsageHours sums the ten-minute rows before before (rounded down to the hour) into one row a machine, hour,
-// model, launcher and agent, as RollupUsage does the minutes.
+// model, launcher, agent and dir, as RollupUsage does the minutes.
 func (d *DB) RollupUsageHours(ctx context.Context, before time.Time) (int64, error) {
 	return d.rollupUsage(ctx, UsageRolledStep, UsageHourStep, before)
 }
@@ -121,12 +135,12 @@ func (d *DB) rollupUsage(ctx context.Context, from, to int, before time.Time) (i
 	tag, err := d.pool.Exec(ctx, `WITH moved AS (
 			DELETE FROM machine_usage WHERE step = $2 AND ts < to_timestamp($1) RETURNING *
 		)
-		INSERT INTO machine_usage AS u (machine_id, ts, step, model, launcher, agent, input, cache_write, cache_read, output,
-			requests)
-		SELECT machine_id, date_bin(make_interval(secs => $3), ts, timestamptz 'epoch'), $3, model, launcher, agent,
+		INSERT INTO machine_usage AS u (machine_id, ts, step, model, launcher, agent, dir, input, cache_write, cache_read,
+			output, requests)
+		SELECT machine_id, date_bin(make_interval(secs => $3), ts, timestamptz 'epoch'), $3, model, launcher, agent, dir,
 			sum(input), sum(cache_write), sum(cache_read), sum(output), sum(requests)
-		FROM moved GROUP BY 1, 2, 4, 5, 6
-		ON CONFLICT (machine_id, ts, step, model, launcher, agent) DO UPDATE SET input = u.input + excluded.input,
+		FROM moved GROUP BY 1, 2, 4, 5, 6, 7
+		ON CONFLICT (machine_id, ts, step, model, launcher, agent, dir) DO UPDATE SET input = u.input + excluded.input,
 			cache_write = u.cache_write + excluded.cache_write, cache_read = u.cache_read + excluded.cache_read,
 			output = u.output + excluded.output, requests = u.requests + excluded.requests`,
 		before.Truncate(time.Duration(to)*time.Second).Unix(), from, to)
@@ -222,6 +236,86 @@ func (d *DB) UsageSpans(ctx context.Context, bounds []time.Time, by UsageBy) ([]
 	return out, rows.Err()
 }
 
+// UsageDirRow is one machine's latest resolution of one directory (usage_dirs; docs/server/machines.md "Token usage by
+// project").
+type UsageDirRow struct {
+	Machine string
+	proto.UsageDir
+}
+
+// UsageDirs is every machine's resolution of its directories, by machine and directory.
+func (d *DB) UsageDirs(ctx context.Context) ([]UsageDirRow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT machine_id, dir, project, name, host, place, worktree FROM usage_dirs
+		ORDER BY machine_id, dir`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageDirRow
+	for rows.Next() {
+		var r UsageDirRow
+		if err := rows.Scan(&r.Machine, &r.Dir, &r.Project, &r.Name, &r.Host, &r.Place, &r.Worktree); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PutUsageDirs keeps a node's latest resolution of each of the directories (a backfill's: usage_dirs).
+func (d *DB) PutUsageDirs(ctx context.Context, machine string, dirs []proto.UsageDir) error {
+	if len(dirs) == 0 {
+		return nil
+	}
+	b := &pgx.Batch{}
+	for _, x := range dirs {
+		b.Queue(putUsageDirSQL, machine, x.Dir, x.Project, x.Name, x.Host, x.Place, x.Worktree)
+	}
+	return d.pool.SendBatch(ctx, b).Close()
+}
+
+// UsageDirSpan is the tokens of one span of UsageDirSpans' bounds of one machine's directory, and with detail of one
+// agent, model and launcher there.
+type UsageDirSpan struct {
+	Span                         int // bounds[Span] to bounds[Span+1]
+	Machine, Dir                 string
+	Agent, Model, Launcher       string // UsageDirSpans' detail; "" otherwise
+	Input, CacheWrite, CacheRead int64
+	Output                       int64
+	Requests                     int
+}
+
+// UsageDirSpans sums every machine's rows into the spans between bounds (in time order) by machine and directory, and
+// with detail by agent, model and launcher too; only the directories in dirs when it is not nil. A row counts in the
+// span its start is in, as in UsageSpans.
+func (d *DB) UsageDirSpans(ctx context.Context, bounds []time.Time, detail bool, dirs []string) ([]UsageDirSpan, error) {
+	if len(bounds) < 2 {
+		return nil, nil
+	}
+	rows, err := d.pool.Query(ctx, `SELECT width_bucket(ts, $1::timestamptz[]) - 1, machine_id, dir,
+			CASE WHEN $2::boolean THEN agent ELSE '' END, CASE WHEN $2::boolean THEN model ELSE '' END,
+			CASE WHEN $2::boolean THEN launcher ELSE '' END,
+			sum(input)::bigint, sum(cache_write)::bigint, sum(cache_read)::bigint, sum(output)::bigint, sum(requests)::bigint
+		FROM machine_usage WHERE ts >= $3 AND ts < $4 AND ($5::text[] IS NULL OR dir = ANY($5::text[]))
+		GROUP BY 1, 2, 3, 4, 5, 6 ORDER BY 1, 2, 3, 4, 5, 6`, bounds, detail, bounds[0], bounds[len(bounds)-1], dirs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageDirSpan
+	for rows.Next() {
+		var s UsageDirSpan
+		var req int64
+		if err := rows.Scan(&s.Span, &s.Machine, &s.Dir, &s.Agent, &s.Model, &s.Launcher, &s.Input, &s.CacheWrite,
+			&s.CacheRead, &s.Output, &req); err != nil {
+			return nil, err
+		}
+		s.Requests = int(req)
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // UsageBackfill is how far a machine's backfill of an agent got (usage_backfill, docs/server/machines.md "Backfill").
 type UsageBackfill struct {
 	Through time.Time // the start of the last hour sent; zero: none yet
@@ -273,10 +367,10 @@ func (d *DB) UsageBackfill(ctx context.Context, machine, agent string) (UsageBac
 // added, an hour counted once a record.
 func (d *DB) PutUsageBackfill(ctx context.Context, machine string, agents []string, buckets []proto.UsageBucket, through time.Time, done bool) (stored int, err error) {
 	n := len(buckets)
-	hours, models, launchers, names := make([]int64, n), make([]string, n), make([]string, n), make([]string, n)
+	hours, models, launchers, names, dirs := make([]int64, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n)
 	in, cw, cr, out, req := make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
 	for i, b := range buckets {
-		hours[i], models[i], launchers[i], names[i] = b.Minute, b.Model, b.Launcher, b.Agent
+		hours[i], models[i], launchers[i], names[i], dirs[i] = b.Minute, b.Model, b.Launcher, b.Agent, b.Dir
 		in[i], cw[i], cr[i], out[i], req[i] = b.Input, b.CacheWrite, b.CacheRead, b.Output, int64(b.Requests)
 	}
 	records := map[string]int{}
@@ -291,27 +385,28 @@ func (d *DB) PutUsageBackfill(ctx context.Context, machine string, agents []stri
 			// had: the machine's hours and the agents with a row in them, as the statement starts (its own rows are
 			// not in it).
 			rows, err := tx.Query(ctx, `WITH b AS (
-					SELECT date_bin('1 hour', to_timestamp(hour), timestamptz 'epoch') AS ts, model, launcher, agent, input,
+					SELECT date_bin('1 hour', to_timestamp(hour), timestamptz 'epoch') AS ts, model, launcher, agent, dir, input,
 						cache_write, cache_read, output, requests
 					FROM unnest($2::bigint[], $3::text[], $4::text[], $5::text[], $6::bigint[], $7::bigint[], $8::bigint[],
-						$9::bigint[], $10::bigint[]) AS u(hour, model, launcher, agent, input, cache_write, cache_read, output, requests)
+						$9::bigint[], $10::bigint[], $13::text[]) AS u(hour, model, launcher, agent, input, cache_write, cache_read, output,
+						requests, dir)
 				), had AS (
 					SELECT DISTINCT date_bin('1 hour', ts, timestamptz 'epoch') AS ts, agent
 					FROM machine_usage
 					WHERE machine_id = $1 AND ts >= (SELECT min(ts) FROM b) AND ts < (SELECT max(ts) FROM b) + interval '1 hour'
 				), added AS (
-					INSERT INTO machine_usage (machine_id, ts, step, model, launcher, agent, input, cache_write, cache_read,
+					INSERT INTO machine_usage (machine_id, ts, step, model, launcher, agent, dir, input, cache_write, cache_read,
 						output, requests)
-					SELECT $1, ts, 3600, model, launcher, agent, sum(input), sum(cache_write), sum(cache_read), sum(output),
+					SELECT $1, ts, 3600, model, launcher, agent, dir, sum(input), sum(cache_write), sum(cache_read), sum(output),
 						sum(requests)
 					FROM b WHERE NOT EXISTS (SELECT 1 FROM had h WHERE h.ts = b.ts
 						AND (h.agent = b.agent OR h.agent = '' AND b.agent = ANY($12::text[])))
-					GROUP BY ts, model, launcher, agent
-					ON CONFLICT (machine_id, ts, step, model, launcher, agent) DO NOTHING
+					GROUP BY ts, model, launcher, agent, dir
+					ON CONFLICT (machine_id, ts, step, model, launcher, agent, dir) DO NOTHING
 					RETURNING ts, CASE WHEN agent = ANY($11::text[]) THEN '' ELSE agent END AS rec
 				)
 				SELECT rec, count(DISTINCT ts) FROM added GROUP BY rec`,
-				machine, hours, models, launchers, names, in, cw, cr, out, req, usageFirstRecord, UsageMeteredBefore)
+				machine, hours, models, launchers, names, in, cw, cr, out, req, usageFirstRecord, UsageMeteredBefore, dirs)
 			if err != nil {
 				return err
 			}

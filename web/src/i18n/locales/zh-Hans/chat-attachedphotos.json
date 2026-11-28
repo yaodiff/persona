@@ -1,5 +1,5 @@
 {
-  "photo": "图片 {n}，点开看大图",
+  "photo": "图片 {n}，点击查看大图",
   "files_more_other": "还有 {count} 个文件",
   "files_less": "收起"
 }

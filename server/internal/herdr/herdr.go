@@ -257,14 +257,24 @@ func (c *Client) rpcOnce(ctx context.Context, method string, params any, out any
 	if c.Socket == "" {
 		return errNoSocket
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeoutOf(method))
+	dctx, cancel := context.WithTimeout(ctx, timeoutOf(method))
 	defer cancel()
-	conn, err := dialSocket(ctx, c.Socket)
+	conn, err := dialSocket(dctx, c.Socket)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errNoSocket, err)
+		// A caller that gave up while connecting gets its own error, not "no socket": the CLI fallback would only
+		// start herdr under a context that has already ended and report that failure instead (#16008).
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("herdr %s: %w", method, cerr)
+		}
+		// A dial timeout indicates a busy/overloaded herdr rather than a missing socket (#13578).
+		var ne net.Error
+		if dctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+			return fmt.Errorf("herdr %s: %w", method, err)
+		}
+		return fmt.Errorf("%w: %w", errNoSocket, err)
 	}
 	defer conn.Close()
-	return c.rpcConn(ctx, conn, method, params, out)
+	return c.rpcConn(dctx, conn, method, params, out)
 }
 
 func (c *Client) rpcConn(ctx context.Context, conn net.Conn, method string, params any, out any) error {
@@ -431,8 +441,10 @@ type Process struct {
 	PID  int    `json:"pid"`
 	Name string `json:"name"`
 	// Argv0 is what it was started as: Claude Code renames its process to its version ("2.1.312"), argv0 still says
-	// claude; a login shell's starts with "-".
+	// claude; a login shell's starts with "-". herdr 0.9.5 reports Argv instead.
 	Argv0 string `json:"argv0"`
+	// Argv is its command line, what herdr 0.9.5 reports in place of argv0.
+	Argv []string `json:"argv"`
 }
 
 // PaneForeground returns a pane's foreground processes.
@@ -449,22 +461,52 @@ func (c *Client) PaneForeground(ctx context.Context, pane string) ([]Process, er
 	return out.ProcessInfo.Foreground, nil
 }
 
-// PaneProcesses returns the pids of a pane's foreground processes, claude first.
+// PaneProcesses returns the pids of a pane's foreground processes, Claude Code's own first (claudeRank). herdr lists
+// the foreground group's leader first: a wrapper when the launcher runs claude under one ("<wrapper> run -- <claude
+// arguments>"), and the port scan takes the first pid for the agent itself, whose own listeners are no server it runs
+// (node ports.go).
 func (c *Client) PaneProcesses(ctx context.Context, pane string) ([]int, error) {
 	procs, err := c.PaneForeground(ctx, pane)
 	if err != nil {
 		return nil, err
 	}
-	var claude, other []int
-	for _, p := range procs {
-		// Claude Code renames its process to its version ("2.1.312"); argv0 still says claude.
-		if strings.Contains(p.Name, "claude") || strings.Contains(p.Argv0, "claude") {
-			claude = append(claude, p.PID)
-		} else {
-			other = append(other, p.PID)
+	slices.SortStableFunc(procs, func(a, b Process) int { return claudeRank(a) - claudeRank(b) })
+	pids := make([]int, len(procs))
+	for i, p := range procs {
+		pids[i] = p.PID
+	}
+	return pids, nil
+}
+
+// claudeRank is how surely p is Claude Code itself, 0 surest: a process named after a version, as Claude Code names
+// itself ("2.1.312"); then one whose name or program file says claude, not a folder on the way to it (a wrapper may
+// live in one named after claude); then anything else.
+func claudeRank(p Process) int {
+	if versionName(p.Name) {
+		return 0
+	}
+	started := p.Argv0
+	if started == "" && len(p.Argv) > 0 {
+		started = p.Argv[0]
+	}
+	if strings.Contains(p.Name, "claude") || strings.Contains(filepath.Base(started), "claude") {
+		return 1
+	}
+	return 2
+}
+
+// versionName: name is a version number, three or more dot-separated runs of digits ("2.1.312").
+func versionName(name string) bool {
+	parts := strings.Split(name, ".")
+	if len(parts) < 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || strings.Trim(part, "0123456789") != "" {
+			return false
 		}
 	}
-	return append(claude, other...), nil
+	return true
 }
 
 func (a Agent) SessionID() string {

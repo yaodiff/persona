@@ -165,8 +165,7 @@ func TestScheduledTodoEscalationMarkerRecovery(t *testing.T) {
 				}
 			}
 			if tc.restart {
-				s, _ = newQuietServiceOn(t, store)
-				s.superviseTimes.gather = time.Hour
+				s, _ = newQuietServiceTimed(t, store, heldSuperviseTimings())
 				s.todoAskAfter = time.Nanosecond
 			}
 			retry := func() {

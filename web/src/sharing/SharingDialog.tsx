@@ -79,7 +79,7 @@ export default function SharingDialog({ session, onClose }: { session: Session; 
           <h3>{label("links")}</h3>
           {!state.shares.length && !state.busy && <p className="share-label">{label("empty")}</p>}
           {state.shares.map((share) => <div key={share.share_id} className="share-box share-row">
-            <div className="min-w-0 flex-1"><strong>{label(share.status)}</strong><div className="share-label">{label(share.publication_status)} · {label("expiry")} {new Date(share.expires_at).toLocaleString()}</div><div className="share-label">{label("selected", { count: share.selection.count })} · {label(share.show_tools ? "tools_on" : "tools_off")}</div></div>
+            <div className="min-w-0 flex-1"><strong>{label(share.status)}</strong><div className="share-label">{label(share.publication_status)} · {label("expiry")} {displayTime(share.expires_at)}</div><div className="share-label">{label("selected", { count: share.selection.count })} · {label(share.show_tools ? "tools_on" : "tools_off")}</div></div>
             <Button onClick={() => void model?.edit(share.share_id)} disabled={state.busy}>{label("edit")}</Button>
           </div>)}
         </section>}
@@ -119,7 +119,7 @@ function SharingForm({ model }: { model: SharingModel }) {
     <label className="share-stack" htmlFor={expiryID}><strong>{label(s.stage === "create" ? "lifetime" : "expiry")}</strong>
       {s.stage === "create" ? <select id={expiryID} className="share-field" value={s.days} disabled={blocked} onChange={(e) => model.change({ days: Number(e.target.value) as 1 | 3 | 7 | 30 })}>
         {[1, 3, 7, 30].map((days) => <option key={days} value={days}>{label(days === 1 ? "day" : "days", { count: days })}</option>)}
-      </select> : <input id={expiryID} className="share-field" type="datetime-local" disabled={blocked} value={localTime(s.expiresAt)} max={localTime(new Date(Date.parse(s.target!.created_at) + 30 * 86400000).toISOString())} onChange={(e) => model.change({ expiresAt: e.target.value ? new Date(e.target.value).toISOString() : "" })} />}
+      </select> : <input id={expiryID} className="share-field" type="datetime-local" disabled={blocked} value={localTime(s.expiresAt)} max={s.target ? localTime(isoTime(Date.parse(s.target.created_at) + 30 * 86400000)) || undefined : undefined} onChange={(e) => model.change({ expiresAt: e.target.value ? isoTime(e.target.value) : "" })} />}
       <span className="share-label">{label("cap")}</span>
     </label>
     {s.preview && <section className="share-stack share-box"><h3>{label("preview_title")}</h3>
@@ -134,7 +134,25 @@ function SharingForm({ model }: { model: SharingModel }) {
 }
 /** The hub's localized warning is plain text rendered escaped; a missing or oversized one falls back to the catalog. */
 function transportWarning(text: string | null | undefined) { return text && text.length <= 1000 ? text : label("transport_warning"); }
-function localTime(iso: string) { const d = new Date(iso); return Number.isFinite(d.getTime()) ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ""; }
+const LOCAL_DT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+export function displayTime(iso: string) { const d = new Date(iso); return Number.isFinite(d.getTime()) ? d.toLocaleString() : "—"; }
+export function isoTime(raw: string | number) {
+  if (typeof raw === "number") { const d = new Date(raw); return Number.isFinite(d.getTime()) ? d.toISOString() : ""; }
+  const s = raw.trim(); const m = LOCAL_DT_RE.exec(s);
+  if (!m) return "";
+  const y = Number(m[1]), mo = Number(m[2]), da = Number(m[3]), hh = Number(m[4]), mi = Number(m[5]), ss = Number(m[6] ?? "0");
+  if (hh > 23 || mi > 59 || ss > 59) return "";
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) && d.getFullYear() === y && d.getMonth() + 1 === mo && d.getDate() === da ? d.toISOString() : "";
+}
+export function localTime(iso: string) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const y = d.getFullYear();
+  if (y < 0 || y > 9999) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${String(y).padStart(4, "0")}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function CatalogSelection({ model }: { model: SharingModel }) {
   const s = model.state, c = s.catalog;
   const selection = s.selection; const group = useId();

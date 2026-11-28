@@ -235,6 +235,86 @@ class ReleasePRTests(unittest.TestCase):
             self.assertEqual(release.next_version("nwverse/persona", True), "0.9.2-beta.3")
             self.assertEqual(release.next_version("nwverse/persona", True, stable_tag="v0.9.1"), "0.9.1-beta.3")
 
+    def test_resolve_target_commit_accepts_pinned_ancestor_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            env = {
+                "GIT_AUTHOR_NAME": "Test",
+                "GIT_AUTHOR_EMAIL": "test@example.com",
+                "GIT_COMMITTER_NAME": "Test",
+                "GIT_COMMITTER_EMAIL": "test@example.com",
+            }
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+
+            def commit(name):
+                (repo / "f.txt").write_text(name + "\n")
+                subprocess.run(["git", "add", "f.txt"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-m", name], cwd=repo, env=env, check=True, capture_output=True)
+                return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+            green = commit("green")
+            merge = commit("merge")
+            plan_dir = repo / ".github/release-prs"
+            plan_dir.mkdir(parents=True)
+
+            # Absent descriptor falls back to merge_commit for backward compatibility.
+            self.assertEqual(
+                release.resolve_target_commit(plan_dir, "0.9.1-beta.3", "beta", merge, cwd=repo),
+                merge,
+            )
+
+            descriptor = plan_dir / "0.9.1-beta.3.json"
+            descriptor.write_text(json.dumps({
+                "version": "0.9.1-beta.3",
+                "commit": green,
+                "ci_run_id": 123456,
+                "channel": "beta",
+            }))
+            self.assertEqual(
+                release.resolve_target_commit(plan_dir, "0.9.1-beta.3", "beta", merge, cwd=repo),
+                green,
+            )
+
+            # Non-ancestor target fails closed.
+            descriptor.write_text(json.dumps({
+                "version": "0.9.1-beta.3",
+                "commit": merge,
+                "ci_run_id": 123456,
+                "channel": "beta",
+            }))
+            with self.assertRaises(release.ReleaseError):
+                release.resolve_target_commit(plan_dir, "0.9.1-beta.3", "beta", green, cwd=repo)
+
+            # Channel, version, SHA, and ci_run_id mismatches all fail closed.
+            for bad in (
+                {"version": "0.9.1-beta.4", "commit": green, "channel": "beta"},
+                {"version": "0.9.1-beta.3", "commit": green, "channel": "release"},
+                {"version": "0.9.1-beta.3", "commit": "not-a-sha", "channel": "beta"},
+                {"version": "0.9.1-beta.3", "commit": green, "channel": "beta", "ci_run_id": 0},
+                {"version": "0.9.1-beta.3", "commit": green, "channel": "beta", "ci_run_id": "123"},
+            ):
+                descriptor.write_text(json.dumps(bad))
+                with self.subTest(bad=bad), self.assertRaises(release.ReleaseError):
+                    release.resolve_target_commit(plan_dir, "0.9.1-beta.3", "beta", merge, cwd=repo)
+
+    def test_verify_artifacts_supports_distinct_pinned_target_and_merge_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "latest.json").write_text('{"version":"0.9.1-beta.3"}')
+            plan = root / "plan.json"
+            release.write_plan(plan, "nwverse/persona", "beta", "0.9.1-beta.3", COMMIT, 12, OTHER, build=202611191200)
+            # Without merge_commit, mismatch fails closed (backward-compatible default).
+            with self.assertRaises(release.ReleaseError):
+                release.verify_artifacts(plan, "nwverse/persona", "beta", COMMIT, (artifacts,))
+            # With matching merge_commit, verification succeeds; wrong merge_commit fails closed.
+            data = release.verify_artifacts(plan, "nwverse/persona", "beta", COMMIT, (artifacts,), merge_commit=OTHER)
+            self.assertEqual(data["commit"], COMMIT)
+            self.assertEqual(data["merge_commit"], OTHER)
+            with self.assertRaises(release.ReleaseError):
+                release.verify_artifacts(plan, "nwverse/persona", "beta", COMMIT, (artifacts,), merge_commit="c" * 40)
+
 
 if __name__ == "__main__":
     unittest.main()

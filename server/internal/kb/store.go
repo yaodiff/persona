@@ -85,6 +85,12 @@ type Chat struct {
 	State     string    `json:"state,omitempty"`
 	StateAt   time.Time `json:"state_at,omitzero"`
 	SourceURL string    `json:"source_url,omitempty"`
+
+	// HeldOffProjects: the user took the chat off every project and held its list (a removal from the chat's side
+	// with lock_lists that left none). While its projects stay locked, compression links it to none of the projects
+	// it names (heldOffProjects). The user linking a project to it by hand, or allowing one again, lifts it; an
+	// extension's link does not.
+	HeldOffProjects bool `json:"held_off_projects,omitempty"`
 }
 
 // Ended reports whether the conversation has ended at its source (a pull request merged or closed, an issue closed).
@@ -132,8 +138,12 @@ type Project struct {
 	SourceURLs         []string                      `json:"source_urls,omitempty"`
 	FieldCoverage      map[string]projectFieldRecord `json:"field_coverage,omitempty"`
 	OneLineNeedsReview bool                          `json:"one_line_needs_summary_review,omitempty"`
-	Created            time.Time                     `json:"created"`
-	Updated            time.Time                     `json:"updated"`
+	// Parent: the project it sits under (a slug; project_tree.go), set only by the user and locked; "" at the top.
+	Parent string `json:"parent,omitempty"`
+	// Milestones: the user's milestone flags on it (project_tree.go).
+	Milestones []Milestone `json:"milestones,omitempty"`
+	Created    time.Time   `json:"created"`
+	Updated    time.Time   `json:"updated"`
 	Tagging
 }
 
@@ -170,6 +180,9 @@ type ProjectMerge struct {
 	// Excluded: the links the user had removed from this project that the merge kept off the kept project too, by
 	// list (exclude.go); an unmerge lets them back there.
 	Excluded map[string][]string `json:"excluded,omitempty"`
+	// Children: the projects under this one that the merge moved under the kept project (or beside it); an unmerge
+	// moves those still there back (project_tree.go).
+	Children []TreeMove `json:"children,omitempty"`
 }
 
 // exclude records that the merge kept id out of the kept project's list.

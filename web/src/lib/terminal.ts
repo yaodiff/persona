@@ -498,3 +498,33 @@ export function historyAnchor(lines: string[]): { anchor: string[]; loaded: numb
   while (all.length && !all[all.length - 1]) all.pop();
   return { anchor: all.slice(0, 20), loaded: all.length };
 }
+
+/** Where scrolling up stopped (`POST …/screen/before`'s answer): more above; the start of the output; the start of what the
+ *  computer keeps, older output let go (`dropped`, #17048); herdr's ~1000-line cap (`at_limit` from a node that predates
+ *  `dropped`). */
+export type HistoryEnd = "more" | "start" | "dropped" | "limit";
+
+export function historyEnd(r: { has_more?: boolean; at_limit?: boolean; dropped?: boolean }): HistoryEnd {
+  if (r.has_more) return "more";
+  if (r.dropped) return "dropped";
+  if (r.at_limit) return "limit";
+  return "start";
+}
+
+/** Polling a screen that can't stream: once a second, as before. */
+export const POLL_MS = 1000;
+/** The quickest pace a node may ask for (the panel's loop runs four times a second). */
+export const POLL_MIN_MS = 250;
+/** How long the screen keeps being read at the node's pace after it last changed. */
+export const POLL_FAST_FOR_MS = 3000;
+
+/**
+ * When to read the screen again while polling (#17048): at the pace the node gave (`refresh_ms`, for a computer whose
+ * screen reads are cheap) while the screen changes and for a few seconds after, else once a second. An idle terminal
+ * costs no more than before.
+ */
+export function pollDelay(refreshMs: number | undefined, changedAt: number, now: number): number {
+  if (!refreshMs || !Number.isFinite(refreshMs) || refreshMs >= POLL_MS) return POLL_MS;
+  if (now - changedAt > POLL_FAST_FOR_MS) return POLL_MS;
+  return Math.max(POLL_MIN_MS, refreshMs);
+}

@@ -526,11 +526,22 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
+- A test that re-executes its own binary as a fake child and parks that child in `select {}` behaves differently by OS. On Linux, once nothing else in the child is live (no timer, no network waiter), the runtime ends it with `fatal error: all goroutines are asleep - deadlock!`, about 70 ms after it starts; on macOS it stays parked until killed. `TestModelRunAgyWarmWriteBlockedNoDeadlock` meant its fake agy to stall a write, passed on the Mac and failed every run on the hub, where the node rightly reported a dead worker instead (#17725). Park such a child on something the runtime never calls a deadlock, such as `signal.Notify` for the signal its parent's teardown sends (#17740). To check a Linux-only red quickly, cross-compile the test binary (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c`) and run it on the hub machine with `-test.count`.
 
 ## Settle task outcomes and query review history by ref in Postgres tests (#13231)
 
 - Accepting a task review starts `goRecordTaskOutcome`, which asynchronously writes a `DecisionOutcome` receipt. Call `s.tasks.outcomeRuns.Wait()` before inspecting the task's decisions, then keep rejecting every non-outcome row; neither deleting the assertion nor treating that receipt as an owner click tests supersession. Cancelling a review does not start this writer.
 - `DB.Feed` returns a bounded, oldest-first conversation page. In a shared Postgres shard, older rows can fill all 500 entries and push the review written by the current test out of that page. For a to-do's review audit, query `FeedByRef` with `feedReview` and retain the conversation and `superseded_reason` assertions; increasing the page size only moves the intermittent failure.
+
+## Retirement tests must pass the first-sight floor (2026-11-18, #6819, #10311)
+
+When merging the finished-task pass's resume history with owner-activity protection, keep one `doneSeen` across passes.
+Tests that age a task to exercise the stop RPC must also seed that completion's earlier running observation; otherwise
+the first-sight floor skips the RPC and can hide a broken activity or post-stop guard. Keep the first-sight and resume
+regressions too, rather than shortening the production inactivity window to make the older tests reach their barrier.
+
+When an upstream result accessor is renamed, keep refused-review assertions on the same stored result
+(`resultOfTodo(id)`). Dropping the no-result assertion would hide review effects published before a refused commit.
 
 ## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
 
@@ -607,6 +618,10 @@ link's first event can read that finished turn before the call has heard the fir
 answer is then rightly said at once: nobody was talking yet. It failed about one run in 25 on two loaded cores, and on
 the gate. Make the premise true first and wait on something observable (here: the service got the user's audio, which
 the call weighs before it sends it on), then trigger what it races with. A longer sleep only makes the race rarer.
+- The same holds for stubs: install them before any setup that may already run the code under test. The agy root tests
+seeded their agent (which lists the sessions, and listing scans for the pane's data directory) and only then stubbed
+the clock and the scan, so the real scan recorded the real time and the earlier stubbed time never passed the rescan
+limit; both failed on every run (#17724, fixed by #17739).
 
 ## A moved file or block needs a test that fails when the old copy comes back (2026-11-20, #11476, #11543)
 
@@ -719,6 +734,11 @@ first, and the old copy's state goes its own way.
   Test scripts also verify listening ports with `lsof` after starting mock and fail immediately if absent.
 
 ## New UI tests
+
+- An intentional UI removal also changes dependent integration assertions. After the meeting header became hidden,
+  the photo test still expected a `joined` row and stopped before checking image credentials and deletion. Compare an
+  untouched upstream snapshot, keep the intended rendering and all photo checks, and correct the stale expected rows;
+  do not restore removed UI or loosen timeouts to make the integration test pass.
 
 - File-preview mock has two entry points (2026-11-03, #796): `MOCK_TREE` for the tree, `FILES` for full text/pagination. Update both for new Markdown fixtures, or names/sizes show new content but opening still loads the old long text and tests cannot find new links.
 - `socket.create_connection(timeout=3)` leaves the timeout on the returned socket too. Forwarding mocks must call `settimeout(None)` after connection, letting WebSocket disconnection end the stream. If the simulator pauses over 3 seconds before WebView creation / HTTP requests, the old mock closes TCP while waiting for responses, leaving a correctly opened drawer white. Do not loosen page-load assertions because of it.

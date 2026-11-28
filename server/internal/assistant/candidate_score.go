@@ -17,7 +17,8 @@ import (
 // T is the wall-clock minutes from dispatch to acceptance (p50) and FP the first-pass rate (accepted with no rework
 // review), both over the last 14 days of the same tier on the same launcher + model, shrunk toward the tier's pooled
 // prior with five samples' weight; a tier with no samples at all uses 30 minutes and 0.5. n is the candidate's own
-// sample count (fewer samples cost more), H its pace-based headroom (candidate_headroom.go; unknown adds nothing).
+// sample count (fewer samples cost more once it has been tried; an untried one carries no κ term, shortagePenalty),
+// H its pace-based headroom (candidate_headroom.go; unknown adds nothing).
 // A candidate with known H ≤ 0 is passed over unless every usable one is (then the first usable, over_pace). Scores
 // within one point go to the earlier candidate, so with no data and room everywhere the first candidate is chosen,
 // exactly as with one candidate.
@@ -140,6 +141,18 @@ type candidateChoice struct {
 	Scores []candidateScore `json:"scores"`
 }
 
+// shortagePenalty is the κ term: fewer samples cost more, κ·T/√(n+1), once a candidate has been tried. An untried
+// candidate (n = 0) carries none (#17011): its T and FP are already the tier's pooled values, and charging it the
+// full κ·T while a tried one pays κ·T/√(n+1) put it behind as soon as any other candidate had one sample; it then
+// never ran, never got a sample, and stayed locked out. So a candidate the owner listed is tried once before the
+// samples decide.
+func shortagePenalty(n int, t float64) float64 {
+	if n <= 0 {
+		return 0
+	}
+	return scoreKappa * t / math.Sqrt(float64(n)+1)
+}
+
 // shrink pulls an observed value toward the prior with scorePriorWeight samples' weight.
 func shrink(n int, observed, prior float64) float64 {
 	return (float64(n)*observed + scorePriorWeight*prior) / (float64(n) + scorePriorWeight)
@@ -170,7 +183,7 @@ func scoreCandidates(in []scoreInput, prior candidateStats) candidateChoice {
 			}
 			t := shrink(c.Stats.N, c.Stats.MinutesP50, tPrior)
 			fp := shrink(c.Stats.N, c.Stats.FirstPass, fpPrior)
-			score := t*(1+scoreBeta*(1-fp)) + scoreKappa*t/math.Sqrt(float64(c.Stats.N)+1)
+			score := t*(1+scoreBeta*(1-fp)) + shortagePenalty(c.Stats.N, t)
 			if c.Headroom.Known {
 				score += scoreMu / (1 + 10*c.Headroom.H)
 			}

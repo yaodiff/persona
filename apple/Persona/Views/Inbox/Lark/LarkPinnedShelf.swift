@@ -1,18 +1,19 @@
 import SwiftUI
 
-/// The compact shelf and its expanded rows use the same ordering and unread state.
+/// The compact shelf and its expanded rows use the same ordering and unread state. It holds the pinned chats and the
+/// pinned personal Agents (`LarkAgentFeed.shelf`), each with its own face.
 struct LarkPinnedShelf: View {
-    let conversations: [LarkConversation]
+    let conversations: [LarkFeedRow]
     @Binding var interaction: LarkPinnedInteraction
     @Binding var expandable: Bool
-    let open: (LarkConversation) -> Void
+    let open: (LarkFeedRow) -> Void
     @ScaledMetric private var cellWidth = Theme.Size.box56
     @State private var width: CGFloat = 0
 
     private var columns: Int { max(2, Int((width + Theme.Space.s) / (cellWidth + Theme.Space.s))) }
     private var canExpand: Bool { conversations.count > columns }
     private var firstCount: Int { canExpand ? columns - 1 : columns }
-    private var hiddenUnread: Int { conversations.dropFirst(firstCount).reduce(0) { $0 + $1.badge } }
+    private var hiddenUnread: Int { conversations.dropFirst(firstCount).reduce(0) { $0 + $1.unread } }
 
     var body: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: Theme.Space.s, alignment: .top), count: columns),
@@ -52,21 +53,42 @@ struct LarkPinnedShelf: View {
         .onDisappear { expandable = false }
     }
 
-    private func pin(_ conversation: LarkConversation) -> some View {
-        Button { open(conversation) } label: {
+    private func pin(_ row: LarkFeedRow) -> some View {
+        Button { open(row) } label: {
             VStack(spacing: Theme.Space.xs) {
-                LarkAvatarImage(name: conversation.name, url: conversation.picture, account: conversation.account, size: Theme.Size.avatarXL)
+                face(row)
                     .dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize)
                     .overlay(alignment: .topTrailing) {
-                        if conversation.badge > 0 { CountBadge(count: conversation.badge).dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize) }
+                        if row.unread > 0 { CountBadge(count: row.unread).dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize) }
                     }
-                Text(conversation.name).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(name(row)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
             }.frame(maxWidth: .infinity).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(String(localized: "Pinned: \(conversation.name)"))
-        .accessibilityValue(conversation.badge > 0 ? String(localized: "\(conversation.badge) unread [Lark Pinned Shelf be6134]") : String(localized: "No unread messages"))
-        .accessibilityIdentifier("feishu-pin-" + conversation.id)
+        .accessibilityLabel(String(localized: "Pinned: \(name(row))"))
+        .accessibilityValue(row.unread > 0 ? String(localized: "\(row.unread) unread [Lark Pinned Shelf be6134]") : String(localized: "No unread messages"))
+        .accessibilityIdentifier(identifier(row))
+    }
+
+    @ViewBuilder private func face(_ row: LarkFeedRow) -> some View {
+        switch row {
+        case .chat(let c): LarkAvatarImage(name: c.name, url: c.picture, account: c.account, size: Theme.Size.avatarXL)
+        case .agent(let s): PersonalAgentAvatar(session: s, size: Theme.Size.avatarXL, showsCharge: true)
+        }
+    }
+
+    private func name(_ row: LarkFeedRow) -> String {
+        switch row {
+        case .chat(let c): c.name
+        case .agent(let s): s.title
+        }
+    }
+
+    private func identifier(_ row: LarkFeedRow) -> String {
+        switch row {
+        case .chat(let c): "feishu-pin-" + c.id
+        case .agent(let s): "feishu-pin-agent-" + s.id
+        }
     }
 }
 

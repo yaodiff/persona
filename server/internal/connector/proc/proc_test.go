@@ -41,6 +41,10 @@ func TestMain(m *testing.M) {
 			serveRawRecall()
 			os.Exit(0)
 		}
+		if os.Getenv("PERSONA_PROC_KIND") == "raw-auto-confirm" { // raw protocol extension testing guarded auto-confirm (auto_confirm_test.go)
+			serveRawAutoConfirm()
+			os.Exit(0)
+		}
 		err := serve.Main(context.Background(), os.Stdin, os.Stdout, func(cfg json.RawMessage, s connector.Secrets) (connector.Connector, error) {
 			switch os.Getenv("PERSONA_PROC_KIND") {
 			case "recall-go", "recall-go-undeclared":

@@ -14,7 +14,10 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   `origin/main` between inspection and local commit consolidation, turning an older tree into apparent reversions
   of unrelated main changes. Capture the full base SHA or fetch into a task-specific ref before integrating or
   consolidating unpublished commits. Compare against that fixed base and stage only the task's files before pushing;
-  never force-push a published branch or rewrite another task's commits to repair the mismatch.
+  never force-push a published branch or rewrite another task's commits to repair the mismatch. The same holds for two
+  processes in one clone: a watcher preparing a review worktree and `scripts/hooks/merge-pr.sh` read `FETCH_HEAD` after
+  fetching, so whichever fetch runs second wins and the other reports a moved base or head for an unchanged PR
+  (#16759). Fetch into a per-PR ref (`+pull/<n>/head:<ref>`) and compare that ref.
 
 - Privacy hooks must resolve the tracked default branch, not assume `origin/master` (#733). A new remote branch has an all-zero old SHA, so falling back to that SHA and skipping an unavailable range silently lets its first push through. Test real first pushes to an isolated bare repository, retain existing-ref and deletion controls, and refuse a new branch when no scan base is available.
 

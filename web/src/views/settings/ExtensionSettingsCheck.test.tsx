@@ -84,7 +84,7 @@ describe("a secret the extension turned down", () => {
     await act(async () => button("保存")!.click());
     await flush();
 
-    expect(setExtensionSecret).toHaveBeenCalledWith("example-gateway", "gateway_key", "ag-bad-key");
+    expect(setExtensionSecret).toHaveBeenCalledWith("example-gateway", "gateway_key", "ag-bad-key", expect.objectContaining({ managerId: "assistant" }));
     const alert = document.querySelector<HTMLElement>('[role="alert"]');
     expect(alert?.textContent).toContain(REFUSED);
     // under the field, tied to it

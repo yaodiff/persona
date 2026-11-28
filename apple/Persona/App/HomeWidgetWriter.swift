@@ -272,9 +272,11 @@ extension AppModel {
     func openWidget(_ kind: HomeKind) {
         switch kind {
         case .agents: selectedTab = .chats
-        case .inbox: selectedTab = .mail
+        case .inbox:
+            openNavigationEntry(.inbox)
         case .record: MeetingRecorder.openRecordings()
-        case .today, .todos: showShellPage(.todos)
+        case .today, .todos:
+            openNavigationEntry(.todos)
         case .usage, .computers: showShellPage(.machines)
         case .health, .water, .protein, .healthToday: showShellPage(.health)
         }

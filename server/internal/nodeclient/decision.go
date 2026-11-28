@@ -24,11 +24,11 @@ func DecisionRaiseNode(ctx context.Context, dial Dialer, in DecisionRaiseRequest
 }
 
 func DecisionGetNode(ctx context.Context, dial Dialer, id, pane string) (assistantwire.OutsideDecisionReply, error) {
-	return decisionNode(ctx, dial, assistantwire.MethodDecisionGet, map[string]string{"id": id}, pane)
+	return decisionNode(ctx, dial, assistantwire.MethodDecisionGet, assistantwire.OutsideDecisionIDParams{ID: assistantwire.OutsideDecisionID(id)}, pane)
 }
 
 func DecisionWithdrawNode(ctx context.Context, dial Dialer, id, pane string) (assistantwire.OutsideDecisionReply, error) {
-	return decisionNode(ctx, dial, assistantwire.MethodDecisionWithdraw, map[string]string{"id": id}, pane)
+	return decisionNode(ctx, dial, assistantwire.MethodDecisionWithdraw, assistantwire.OutsideDecisionIDParams{ID: assistantwire.OutsideDecisionID(id)}, pane)
 }
 
 func decisionNode(ctx context.Context, dial Dialer, kind string, input any, pane string) (assistantwire.OutsideDecisionReply, error) {

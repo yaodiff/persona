@@ -11,10 +11,10 @@ import (
 // shell_waiting (#2570), and every retry opened another tab that stopped on the same question (#10365). What the
 // node types (agentenv.go) comes too late for that. So the tab's shell is given startShellEnv as it is made, where
 // the engine takes an environment for a new shell (host.EnvLauncher: herdr's tab.create / workspace.create env, the
-// Herdr App's terminal.run env; Orca and Tern take none yet): the Agent mark (agentMarkEnv, #10111) and the startup
-// frameworks' own switches for their questions. The typed start line unsets the switches again (startupOnlyEnv) and
-// keeps the mark, so the Agent and the shell the tab keeps run with the user's environment. Only start tabs get them:
-// a terminal the user opens, a split, a preview's server never do.
+// Herdr App's terminal.run env, Orca's terminal.create env; Tern takes none yet): the Agent mark (agentMarkEnv,
+// #10111) and the startup frameworks' own switches for their questions. The typed start line unsets the switches again
+// (startupOnlyEnv) and keeps the mark, so the Agent and the shell the tab keeps run with the user's environment. Only
+// start tabs get them: a terminal the user opens, a split, a preview's server never do.
 
 // startShellEnv is the environment ("KEY=VALUE") of a start tab's shell: the Agent mark, oh-my-zsh's update check and
 // compfix prompt off (DISABLE_AUTO_UPDATE wins over DISABLE_UPDATE_PROMPT; DISABLE_UPDATE_PROMPT alone would update

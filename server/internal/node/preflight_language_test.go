@@ -32,7 +32,7 @@ func TestPreflightCheckSpeaksEveryLanguage(t *testing.T) {
 			hint:   "Check this path's permissions and whether its mount (network disk or FUSE) still responds, or move the directory elsewhere",
 			item:   "Hung (no response within 3s): /persona-test/work (working directory)"},
 		{name: "Chinese", lang: i18n.ZhHans,
-			detail: "读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude会停在 Loading commands and agents，等不到 SessionStart",
+			detail: "读 /persona-test/work 超过 3s 没有返回：在这里启动的 Claude 会停在 Loading commands and agents，等不到 SessionStart",
 			hint:   "检查这个路径的权限，或者它所在的挂载（网络盘、FUSE）是否还有响应；或者把目录挪到别处",
 			item:   "卡住（3s 没有返回）：/persona-test/work（工作目录）"},
 		{name: "Japanese", lang: i18n.Ja,

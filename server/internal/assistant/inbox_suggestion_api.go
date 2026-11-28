@@ -446,7 +446,7 @@ func (s *Service) confirmReply(ctx context.Context, it *InboxItem, g *InboxSugge
 		err = errMailReplyTargetChanged
 	} else {
 		// Non-mail suggestions keep their legacy path; new mail suggestions always name a target.
-		_, err = s.replyInboxDo(ctx, it.ID, text, clientID, false, false, g.Changes...)
+		_, err = s.replyInboxDoMentions(ctx, it.ID, text, clientID, false, false, activeReplyMentions(text, g.Mentions), g.Changes...)
 	}
 	b := &s.inbox
 	now := time.Now()

@@ -57,6 +57,41 @@ class ServerShardCommandTests(unittest.TestCase):
         self.assertEqual(len(server.commands(["example/server/internal/node/sub"], "node", "/tmp/db.json")), 1)
         self.assertEqual(len(server.commands(["example/server/internal/assistantwire"], "other", "/tmp/db.json")), 1)
 
+    def test_large_rest_lists_are_batched_round_robin_while_small_lists_stay_one_process(self):
+        small_rest = [f"example/server/internal/pkg{i:02d}" for i in range(server.REST_BATCH_MIN - 1)]
+        self.assertEqual(len(server.commands(small_rest, "other", "/tmp/db.json")), 1)
+        self.assertEqual(len(server.commands(small_rest + ["example/server/internal/db"], "other", "/tmp/db.json",
+                                             {"./internal/db": ["^(TestDB)$"]})), 2)
+
+        large_rest = [f"example/server/internal/pkg{i:02d}" for i in range(server.REST_BATCH_MIN)]
+        plain_runs = server.commands(large_rest, "other", "/tmp/db.json")
+        self.assertEqual(len(plain_runs), server.REST_BATCHES)
+        prefix = server.go_test("other", "/tmp/db.json")
+        batched = []
+        for index, run in enumerate(plain_runs):
+            self.assertEqual(run[:len(prefix)], prefix)
+            batch = run[len(prefix):]
+            self.assertEqual(batch, large_rest[index::server.REST_BATCHES])
+            batched.extend(batch)
+        self.assertCountEqual(batched, large_rest)
+        self.assertEqual(len(set(batched)), len(large_rest))
+
+        mixed = large_rest + ["example/server/internal/db", "example/server/internal/devices"]
+        partitions = {
+            "./internal/db": ["^(TestDB1)$", "^(TestDB2)$"],
+            "./internal/devices": ["^(TestDev1)$", "^(TestDev2)$"],
+        }
+        mixed_runs = server.commands(mixed, "other", "/tmp/db.json", partitions)
+        self.assertEqual(len(mixed_runs), server.REST_BATCHES + 4)
+        self.assertEqual(mixed_runs[:server.REST_BATCHES], plain_runs)
+        self.assertEqual([run[-3:] for run in mixed_runs[server.REST_BATCHES:]], [
+            ["-run", "^(TestDB1)$", "./internal/db"],
+            ["-run", "^(TestDB2)$", "./internal/db"],
+            ["-run", "^(TestDev1)$", "./internal/devices"],
+            ["-run", "^(TestDev2)$", "./internal/devices"],
+        ])
+        self.assertEqual(server.rest_batches([]), [])
+
     def test_a_partitioned_package_never_runs_without_its_partitions(self):
         for packages, shard in ((self.node, "node"), (["example/server/internal/assistant"], "managers")):
             with self.assertRaises(ValueError):
@@ -113,6 +148,42 @@ class ServerShardCommandTests(unittest.TestCase):
         self.assertEqual(list_calls[0], [*prefix, "go", "test", "-list", ".*", "./internal/assistant"])
         for command in run_calls:
             self.assertEqual(command[:len(prefix)], prefix)
+
+    def test_main_warms_large_rest_lists_before_spawning_workers(self):
+        db = "/tmp/db.json"
+        rest_pkgs = [f"example/server/internal/pkg{i:02d}" for i in range(server.REST_BATCH_MIN)]
+        events = []
+
+        def fake_check_output(command, **kwargs):
+            if command[:2] == ["go", "list"]:
+                return "\n".join(rest_pkgs) + "\n"
+            raise AssertionError(f"unexpected check_output: {command}")
+
+        def fake_run(command, **kwargs):
+            events.append(("warm", command))
+            return mock.Mock(returncode=0)
+
+        class FakeProcess:
+            def __init__(self, command, **kwargs):
+                events.append(("run", command))
+                self.stdout = io.StringIO("")
+                self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        with mock.patch.object(sys, "argv", ["server-shards.py", "other", "--database-file", db]), \
+                mock.patch.object(server.subprocess, "check_output", side_effect=fake_check_output), \
+                mock.patch.object(server.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(server.subprocess, "Popen", side_effect=FakeProcess), \
+                mock.patch.object(sys, "stdout", io.StringIO()):
+            self.assertEqual(server.main(), 0)
+        self.assertEqual([kind for kind, _ in events], ["warm"] + ["run"] * server.REST_BATCHES)
+        prefix = server.server_test_env(db)
+        self.assertEqual(events[0][1], [*prefix, "go", "test", "-p", "4", "-list", "^$", *rest_pkgs])
 
 
 def output(test, *lines, package="example/server/internal/node"):
@@ -294,7 +365,7 @@ class ShardTests(unittest.TestCase):
         script = (ROOT / "scripts/ci/server.sh").read_text()
         for label in ("Go formatting", "Server vet", "Server build", "Windows node build and vet", "Go SDK tests",
                       "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt", "Core-only hub smoke",
-                      "Builds without each module", "Server $shard tests with Postgres, core only"):
+                      "Core-only install from packages", "Builds without each module", "Server $shard tests with Postgres, core only"):
             self.assertIn(label, script)
         self.assertIn('lane="${1:-all}"', script)
 

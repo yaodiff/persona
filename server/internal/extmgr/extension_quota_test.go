@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/extension"
 	pserve "github.com/nwverse/persona/server/internal/extension/serve"
 	"github.com/nwverse/persona/server/internal/quota"
@@ -199,5 +201,21 @@ func TestGatewayHosts(t *testing.T) {
 		if fmt.Sprint(hosts) != c.hosts && !(c.hosts == "[]" && hosts == nil) || any != c.any {
 			t.Fatalf("%s: %v %v", c.contributes, hosts, any)
 		}
+	}
+}
+
+func TestGatewayLaunchersFallsBackForAnOlderAssistant(t *testing.T) {
+	h := newTestManager(t)
+	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+		if method != assistantwire.MethodModelsLaunchers || string(params) != `{}` {
+			t.Fatalf("forwarded %s %s", method, params)
+		}
+		return nil, &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method"}
+	}
+	list, err := h.gatewayLaunchers(t.Context())
+	var wireErr *rpc.Error
+	if list != nil || !errors.As(err, &wireErr) || wireErr.Code != extension.CodeUnsupported ||
+		wireErr.Message != "the manager is too old to list the launchers; update it" {
+		t.Fatalf("gateway launchers = %v, %v", list, err)
 	}
 }

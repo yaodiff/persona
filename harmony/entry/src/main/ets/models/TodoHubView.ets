@@ -8,7 +8,14 @@ import { TODO_LIST_SECTIONS, parseTodoListSection, type TodoListSection } from '
 export const TODO_HUB_SECTIONS: TodoListSection[] = [...TODO_LIST_SECTIONS];
 export const TODO_HUB_CHOICES: string[] = ['all', 'needs_you', 'in_progress', 'todo', 'done'];
 
-const [needsYou, canWait, working, waiting, todo, justFinished, someday, done] = TODO_LIST_SECTIONS;
+const needsYou: TodoListSection = TODO_LIST_SECTIONS[0];
+const canWait: TodoListSection = TODO_LIST_SECTIONS[1];
+const working: TodoListSection = TODO_LIST_SECTIONS[2];
+const waiting: TodoListSection = TODO_LIST_SECTIONS[3];
+const todo: TodoListSection = TODO_LIST_SECTIONS[4];
+const justFinished: TodoListSection = TODO_LIST_SECTIONS[5];
+const someday: TodoListSection = TODO_LIST_SECTIONS[6];
+const done: TodoListSection = TODO_LIST_SECTIONS[7];
 
 // The label of a section or of a Filter choice ('in_progress' is no section).
 export function todoHubLabel(value: string): string {

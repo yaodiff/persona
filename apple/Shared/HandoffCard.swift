@@ -64,6 +64,7 @@ nonisolated enum HandoffCardState: Hashable, Sendable {
         guard let item else { return .unknown }
         if item.isDone {
             guard newest else { return .replaced }
+            if item.doneBy == "source_replied" { return .selfReplied }
             if item.doneBy == "replied" {
                 let last = item.chain?.last { $0.kind == "confirmed" || $0.kind == "self_replied" }
                 if last?.kind == "self_replied" { return .selfReplied }

@@ -13,6 +13,7 @@ import (
 )
 
 func TestChannelRouteKeyPartialClassification(t *testing.T) {
+	var bindings threadBindingIndex
 	for _, tc := range []struct {
 		name              string
 		kind              channel.ChatKind
@@ -27,11 +28,11 @@ func TestChannelRouteKeyPartialClassification(t *testing.T) {
 	} {
 		for _, mode := range []channel.ThreadMode{channel.ThreadModePerTopic, channel.ThreadModePerGroupAndTopic} {
 			m := channel.Message{ChatKind: tc.kind, ChatID: tc.chat, TopicID: tc.topic, Thread: " legacy "}
-			if got := channelRouteKey(mode, m); got != tc.want {
+			if got := bindings.resolve("examplechat", m, mode, true).primary; got != tc.want {
 				t.Errorf("%s (%s): got %q, want %q", tc.name, mode, got, tc.want)
 			}
 			m.Thread = ""
-			if tc.want == "legacy" && channelRouteKey(mode, m) != "" {
+			if tc.want == "legacy" && bindings.resolve("examplechat", m, mode, true).primary != "" {
 				t.Errorf("%s (%s): incomplete route without a legacy thread must use the default target", tc.name, mode)
 			}
 		}
@@ -62,8 +63,9 @@ func TestChannelRoutingDefaultsAcrossManagers(t *testing.T) {
 			t.Fatalf("%s: target override %+v, want %q", s.id, d.TargetOverride, override)
 		}
 		msg := channel.Message{Thread: "legacy", ChatID: "chat", TopicID: "topic"}
-		if got := s.channelThreadKey(context.Background(), "examplechat", msg); got != key {
-			t.Fatalf("%s: route %q, want %q", s.id, got, key)
+		binding, v, err := s.threadBindingForTest(context.Background(), "examplechat", msg)
+		if err != nil || binding.primary != key || binding.isThread(v) != (key != "") {
+			t.Fatalf("%s: route %q, want %q, err=%v", s.id, binding.primary, key, err)
 		}
 	}
 	setIntegrationsV2ViaHTTP(t, a, true, false)

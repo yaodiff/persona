@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
@@ -283,6 +285,11 @@ func TestExtensionEventQueueIsBounded(t *testing.T) {
 // An idle conversation whose node cannot take the message now: the event waits, and goes in when it can.
 func TestExtensionEventQueuesWhenDeliveryFails(t *testing.T) {
 	s, f := eventService(t)
+	gap := relayRetryGap
+	relayRetryGap = time.Hour
+	t.Cleanup(func() { relayRetryGap = gap })
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
 	f.mu.Lock()
 	f.failAssistant = errors.New("node unreachable")
 	f.mu.Unlock()
@@ -290,12 +297,479 @@ func TestExtensionEventQueuesWhenDeliveryFails(t *testing.T) {
 	if err != nil || res.Delivery != assistantwire.EventQueued {
 		t.Fatalf("%+v %v", res, err)
 	}
+	if f.sent() != 0 {
+		t.Fatalf("sent despite failure: %d", f.sent())
+	}
+	q := queueOf(s, "conv1")
+	if len(q) != 1 || q[0].Key != "disk" {
+		t.Fatalf("queue %+v, want 1 queued event", q)
+	}
+	s.relays.mu.Lock()
+	hasTimer := s.relays.holds["conv1"] != nil
+	hasFailedAt := !s.relays.failedAt["conv1"].IsZero()
+	stuckMatch := s.relays.stuck["conv1"] == q[0]
+	s.relays.mu.Unlock()
+	if !hasTimer || !hasFailedAt || !stuckMatch {
+		t.Fatalf("expected retry timer, failedAt, and stuck head after direct failure (timer=%v, failedAt=%v, stuck=%v)", hasTimer, hasFailedAt, stuckMatch)
+	}
+
+	// Clearing the node error within relayRetryGap must not let SessionsChanged bypass backoff.
 	f.mu.Lock()
 	f.failAssistant = nil
 	f.mu.Unlock()
+	idle := DeviceSessions{
+		MachineID: "server",
+		Sessions:  []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}},
+	}
+	s.SessionsChanged(context.Background(), idle)
+	if drainingNow(s, "conv1") || f.sent() != 0 || len(queueOf(s, "conv1")) != 1 {
+		t.Fatalf("SessionsChanged bypassed relayRetryGap backoff: draining=%v sent=%d queue=%d", drainingNow(s, "conv1"), f.sent(), len(queueOf(s, "conv1")))
+	}
+
+	relayRetryGap = 0
+	s.SessionsChanged(context.Background(), idle)
 	waitFor(t, "the queued event to go in", func() bool { return f.sent() == 1 })
 	waitFor(t, "the queue to empty", func() bool { return len(queueOf(s, "conv1")) == 0 })
 	assertSentSource(t, f, &proto.MessageSource{Kind: proto.SourceExtension, Title: "Example Monitor"})
+}
+
+type gatedHub struct {
+	Hub
+	onSend     func(context.Context, DeviceCall) (json.RawMessage, error, bool)
+	onSnapshot func(Snapshot)
+}
+
+func (g *gatedHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if g.onSend != nil && p.Method == DeviceAssistantSend {
+		if res, err, handled := g.onSend(ctx, p); handled {
+			return res, err
+		}
+	}
+	return g.Hub.DeviceCall(ctx, p)
+}
+
+func (g *gatedHub) Snapshot(ctx context.Context, snap Snapshot) (SnapshotResult, error) {
+	if g.onSnapshot != nil {
+		g.onSnapshot(snap)
+	}
+	return g.Hub.Snapshot(ctx, snap)
+}
+
+// A second extension event within relayRetryGap must not retry a stuck q[0], and a role-change busy refusal holds the
+// whole conversation until the gap expires or active work finishes.
+func TestExtensionEventSecondEventDoesNotBypassBackoffForStuckHead(t *testing.T) {
+	t.Run("transient_error", func(t *testing.T) {
+		s, f := eventService(t)
+		gap := relayRetryGap
+		relayRetryGap = time.Hour
+		t.Cleanup(func() { relayRetryGap = gap })
+		t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+		var attempts []string
+		f.mu.Lock()
+		f.failAssistant = errors.New("node unreachable")
+		f.onAssistantSend = func(_ *fakeHub, p map[string]any) {
+			if p["session_id"] == "conv1" {
+				text, _ := p["text"].(string)
+				attempts = append(attempts, text)
+			}
+		}
+		f.mu.Unlock()
+		countMatching := func(substr string) int {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			n := 0
+			for _, text := range attempts {
+				if strings.Contains(text, substr) {
+					n++
+				}
+			}
+			return n
+		}
+
+		if res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`); err != nil || res.Delivery != assistantwire.EventQueued {
+			t.Fatalf("%+v %v", res, err)
+		}
+		if res, err := event(s, "example-monitor", `{"key":"cpu","title":"CPU busy"}`); err != nil || res.Delivery != assistantwire.EventQueued {
+			t.Fatalf("%+v %v", res, err)
+		}
+		waitFor(t, "second event try to settle", func() bool { return !drainingNow(s, "conv1") && countMatching("CPU busy") == 1 })
+		if got := countMatching("Disk 92%"); got != 1 {
+			t.Fatalf("stuck head Disk 92%% was retried %d times inside relayRetryGap, want 1", got)
+		}
+		if len(queueOf(s, "conv1")) != 2 {
+			t.Fatalf("expected 2 queued events, got %d", len(queueOf(s, "conv1")))
+		}
+	})
+
+	t.Run("role_change_busy", func(t *testing.T) {
+		s, f := eventService(t)
+		gap := relayRetryGap
+		relayRetryGap = time.Hour
+		t.Cleanup(func() { relayRetryGap = gap })
+		t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+		var attempts int
+		f.mu.Lock()
+		f.failAssistant = &rpc.Error{Code: assistantwire.CodeConversationBusy, Message: "role changed while working"}
+		f.onAssistantSend = func(_ *fakeHub, p map[string]any) {
+			if p["session_id"] == "conv1" {
+				attempts++
+			}
+		}
+		f.mu.Unlock()
+		tries := func() int {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return attempts
+		}
+
+		if res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`); err != nil || res.Delivery != assistantwire.EventQueued {
+			t.Fatalf("%+v %v", res, err)
+		}
+		s.relays.mu.Lock()
+		_, waiting := s.relays.roleChange["conv1"]
+		s.relays.mu.Unlock()
+		if !waiting {
+			t.Fatal("expected roleChange gate after CodeConversationBusy direct failure")
+		}
+
+		f.mu.Lock()
+		f.failAssistant = nil
+		f.mu.Unlock()
+		if res, err := event(s, "example-monitor", `{"key":"cpu","title":"CPU busy"}`); err != nil || res.Delivery != assistantwire.EventQueued {
+			t.Fatalf("%+v %v", res, err)
+		}
+		s.SessionsChanged(context.Background(), DeviceSessions{
+			MachineID: "server",
+			Sessions:  []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}},
+		})
+		if drainingNow(s, "conv1") || tries() != 1 || f.sent() != 0 || len(queueOf(s, "conv1")) != 2 {
+			t.Fatalf("roleChange gate bypassed inside relayRetryGap: draining=%v tries=%d sent=%d queue=%d",
+				drainingNow(s, "conv1"), tries(), f.sent(), len(queueOf(s, "conv1")))
+		}
+
+		s.SessionsChanged(context.Background(), DeviceSessions{
+			MachineID: "server",
+			Sessions:  []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking}},
+		})
+		s.SessionsChanged(context.Background(), DeviceSessions{
+			MachineID: "server",
+			Sessions:  []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}},
+		})
+		waitFor(t, "first queued event to go in after work completion", func() bool {
+			return f.sent() == 1 && len(queueOf(s, "conv1")) == 1 && !drainingNow(s, "conv1")
+		})
+		s.SessionsChanged(context.Background(), DeviceSessions{
+			MachineID: "server",
+			Sessions:  []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}},
+		})
+		waitFor(t, "both queued events to go in after work completion", func() bool {
+			return f.sent() == 2 && len(queueOf(s, "conv1")) == 0 && !drainingNow(s, "conv1")
+		})
+	})
+}
+
+// When another healthy message arrives at q[0] while an event's direct try is failing, the direct failure must not
+// install backoff/timer over q[0]; instead the healthy head drains immediately.
+func TestExtensionEventDirectFailureDoesNotStallConcurrentHead(t *testing.T) {
+	s, f := eventService(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	s.hub = &gatedHub{
+		Hub: f,
+		onSend: func(ctx context.Context, _ DeviceCall) (json.RawMessage, error, bool) {
+			hit := false
+			once.Do(func() { hit = true })
+			if !hit {
+				return nil, nil, false
+			}
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err(), true
+			}
+			return nil, errors.New("node unreachable"), true
+		},
+	}
+
+	gap := relayRetryGap
+	relayRetryGap = time.Hour
+	t.Cleanup(func() { relayRetryGap = gap })
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+	type eventOutcome struct {
+		res assistantwire.AssistantEventResult
+		err error
+	}
+	done := make(chan eventOutcome, 1)
+	go func() {
+		res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`)
+		done <- eventOutcome{res, err}
+	}()
+
+	<-entered
+	if n := s.queueRelay("conv1", relayMsg{From: "conv2", FromTitle: "Planning", Tool: "conversation_send", Text: "hello first", At: time.Now().UTC()}); n != 1 {
+		t.Fatalf("queueRelay returned %d, want 1", n)
+	}
+	close(release)
+
+	out := <-done
+	if out.err != nil || out.res.Delivery != assistantwire.EventQueued {
+		t.Fatalf("%+v %v", out.res, out.err)
+	}
+	waitFor(t, "healthy head to drain despite direct failure", func() bool { return f.sent() == 1 && !drainingNow(s, "conv1") })
+	if text, _ := f.lastSend(t)["text"].(string); !strings.Contains(text, "hello first") {
+		t.Fatalf("expected healthy head hello first, got %q", text)
+	}
+	q := queueOf(s, "conv1")
+	if len(q) != 1 || q[0].Key != "disk" {
+		t.Fatalf("expected only the failed event in queue, got %+v", q)
+	}
+	s.relays.mu.Lock()
+	hasTimer := s.relays.holds["conv1"] != nil
+	hasFailedAt := !s.relays.failedAt["conv1"].IsZero()
+	s.relays.mu.Unlock()
+	if hasTimer || hasFailedAt {
+		t.Fatalf("direct failure with non-head queue wrote backoff state (timer=%v, failedAt=%v)", hasTimer, hasFailedAt)
+	}
+}
+
+// Because failure backoff and timer setup happen atomically with queueing before publish, a concurrent SessionsChanged
+// draining the queue during publish cannot leave stale failedAt/stuck state behind.
+func TestExtensionEventSessionsChangedDuringPublishLeavesNoStaleFailedAt(t *testing.T) {
+	s, f := eventService(t)
+	pubEntered := make(chan struct{})
+	pubRelease := make(chan struct{})
+	var once sync.Once
+	s.hub = &gatedHub{
+		Hub: f,
+		onSnapshot: func(_ Snapshot) {
+			once.Do(func() {
+				close(pubEntered)
+				<-pubRelease
+			})
+		},
+	}
+
+	gap := relayRetryGap
+	relayRetryGap = time.Hour
+	t.Cleanup(func() { relayRetryGap = gap })
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+	f.mu.Lock()
+	f.failAssistant = errors.New("node unreachable")
+	f.mu.Unlock()
+
+	type eventOutcome struct {
+		res assistantwire.AssistantEventResult
+		err error
+	}
+	done := make(chan eventOutcome, 1)
+	go func() {
+		res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`)
+		done <- eventOutcome{res, err}
+	}()
+
+	<-pubEntered
+	s.relays.mu.Lock()
+	timerDuringPub := s.relays.holds["conv1"]
+	hasFailedDuringPub := !s.relays.failedAt["conv1"].IsZero()
+	_, hasStuckDuringPub := s.relays.stuck["conv1"]
+	s.relays.mu.Unlock()
+	if timerDuringPub == nil || !hasFailedDuringPub || !hasStuckDuringPub {
+		close(pubRelease)
+		<-done
+		t.Fatalf("expected atomic backoff state before publish (timer=%v, failedAt=%v, stuck=%v)", timerDuringPub != nil, hasFailedDuringPub, hasStuckDuringPub)
+	}
+
+	f.mu.Lock()
+	f.failAssistant = nil
+	f.mu.Unlock()
+	relayRetryGap = 0
+	s.SessionsChanged(context.Background(), DeviceSessions{
+		MachineID: "server",
+		Sessions:  []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}},
+	})
+	waitFor(t, "event drained during publish", func() bool { return f.sent() == 1 && len(queueOf(s, "conv1")) == 0 && !drainingNow(s, "conv1") })
+
+	close(pubRelease)
+	out := <-done
+	if out.err != nil || out.res.Delivery != assistantwire.EventQueued {
+		t.Fatalf("%+v %v", out.res, out.err)
+	}
+	s.relays.mu.Lock()
+	timerAfter := s.relays.holds["conv1"]
+	hasFailedAfter := !s.relays.failedAt["conv1"].IsZero()
+	_, hasStuckAfter := s.relays.stuck["conv1"]
+	_, hasRoleAfter := s.relays.roleChange["conv1"]
+	s.relays.mu.Unlock()
+	if len(queueOf(s, "conv1")) != 0 || hasFailedAfter || hasStuckAfter || hasRoleAfter || timerAfter != timerDuringPub {
+		t.Fatalf("stale state left on empty queue (q=%d, failedAt=%v, stuck=%v, roleChange=%v, sameTimer=%v)",
+			len(queueOf(s, "conv1")), hasFailedAfter, hasStuckAfter, hasRoleAfter, timerAfter == timerDuringPub)
+	}
+}
+
+// A gone main conversation returns no_main_conversation immediately instead of queueing the event or arming a timer.
+func TestExtensionEventGoneDoesNotQueueOrArmTimer(t *testing.T) {
+	s, f := eventService(t)
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+	f.mu.Lock()
+	delete(f.known, "conv1")
+	f.mu.Unlock()
+
+	res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`)
+	if convCode(err) != assistantwire.CodeNoMainConversation || res.Delivery != "" {
+		t.Fatalf("got res=%+v err=%v, want %s error and empty delivery", res, err, assistantwire.CodeNoMainConversation)
+	}
+	if len(queueOf(s, "conv1")) != 0 {
+		t.Fatalf("gone conversation left queued event: %+v", queueOf(s, "conv1"))
+	}
+	s.relays.mu.Lock()
+	hasTimer := s.relays.holds["conv1"] != nil
+	hasFailedAt := !s.relays.failedAt["conv1"].IsZero()
+	s.relays.mu.Unlock()
+	if hasTimer || hasFailedAt {
+		t.Fatalf("gone conversation armed timer or failedAt (timer=%v, failedAt=%v)", hasTimer, hasFailedAt)
+	}
+}
+
+// Repeated transient delivery failures keep re-arming the retry timer so the queued event delivers once the transient
+// error clears, even without an unrelated SessionsChanged event.
+func TestExtensionEventDirectFailureRetriesOnTimer(t *testing.T) {
+	s, f := eventService(t)
+	gap := relayRetryGap
+	relayRetryGap = 20 * time.Millisecond
+	t.Cleanup(func() { relayRetryGap = gap })
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+	var attempts int
+	f.mu.Lock()
+	f.failAssistant = errors.New("node unreachable")
+	f.onAssistantSend = func(h *fakeHub, p map[string]any) {
+		if p["session_id"] == "conv1" {
+			attempts++
+			if attempts >= 3 {
+				// Fail attempts 1 (direct) and 2 (first timer retry); clear on attempt 3 with no SessionsChanged.
+				h.failAssistant = nil
+			}
+		}
+	}
+	f.mu.Unlock()
+	tries := func() int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return attempts
+	}
+
+	res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`)
+	if err != nil || res.Delivery != assistantwire.EventQueued {
+		t.Fatalf("%+v %v", res, err)
+	}
+	waitFor(t, "event to recover on timer after two failures", func() bool {
+		return tries() == 3 && f.sent() == 1 && len(queueOf(s, "conv1")) == 0 && !drainingNow(s, "conv1")
+	})
+}
+
+// If an in-memory retry timer is lost, drainHeldRelays still picks up a queued extension event with failedAt recorded.
+func TestExtensionEventDrainHeldRelaysRecoversFailedEvent(t *testing.T) {
+	s, f := eventService(t)
+	gap := relayRetryGap
+	relayRetryGap = time.Hour
+	t.Cleanup(func() { relayRetryGap = gap })
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+	f.mu.Lock()
+	f.failAssistant = errors.New("node unreachable")
+	f.mu.Unlock()
+	res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`)
+	if err != nil || res.Delivery != assistantwire.EventQueued {
+		t.Fatalf("%+v %v", res, err)
+	}
+	stopRelayTimer(s, "conv1")
+
+	f.mu.Lock()
+	f.failAssistant = nil
+	f.mu.Unlock()
+	relayRetryGap = 0
+	s.drainHeldRelays(context.Background(), time.Now())
+	waitFor(t, "drainHeldRelays to deliver failed extension event", func() bool {
+		return f.sent() == 1 && len(queueOf(s, "conv1")) == 0 && !drainingNow(s, "conv1")
+	})
+}
+
+// On a CodeConversationBusy direct refusal, roleChange records background work from a refreshed post-call session
+// snapshot rather than the pre-tryDirectRelay snapshot.
+func TestExtensionEventRoleChangeRefreshesSessionSnapshot(t *testing.T) {
+	s, f := eventService(t)
+	gap := relayRetryGap
+	relayRetryGap = time.Hour
+	t.Cleanup(func() { relayRetryGap = gap })
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+	s.hub = &gatedHub{
+		Hub: f,
+		onSend: func(_ context.Context, _ DeviceCall) (json.RawMessage, error, bool) {
+			f.setSessions("server", proto.Session{
+				SessionID: "conv1",
+				MachineID: "server",
+				Assistant: true,
+				Status:    proto.StatusIdle,
+				Subagents: []proto.Subagent{{ID: "sub1", Running: true}},
+			})
+			return nil, &rpc.Error{Code: assistantwire.CodeConversationBusy, Message: "role changed while working"}, true
+		},
+	}
+
+	res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`)
+	if err != nil || res.Delivery != assistantwire.EventQueued {
+		t.Fatalf("%+v %v", res, err)
+	}
+	s.relays.mu.Lock()
+	sawWork, waiting := s.relays.roleChange["conv1"]
+	s.relays.mu.Unlock()
+	if !waiting || !sawWork {
+		t.Fatalf("expected roleChange[conv1]=true from refreshed session snapshot, got waiting=%v sawWork=%v", waiting, sawWork)
+	}
+}
+
+// An in-doubt direct delivery preserves TriedAt so a subsequent drain checks the transcript instead of sending twice.
+func TestExtensionEventInDoubtRecordsTriedAtAndReconciles(t *testing.T) {
+	s, f := eventService(t)
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
+
+	tries := relayTries(f, "conv1")
+	f.mu.Lock()
+	prev := f.onAssistantSend
+	f.onAssistantSend = func(f *fakeHub, p map[string]any) {
+		prev(f, p)
+		text, _ := p["text"].(string)
+		f.items = append(f.items, proto.Item{Seq: len(f.items) + 1, Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()})
+	}
+	f.failAssistant = context.DeadlineExceeded
+	f.mu.Unlock()
+
+	res, err := event(s, "example-monitor", `{"key":"disk","title":"Disk 92%"}`)
+	if err != nil || res.Delivery != assistantwire.EventQueued {
+		t.Fatalf("%+v %v", res, err)
+	}
+	q := queueOf(s, "conv1")
+	if len(q) != 1 || q[0].TriedAt.IsZero() {
+		t.Fatalf("expected queued event with TriedAt set, got %+v", q)
+	}
+	f.mu.Lock()
+	f.failAssistant = nil
+	f.mu.Unlock()
+	s.SessionsChanged(context.Background(), DeviceSessions{
+		MachineID: "server",
+		Sessions:  []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}},
+	})
+	waitFor(t, "the in-doubt event to reconcile", func() bool { return len(queueOf(s, "conv1")) == 0 && !drainingNow(s, "conv1") })
+	if got := triesOf(f, tries); len(got) != 1 {
+		t.Fatalf("sent %d times (%q), want 1 when already in transcript", len(got), got)
+	}
 }
 
 // What the manager asks over the bus reaches the same: the hub's dispatcher routes it, an unknown field is refused.
@@ -351,16 +825,26 @@ func TestExtensionEventFollowsTheMainConversationToItsOwnMachine(t *testing.T) {
 	}
 }
 
-// A conversation that refuses for good (relayRefused) must not keep a place of the extension's in its queue: after a
-// run of events none waits, and the next one is told queued or delivered, never queue_full.
+// A conversation that refuses for good (relayRefused) surfaces the refusal error instead of claiming EventQueued,
+// leaves nothing in the queue, arms no timer, and never causes queue_full on subsequent events.
 func TestExtensionEventRefusedForGoodDoesNotClogTheQueue(t *testing.T) {
 	s, f := eventService(t)
+	t.Cleanup(func() { stopRelayTimer(s, "conv1") })
 	refuseSendsTo(f, "conv1", &rpc.Error{Code: "unheard_of", Message: "no"})
 	for i := range extEventQueueMost + 3 {
-		if _, err := event(s, "example-monitor", fmt.Sprintf(`{"key":"k%d","title":"Event %d"}`, i, i)); err != nil {
-			t.Fatalf("event %d: %v", i, err)
+		res, err := event(s, "example-monitor", fmt.Sprintf(`{"key":"k%d","title":"Event %d"}`, i, i))
+		if convCode(err) != "unheard_of" || res.Delivery != "" {
+			t.Fatalf("event %d: got res=%+v err=%v, want unheard_of refusal and empty delivery", i, res, err)
 		}
-		// Each one is taken off by the drain that follows it: the next goes in once that has run, whatever the machine's speed.
-		waitFor(t, "the refused event to leave the queue", func() bool { return len(queueOf(s, "conv1")) == 0 && !drainingNow(s, "conv1") })
+		if len(queueOf(s, "conv1")) != 0 || drainingNow(s, "conv1") {
+			t.Fatalf("event %d left queued or draining state: q=%d draining=%v", i, len(queueOf(s, "conv1")), drainingNow(s, "conv1"))
+		}
+	}
+	s.relays.mu.Lock()
+	hasTimer := s.relays.holds["conv1"] != nil
+	hasFailedAt := !s.relays.failedAt["conv1"].IsZero()
+	s.relays.mu.Unlock()
+	if hasTimer || hasFailedAt {
+		t.Fatalf("permanent refusal armed timer or failedAt (timer=%v, failedAt=%v)", hasTimer, hasFailedAt)
 	}
 }

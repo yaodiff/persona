@@ -13,8 +13,10 @@ import type { AssistantInfo, Item, Session } from "./types";
 export const AUTO_ORIGINS = ["inbox", "task", "lark_agent", "spawned", "extension", "other"] as const;
 export type AutoOrigin = (typeof AUTO_ORIGINS)[number];
 
-/** What "All chats" can be filtered to: everything, the user's own, or one group of automatic ones. */
-export type OriginFilter = "all" | "mine" | AutoOrigin;
+/** What "All chats" can be filtered to: everything, the user's own, one group of automatic ones, or every chat an
+ *  external source opened (`external`: Lark /agent's and other extensions', EXTERNAL_ORIGINS; the phone tab bar's
+ *  External, lib/phone-nav.ts). */
+export type OriginFilter = "all" | "mine" | "external" | AutoOrigin;
 
 const USER_ORIGINS = new Set(["", "user", "channel"]);
 
@@ -87,12 +89,13 @@ export function externalOpening(s: Pick<Session, "origin"> | undefined, items: r
 
 /** The filter of a `/history/<filter>` address; anything else is all of them. */
 export function parseOriginFilter(v: string | undefined): OriginFilter {
-  return v === "mine" || (AUTO_ORIGINS as readonly string[]).includes(v ?? "") ? (v as OriginFilter) : "all";
+  return v === "mine" || v === "external" || (AUTO_ORIGINS as readonly string[]).includes(v ?? "") ? (v as OriginFilter) : "all";
 }
 
 export function matchesOrigin(s: Pick<Session, "origin"> & { session_id?: string }, filter: OriginFilter, background?: string): boolean {
   if (filter === "all") return true;
   const o = autoOrigin(s, background);
+  if (filter === "external") return (EXTERNAL_ORIGINS as readonly string[]).includes(o ?? "");
   return filter === "mine" ? o === undefined : o === filter;
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"sync"
 	"time"
@@ -46,22 +47,30 @@ func (h *Manager) waitStarted(ctx context.Context, id string, upgrade bool, op *
 	wait := host.ReadyWithin + 5*time.Second
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	name := op.v.Name
+	opMeta := func() (name, version, from string) {
+		ps.ops.mu.Lock()
+		defer ps.ops.mu.Unlock()
+		return op.v.Name, op.v.Version, op.v.From
+	}
 	for {
+		// Subscribe before inspecting Status so a transition between Status and select cannot be missed.
+		changes := hp.proc.Changes()
 		state, why := hp.proc.Status()
 		switch state {
 		case host.StateRunning, host.StateStopped:
 			return nil
 		case host.StateError:
+			name, version, from := opMeta()
 			if upgrade {
-				return localizedKind(errRolledBack, "hub-extension_operations.rolled_back", i18n.Args{"name": name, "to": op.v.Version, "from": op.v.From, "why": why})
+				return localizedKind(errRolledBack, "hub-extension_operations.rolled_back", i18n.Args{"name": name, "to": version, "from": from, "why": why})
 			}
 			return i18n.Err("hub-extension_operations.start_failed", i18n.Args{"name": name, "why": why})
 		}
 		select {
 		case <-ctx.Done():
+			name, _, _ := opMeta()
 			return i18n.Err("hub-extension_operations.start_timeout", i18n.Args{"name": name, "seconds": int(wait / time.Second)})
-		case <-hp.proc.Changes():
+		case <-changes:
 		}
 	}
 }
@@ -125,24 +134,21 @@ type previewJob struct {
 // launch runs job as a new operation: in the background when async (its answer is nil, nil), else before it returns.
 // from is the failed operation it retries: what the user agreed to there carries over.
 func (h *Manager) launch(ctx context.Context, job previewJob, from *extOp, async bool) (*extOp, *extension.Preview, error) {
-	op := h.startOp(job.kind, job.id, job.actor, job.lang, job.ofMarket)
-	h.extensions.ops.mu.Lock()
-	op.retry = func() (*extOp, error) {
-		next, _, _ := h.launch(i18n.With(context.Background(), job.lang), job, op, true)
-		return next, nil
-	}
-	if from != nil {
-		op.consented, op.consentedBundle = from.consented, from.consentedBundle
-	}
-	h.extensions.ops.mu.Unlock()
 	asked := ctx
 	if async {
 		ctx = context.WithoutCancel(ctx)
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
-	h.extensions.ops.mu.Lock()
-	op.cancel = cancel
-	h.extensions.ops.mu.Unlock()
+	op := h.startOpWith(job.kind, job.id, job.actor, job.lang, job.ofMarket, func(op *extOp) {
+		op.cancel = cancel
+		op.retry = func() (*extOp, error) {
+			next, _, _ := h.launch(i18n.With(context.Background(), job.lang), job, op, true)
+			return next, nil
+		}
+		if from != nil {
+			op.consented, op.consentedBundle = from.consented, maps.Clone(from.consentedBundle)
+		}
+	})
 	do := func() (*extension.Preview, error) {
 		defer cancel(nil)
 		pv, err := job.run(extension.WithProgress(ctx, h.progress(op)))
@@ -155,7 +161,7 @@ func (h *Manager) launch(ctx context.Context, job previewJob, from *extOp, async
 			h.opFail(op, err)
 			return nil, err
 		}
-		h.opPreviewed(op, pv, func(refs []bundleRef) {
+		if h.opPreviewed(op, pv, func(refs []bundleRef) {
 			upgrade := ""
 			if pv.Upgrade {
 				upgrade = pv.Manifest.ID
@@ -164,7 +170,9 @@ func (h *Manager) launch(ctx context.Context, job previewJob, from *extOp, async
 				}
 			}
 			_, _ = h.installOp(i18n.With(context.Background(), job.lang), op, upgrade, pv.ID, pv.Digest, refs, job.actor)
-		})
+		}) {
+			return nil, extension.ErrUserCanceled
+		}
 		return pv, nil
 	}
 	if async {
@@ -205,7 +213,21 @@ func (h *Manager) uninstallOp(w http.ResponseWriter, r *http.Request, id string,
 		h.uninstallPack(w, r, id, o) // its 404
 		return
 	}
-	op := h.startOp(opUninstall, id, opActor(r, o.actor), h.requestLang(r), extension.FromMarket(p.Record.Origin) != "")
+	op := h.startOpWith(opUninstall, id, opActor(r, o.actor), h.requestLang(r), extension.FromMarket(p.Record.Origin) != "", func(op *extOp) {
+		op.retry = func() (*extOp, error) {
+			bg := r.Clone(context.WithoutCancel(r.Context()))
+			rec := &opRecorder{header: http.Header{}, status: http.StatusOK}
+			h.uninstallOp(rec, bg, id, o, true)
+			var out struct {
+				Operation ExtensionOperation `json:"operation"`
+			}
+			_ = json.Unmarshal(rec.body, &out)
+			if next := h.opByID(out.Operation.ID); next != nil {
+				return next, nil
+			}
+			return nil, i18n.Err("hub-extension_operations.not_found")
+		}
+	})
 	run := func(r *http.Request) *opRecorder {
 		h.opStep(op, extension.StepStop, extension.StepRunning)
 		rec := &opRecorder{header: http.Header{}, status: http.StatusOK}
@@ -238,21 +260,6 @@ func (h *Manager) uninstallOp(w http.ResponseWriter, r *http.Request, id string,
 		h.opSucceed(op)
 		return rec
 	}
-	ps.ops.mu.Lock()
-	op.retry = func() (*extOp, error) {
-		bg := r.Clone(context.WithoutCancel(r.Context()))
-		rec := &opRecorder{header: http.Header{}, status: http.StatusOK}
-		h.uninstallOp(rec, bg, id, o, true)
-		var out struct {
-			Operation ExtensionOperation `json:"operation"`
-		}
-		_ = json.Unmarshal(rec.body, &out)
-		if next := h.opByID(out.Operation.ID); next != nil {
-			return next, nil
-		}
-		return nil, i18n.Err("hub-extension_operations.not_found")
-	}
-	ps.ops.mu.Unlock()
 	if async {
 		bg := r.Clone(context.WithoutCancel(r.Context()))
 		go run(bg)

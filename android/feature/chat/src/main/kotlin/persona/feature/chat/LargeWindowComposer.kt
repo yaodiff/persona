@@ -213,7 +213,7 @@ fun LargeWindowComposer(
             ComposerKeyAction.Collapse,
             ComposerKeyAction.PassThrough -> false
         }
-    }.then(if (state.value.composition == null) Modifier.hardwareShortcutTextInput() else Modifier).dragAndDropTarget(
+    }.hardwareShortcutTextInput { state.value.composition == null }.dragAndDropTarget(
         shouldStartDragAndDrop = { event ->
             currentCanDrop && composerDropAccepts(event.toAndroidDragEvent().clipDescription)
         },

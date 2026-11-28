@@ -15,6 +15,7 @@ import org.robolectric.annotation.Config
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.sort.AgentListDisplay
 import persona.core.domain.sort.AgentListDisplaySettings
+import persona.core.domain.sort.AgentSeenRows
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en")
@@ -29,6 +30,8 @@ class AgentHerdrTabNameSettingTest {
         val settings = object : AgentListDisplaySettings {
             override val display = MutableStateFlow(AgentListDisplay.Avatar)
             override suspend fun setDisplay(value: AgentListDisplay) = Unit
+            override val seenRows = MutableStateFlow(AgentSeenRows.Stay)
+            override suspend fun setSeenRows(value: AgentSeenRows) = Unit
             override val useHerdrTabName = enabled
             override suspend fun refreshHerdrTabName() { refreshes++ }
             override suspend fun setUseHerdrTabName(value: Boolean) {

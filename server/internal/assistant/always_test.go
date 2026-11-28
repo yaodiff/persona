@@ -8,7 +8,9 @@ import (
 	"errors"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -189,5 +191,103 @@ func TestRememberedAnswerDoesNotRestoreRevokedGrant(t *testing.T) {
 	<-done
 	if _, ok := ft.s.alwaysAllowed(context.Background(), ix); ok {
 		t.Fatal("in-flight automatic answer restored a revoked grant")
+	}
+}
+
+type occurrenceSwapStore struct {
+	*fleetMem
+	alwaysStarted, alwaysRelease chan struct{}
+	recordStarted, recordRelease chan struct{}
+	alwaysOnce, recordOnce       sync.Once
+}
+
+func (s *occurrenceSwapStore) AlwaysAllowed(ctx context.Context, session string, keys []string) (bool, error) {
+	if s.alwaysStarted != nil {
+		s.alwaysOnce.Do(func() {
+			close(s.alwaysStarted)
+			<-s.alwaysRelease
+		})
+	}
+	return s.fleetMem.AlwaysAllowed(ctx, session, keys)
+}
+
+func (s *occurrenceSwapStore) InteractionRecord(ctx context.Context, id string) (*db.InteractionRecord, error) {
+	if s.recordStarted != nil {
+		s.recordOnce.Do(func() {
+			close(s.recordStarted)
+			<-s.recordRelease
+		})
+	}
+	return s.fleetMem.InteractionRecord(ctx, id)
+}
+
+func TestKeepAlwaysDoesNotResolveReplacementOccurrence(t *testing.T) {
+	ft := newFleetTest(t)
+	st := &occurrenceSwapStore{fleetMem: ft.st, alwaysStarted: make(chan struct{}), alwaysRelease: make(chan struct{})}
+	ft.s.setStore(func() Store { return st })
+	first := resumable("ix_keep_always_occurrence")
+	first.ToolName = "Bash"
+	first.AlwaysKeys = []string{"lark:keep-always-occurrence"}
+	first.CreatedAt = time.Now().UTC()
+	putPending(ft.s, &pending{ix: first, done: make(chan proto.Resolution, 1)})
+	source := first
+	source.ID = "ix_keep_always_source"
+	allow := true
+	done := make(chan struct{})
+	go func() {
+		ft.s.keepAlways(source, proto.Resolution{Allow: &allow, Always: true})
+		close(done)
+	}()
+	<-st.alwaysStarted
+	replacement := first
+	replacement.CreatedAt = first.CreatedAt.Add(time.Second)
+	replacement.AlwaysKeys = []string{"lark:different-occurrence"}
+	current := &pending{ix: replacement, done: make(chan proto.Resolution, 1)}
+	putPending(ft.s, current)
+	close(st.alwaysRelease)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Always propagation did not finish")
+	}
+	ft.s.fleet.mu.Lock()
+	kept := ft.s.fleet.interactions[replacement.ID] == current && !current.claimed
+	ft.s.fleet.mu.Unlock()
+	if !kept {
+		t.Fatal("an Always result for the old occurrence claimed its replacement")
+	}
+}
+
+func TestRememberedReconnectDoesNotClaimReplacementAfterHistoryCheck(t *testing.T) {
+	ft := newFleetTest(t)
+	st := &occurrenceSwapStore{fleetMem: ft.st, recordStarted: make(chan struct{}), recordRelease: make(chan struct{})}
+	ft.s.setStore(func() Store { return st })
+	first := resumable("ix_remembered_reconnect_occurrence")
+	first.ToolName = "Bash"
+	first.AlwaysKeys = []string{"lark:remembered-reconnect-occurrence"}
+	first.CreatedAt = time.Now().UTC()
+	if err := st.AllowAlways(context.Background(), first.SessionID, first.ToolName, first.AlwaysKeys); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan detachedTestResult, 1)
+	go func() {
+		r, err := ft.s.nodeInteraction(context.Background(), first)
+		result <- detachedTestResult{res: r, err: err}
+	}()
+	<-st.recordStarted
+	replacement := first
+	replacement.CreatedAt = first.CreatedAt.Add(time.Second)
+	current := &pending{ix: replacement, done: make(chan proto.Resolution, 1)}
+	putPending(ft.s, current)
+	close(st.recordRelease)
+	got := awaitDetachedTest(t, result)
+	if got.err != nil || got.res.Allow == nil || !*got.res.Allow || !got.res.Remembered {
+		t.Fatalf("remembered reconnect result = %+v, %v", got.res, got.err)
+	}
+	ft.s.fleet.mu.Lock()
+	kept := ft.s.fleet.interactions[replacement.ID] == current && !current.claimed
+	ft.s.fleet.mu.Unlock()
+	if !kept {
+		t.Fatal("a remembered answer claimed a replacement installed after its history check")
 	}
 }

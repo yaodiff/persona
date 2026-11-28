@@ -77,6 +77,10 @@ func (c *codexConn) decide(ctx context.Context, method string, raw json.RawMessa
 	var r codexRequest
 	_ = json.Unmarshal(raw, &r)
 	mode, _ := n.modesOf(p.id)
+	traexInbox := p.agent == traexAgent
+	if traexInbox {
+		mode = inboxPermissionMode(mode, "", false)
+	}
 	cwd := firstNonEmpty(r.Cwd, p.cwd) // where the request runs: what the gate and the memory checks go by
 	// The card is the conversation's: placed in its directory, where it started, not a subfolder the request runs in
 	// (identity.CardCwd, #2368).
@@ -139,6 +143,9 @@ func (c *codexConn) decide(ctx context.Context, method string, raw json.RawMessa
 		}
 		accept := map[string]any{"action": "accept", "content": map[string]any{}, "_meta": nil}
 		// Persona's own tools run unasked; the hub asks before the ones that act for the user (mail_send, phone writes).
+		if traexInbox && !c.isTraexPersonaMCP(r.ServerName) {
+			return map[string]any{"action": "decline", "content": nil, "_meta": nil}, nil
+		}
 		if compat.IsMCPServer(r.ServerName) || mode == proto.ModeBypass {
 			return accept, nil
 		}
@@ -156,6 +163,9 @@ func (c *codexConn) decide(ctx context.Context, method string, raw json.RawMessa
 
 	case "item/permissions/requestApproval":
 		deny := map[string]any{"permissions": map[string]any{}, "scope": "turn"}
+		if traexInbox {
+			return deny, nil
+		}
 		var granted map[string]any
 		_ = json.Unmarshal(r.Permissions, &granted)
 		for k, v := range granted {
@@ -181,6 +191,9 @@ func (c *codexConn) decide(ctx context.Context, method string, raw json.RawMessa
 		return map[string]any{"permissions": granted, "scope": "turn"}, nil
 
 	case "item/tool/requestUserInput":
+		if traexInbox {
+			return map[string]any{"answers": map[string]any{}}, nil
+		}
 		ix.Kind, ix.ToolName, ix.CanCancel = proto.IxQuestion, "request_user_input", true
 		for _, q := range r.Questions {
 			qq := proto.Question{Question: q.Question, Header: q.Header}

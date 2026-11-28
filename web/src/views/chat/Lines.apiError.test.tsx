@@ -29,9 +29,9 @@ const inline = (text: string, assistant = false) => renderToStaticMarkup(<ChatLi
 
 describe("a model error's fix", () => {
   it("offers 去修 in a Persona conversation", () => {
-    expect(banner("Invalid API key · Fix external API key", true)).toContain("去修");
+    expect(banner("Invalid API key · Fix external API key", true)).toContain("修复");
     // a record in the chat keeps the fix its own text names
-    expect(inline("Invalid API key · Fix external API key", true)).toContain("去修");
+    expect(inline("Invalid API key · Fix external API key", true)).toContain("修复");
   });
 
   it("names the affected launcher and opens its provider settings", () => {
@@ -42,7 +42,7 @@ describe("a model error's fix", () => {
     const fix = turnErrorFix("auth_failed", "team-relay");
     act(() => root.render(<ErrorBanner line={line("Invalid API key · Fix external API key")} onDismiss={() => {}} assistant fix={fix} />));
     expect(host.textContent).toContain("team-relay");
-    const repair = [...host.querySelectorAll("button")].find((b) => b.textContent === "去修")!;
+    const repair = [...host.querySelectorAll("button")].find((b) => b.textContent === "修复")!;
     act(() => repair.click());
     expect(location.pathname + location.search).toBe("/settings?tab=models&launcher=team-relay");
     act(() => root.unmount());
@@ -61,7 +61,7 @@ describe("a model error's fix", () => {
         ? <ChatLineView {...props} mid="m" sid="s" expandFold={async () => {}} />
         : <ErrorBanner {...props} onDismiss={() => {}} />));
       expect(host.textContent).toContain("team-relay ·");
-      const repair = [...host.querySelectorAll("button")].find((b) => b.textContent === "去修")!;
+      const repair = [...host.querySelectorAll("button")].find((b) => b.textContent === "修复")!;
       act(() => repair.click());
       expect(location.pathname + location.search).toBe("/settings?tab=models&launcher=team-relay");
       act(() => root.unmount());
@@ -71,13 +71,13 @@ describe("a model error's fix", () => {
   });
 
   it("does not point an agent session at Persona's settings", () => {
-    expect(banner("Invalid API key · Fix external API key", false)).not.toContain("去修");
+    expect(banner("Invalid API key · Fix external API key", false)).not.toContain("修复");
   });
 
   it("keeps 重试 on an agent session's passing error", () => {
     const html = banner("API Error: 529 overloaded", false);
     expect(html).toContain("重试");
-    expect(html).not.toContain("去修");
+    expect(html).not.toContain("修复");
   });
 
   it("recognizes safeguards as requiring action and offers editing only on a supported agent chat", () => {
@@ -100,13 +100,13 @@ describe("a gateway that refused on-demand tools (tool_search_unsupported)", () 
 
   it("says so in a Persona conversation and offers Retry, not a provider to set up", () => {
     const html = banner(edge, true);
-    expect(html).toContain("这个网关不支持按需加载工具");
+    expect(html).toContain("该网关不支持按需加载工具");
     expect(html).not.toContain("全部工具"); // an older computer's node keeps tool search on: no promise it can't keep
     expect(html).toContain(">重试</button>");
-    expect(html).not.toContain("去修");
+    expect(html).not.toContain("修复");
     // the record in the chat says the same, with no button of its own
-    expect(inline(edge, true)).toContain("这个网关不支持按需加载工具");
-    expect(inline(edge, true)).not.toContain("去修");
+    expect(inline(edge, true)).toContain("该网关不支持按需加载工具");
+    expect(inline(edge, true)).not.toContain("修复");
   });
 
   it("is the hub's code too, and an Agent session's card keeps the rejected request without a Retry that would fail the same way", () => {
@@ -131,7 +131,7 @@ describe("a model the chat can't run (model_route)", () => {
     act(() => root.render(<ErrorBanner line={line(route)} assistant fix={fix} onRetry={() => {}} onDismiss={() => {}} />));
     const buttons = [...host.querySelectorAll("button")];
     expect(buttons.some((b) => b.textContent === "重试")).toBe(false);
-    act(() => buttons.find((b) => b.textContent === "去修")!.click());
+    act(() => buttons.find((b) => b.textContent === "修复")!.click());
     expect(onPickModel).toHaveBeenCalledTimes(1);
     act(() => buttons.find((b) => b.textContent === "恢复跟随默认")!.click());
     expect(run).toHaveBeenCalledTimes(1);
@@ -150,7 +150,7 @@ describe("a model error is cindy's error notice (#5157)", () => {
     expect(html).not.toMatch(/bg-red-tint|var\(--red\)_22%/);
     expect(html).toContain('class="mt-0.5 inline-flex shrink-0 text-red"');
     expect(html).toContain("推理服务暂时没有可用的 GPU");
-    expect(html).toContain("临时故障，过一会儿多半会好");
+    expect(html).toContain("临时故障，通常很快会恢复。");
     expect(html).toContain("重试");
     // a 28 px action keeps a finger-sized target on a touch screen
     expect(html).toMatch(/<button[^>]*class="[^"]*touch-hit[^"]*"[^>]*>(?:(?!<\/button>).)*重试<\/button>/);
@@ -264,7 +264,7 @@ describe("an exhausted recovery chain's failure card", () => {
   it("offers Retry on a safeguards error the parser treats as non-transient, with the cause and reset time", () => {
     const html = banner(safeguards, false, { exhausted });
     expect(html).toContain(">重试</button>");
-    expect(html).toContain("模型拒绝了这次请求");
+    expect(html).toContain("模型拒绝了此请求");
     expect(html).toContain(resetText);
     expect(html).toMatch(/data-testid="recovery-exhausted"/);
   });
@@ -275,11 +275,11 @@ describe("an exhausted recovery chain's failure card", () => {
     const root = createRoot(host);
     act(() => root.render(<ErrorBanner line={line(safeguards)} onRetry={() => {}} onDismiss={() => {}} exhausted={exhausted} />));
     // before the fold opens, the card's face names the cause but not the tried models
-    expect(host.textContent).toContain("模型拒绝了这次请求");
-    expect(host.textContent).not.toContain("试过的模型");
+    expect(host.textContent).toContain("模型拒绝了此请求");
+    expect(host.textContent).not.toContain("已尝试的模型");
     act(() => [...host.querySelectorAll("button")].find((b) => b.textContent === "错误详情")!.click());
     const details = host.querySelector("[data-error-details]")!;
-    expect(details.textContent).toContain("试过的模型：model-a -> model-b");
+    expect(details.textContent).toContain("已尝试的模型：model-a -> model-b");
     act(() => root.unmount());
     host.remove();
   });
@@ -287,7 +287,7 @@ describe("an exhausted recovery chain's failure card", () => {
   it("still hides Retry without the exhausted marker, so ordinary safeguards errors keep their old behavior", () => {
     const html = banner(safeguards, false);
     expect(html).not.toContain(">重试</button>");
-    expect(html).not.toContain("模型拒绝了这次请求");
+    expect(html).not.toContain("模型拒绝了此请求");
   });
 
   it("shows the cause alone when the upstream gave no reset time", () => {
@@ -295,7 +295,7 @@ describe("an exhausted recovery chain's failure card", () => {
       model_fallback: { subtype: "model_refusal_fallback", category: "quota_exhausted", recovery_exhausted: true },
     })!;
     const html = banner("API Error: 429 rate_limited", false, { exhausted: noReset });
-    expect(html).toContain("额度用尽");
+    expect(html).toContain("额度已用尽");
     expect(html).not.toContain("恢复可用");
     expect(html).toContain(">重试</button>");
   });
@@ -304,7 +304,7 @@ describe("an exhausted recovery chain's failure card", () => {
     const html = renderToStaticMarkup(
       <ChatLineView line={line(safeguards)} mid="m" sid="s" expandFold={async () => {}} exhausted={exhausted} />,
     );
-    expect(html).toContain("模型拒绝了这次请求");
+    expect(html).toContain("模型拒绝了此请求");
     expect(html).toContain(resetText);
     expect(html).not.toContain(">重试</button>");
   });
@@ -333,12 +333,12 @@ describe("image-limit turn failures (#13045)", () => {
             onDismiss={() => {}}
           />,
         ));
-        expect(host.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
-        expect(host.textContent).not.toContain("要你处理，重试没有用");
+        expect(host.textContent).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
+        expect(host.textContent).not.toContain("需要你手动处理，重试无法解决。");
         expect(host.textContent).not.toContain(raw);
         const buttons = [...host.querySelectorAll("button")];
         expect(buttons.some((b) => b.textContent === "重试")).toBe(false);
-        expect(buttons.some((b) => b.textContent === "去修")).toBe(false);
+        expect(buttons.some((b) => b.textContent === "修复")).toBe(false);
         const compactBtn = host.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]');
         expect(compactBtn?.textContent).toBe("压缩并重发");
         act(() => compactBtn!.click());
@@ -354,17 +354,17 @@ describe("image-limit turn failures (#13045)", () => {
 
   it("omits Compact and send again when compaction is unsupported and on inline history records", () => {
     const html = banner(samples[0], false);
-    expect(html).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(html).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
     expect(html).not.toContain("压缩并重发");
     expect(html).not.toContain(">重试</button>");
     const record = inline(samples[0], true);
-    expect(record).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(record).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
     expect(record).not.toContain("压缩并重发");
   });
 
   it("recognizes hub turnErrorCode=images_too_large even on generic API Error wording", () => {
     const html = banner("API Error: 400 Bad Request", false, { turnErrorCode: "images_too_large", onCompactAndResend: () => {} });
-    expect(html).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(html).toContain("该对话中的图片数量过多或体积过大，超出了模型限制。");
     expect(html).toContain("压缩并重发");
     expect(html).not.toContain(">重试</button>");
   });

@@ -96,6 +96,24 @@ internal fun ChatMarkdown(text: String, id: String = text,
     else ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming)
 }
 
+/** Public streaming Markdown renderer shared with overlays (e.g. Digital Assistant quick sheet). */
+@Composable
+fun StreamingReplyMarkdown(
+    text: String,
+    id: String = text,
+    streaming: Boolean = false,
+    bodyStyle: TextStyle = PersonaTheme.type.body,
+    color: Color = PersonaTheme.palette.ink,
+    selectable: Boolean = false,
+) = ChatMarkdown(
+    text = text,
+    id = id,
+    bodyStyle = bodyStyle,
+    color = color,
+    selectable = selectable,
+    streaming = streaming,
+)
+
 /**
  * [text] with its card blocks (docs/assistant/assistant-views.md "Card identity", the hub's fence rules): the Markdown around them as
  * Markdown, each ```persona-view as a card under its key ([viewKeys] maps its number in the text to `<item id>/<n>`;
@@ -425,6 +443,8 @@ internal fun ChatLineContent(
     turnLauncher: String? = null,
     /** Opens the session's terminal: the live work line's mark on Glass ([ChatTerminalPlaces.onWorkLine]). */
     onTerminal: (() -> Unit)? = null,
+    /** A work group's attached views are already shown above its expanded steps. */
+    showToolViews: Boolean = true,
 ) {
     val res = LocalResources.current
     if (turnFix != null) {
@@ -438,7 +458,7 @@ internal fun ChatLineContent(
             return TurnErrorFixCard(turnFix, raw, turnLauncher, retry)
         }
     }
-    when (line) {
+    val content: @Composable () -> Unit = { when (line) {
         is ChatLine.Row -> when (line.row.type) {
             "user" -> line.row.item?.item?.let { item ->
                 val source = persona.core.domain.sourceOf(item)
@@ -446,11 +466,16 @@ internal fun ChatLineContent(
                     source != null -> SourceMessage(item, source, showSourceLabel, textUpdates[item.id],
                         images = userPictures(userImages, session, loader), hidePrompt = hideTaskPrompts)
                     line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!, showDetail = !hideTaskPrompts)
+                    // A BotMux message: as written in Lark while the chat decodes (BotmuxMessages.kt)
+                    item.botmux != null -> BotmuxUserMessage(item, userImages.isNotEmpty()) { shown ->
+                        MergedUserBubble(listOf(shown), if (shown === item) textUpdates else emptyMap(), onLastLine.takeIf { line.row.id == lastUserId },
+                            images = userPictures(userImages, session, loader), openingSource = openingSource)
+                    }
                     else -> MergedUserBubble(listOf(item), textUpdates, onLastLine.takeIf { line.row.id == lastUserId },
                         images = userPictures(userImages, session, loader), openingSource = openingSource)
                 }
             }
-            "reply" -> line.row.item?.item?.let { item ->
+            "reply" -> line.row.item?.item?.takeUnless { botmuxSentinelHidden(it, agentSession) }?.let { item ->
                 WithLiveText(item, textUpdates[item.id], liveText[item.id], item.id in streamingItemIds) { update ->
                     val hideCloseout = closeoutReply == line.row.id && update?.streaming != true
                     // only the block goes; a reply that said nothing else is not drawn at all
@@ -474,6 +499,7 @@ internal fun ChatLineContent(
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
         is ChatLine.Viewed -> ViewedImagesRow(line.images, session, loader)
+        is ChatLine.BotmuxReplies -> BotmuxRepliesLine(line)
         is ChatLine.ModeChange -> ModeChangeDivider(line.change, agentSession)
         is ChatLine.EngineChanged -> EngineChangeDivider(line.change)
         // Glass: where the replies' model changed (#5055, ModelChanges.mark), as the transcript names both.
@@ -501,7 +527,7 @@ internal fun ChatLineContent(
         is ChatLine.Work -> Column(Modifier.fillMaxWidth()) {
             // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary. On Glass
             // Persona's work line is the Agent chat's, ticking while it runs (iOS has one `WorkLine`, #4339 C13).
-            if (style.compactToolSummary && PersonaTheme.style != AppStyle.Glass) AssistantWorkSummary(line, onToggle)
+            if (style.compactToolSummary && PersonaTheme.style != AppStyle.Glass) AssistantWorkSummary(line, style.hidesThoughts(), onToggle)
             else {
                 // Waiting on you, the turn stays the live one (it folds and opens as while it runs), but its line says it
                 // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
@@ -521,6 +547,13 @@ internal fun ChatLineContent(
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp.row).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
+    } }
+    val blocks = LocalViewBlocks.current
+    val views = remember(line, showToolViews) { if (showToolViews) line.toolViews() else emptyList() }
+    if (blocks == null || views.isEmpty()) content()
+    else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        content()
+        for (view in views) DisableSelection { InterfaceContent { blocks.toolView(view) } }
     }
 }
 
@@ -528,9 +561,30 @@ internal fun ChatLineContent(
 @Composable
 private fun ChatRenderStyle.hidesThoughts(): Boolean = hideThoughts && PersonaTheme.style != AppStyle.Glass
 
+/**
+ * Whether a compact assistant work fold (Brief/Board) has any step that would actually render when expanded.
+ * Thoughts are hidden on Brief/Board, so a live turn that has only started thinking has zero inspectable steps.
+ */
+internal fun ChatLine.Work.hasVisibleCompactSteps(hidesThoughts: Boolean): Boolean = steps.any { step ->
+    when (step) {
+        is WorkItem.Tool, is WorkItem.Narration, is WorkItem.Folded -> true
+        is WorkItem.Thought -> !hidesThoughts || step.item.kind != "thinking"
+    }
+}
+
 @Composable
-private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
-    AssistantFoldLine(pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools), line.open) { onToggle(line.id) }
+private fun AssistantWorkSummary(line: ChatLine.Work, hidesThoughts: Boolean, onToggle: (String) -> Unit) {
+    val label = when {
+        line.tools > 0 -> pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools)
+        !line.hasVisibleCompactSteps(hidesThoughts) -> return
+        line.live -> stringResource(R.string.chat_work_working)
+        else -> {
+            val replies = line.steps.count { it is WorkItem.Narration }
+            if (replies > 0) stringResource(R.string.chat_work_replies, replies)
+            else stringResource(R.string.chat_work_done)
+        }
+    }
+    AssistantFoldLine(label, line.open) { onToggle(line.id) }
 }
 
 /** One muted line that opens and closes what it stands for: the work summary, a folded background round (#4314). */

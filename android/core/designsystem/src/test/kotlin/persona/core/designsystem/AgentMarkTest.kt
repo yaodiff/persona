@@ -45,7 +45,7 @@ class AgentMarkTest {
         assertEquals(AgentMarkKind.Trae, session("trae").agentMark?.kind)
         assertEquals(AgentMarkSpec(AgentMarkKind.Trae, "TRAE CLI", null), session("trae-cli").agentMark)
         val traex = session("traex").agentMark!!
-        assertNull(traex.kind)
+        assertEquals(AgentMarkKind.Trae, traex.kind)
         assertEquals("TRAE CLI", traex.name)
         assertEquals(AgentMarkSpec(AgentMarkKind.Trae, "TRAE CLI", null), session("traecli").agentMark)
         assertEquals(AgentMarkKind.Dsh, session("dsh", label = "DSH").agentMark?.kind)
@@ -72,10 +72,10 @@ class AgentMarkTest {
     }
 
     @Test fun knownMarksGoByTheFirstWordOfAnyName() {
-        assertEquals(listOf(AgentMarkKind.Claude, AgentMarkKind.Claude, AgentMarkKind.Codex, AgentMarkKind.Trae, AgentMarkKind.Trae, AgentMarkKind.Trae),
-            listOf("claude", "Claude-Code", "codex", "TRAE CLI", "trae_cli", " traecli ").map(::knownAgentMark))
-        assertEquals(listOf(null, null, null, null, null),
-            listOf(null, "", "traex", "unknown harness", "-trae").map(::knownAgentMark))
+        assertEquals(listOf(AgentMarkKind.Claude, AgentMarkKind.Claude, AgentMarkKind.Codex, AgentMarkKind.Trae, AgentMarkKind.Trae, AgentMarkKind.Trae, AgentMarkKind.Trae),
+            listOf("claude", "Claude-Code", "codex", "traex", "TRAE CLI", "trae_cli", " traecli ").map(::knownAgentMark))
+        assertEquals(listOf(null, null, null, null),
+            listOf(null, "", "unknown harness", "-trae").map(::knownAgentMark))
         assertEquals(listOf(AgentMarkKind.Grok, AgentMarkKind.Grok, AgentMarkKind.Antigravity, AgentMarkKind.Kimi, AgentMarkKind.Copilot),
             listOf("Grok · Official", "Grok Build", "Google Antigravity", "Kimi CLI", "GitHub Copilot CLI").map(::knownAgentMark))
         assertEquals(AgentMarkKind.OpenCode, session("opencode").agentMark?.kind)

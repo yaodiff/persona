@@ -4,14 +4,18 @@ import {
   applyStepOverride,
   canonicalJson,
   clearAgentPreTools,
+  createClassicHookObservation,
   createPreToolCache,
   extractPreToolUse,
+  finishClassicTurn,
   hasPermissionDecision,
   homeDir,
   isToolCompleted,
   markToolCompleted,
   mergeOverride,
   nextBackoff,
+  noteClassicPreToolUse,
+  noteTurnStepToolUses,
   readPermissionAnswer,
   readPoll,
   recordPreTool,
@@ -25,6 +29,7 @@ const SESSION = '11111111-2222-3333-4444-555555555555'
 
 type Answer = { status: number; body: unknown } | { fail: true }
 type PermResponder = (body: Record<string, unknown>, call: number) => Answer | Promise<Answer>
+type StepToolUse = { tool_use_id: string; tool: string; input: Record<string, unknown> }
 
 // The engine beneath the plugin: a session, its manifest, and a node that answers polls in the order given (then
 // none: a node that went away), recording every request and every prompt the plugin submits.
@@ -35,6 +40,7 @@ function world(
   opts: {
     onPermission?: PermResponder
     corePermission?: (e: Record<string, unknown>) => unknown | Promise<unknown>
+    stepToolUses?: StepToolUse[]
   } = {},
 ) {
   const requests: { url: string; socketPath?: string; body: Record<string, unknown> }[] = []
@@ -44,15 +50,16 @@ function world(
   let holdSubmit = false
   let settleSubmit: ((outcome: 'reject' | 'drop') => void) | undefined
   let abortError: string | undefined
+  let sessionId = SESSION
   let sessionModel = 'claude-sonnet-5-5'
   let permCalls = 0
   mock.env(on, env)
   const clock = mock.clock(on, { now: 1_000 })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: SESSION }))
+  on('session.id', () => ({ value: sessionId }))
   on('session.model', () => ({ value: sessionModel }))
   on('session.version', () => ({ value: { version: '2.1.330', base: '2.1.330' } }))
-  on('fs.read', () => ({ value: '{"name":"persona","version":"0.3.0"}' }))
+  on('fs.read', () => ({ value: '{"name":"persona","version":"0.3.2"}' }))
   on('ui.log', () => ({ value: undefined }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: 'done' }))
@@ -83,7 +90,14 @@ function world(
   })
   on('turn.step', async function* (_$, e) {
     steps.push({ model: e.model, ...(e.effort !== undefined ? { effort: e.effort } : {}), ...(e.agentId !== undefined ? { agentId: e.agentId } : {}) })
-    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: 'ok',
+      toolUses: (opts.stepToolUses ?? []) as never,
+      stopReason: 'end_turn' as const,
+      usage: null,
+    }
   })
   on('http.fetch', async (_$, e) => {
     const rawBody = typeof e.init?.body === 'string' ? e.init.body : '{}'
@@ -117,6 +131,9 @@ function world(
     },
     setAbortError(err: string | undefined) {
       abortError = err
+    },
+    setSessionId(id: string) {
+      sessionId = id
     },
     setSessionModel(m: string) {
       sessionModel = m
@@ -156,7 +173,8 @@ describe('persona plugin', () => {
     expect(poll?.socketPath).toBe('/home/me/.persona/node.sock')
     expect(poll?.body).toEqual({
       session_id: SESSION,
-      plugin_version: '0.3.0',
+      plugin_version: '0.3.2',
+      observed_effort: { at_ms: 1000, reset: true },
       engine_version: '2.1.330',
       capabilities: ['busy_input', 'interrupt', 'settings', 'permissions'],
       wait_ms: 25_000,
@@ -241,10 +259,65 @@ describe('persona plugin', () => {
       { model: 'claude-haiku-5-5', agentId: 'sub-1' },
     ])
 
+    await w.clock.advance(2_000)
+    await w.clock.settle()
+    expect(w.requests.at(-1)?.body.observed_effort).toEqual({ level: 'xhigh', at_ms: 1000 })
+
     // Changing model in Claude Desktop UI supersedes Persona's earlier pick.
     w.setSessionModel('claude-opus-5-5')
     await runStep({ turnId: 't2', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 2 })
     expect(w.steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'high' })
+  })
+
+  test('keeps an explicit auto choice and an active turn across a missing session id', async ($, on) => {
+    const w = world(on, [
+      { status: 200, body: { messages: [], settings: { id: 's1', effort: 'auto' }, retry_ms: 100 } },
+      { status: 200, body: { messages: [], interrupt: { id: 'stop', deadline_ms: 9_000 } } },
+    ])
+    await $.session.start(start)
+    await w.clock.settle()
+    await $.turn.start({ text: 'task', turnId: 't1' })
+    w.setSessionId('')
+    const gen = $.turn.step({ turnId: 't1', index: 0, model: 'sonnet', effort: 'high', messageCount: 1 })
+    while (!(await gen.next()).done) { /* drain the step */ }
+    w.setSessionId(SESSION)
+    await w.clock.advance(100)
+    await w.clock.settle()
+    expect(w.steps.at(-1)?.effort).toBeUndefined()
+    expect(w.requests.filter(r => r.url.endsWith('/poll'))[1]?.body.observed_effort).toEqual({ level: 'auto', at_ms: 1000 })
+    expect(w.aborted).toEqual(['t1'])
+  })
+
+  test('polls with the effective main-loop effort only for the session that ran the step', async ($, on) => {
+    const reply = { status: 200, body: { messages: [], retry_ms: 100 } }
+    const w = world(on, Array(10).fill(reply))
+    await $.session.start(start)
+    await w.clock.settle()
+
+    const step = async (effort?: 'low' | 'high' | number, agentId?: string) => {
+      const gen = $.turn.step({ turnId: 'main', index: 0, model: 'sonnet', messageCount: 1, effort, agentId })
+      while (!(await gen.next()).done) { /* drain the step */ }
+    }
+    const poll = async () => {
+      await w.clock.advance(100)
+      await w.clock.settle()
+      return w.requests.at(-1)?.body
+    }
+    await step('high')
+    expect((await poll())?.observed_effort).toEqual({ level: 'high', at_ms: 1000 })
+    await step('low', 'sub-1')
+    expect((await poll())?.observed_effort).toEqual({ level: 'high', at_ms: 1000 })
+    await step('low')
+    expect((await poll())?.observed_effort).toEqual({ level: 'low', at_ms: 1200 })
+    await step(4096)
+    expect((await poll())?.observed_effort).toEqual({ at_ms: 1300 })
+    await step()
+    expect((await poll())?.observed_effort).toEqual({ at_ms: 1400 })
+    await step('high')
+    w.setSessionId('22222222-2222-3333-4444-555555555555')
+    const cleared = await poll()
+    expect(cleared?.session_id).toBe('22222222-2222-3333-4444-555555555555')
+    expect(cleared?.observed_effort).toEqual({ at_ms: 1600, reset: true })
   })
 
   test('submits nothing late, empty or a slash command, and tells the node why', async ($, on) => {
@@ -311,6 +384,98 @@ describe('persona plugin', () => {
     const out = await $.classic.PermissionRequest(permEvent() as never)
     expect(out).toEqual({})
     expect(w.requests.filter(r => r.url.endsWith('/permission'))).toEqual([])
+  })
+
+  test('reports classic hooks passed over after a main-loop turn uses tools without classic.PreToolUse', async ($, on) => {
+    const w = world(
+      on,
+      [
+        { status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } },
+        { status: 200, body: { messages: [], permissions: false, retry_ms: 60_000 } },
+      ],
+      { HOME: '/home/me' },
+      {
+        stepToolUses: [{ tool_use_id: 'toolu_skipped', tool: 'Bash', input: { command: 'echo skipped' } }],
+      },
+    )
+    await $.session.start(start)
+    await w.clock.settle()
+
+    const firstPoll = w.requests.find(r => r.url.endsWith('/poll'))
+    expect(firstPoll?.body.classic_passed_over).toBeUndefined()
+
+    await $.turn.start({ text: 'run a tool', turnId: 'turn-passed-over' } as never)
+    const step = $.turn.step({ turnId: 'turn-passed-over', index: 0, model: 'claude-sonnet-5-5', messageCount: 1 })
+    while (!(await step.next()).done) {
+      // drain the step
+    }
+    await w.clock.advance(2_000)
+    await w.clock.settle()
+
+    expect(await $.classic.PermissionRequest(permEvent({ tool_use_id: 'toolu_skipped' }) as never)).toEqual({})
+    expect(w.requests.filter(r => r.url.endsWith('/permission'))).toEqual([])
+
+    const polls = w.requests.filter(r => r.url.endsWith('/poll'))
+    expect(polls.length).toBe(2)
+    expect(polls[1]?.body).toMatchObject({ classic_passed_over: true })
+    await $.turn.complete({ turnId: 'turn-passed-over', answer: 'done' } as never)
+  })
+
+  test('keeps classic permission bridging when classic.PreToolUse reaches the plugin', async ($, on) => {
+    const w = world(
+      on,
+      [
+        { status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } },
+        { status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } },
+      ],
+      { HOME: '/home/me' },
+      {
+        stepToolUses: [{ tool_use_id: 'toolu_present', tool: 'Bash', input: { command: 'echo present' } }],
+        onPermission: () => ({
+          status: 200,
+          body: {
+            action: 'decide',
+            decision: {
+              behavior: 'allow',
+              updatedInput: { command: 'echo present' },
+            },
+          },
+        }),
+      },
+    )
+    await $.session.start(start)
+    await w.clock.settle()
+
+    await $.turn.start({ text: 'run a tool', turnId: 'turn-present' } as never)
+    const step = $.turn.step({ turnId: 'turn-present', index: 0, model: 'claude-sonnet-5-5', messageCount: 1 })
+    while (!(await step.next()).done) {
+      // drain the step
+    }
+    await $.tool.call({
+      tool: 'Bash',
+      tool_use_id: 'toolu_present',
+      command: 'echo present',
+      description: 'print present',
+    } as never)
+    await $.turn.complete({ turnId: 'turn-present', answer: 'done' } as never)
+
+    await w.clock.advance(60_000)
+    await w.clock.settle()
+
+    const polls = w.requests.filter(r => r.url.endsWith('/poll'))
+    expect(polls.length).toBe(2)
+    expect(polls[1]?.body.classic_passed_over).toBeUndefined()
+
+    const out = await $.classic.PermissionRequest(
+      permEvent({ tool_use_id: 'toolu_present', tool_input: { command: 'echo present', description: 'print present' } }) as never,
+    )
+    expect(out).toEqual({
+      decision: {
+        behavior: 'allow',
+        updatedInput: { command: 'echo present' },
+      },
+    })
+    expect(w.requests.filter(r => r.url.endsWith('/permission')).length).toBe(1)
   })
 
   test('pairs flat PreToolUse tool_use_id, renews long polls with stable req_id, and returns phone allow/deny decisions', async ($, on) => {
@@ -863,5 +1028,26 @@ describe('protocol helpers', () => {
     clearAgentPreTools(cache, '')
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't5', command: 'pwd' })
     expect(takePreTool(cache, 'Bash', { command: 'pwd' })).toEqual({ id: 't5', ambiguous: false })
+  })
+
+  test('classic hook observation', () => {
+    let observed = createClassicHookObservation()
+    observed = noteTurnStepToolUses(observed, undefined, { toolUses: [1, 2] })
+    expect(observed.toolUses).toBe(2)
+    observed = finishClassicTurn(observed)
+    expect(observed.passedOver).toBe(true)
+    expect(observed.toolUses).toBe(0)
+
+    let present = createClassicHookObservation()
+    present = noteTurnStepToolUses(present, undefined, { toolUses: [1] })
+    present = noteClassicPreToolUse(present, { tool_use_id: 't1' })
+    present = finishClassicTurn(present)
+    expect(present.passedOver).toBe(false)
+
+    let subagent = createClassicHookObservation()
+    subagent = noteTurnStepToolUses(subagent, 'sub-1', { toolUses: [1] })
+    subagent = noteClassicPreToolUse(subagent, { tool_use_id: 't2', agent_id: 'sub-1' })
+    subagent = finishClassicTurn(subagent)
+    expect(subagent.passedOver).toBe(false)
   })
 })

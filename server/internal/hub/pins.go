@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Pins are the spaces and agents the user keeps at the top of the "Develop" list (saved in Postgres, so a reinstall or
@@ -103,6 +105,7 @@ func (h *Hub) pinRoutes(api *http.ServeMux) {
 		h.mutes = &p
 		h.mutesMu.Unlock()
 		h.mutesChanged() // the manager decides the pushes (fleet_link.go)
+		h.broadcastAgentPreferenceEvent(proto.MutesEventType)
 		writeJSON(w, p)
 	})
 	api.HandleFunc("GET /api/v1/pins", func(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +138,16 @@ func (h *Hub) pinRoutes(api *http.ServeMux) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		h.broadcastAgentPreferenceEvent(proto.PinsEventType)
 		writeJSON(w, p)
 	})
+}
+
+func (h *Hub) broadcastAgentPreferenceEvent(typ proto.AgentPreferenceEventType) {
+	b, err := json.Marshal(proto.AgentPreferenceEvent{Type: typ})
+	if err == nil {
+		h.broadcastRaw(string(typ), b)
+	}
 }
 
 // renameSpace renames a herdr workspace and carries its pins / mutes over (they are keyed by "machine/name").
@@ -181,7 +192,8 @@ func (h *Hub) renameSpace(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	if old != "" && old != name && h.store != nil {
 		from, to := m.cfg.ID+"/"+old, m.cfg.ID+"/"+name
-		for _, key := range []string{"pins", "mutes"} {
+		for _, typ := range []proto.AgentPreferenceEventType{proto.PinsEventType, proto.MutesEventType} {
+			key := string(typ)
 			p := Pins{}
 			if found, err := h.store.Setting(ctx, key, &p); err != nil || !found {
 				continue
@@ -194,12 +206,13 @@ func (h *Hub) renameSpace(w http.ResponseWriter, r *http.Request, m *Machine) {
 			}
 			if changed {
 				_ = h.store.PutSetting(ctx, key, p)
-				if key == "mutes" {
+				if typ == proto.MutesEventType {
 					h.mutesMu.Lock()
 					h.mutes = &p
 					h.mutesMu.Unlock()
 					h.mutesChanged()
 				}
+				h.broadcastAgentPreferenceEvent(typ)
 			}
 		}
 	}

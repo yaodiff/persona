@@ -8,35 +8,16 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Card is a message card (card JSON 2.0: Markdown with headings, tables and code blocks; Feishu 7.20 and later).
-// Buttons carry a value that comes back in the card.action.trigger callback (CardAction.Action.Value); buttons inside
-// a form submit it too (CardAction.Action.FormValue). 2.0 rejects unknown fields, so only documented ones are written.
-type Card struct {
-	Schema string         `json:"schema"`
-	Config map[string]any `json:"config"`
-	Header *cardHeader    `json:"header,omitempty"`
-	Body   cardBody       `json:"body"`
-}
-
-type cardHeader struct {
-	Title       plain  `json:"title"`
-	Subtitle    *plain `json:"subtitle,omitempty"` // who or where, under the title
-	Template    string `json:"template,omitempty"`
-	TextTagList []any  `json:"text_tag_list,omitempty"` // tags on the right of the title
-}
-
-type cardBody struct {
-	Elements []any `json:"elements"`
-}
-
-type plain struct {
-	Tag     string `json:"tag"`
-	Content string `json:"content"`
-}
+// Card builds the neutral card wire value in place.
+type Card assistantwire.BotCard
+type cardHeader = assistantwire.BotCardHeader
+type cardBody = assistantwire.BotCardBody
+type plain = assistantwire.BotCardText
 
 func text(s string) plain { return plain{Tag: "plain_text", Content: s} }
 
@@ -57,9 +38,9 @@ const (
 // NewCard starts a card; an empty title leaves the header out. summary is what the chat list shows for it (an
 // assistant card in it as its title or fallback, never its JSON).
 func NewCard(title, template, summary string) *Card {
-	cfg := map[string]any{"update_multi": true}
+	cfg := &assistantwire.BotCardConfig{UpdateMulti: true}
 	if s := strings.TrimSpace(wire.AssistantCardText(summary)); s != "" {
-		cfg["summary"] = map[string]any{"content": clipRunes(oneLine(s), 60)}
+		cfg.Summary = &assistantwire.BotCardSummary{Content: clipRunes(oneLine(s), 60)}
 	}
 	c := &Card{Schema: "2.0", Config: cfg, Body: cardBody{Elements: []any{}}}
 	if title != "" {
@@ -609,4 +590,11 @@ func clipRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// MarkdownLinkOK reports whether u is an http(s) address with a host that a Markdown link can hold (card links are documented for
+// http(s) only, as safeLinkButton checks).
+func MarkdownLinkOK(u string) bool {
+	p, err := url.Parse(u)
+	return err == nil && u != "" && (p.Scheme == "http" || p.Scheme == "https") && p.Host != "" && !strings.ContainsAny(u, "() \t\r\n")
 }

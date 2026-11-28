@@ -74,10 +74,21 @@ func (n *Node) runtimeUsageReport(h *runtimeConn, params json.RawMessage, now ti
 		return
 	}
 	st, _ := n.state.get(p.SessionID)
+	dir := ""
+	if dirs := n.usageDirs.get(); dirs != nil { // a manager that keeps directories (usage_dirs.go)
+		cwd := st.Cwd
+		if cwd == "" && n.runtimes != nil {
+			if row, _, ok := n.runtimes.rowOf(p.SessionID); ok {
+				cwd = row.Cwd
+			}
+		}
+		dir = n.usageDirKey(cwd, dirs.temps)
+		dirs.want(dir)
+	}
 	u := &n.runtimeUsage
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	bucketKey := usageKey{minute.Unix(), p.Model, st.Launcher, agent}
+	bucketKey := usageKey{minute.Unix(), p.Model, st.Launcher, agent, dir}
 	if _, exists := u.pending[bucketKey]; !exists && len(u.pending) >= runtimeUsageMaxPending {
 		return
 	}
@@ -103,7 +114,7 @@ func (n *Node) runtimeUsageReport(h *runtimeConn, params json.RawMessage, now ti
 		u.pending = map[usageKey]proto.UsageBucket{}
 	}
 	b := u.pending[bucketKey]
-	b.Minute, b.Model, b.Launcher, b.Agent = bucketKey.minute, bucketKey.model, bucketKey.launcher, bucketKey.agent
+	b.Minute, b.Model, b.Launcher, b.Agent, b.Dir = bucketKey.minute, bucketKey.model, bucketKey.launcher, bucketKey.agent, bucketKey.dir
 	b.Input += p.Input
 	b.Output += p.Output
 	b.CacheRead += p.CacheRead

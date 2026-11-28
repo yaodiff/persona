@@ -18,6 +18,7 @@ vi.mock("../../lib/ops", () => ({
   }),
 }));
 import { InteractionCard } from "./Interactions";
+import { setToken } from "../../lib/api";
 import { answerCard } from "../../lib/card-answer";
 import { NOTE_MESSAGE, planClick } from "../../lib/notification-answer";
 import { quickAnswers } from "../../lib/quick-answers";
@@ -136,4 +137,24 @@ it("shows a secret storage target and fields without claiming the Agent receives
   expect(text).toContain("credential");
   expect(text).not.toContain("for this run only");
   expect(button("Always Allow")).toBeUndefined();
+});
+
+it("reports secret_handoff card seen with Bearer auth and encodes special interaction IDs", async () => {
+  setToken("synthetic-handoff-tok");
+  const seenReqs: { url: string; method?: string; auth: string | null }[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    seenReqs.push({ url: String(input), method: init?.method, auth: headers.get("Authorization") });
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
+  try {
+    await render(card({ id: "ix/handoff?seen=1", seen_ttl_seconds: 600 }));
+    await flush();
+    expect(seenReqs).toEqual([
+      { url: "/api/v1/interactions/ix%2Fhandoff%3Fseen%3D1/seen", method: "POST", auth: "Bearer synthetic-handoff-tok" },
+    ]);
+  } finally {
+    vi.unstubAllGlobals();
+    setToken("");
+  }
 });

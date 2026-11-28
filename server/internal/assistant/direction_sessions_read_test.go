@@ -202,6 +202,68 @@ func TestDirectionReadEndedTaskKeepsOpenOwnership(t *testing.T) {
 	}
 }
 
+func TestDirectionReadTodosV2SharesBoardAttribution(t *testing.T) {
+	e := directionFilingEnv(t, nil)
+	on := true
+	setSettings(t, e.s, func(cfg *Settings) { cfg.TodosV2 = &on })
+	at := time.Now().UTC()
+	parent := e.task("Task from a historical direction", func(todo *Todo) {
+		todo.Origin = "conv_lead_a"
+	})
+	closedChild := e.task("Closed step keeps its inherited direction", func(todo *Todo) {
+		todo.PartOf, todo.DoneAt = parent, &at
+	})
+	explicit := e.task("Explicit attribution wins in history", func(todo *Todo) {
+		todo.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+		todo.DirectionID, todo.DoneAt = "conv_lead_b", &at
+	})
+	openChild := e.task("Open step of a historical direction", func(todo *Todo) {
+		todo.PartOf = parent
+	})
+	if code, _ := doRoute(t, e.s, http.MethodPost, "/api/v1/assistant/directions/conv_lead_a/end", "", roleFull); code != http.StatusOK {
+		t.Fatalf("end direction: %d", code)
+	}
+	e.s.directionsSync(context.Background())
+
+	boardResp := doTodoHTTP(e.s, http.MethodGet, "/api/v1/todos", "")
+	var list todosList
+	if boardResp.Code != http.StatusOK || json.Unmarshal(boardResp.Body.Bytes(), &list) != nil || list.Board == nil {
+		t.Fatalf("GET /api/v1/todos: %d %s", boardResp.Code, boardResp.Body.String())
+	}
+	groupOf := map[string]string{}
+	var historicalLabel string
+	for _, group := range list.Board.DirectionGroups {
+		if group.DirectionID == "conv_lead_a" {
+			historicalLabel = group.Label
+		}
+		for _, id := range group.TodoIDs {
+			groupOf[id] = group.DirectionID
+		}
+	}
+	for id, want := range map[string]string{parent: "conv_lead_a", openChild: "conv_lead_a", closedChild: "conv_lead_a", explicit: "conv_lead_b"} {
+		if groupOf[id] != want {
+			t.Errorf("board direction for %s = %q, want %q", id, groupOf[id], want)
+		}
+	}
+	for direction, want := range map[string]string{"conv_lead_a": closedChild, "conv_lead_b": explicit} {
+		got := directionMustRead(t, e.s, "", direction)
+		if direction == "conv_lead_a" && (historicalLabel == "" || got.Name != historicalLabel) {
+			t.Errorf("historical direction label = %q in the board, %q in the direction read", historicalLabel, got.Name)
+		}
+		if len(got.EndedTasks) != 1 || got.EndedTasks[0].ID != want {
+			t.Errorf("ended tasks in %s = %+v, want %s", direction, got.EndedTasks, want)
+		}
+	}
+	for _, group := range e.tree().Directions {
+		if group.ID == "conv_lead_a" || !group.Secretary && (slices.Contains(taskIDs(group), parent) || slices.Contains(taskIDs(group), openChild)) {
+			t.Errorf("historical attribution leaked into current direction %s: %+v", group.ID, group)
+		}
+		if group.Secretary && (!slices.Contains(taskIDs(group), parent) || !slices.Contains(taskIDs(group), openChild)) {
+			t.Errorf("historically attributed open work missing from the secretary group: %+v", group)
+		}
+	}
+}
+
 func TestDirectionReadEndedTaskUsesStoredCancellation(t *testing.T) {
 	e := directionFilingEnv(t, nil)
 	now := time.Now().UTC()

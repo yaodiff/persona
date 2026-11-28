@@ -136,7 +136,7 @@ describe("the leader conversations in the sidebar", () => {
     expect(t("sidebar.recent_chats")).toBe("最近");
     expect(row("lead-a").textContent).toContain("Product");
     // what it has waiting on you in words; what runs under it is the arc alone, never "在做 N" as well (#6626)
-    expect(row("lead-a").textContent).toContain("等你 1");
+    expect(row("lead-a").textContent).toContain("待处理 1");
     expect(row("lead-a").textContent).not.toContain("在做");
     expect(row("lead-b").textContent).toContain("Infrastructure");
     expect(row("lead-b").textContent).not.toContain("在做");
@@ -169,9 +169,9 @@ describe("the leader conversations in the sidebar", () => {
     ] };
     await renderSidebar();
     expect(row("lead-a").querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
-    expect(row("lead-a").textContent).toContain("等你 1");
+    expect(row("lead-a").textContent).toContain("待处理 1");
     expect(row("lead-b").querySelector('[data-shape="arc"]')).toBeNull();
-    expect(row("lead-b").textContent).not.toMatch(/在做|等你/);
+    expect(row("lead-b").textContent).not.toMatch(/在做|待处理/);
   });
 
   it("spin on a working task from an older hub whose tree has no running", async () => {
@@ -190,7 +190,7 @@ describe("the leader conversations in the sidebar", () => {
     await renderSidebar();
     const tally = host.querySelector<HTMLElement>("[data-sidebar-rows] [data-direction-counts]");
     expect(tally).not.toBeNull();
-    expect(tally!.textContent).toBe("等你 1");
+    expect(tally!.textContent).toBe("待处理 1");
     expect(tally!.querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
   });
 
@@ -202,7 +202,7 @@ describe("the leader conversations in the sidebar", () => {
     ] };
     await renderSidebar();
     const tally = host.querySelector<HTMLElement>("[data-sidebar-rows] [data-direction-counts]");
-    expect(tally!.textContent).toBe("等你 3");
+    expect(tally!.textContent).toBe("待处理 3");
     expect(tally!.querySelector('[data-shape="arc"]')).toBeNull();
   });
 
@@ -223,7 +223,7 @@ describe("the leader conversations in the sidebar", () => {
     const outside = directionRow("direction-outside");
     const outsideLink = outside.querySelector<HTMLAnchorElement>('a[href="/s/mac/agent-7"]')!;
     expect(outsideLink.textContent).toContain("Outside release");
-    expect(outsideLink.textContent).toContain("等你 2");
+    expect(outsideLink.textContent).toContain("待处理 2");
     expect(outside.textContent).not.toContain("agent-7");
     expect(outside.querySelector('a[href^="/persona/"]')).toBeNull();
     expect(outside.querySelector('[aria-haspopup="menu"]')).toBeNull();
@@ -254,7 +254,7 @@ describe("the leader conversations in the sidebar", () => {
     ] };
     await renderSidebar();
     const tally = host.querySelector<HTMLElement>("[data-sidebar-rows] [data-direction-counts]")!;
-    expect(tally.textContent).toBe("等你 3");
+    expect(tally.textContent).toBe("待处理 3");
     expect(tally.querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
   });
 
@@ -460,9 +460,9 @@ describe("the leader conversations in the sidebar", () => {
     expect(rowIds()).toEqual(["lead-a", "lead-b", "mine", "newest"]);
     expect(row("mine").textContent).toContain("Docs sync");
     expect(row("mine").querySelector('[data-shape="arc"][data-state="working"]')).not.toBeNull();
-    expect(row("lead-a").textContent).toContain("等你 3");
+    expect(row("lead-a").textContent).toContain("待处理 3");
     // the secretary group's counts are never a lead's
-    expect(host.querySelector("[data-sidebar-rows]")!.textContent).not.toContain("等你 9");
+    expect(host.querySelector("[data-sidebar-rows]")!.textContent).not.toContain("待处理 9");
     named = { leaders: [{ id: "mine", name: "Docs sync", counts: { working: 1, needs_you: 0 }, running: true }] };
     push({ type: "directions" });
     await flush();

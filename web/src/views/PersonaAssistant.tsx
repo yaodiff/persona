@@ -13,7 +13,7 @@ import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFail
 import { conversationPage } from "../lib/conversation-page";
 import { navigate } from "../lib/router";
 import { hubHas, refreshAssistant, useStore } from "../lib/store";
-import { effectiveLauncher, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel, pickEffort, pickFast, pickLauncher, usePickedLauncher } from "../lib/assistant-chat";
+import { effectiveLauncher, NEW_CONVERSATION, pickedEffort, pickedLauncher, pickedModel, pickedServiceTier, pickEffort, pickLauncher, pickServiceTier, usePickedLauncher } from "../lib/assistant-chat";
 import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../lib/assistant-models";
 import { adoptedConversation, noteSent, outboxMessage } from "../lib/outbox";
 import { CLEAR_MAIN_FEATURE, isClearCommand, mainCommands, useMainCleared } from "../lib/main-clear";
@@ -289,7 +289,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
     const launcher = pickedLauncher(NEW_CONVERSATION);
     // written for the manager shown now: its retries go there even if the switcher moves meanwhile
     const chosen = chosenManager() ?? undefined;
-    const body = { prompt: out.text, images: out.images.length ? out.images : undefined, launcher, model: launcher ? pickedModel(NEW_CONVERSATION) : undefined, effort: pickedEffort(NEW_CONVERSATION), service_tier: startServiceTier && !chosen && pickedFast() ? "priority" : undefined, main: main || undefined };
+    const body = { prompt: out.text, images: out.images.length ? out.images : undefined, launcher, model: launcher ? pickedModel(NEW_CONVERSATION) : undefined, effort: pickedEffort(NEW_CONVERSATION), service_tier: startServiceTier && !chosen ? pickedServiceTier() : undefined, main: main || undefined };
     const headers = ownerHeaders(chosen);
     const from = shownManager();
     // one op id for this message, its quiet retries included (#1382); sent again after a refusal, it gets a new one
@@ -304,7 +304,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
         noteSent(r.session.machine_id, r.session.session_id, out);
         if (launcher) pickLauncher(NEW_CONVERSATION, undefined);
         pickEffort(NEW_CONVERSATION, undefined);
-        pickFast(false);
+        pickServiceTier(undefined);
         void refreshAssistant().catch(() => {});
         navigate(conversationPage(r.session.session_id, r.session.machine_id, from));
         return true;
@@ -374,11 +374,12 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
       )}
       <MainRuntimeSlot starting={Boolean(main && sending)} />
       <div className={docked ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5 pb-[10vh]"}>
-        <div className={docked ? "contents" : "w-full max-w-[640px]"} style={docked ? undefined : { animation: `fade-up 450ms ${EASE} both` }}>
+        <div className={docked ? "contents" : "w-full max-w-[640px]"} style={docked ? undefined : { animation: `fade-up 450ms ${EASE} backwards` }}>
           {sending ? (
-            // the conversation page's middle (ChatView): the message where its bubble will be, "Preparing" where the answer comes
+            // the conversation page's middle (ChatView): match ChatView's [data-chat-content] padding and gap so the
+            // first bubble stays at the same vertical position when ChatView takes over
             <div className="relative min-h-0 flex-1 overflow-y-auto" data-start-pending>
-              <div className="mx-auto flex w-full max-w-[880px] flex-col gap-7 px-5 pt-6 pb-10 sm:px-8" style={{ animation: `fade-up ${MOVE_MS}ms ${EASE} ${MOVE_MS / 2}ms both` }}>
+              <div className="mx-auto flex w-full max-w-[880px] flex-col gap-3.5 px-5 pt-7 pb-10 sm:px-8" style={main && cleared ? undefined : { animation: `fade-up ${MOVE_MS}ms ${EASE} ${MOVE_MS / 2}ms both` }}>
                 {/* what the conversation page opens with, before and after its transcript comes (ChatView's `opening`) */}
                 <div className="text-center text-[11.5px] text-ink-3">{t("chat-chatview.chat_start")}</div>
                 <DayLine date={startOfDay(sending.at)} />

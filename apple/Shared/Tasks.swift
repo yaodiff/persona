@@ -495,6 +495,17 @@ nonisolated struct TodosPage: Equatable, Sendable {
     var views: [String: TodoSummary] = [:]
     var counts: TodoCounts?
     var etag: String?
+    /// The hub-wide to-do revision this answer is current at (`X-Persona-Todos-Revision`, #13804): nil from a hub
+    /// without `todo_revision`, or when a write raced the read. A pushed read asks `GET /api/v1/todos/revision` with it.
+    var revision: String?
+}
+
+/// What `GET /api/v1/todos/revision` said about the revision a client holds (#13804).
+nonisolated enum TodoRevisionAnswer: Equatable, Sendable {
+    /// Still the one held (304): the list did not change.
+    case unchanged
+    /// Another one (nil: the hub named none): the list is read again.
+    case changed(String?)
 }
 
 /// A todo (docs/assistant/todos.md); a task is one whose `origin` is an assistant conversation.
@@ -925,8 +936,9 @@ nonisolated enum WatchInteractions {
     /// like the phone's Agents badge and inbox. The hub stamps `muted`; an older hub leaves it false. A question the
     /// assistant is still looking at stays off too (#544): it buzzes once it is handed to the user. So does a card its
     /// task's supervisor holds (`Interaction.supervisorHeld`): the watch would answer it with a tap.
+    /// A display copy also stays out: its authoritative card is the watch's one row and one buzz.
     static func leavingMuted(_ interactions: [Interaction]) -> [Interaction] {
-        interactions.filter { !$0.muted && !$0.isDelegating && $0.answerableHere }
+        interactions.filter { !$0.isDisplayMirror && !$0.muted && !$0.isDelegating && $0.answerableHere }
     }
 
     /// Cards passed to `WatchPet.status`: keeps non-muted pending cards (including delegating questions, which stay
@@ -1292,10 +1304,22 @@ nonisolated extension APIClient {
     /// The list, unless it is still the one tagged `etag` (a 304: nil list, #9590), its rows' views and counts, and its
     /// tag. Most `todos` events change nothing the list holds; reading it again was about 200 KB each on a busy hub.
     func todos(etag: String?) async throws -> TodosPage {
-        let answer = try await conditionalGet("/api/v1/todos", query: [:], etag: etag)
-        guard let data = answer.data else { return TodosPage(list: nil, etag: answer.etag) }
+        let answer = try await conditionalGet("/api/v1/todos", query: [:], etag: etag, header: Self.todoRevisionHeader)
+        guard let data = answer.data else { return TodosPage(list: nil, etag: answer.etag, revision: answer.header) }
         let read = try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(TodosResponse.self, from: data) }.value
-        return TodosPage(list: read.todos, views: read.views, counts: read.counts, etag: answer.etag)
+        return TodosPage(list: read.todos, views: read.views, counts: read.counts, etag: answer.etag, revision: answer.header)
+    }
+
+    /// The header a capable hub tags the to-do list and its revision with (#13804).
+    static let todoRevisionHeader = "X-Persona-Todos-Revision"
+
+    /// The hub-wide to-do revision (`GET /api/v1/todos/revision`, only while the hello lists `todo_revision`): whether
+    /// it is still `known` (a 304). Far cheaper than the list, which the hub does not build to answer it.
+    func todoRevision(known: String) async throws -> TodoRevisionAnswer {
+        let answer = try await conditionalGet("/api/v1/todos/revision", query: [:], etag: known, header: Self.todoRevisionHeader)
+        guard let data = answer.data else { return .unchanged }
+        nonisolated struct Revision: Decodable { var revision: String }
+        return .changed(answer.header ?? answer.etag ?? (try? JSON.decoder.decode(Revision.self, from: data))?.revision)
     }
 
     /// Starts an open plan; `edits` replace the fields the user changed (by index), `remember` lets this kind start
@@ -1331,7 +1355,11 @@ nonisolated extension APIClient {
                 case askedAt = "asked_at"
             }
         }
-        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept", body: Body(askedAt: askedAt, option: option, response: response))
+        // Plain acceptance (`acceptTryFromApp`) can block up to 45 s on `confirmOwnerTaskClose` while waiting for the
+        // owner to confirm closing active Agent work, so wait past the server's confirmation window.
+        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept",
+                           body: Body(askedAt: askedAt, option: option, response: response),
+                           timeout: Self.todoCloseConfirmWait)
     }
 
     /// Don't handle on a decision row (`decision_review`, docs/protocol/protocol.md): the round `reviewAt` stays hidden from

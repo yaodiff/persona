@@ -15,6 +15,8 @@ import { MeetingPreferences, settingsMeetingRoleLabel } from '../models/MeetingP
 import { machineOnline } from '../models/MachineDashboard';
 import { PhoneDefaultPermissionSection } from './PhoneDefaultPermissionSection';
 import { phoneSettingsRows,phoneSettingsSearchCatalog,phoneHubUpdateMessage } from '../core/PhoneSettingsNavigation';
+import { Haptics } from '../platform/Haptics';
+import { toastCenter } from '../models/ToastCenter';
 
 const AGENT_OPTIONS:string[] = ['phone_agent_folders','phone_claude_config','phone_codex_config','phone_agy_config','triage'];
 const LOCAL_SEARCH_ROUTES:string[] = ['phone_agent_folders','launchers','engine','schedules','privacy','memory','ssh','node_update','ledger','diagnostics'];
@@ -33,6 +35,7 @@ function settingIcon(id:string):Resource {
   switch (id) {
     case 'models': return $r('sys.symbol.square_stack_3d');
     case 'assistant': return Symbols.persona;
+    case 'standing_authorizations': return $r('sys.symbol.checkmark_shield');
     case 'channels': return $r('sys.symbol.ellipsis_bubble');
     case 'connectors': return $r('sys.symbol.link');
     case 'extensions': return Symbols.apps;
@@ -40,6 +43,7 @@ function settingIcon(id:string):Resource {
     case 'phone_live_screen': return $r('sys.symbol.desktop');
     case 'phone_native_alarms': return $r('sys.symbol.bell');
     case 'phone_health_reports': return $r('sys.symbol.heart');
+    case 'phone_xiaoyi': return Symbols.persona;
     case 'phone_hubs': return $r('sys.symbol.link');
     case 'phone_pairing': return $r('sys.symbol.qrcode');
     case 'phone_settings_advanced': return $r('sys.symbol.slider_horizontal_2');
@@ -76,6 +80,40 @@ function settingIcon(id:string):Resource {
   }
 }
 
+function settingTint(id:string):ResourceColor {
+  switch (id) {
+    case 'notifications':
+    case 'phone_native_alarms':
+    case 'phone_health_reports':
+      return Colors.danger;
+    case 'appearance':
+    case 'phone_language_options':
+      return Colors.indigo;
+    case 'models':
+    case 'assistant':
+    case 'standing_authorizations':
+    case 'privacy':
+    case 'phone_xiaoyi':
+      return Colors.ai;
+    case 'machines':
+    case 'phone_live_screen':
+    case 'ssh':
+      return Colors.teal;
+    case 'channels':
+    case 'phone_inbox_sources':
+    case 'connectors':
+      return Colors.positive;
+    case 'phone_meeting_options':
+    case 'schedules':
+    case 'phone_knowledge_selection':
+    case 'memory':
+    case 'phone_agent_layout':
+      return Colors.working;
+    default:
+      return Colors.iconAccent;
+  }
+}
+
 function settingArtwork(id:string):Resource|undefined {
   switch (id) {
     case 'models': return $r('app.media.phone_settings_model');
@@ -103,6 +141,7 @@ function settingLabel(id:string, label:(page:string)=>string):string {
   if (id === 'phone_language_options') return tr('phone_settings_language_dictation');
   if (id === 'models') return tr('phone_settings_models');
   if (id === 'assistant') return tr('phone_settings_profile');
+  if (id === 'standing_authorizations') return tr('standing_auth_title');
   if (id === 'appearance') return tr('phone_settings_display');
   if (id === 'phone_meeting_options') return tr('meetings');
   if (id === 'machines') return tr('phone_machines');
@@ -222,18 +261,36 @@ export struct SettingsDirectory {
     }
   }
   @Builder identity() {
-    Button({type:ButtonType.Normal}) { Row({space:9}) {
+    Button({type:ButtonType.Normal}) { Row({space:12}) {
       Stack({alignContent:Alignment.BottomEnd}) {
-        Text(this.account().slice(0,1)).fontSize('16vp').fontWeight(FontWeight.Bold).fontColor(Color.White)
-          .width(32).height(32).textAlign(TextAlign.Center).backgroundColor(Colors.ai).borderRadius(16)
-        Circle().width(9).height(9).fill(this.model.connected ? Colors.positive : Colors.secondary)
-          .stroke(Colors.listGroup(this.elevated)).strokeWidth(1.5)
-      }.width(32).height(32)
-      Text(this.currentManager() ? tr('settings_assistant_named').replace('{name}',this.account()) : tr('phone_settings_assistant'))
-        .fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Bold).fontColor(Colors.ink).layoutWeight(1)
-      if (this.currentManager()) Text(tr('phone_settings_switch')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
-    }.width('100%').padding({left:15,right:13,top:13,bottom:10})
-      }.width('100%').constraintSize({minHeight:PhoneStyle.formSize(64,78,nativeEnvironment.fontScale)}).padding(0).backgroundColor(Color.Transparent).accessibilityText(tr('settings_this_assistant')+' · '+this.account())
+        Text(this.account().slice(0,1)).fontSize('17vp').fontWeight(FontWeight.Bold).fontColor(Color.White)
+          .width(38).height(38).textAlign(TextAlign.Center).backgroundColor(Colors.ai).borderRadius(Tokens.radiusCapsule)
+        Circle().width(10).height(10).fill(this.model.connected ? Colors.positive : Colors.secondary)
+          .stroke(Colors.card(this.elevated)).strokeWidth(2)
+      }.width(38).height(38)
+      Column({space:2}) {
+        Text(this.currentManager() ? tr('settings_assistant_named').replace('{name}',this.account()) : tr('phone_settings_assistant'))
+          .fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+        Text(tr(this.model.connected ? 'online' : 'offline'))
+          .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(this.model.connected ? Colors.positive : Colors.secondary).maxLines(1)
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      if (this.currentManager()) {
+        Row({space:4}) {
+          Text(tr('phone_settings_switch')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(Colors.link)
+          SymbolGlyph($r('sys.symbol.chevron_down')).fontSize('12vp').fontColor([Colors.tertiary]).accessibilityLevel('no')
+        }
+        .padding({left:10,right:8,top:5,bottom:5})
+        .backgroundColor(Colors.control)
+        .borderRadius(Tokens.capsule)
+      }
+    }.width('100%').padding({left:15,right:14,top:12,bottom:12})
+      }.width('100%').constraintSize({minHeight:PhoneStyle.formSize(62,74,this.environment.fontScale)}).padding(0)
+      .backgroundColor(Colors.card(this.elevated))
+      .borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .margin({bottom:12})
+      .accessibilityText(tr('settings_this_assistant')+' · '+this.account())
       .bindMenu(this.managerMenu(this.model.scope())).id('settings.assistant_switch')
   }
   @Builder directoryFootnote(text:string, id:string, beforeNextCard:number=0) {
@@ -254,11 +311,13 @@ export struct SettingsDirectory {
         } else if (title) PhoneSectionTitle({text:title})
         Column() {
           ForEach(entries ?? this.results,(id:string,ix:number) => {
-            PhoneSettingsRow({elevated:this.elevated,label:settingLabel(id,this.label),detail:this.subtitle(id),symbol:settingIcon(id),artwork:settingArtwork(id),tint:Colors.iconAccent,
+            PhoneSettingsRow({elevated:this.elevated,label:settingLabel(id,this.label),detail:this.subtitle(id),symbol:settingIcon(id),artwork:settingArtwork(id),tint:settingTint(id),
               identity:id==='phone_settings_advanced' ? 'settings.advanced' : 'settings.'+id,last:ix+1===(entries ?? this.results).length,action:() => this.openEntry(id)})
           },(id:string,ix:number) => JSON.stringify([id,ix,this.subtitle(id),(entries ?? this.results).length]))
           if (!(entries ?? this.results).length) Text(tr('no_results')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.secondary).width('100%').padding(15).id('settings.no_results')
         }.width('100%').clip(true).backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.cardRadius)
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
       }.width('100%')
     }.margin({top:homeScope === 'hub' ? 17.5 : 0})
   }
@@ -302,9 +361,9 @@ export struct SettingsDirectory {
             .onChange((v:string) => { this.query = v; this.onQueryChange(v); }).id('settings.search')
           if (this.showDismissSearch && this.query.length) this.clearSearchButton()
         }.padding({left:this.showDismissSearch ? 12.33 : 12,right:this.showDismissSearch && this.query.length ? this.searchSize(2.33,5.67) : 8})
-          .layoutWeight(1).borderRadius(32).backgroundColor(this.elevated ? Colors.sheetControl : Colors.control)
+          .layoutWeight(1).borderRadius(Tokens.radiusCapsule).backgroundColor(this.elevated ? Colors.sheetControl : Colors.control)
           .linearGradient(this.searchGradient())
-          .outlineWidth(this.systemSearchMaterial() ? 0.33 : 0).outlineColor($r('app.color.settings_search_outline')).outlineRadius(32)
+          .outlineWidth(this.systemSearchMaterial() ? 0.33 : 0).outlineColor($r('app.color.settings_search_outline')).outlineRadius(Tokens.radiusCapsule)
           .shadow({radius:this.systemSearchMaterial() ? 4 : 0,color:$r('app.color.settings_search_shadow'),offsetY:2})
           if (this.showDismissSearch && this.query.trim()) Button({type:ButtonType.Circle}) {
             PhoneOutlineIcon({name:'navigationClose',color:Colors.ink,iconScale:this.searchSize(1.02,23.33/17)})
@@ -359,14 +418,15 @@ export struct PhoneSettingsOptions {
       ForEach(['auto','zh-CN','keyboard'], (choice: string) => {
         MenuItem({content: this.dictationLabel(choice)}).selected(this.dictation.choice === choice).selectIcon(true)
           .enabled(!this.dictation.saving).onClick(() => {
+            Haptics.selection();
             this.dictation.choose(choice).then((saved: boolean) => {
-              if (!saved && this.mounted) this.getUIContext().getPromptAction().showToast({message:tr('cache_unavailable')});
+              if (!saved && this.mounted) toastCenter.error(tr('cache_unavailable'));
             });
           }).id('settings.dictation.' + choice)
       }, (choice: string) => choice)
       MenuItem({content: tr('phone_keyboard_settings')}).onClick(() => {
         inputMethod.getSetting().showOptionalInputMethods().catch(() => {
-          if (this.mounted) this.getUIContext().getPromptAction().showToast({message:tr('failed')});
+          if (this.mounted) toastCenter.error(tr('failed'));
         });
       }).id('settings.dictation.system')
     }
@@ -375,10 +435,11 @@ export struct PhoneSettingsOptions {
   private choose(language:string):void {
     const owner=this.model;
     if (language===owner.language || owner.languageChanging) return;
+    Haptics.selection();
     const scope=owner.scope(), generation=owner.connectionGeneration();
     owner.setLanguage(language).then(() => {
       if (this.mounted && this.model===owner && owner.owns(generation,scope) && language==='default' && owner.language==='default')
-        this.getUIContext().getPromptAction().showToast({message:tr('language_after_restart')});
+        toastCenter.info(tr('language_after_restart'));
     }).catch(() => {});
   }
   build() {
@@ -388,10 +449,12 @@ export struct PhoneSettingsOptions {
         ListItem() {
         Column() {
           ForEach(AGENT_OPTIONS,(id:string,ix:number) => {
-            PhoneSettingsRow({elevated:this.elevated,insetGrouped:true,label:settingLabel(id,this.label),symbol:settingIcon(id),artwork:settingArtwork(id),tint:Colors.iconAccent,
+            PhoneSettingsRow({elevated:this.elevated,insetGrouped:true,label:settingLabel(id,this.label),symbol:settingIcon(id),artwork:settingArtwork(id),tint:settingTint(id),
               identity:'settings.'+id,last:ix === AGENT_OPTIONS.length-1,action:() => this.onOpen(id)})
           },(id:string) => id)
         }.width('100%').clip(true).backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.settingsGroupRadius)
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.settingsGroupRadius})
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
         }.margin({top:17.5})
         ListItem() { Text(tr('phone_agent_tools_note')).fontSize(Tokens.caption).maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
           .lineHeight(PhoneStyle.settingsExampleLineHeight(15.67,22,this.environment.fontScale)).fontColor(PhoneStyle.settingsSecondary)
@@ -417,6 +480,8 @@ export struct PhoneSettingsOptions {
             if (ix<LANGUAGES.length-1) Divider().strokeWidth(0.5).color(Colors.divider).margin({left:20})
           },(lang:string) => lang)
         }.width('100%').clip(true).backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.cardRadius)
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
         }
         ListItem() { Text(tr('phone_language_system_note')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%').padding({left:20,right:20,top:7,bottom:20}) }
         ListItem() {
@@ -425,7 +490,10 @@ export struct PhoneSettingsOptions {
             Text(this.dictationLabel(this.dictation.choice)).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.link)
             SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
           }.constraintSize({minHeight:PhoneStyle.groupedRowHeight(this.environment.fontScale)}).width('100%').padding({left:20,right:20,top:7,bottom:7})
-            .backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.cardRadius).accessibilityGroup(true)
+            .backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.cardRadius)
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+            .shadow(PhoneStyle.cardElevation(this.environment.dark))
+            .accessibilityGroup(true)
             .bindMenu(this.dictationMenu()).accessibilityRole(AccessibilityRoleType.BUTTON).id('settings.dictation.choice')
         }
         ListItem() { Text(tr('phone_dictation_automatic_note')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%').padding({left:20,right:20,top:7,bottom:10}) }

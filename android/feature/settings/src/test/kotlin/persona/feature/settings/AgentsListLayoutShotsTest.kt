@@ -36,6 +36,7 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.pagePadding
 import persona.core.domain.sort.AgentListDisplay
 import persona.core.domain.sort.AgentListDisplaySettings
+import persona.core.domain.sort.AgentSeenRows
 import java.io.File
 
 /**
@@ -52,6 +53,8 @@ class AgentsListLayoutShotsTest {
     private val choice = object : AgentListDisplaySettings {
         override val display = MutableStateFlow(AgentListDisplay.Avatar)
         override suspend fun setDisplay(value: AgentListDisplay) { display.value = value }
+        override val seenRows = MutableStateFlow(AgentSeenRows.Stay)
+        override suspend fun setSeenRows(value: AgentSeenRows) { seenRows.value = value }
     }
 
     @Test fun glass() {

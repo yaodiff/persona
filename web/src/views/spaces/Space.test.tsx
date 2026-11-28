@@ -31,13 +31,28 @@ vi.mock("../../lib/api", async (orig) => {
       if (path === "/assistant/tracks/money/space-md" && method === "PUT") {
         return hub.mdWrite === "stale" ? Promise.reject(new real.ApiError(409, "space-md changed", {})) : Promise.resolve({ content: (init!.json as { content: string }).content, digest: "d2", state: "Taxes filed." });
       }
+      if (path.startsWith("/assistant/conversations?space=") && method === "POST") {
+        return Promise.resolve({ session: { machine_id: "mac", session_id: "c-new", title: "New chat", space: "money" } });
+      }
       return Promise.resolve({});
     },
   };
 });
+const composer = vi.hoisted(() => ({
+  onSend: null as null | ((out: { text: string; images: unknown[] }) => Promise<boolean>),
+}));
 vi.mock("../chat/ChatView", () => ({ ChatView: () => null }));
-vi.mock("../chat/Composer", () => ({ Composer: () => null }));
+vi.mock("../chat/ModelPill", () => ({ AssistantModelPill: () => <span data-testid="space-model-pill">model-pill</span> }));
+vi.mock("../chat/Composer", () => ({
+  Composer: ({ onSend, trailing }: { onSend: (out: { text: string; images: unknown[] }) => Promise<boolean>; trailing?: React.ReactNode }) => {
+    composer.onSend = onSend;
+    return <div data-testid="space-composer">{trailing}</div>;
+  },
+}));
 
+import { NEW_CONVERSATION, pickEffort, pickLauncher, pickModel, pickServiceTier } from "../../lib/assistant-chat";
+import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../../lib/assistant-models";
+import { getState, reset } from "../../lib/store";
 import { resetTracksForTest } from "../../lib/tracks";
 import { NewSpace } from "./NewSpace";
 import { Space } from "./Space";
@@ -73,6 +88,10 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   document.body.innerHTML = "";
+  reset();
+  pickLauncher(NEW_CONVERSATION, undefined);
+  pickEffort(NEW_CONVERSATION, undefined);
+  pickServiceTier(undefined);
 });
 
 describe("a space's home", () => {
@@ -107,6 +126,36 @@ describe("a space's home", () => {
     act(() => root.render(<Space slug="nowhere" fresh onToggleSidebar={() => {}} />));
     await flush();
     expect(host.textContent).toContain(t("spaces.gone_title"));
+  });
+
+  it("shows the model selector pill and forwards picked launcher, model, effort and service tier on start", async () => {
+    Object.assign(getState(), {
+      assistant: { machine_id: "mac", launcher: "claude", conversations: [] },
+      features: [ASSISTANT_START_SERVICE_TIER_FEATURE],
+    });
+    pickLauncher(NEW_CONVERSATION, "codex");
+    pickModel(NEW_CONVERSATION, "gpt-5.4");
+    pickEffort(NEW_CONVERSATION, "high");
+    pickServiceTier("fast");
+
+    act(() => root.render(<Space slug="money" fresh onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.querySelector('[data-testid="space-model-pill"]')).not.toBeNull();
+
+    await act(async () => {
+      await composer.onSend?.({ text: "Check Q4 budget", images: [] });
+    });
+    await flush();
+    const post = hub.calls.find((c) => c.method === "POST" && c.path === "/assistant/conversations?space=money");
+    expect(post?.json).toEqual({
+      prompt: "Check Q4 budget",
+      images: undefined,
+      launcher: "codex",
+      model: "gpt-5.4",
+      effort: "high",
+      service_tier: "fast",
+      space: "money",
+    });
   });
 });
 

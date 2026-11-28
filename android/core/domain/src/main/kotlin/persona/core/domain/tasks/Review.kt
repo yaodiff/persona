@@ -55,9 +55,9 @@ val Todo.reviewStage: ReviewStage?
         }
     }
 
-/** An undismissed decision only the owner can move, with the same label on the row and detail as in triage (#5732). */
+/** An undismissed decision or personal verification only the owner can move, with the same label on the row and detail as in triage (#5732). */
 fun Todo.waitsForOwner(): Boolean =
-    !isDone && !decisionDismissed() && (reviewState == "needs_user" || openAsk?.outcome == "decide" || openAsk?.outcome == "cannot")
+    !isDone && (reviewState == "user_check" || !decisionDismissed() && (reviewState == "needs_user" || openAsk?.outcome == "decide" || openAsk?.outcome == "cannot"))
 
 /** Delivered work at rest still awaits acceptance; `live` alone never means done (#5732). */
 fun Todo.deliveredAwaitingReview(lookup: (SessionKey) -> Session?, now: Long = System.currentTimeMillis()): Boolean {

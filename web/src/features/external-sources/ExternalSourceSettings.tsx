@@ -19,6 +19,17 @@ export interface ExternalSourceSettingsProps {
   channel?: string;
   /** Known account IDs and their visible names, when the integration already lists them. */
   accounts?: { channel: string; name: string }[];
+  /** Host-provided wording where the blocks appear without their usual page context (an extension's details). */
+  copy?: ExternalSourceSettingsCopy;
+}
+
+export interface ExternalSourceSettingsCopy {
+  channelDefaultsTitle?: string;
+  channelHint?: string;
+  flowsTitle?: string;
+  flowsHint?: string;
+  /** An empty list is not useful where the block is secondary: leave it out until something is connected. */
+  hideEmptyFlows?: boolean;
 }
 
 function channelChoices(provider: string | undefined, accounts: ExternalSourceSettingsProps["accounts"], refs: ExternalRef[]) {
@@ -34,7 +45,7 @@ function channelChoices(provider: string | undefined, accounts: ExternalSourceSe
   return [...choices.values()];
 }
 
-export function ExternalSourceSettings({ manager, provider, channel, accounts }: ExternalSourceSettingsProps) {
+export function ExternalSourceSettings({ manager, provider, channel, accounts, copy }: ExternalSourceSettingsProps) {
   const [editing, setEditing] = useState(false);
   const summary = useExternalRead(useCallback((signal: AbortSignal) =>
     externalBindingSummary(manager, provider, channel, signal), [manager, provider, channel]));
@@ -47,11 +58,12 @@ export function ExternalSourceSettings({ manager, provider, channel, accounts }:
     .map((row) => [row.id, row.title])), [todos, manager]);
   const directionTitles = useMemo(() => new Map(directions.data?.map((row) => [row.id, row.name || row.title])), [directions.data]);
   if (isExternalSourcesUnsupported(summary.error)) return null;
+  const showFlows = !copy?.hideEmptyFlows || summary.loading || summary.error !== undefined || bindings.length > 0;
 
   return (
     <div data-external-source-settings>
       {!summary.loading && (
-        <Group title={t("external-sources.channel_defaults")} footer={t("external-sources.channel_hint")}>
+        <Group title={copy?.channelDefaultsTitle ?? t("external-sources.channel_defaults")} footer={copy?.channelHint ?? t("external-sources.channel_hint")}>
           {provider
             ? <Row label={providerLabel(provider)} wrapHint>
                 <Button tone="quiet" className="min-h-11" icon="pencil" onClick={() => setEditing(true)}>{t("external-sources.edit_defaults")}</Button>
@@ -61,7 +73,7 @@ export function ExternalSourceSettings({ manager, provider, channel, accounts }:
               </div>}
         </Group>
       )}
-      <Group title={t("external-sources.flows")}>
+      {showFlows && <Group title={copy?.flowsTitle ?? t("external-sources.flows")} footer={copy?.flowsHint}>
         {summary.loading && <div className="px-4 py-3"><Loading /></div>}
         {summary.error !== undefined && <RowFailed text={errorText(summary.error)} retry={t("todos.retry")} onRetry={summary.retry} />}
         {summary.data && !bindings.length && <Row label={t("external-sources.no_flows")} wrapHint />}
@@ -87,7 +99,7 @@ export function ExternalSourceSettings({ manager, provider, channel, accounts }:
             );
           })}
         </ul>
-      </Group>
+      </Group>}
       {editing && (
         <ChannelDefaultsDialog manager={manager} provider={provider} channel={channel}
           channels={channelChoices(provider, accounts, bindings.map((binding) => binding.external_ref))}

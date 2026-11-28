@@ -170,7 +170,7 @@ describe("the badge's mark on the To-dos page (#11838)", () => {
 
   it.each([
     { lang: "en", mark: "Up to you", title: "No Agent is working on it. Counted in the sidebar's To-dos badge.", count: "2 up to you" },
-    { lang: "zh-Hans", mark: "你来处理", title: "没有 Agent 在做这件事。算在侧栏「待办」的角标里。", count: "你来处理 2 项" },
+    { lang: "zh-Hans", mark: "你来处理", title: "当前没有 Agent 在处理此事项。会计入侧栏「待办」的角标计数。", count: "你来处理 2 项" },
     { lang: "ja", mark: "あなたの対応", title: "どのエージェントも作業していません。サイドバーの「ToDo」のバッジに数えられています。", count: "あなたの対応 2件" },
   ] as const)("says it in $lang", async ({ lang, mark, title, count }) => {
     await initI18n(lang);

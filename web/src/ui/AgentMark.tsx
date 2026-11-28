@@ -7,7 +7,8 @@
 //
 // Where each mark comes from (also in THIRD_PARTY_NOTICES.md). Simple Icons (SI) releases the files under CC0; the
 // marks stay their owners' trademarks and are shown only to say which agent a row is, or which product a personal
-// Agents account drives (views/agents/account-groups.tsx, #16248: Grok, the Blossom for ChatGPT, Claude, Gemini).
+// Agents account drives where the provider is that product's own agent (views/agents/account-groups.tsx, #16248: Claude
+// Duet and Gemini Tasks); other products draw their own letter.
 //   claude    SI 16.36.0 `claude.svg` (source claude.ai), coral #D97757 as in apple/…/Brands/brand-claude
 //   codex     OpenAI Blossom, github.com/openai/openai-cookbook `chatgpt-blossom-black.svg`, as apple/…/Brands/brand-openai
 //   opencode  SI `opencode.svg`; source github.com/anomalyco/opencode packages/identity/mark.svg (the project is MIT)

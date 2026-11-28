@@ -93,7 +93,7 @@ internal class ChatInteractionController(
 
     private suspend fun resolve(interaction: Interaction, resolution: Resolution, handoffCard: Boolean = false): ResolveOutcome {
         val phrase = resolution.ownerApprovalPhrase ?:
-            return interactions.resolveOutcome(interaction.id, resolution, handoffCard)
+            return interactions.resolveOccurrence(interaction, resolution, handoffCard)
         interactions.replyOwnerApproval(interaction, phrase)
         return ResolveOutcome()
     }

@@ -43,5 +43,8 @@
   "later_handled": "Marked as handled.",
   "pr_followup_host_not_connected": "Not watched: {host} is not connected.",
   "pr_followup_unsupported_host": "Not watched: Persona cannot read review or conflict status on {host}.",
-  "pr_followup_unwatched": "Not watched: code host is not connected."
+  "pr_followup_unwatched": "Not watched: code host is not connected.",
+  "supervision_deferred": "Follow-ups saved for briefing",
+  "supervision_triage_unavailable": "The background model could not be reached.",
+  "supervision_triage_invalid": "The background model did not give a usable decision."
 }

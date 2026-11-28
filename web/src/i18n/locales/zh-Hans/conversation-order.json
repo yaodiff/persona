@@ -1,12 +1,12 @@
 {
   "arrange_title": "整理对话",
-  "arrange_hint": "按住拖拽柄拖动，或使用上移／下移。排序会同步到你的其他设备。",
+  "arrange_hint": "拖动排序手柄，或使用「上移」「下移」调整顺序。排序将同步至你的其他设备。",
   "arrange_done": "完成",
   "drag_conversation": "拖动排序",
   "move_up": "上移「{title}」",
   "move_down": "下移「{title}」",
   "order_reset": "恢复按时间排序",
   "order_reset_done": "已恢复按活动时间排序",
-  "order_undo_stale": "已有更新的排序，未撤销",
-  "order_save_failed": "没能保存对话排序：{error}"
+  "order_undo_stale": "排序已有更新，本次撤销未生效",
+  "order_save_failed": "无法保存对话排序：{error}"
 }

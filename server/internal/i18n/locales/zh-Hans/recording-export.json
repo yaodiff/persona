@@ -1,0 +1,12 @@
+{
+  "empty": "这段录音没有可导出的转录文本。",
+  "expired": "转录文本已超过录音保留期限。",
+  "bad_timing": "转录文本中包含无效的字幕时间。",
+  "invalid": "无法读取中枢返回的录音详情。",
+  "format": "请选择 Markdown 或 WebVTT 作为录音导出格式。",
+  "minutes": "会议纪要",
+  "recap": "全天回顾",
+  "summary": "摘要",
+  "transcript": "转录文本",
+  "echo": "[Persona 回声] {text}"
+}

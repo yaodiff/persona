@@ -1325,6 +1325,25 @@ class PublicAdministratorTests(unittest.TestCase):
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.assert_private(self.scan())
 
+    def test_reference_line_among_the_generated_owner_block_still_authorizes(self):
+        target = self.repo / ".github/CODEOWNERS"
+        target.write_text(self.REFERENCES[".github/CODEOWNERS"]
+                          + "# BEGIN persona-core (generated from schema/core-paths.txt by scripts/hooks/codeowners.py; do not edit)\n"
+                          + "/.github/CODEOWNERS @reviewer-one\n"
+                          + "/server/ @reviewer-one @reviewer-two\n"
+                          + "# END persona-core\n")
+        self.git("-c", "core.hooksPath=", "commit", "-qam", "Test generated owner block")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_two_published_reference_lines_authorize_nothing(self):
+        target = self.repo / ".github/CODEOWNERS"
+        target.write_text(self.REFERENCES[".github/CODEOWNERS"] + "/docs/SUPER_RULES.md @another-admin\n")
+        self.git("-c", "core.hooksPath=", "commit", "-qam", "Test conflicting reference lines")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assert_private(self.scan())
+
     def test_unreadable_published_evidence_fails_closed(self):
         errors = (OSError("unavailable"), subprocess.CalledProcessError(1, "git"),
                   subprocess.TimeoutExpired("git", 10))

@@ -4,12 +4,12 @@
   "uptime_days": "{d} 天",
   "uptime_hours_minutes": "{h} 小时 {m} 分钟",
   "uptime_minutes": "{m} 分钟",
-  "no_space": "不在空间里",
+  "no_space": "未加入空间",
   "cores_other": "{count} 核",
   "conn_local": "hub 所在的机器，直接运行 node",
-  "conn_ssh": "hub 通过 ssh {host} 接入",
-  "conn_link": "这台电脑主动连 hub（电脑链路）",
-  "conn_kind": "接入方式：{kind}",
+  "conn_ssh": "hub 通过 ssh {host} 连接",
+  "conn_link": "由这台电脑主动连接 hub（电脑链路）",
+  "conn_kind": "连接方式：{kind}",
   "fact_system": "系统",
   "fact_system_build": "{name}（{build}）",
   "fact_kernel": "内核",
@@ -19,7 +19,7 @@
   "fact_cores": "核心",
   "fact_memory": "内存",
   "fact_hostname": "主机名",
-  "fact_boot": "开机于",
+  "fact_boot": "开机时间",
   "fact_boot_uptime": "{day}（已运行 {uptime}）",
-  "fact_connection": "接入"
+  "fact_connection": "连接方式"
 }

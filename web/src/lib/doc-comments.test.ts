@@ -51,8 +51,8 @@ describe("client_id：重试不发两次", () => {
 describe("writeErrorText", () => {
   it("用 hub 的原话；不支持的文档说清楚", () => {
     expect(writeErrorText(new ApiError(502, "飞书网关未登录飞书", { error: "飞书网关未登录飞书" }))).toBe("飞书网关未登录飞书");
-    expect(writeErrorText(new ApiError(400, "x", { error: "x", code: "comment_unsupported" }))).toBe("这种文档不能这样评论");
-    expect(writeErrorText(new TypeError("Failed to fetch"))).toBe("连不上 hub");
+    expect(writeErrorText(new ApiError(400, "x", { error: "x", code: "comment_unsupported" }))).toBe("此类文档暂不支持该评论方式");
+    expect(writeErrorText(new TypeError("Failed to fetch"))).toBe("无法连接 hub");
   });
 });
 

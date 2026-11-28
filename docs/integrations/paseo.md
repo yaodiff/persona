@@ -231,8 +231,11 @@ refresh replaces it, including removals. There is no new setting or model depend
   - **Creation keeps project identity** (#9726, #14844): an explicitly selected workspace supplies its own project ID without
     re-resolving its folder. With a directory alone, the bridge reads the active projects and compares physical paths for the
     directory, Git checkout and main checkout. A main-checkout project wins over legacy projects rooted at the linked worktree
-    or its subdirectories. Duplicate active records at the selected physical root use the lowest project ID, independent of
-    registry order; matches at different non-main roots are `project_ambiguous` for new creation. Names and remote URLs are
+    or its subdirectories. Duplicate active records at the selected physical root (symlink spellings of one directory) resolve
+    independent of registry order: the record registered at the physical path itself, then the one with more workspaces, then
+    the lowest project ID; matches at different non-main roots are `project_ambiguous` for new creation. When no project matches,
+    the bridge hands Paseo the physical path rather than the symlink spelling, so the new project is registered at its canonical
+    root. Names and remote URLs are
     never used to merge independent clones. A failed or malformed project list stops new creation. Only a successful list with no
     match allows Paseo to allocate a project. Project discovery is best effort only for an implicit start that already has a
     worktree workspace: on failure or ambiguity it falls back to the original owner-less workspace lookup, and rethrows the

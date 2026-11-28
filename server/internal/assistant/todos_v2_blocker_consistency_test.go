@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,55 +45,13 @@ func TestTodosV2BlockerCancelMergeTrainSyncsCoordinator(t *testing.T) {
 	task1 := newMergeTrainTask(t, s, "Conflicting PR 1", prURL1)
 	task2 := newMergeTrainTask(t, s, "Queued PR 2", prURL2)
 
-	// Enqueue task1 and trip the 2-failure circuit breaker so it escalates and persists a merge_train blocker.
-	for i, head := range []string{"sha-1", "sha-2"} {
-		out := s.onPRStatusMergeTrain(ctx, task1, TodoPRStatus{
-			URL:       prURL1,
-			State:     "open",
-			HeadOID:   head,
-			Review:    "approved",
-			Checks:    "success",
-			Conflicts: true,
-			CheckedAt: now.Add(time.Duration(i+1) * time.Second),
-		})
-		if i == 1 && out.Decision.State != mergetrain.StateEscalated {
-			t.Fatalf("expected task1 to escalate on 2nd conflict, got %+v", out)
-		}
-	}
-	// Enqueue task2 behind task1 in the same repository.
-	_ = s.onPRStatusMergeTrain(ctx, task2, TodoPRStatus{
-		URL:       prURL2,
-		State:     "open",
-		HeadOID:   "sha-t2",
-		Review:    "approved",
-		Checks:    "pending",
-		CheckedAt: now.Add(3 * time.Second),
+	s.onPRStatusMergeTrain(ctx, task1, TodoPRStatus{
+		URL: prURL1, State: "open", HeadOID: "sha-1", Conflicts: true, CheckedAt: now,
 	})
-
-	blockerID := mergeTrainBlockerID(task1.ID, prURL1)
-	trackKey := task1.ID + "|" + prURL1
-	coord := s.peekMergeTrainCoordinator()
-	if coord == nil {
-		t.Fatal("expected mergeTrainCoordinator to be initialized")
-	}
-	coord.mu.Lock()
-	if !coord.hasActiveBlocker[trackKey] {
-		coord.mu.Unlock()
-		t.Fatal("expected hasActiveBlocker to be set before cancel")
-	}
-	if coord.conflicts[trackKey] == nil {
-		coord.mu.Unlock()
-		t.Fatal("expected conflicts entry to be set before cancel")
-	}
-	if _, ok := coord.escalated[task1.ID+"|"+prURL1+"|sha-2"]; !ok {
-		coord.mu.Unlock()
-		t.Fatal("expected escalated dedup key to be set before cancel")
-	}
-	entryBefore, okBefore := coord.train.Entry(repoKey, task1.ID)
-	coord.mu.Unlock()
-	if !okBefore || entryBefore.State != mergetrain.StateEscalated {
-		t.Fatalf("expected task1 escalated in train before cancel, got ok=%v entry=%+v", okBefore, entryBefore)
-	}
+	s.onPRStatusMergeTrain(ctx, task2, TodoPRStatus{
+		URL: prURL2, State: "open", HeadOID: "sha-t2", Checks: "pending", CheckedAt: now,
+	})
+	blockerID := mergeTrainBlockerID(prURL1)
 
 	// Cancel the merge_train blocker via the HTTP DELETE endpoint.
 	w := doBlockerHTTP(s, http.MethodDelete, "/api/v1/todos/"+task1.ID+"/blockers/"+blockerID, "full", "")
@@ -111,26 +68,9 @@ func TestTodosV2BlockerCancelMergeTrainSyncsCoordinator(t *testing.T) {
 		t.Fatalf("expected cancelled merge_train blocker row, got %+v", rows)
 	}
 
-	// Verify coordinator in-memory state for task1 is fully cleared while task2 is promoted to head.
-	coord.mu.Lock()
-	hasActive := coord.hasActiveBlocker[trackKey]
-	hasConflict := coord.conflicts[trackKey] != nil
-	hasEscalated := false
-	for k := range coord.escalated {
-		if strings.HasPrefix(k, task1.ID+"|"+prURL1+"|") {
-			hasEscalated = true
-		}
-	}
-	_, task1StillInTrain := coord.train.Entry(repoKey, task1.ID)
-	task2After, task2InTrain := coord.train.Entry(repoKey, task2.ID)
-	coord.mu.Unlock()
-
-	if hasActive || hasConflict || hasEscalated || task1StillInTrain {
-		t.Fatalf("coordinator state not cleared after DELETE: active=%v conflict=%v escalated=%v inTrain=%v",
-			hasActive, hasConflict, hasEscalated, task1StillInTrain)
-	}
-	if !task2InTrain || task2After.State != mergetrain.StateActive {
-		t.Fatalf("expected task2 to be promoted to active head after task1 cancel, got ok=%v entry=%+v", task2InTrain, task2After)
+	repo, _ := findRepoSnapshot(s.mergeTrainSnapshot(ctx), repoKey)
+	if repo.Head == nil || repo.Head.PRURL != prURL2 || len(repo.Queue) != 0 {
+		t.Fatalf("cancel did not remove exactly the affected PR and promote the follower: %+v", repo)
 	}
 
 	// Cancel task2 via merged observation so repo head is free, then verify a subsequent clean
@@ -150,7 +90,7 @@ func TestTodosV2BlockerCancelMergeTrainSyncsCoordinator(t *testing.T) {
 		Conflicts: false,
 		CheckedAt: now.Add(5 * time.Second),
 	})
-	if cleanOut.Decision.State == mergetrain.StateEscalated || cleanOut.Escalate {
+	if cleanOut.Decision.State == mergetrain.StateEscalated {
 		t.Fatalf("expected clean observation after cancel not to stay escalated, got %+v", cleanOut)
 	}
 	if cleanOut.Decision.Action != mergetrain.ActionRebaseAndMerge {

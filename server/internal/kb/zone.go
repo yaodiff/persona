@@ -29,6 +29,14 @@ func (s *Store) Zone() *time.Location {
 	return s.zoneLocked()
 }
 
+// ChatZone is the zone a chat's day files are read in, as Since reads them: the archive's, or in a read-only copy the
+// one its files were written in.
+func (s *Store) ChatZone(chatID string) *time.Location {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.chatReadZoneLocked(chatID)
+}
+
 func (s *Store) zoneLocked() *time.Location {
 	if s.zone == nil {
 		return time.Local

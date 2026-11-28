@@ -16,7 +16,7 @@ import (
 
 func TestConfirmationMetricsDatabase(t *testing.T) {
 	ctx := context.Background()
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(ctx, dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestGoldenConfirmationBriefFacts(t *testing.T) {
 
 func TestConfirmationMetricsDeliveryBoundary(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

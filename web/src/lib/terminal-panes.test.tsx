@@ -24,6 +24,8 @@ vi.mock("./api", () => ({
   enc: encodeURIComponent,
   errorText: (e: unknown) => String(e),
 }));
+vi.mock("./store", () => ({ onHubEvent: () => () => {} }));
+vi.mock("./shown-hints", () => ({ onShownHint: () => () => {} }));
 
 const { REFRESH_MS, usePanes } = await import("./terminal-panes");
 

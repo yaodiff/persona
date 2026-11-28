@@ -6,8 +6,10 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialInfo
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.*
+import kotlinx.serialization.encoding.CompositeDecoder
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.json.*
 
 @SerialInfo
@@ -27,9 +29,36 @@ annotation class WireStrict
 abstract class WireSerializer<T>(private val generated: KSerializer<T>) : KSerializer<T> {
     override val descriptor: SerialDescriptor get() = generated.descriptor
 
+    private val streamKnownFieldsOnly: Boolean by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        descriptor.kind == StructureKind.CLASS && (0 until descriptor.elementsCount).all { index ->
+            alternatives(descriptor, index).isEmpty()
+        }
+    }
+
     override fun deserialize(decoder: Decoder): T {
         val input = decoder as? JsonDecoder ?: throw SerializationException("Wire models require JSON")
+        if (streamKnownFieldsOnly && input.json.configuration.ignoreUnknownKeys) {
+            return deserializeKnownFieldsStreaming(input)
+        }
         return input.json.decodeFromJsonElement(generated, clean(input.decodeJsonElement(), descriptor))
+    }
+
+    /**
+     * When decoding a class from a stream with `ignoreUnknownKeys`, skip unknown keys directly in the
+     * JSON lexer instead of materializing large server-only subtrees (e.g. `brief.log`, `view`, `board`)
+     * into a transient `JsonObject` / `HashMap`, while still running D5 [clean] on every known field.
+     */
+    private fun deserializeKnownFieldsStreaming(input: JsonDecoder): T {
+        val fields = LinkedHashMap<String, JsonElement>()
+        input.decodeStructure(descriptor) {
+            while (true) {
+                val index = decodeElementIndex(descriptor)
+                if (index == CompositeDecoder.DECODE_DONE) break
+                fields[descriptor.getElementName(index)] =
+                    decodeSerializableElement(descriptor, index, JsonElement.serializer())
+            }
+        }
+        return input.json.decodeFromJsonElement(generated, clean(JsonObject(fields), descriptor))
     }
 
     override fun serialize(encoder: Encoder, value: T) = generated.serialize(encoder, value)

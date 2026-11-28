@@ -91,7 +91,7 @@ func TestRequestedAgentNameIgnoresBackgroundLimits(t *testing.T) {
 		t.Fatalf("shared title %q after %d calls", got, calls.Load())
 	}
 	rec := agentNameRecordOf(s, "server", "s1")
-	if !rec.Requested || rec.Manual || rec.Changes != 1 || rec.Failures != 0 || rec.LastFailure != "" || !rec.NextAttempt.IsZero() || rec.NamedOutput != c.OutputTokens {
+	if !rec.Requested || rec.Manual || rec.Changes != 1 || rec.Failures != 0 || rec.LastFailure != "" || !rec.NextAttempt.IsZero() || rec.NamedOutput != int(c.OutputTokensValue()) {
 		t.Fatalf("ledger: %+v", rec)
 	}
 	// The same answer again is no change, and the background still does not spend another call on it.

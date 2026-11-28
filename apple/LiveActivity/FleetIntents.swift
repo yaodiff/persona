@@ -12,9 +12,13 @@ struct AllowPermissionIntent: LiveActivityIntent {
     nonisolated static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
 
     @Parameter(title: "Interaction") var interactionID: String?
+    @Parameter(title: "Interaction Occurrence") var interactionCreatedAt: String?
 
     nonisolated init() {}
-    nonisolated init(interactionID: String?) { self.interactionID = interactionID }
+    nonisolated init(interactionID: String?, interactionCreatedAt: String? = nil) {
+        self.interactionID = interactionID
+        self.interactionCreatedAt = interactionCreatedAt
+    }
 
     nonisolated func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
@@ -22,7 +26,7 @@ struct AllowPermissionIntent: LiveActivityIntent {
             Logger(subsystem: "persona", category: "live-activity").warning("AllowPermissionIntent performed without interactionID")
             return .result()
         }
-        await FleetActions.run(.allow, interactionID)
+        await FleetActions.run(.allow, interactionID, occurrence: interactionCreatedAt)
         #endif
         return .result()
     }
@@ -34,9 +38,13 @@ struct DenyPermissionIntent: LiveActivityIntent {
     nonisolated static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
 
     @Parameter(title: "Interaction") var interactionID: String?
+    @Parameter(title: "Interaction Occurrence") var interactionCreatedAt: String?
 
     nonisolated init() {}
-    nonisolated init(interactionID: String?) { self.interactionID = interactionID }
+    nonisolated init(interactionID: String?, interactionCreatedAt: String? = nil) {
+        self.interactionID = interactionID
+        self.interactionCreatedAt = interactionCreatedAt
+    }
 
     nonisolated func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
@@ -44,7 +52,7 @@ struct DenyPermissionIntent: LiveActivityIntent {
             Logger(subsystem: "persona", category: "live-activity").warning("DenyPermissionIntent performed without interactionID")
             return .result()
         }
-        await FleetActions.run(.deny, interactionID)
+        await FleetActions.run(.deny, interactionID, occurrence: interactionCreatedAt)
         #endif
         return .result()
     }
@@ -58,9 +66,13 @@ struct ApprovePlanIntent: LiveActivityIntent {
     nonisolated static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
 
     @Parameter(title: "Interaction") var interactionID: String?
+    @Parameter(title: "Interaction Occurrence") var interactionCreatedAt: String?
 
     nonisolated init() {}
-    nonisolated init(interactionID: String?) { self.interactionID = interactionID }
+    nonisolated init(interactionID: String?, interactionCreatedAt: String? = nil) {
+        self.interactionID = interactionID
+        self.interactionCreatedAt = interactionCreatedAt
+    }
 
     nonisolated func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
@@ -68,7 +80,7 @@ struct ApprovePlanIntent: LiveActivityIntent {
             Logger(subsystem: "persona", category: "live-activity").warning("ApprovePlanIntent performed without interactionID")
             return .result()
         }
-        await FleetActions.run(.approvePlan, interactionID)
+        await FleetActions.run(.approvePlan, interactionID, occurrence: interactionCreatedAt)
         #endif
         return .result()
     }

@@ -81,6 +81,7 @@ func (n *Node) sessionsHistory(ctx context.Context, raw json.RawMessage) (sessio
 	}
 	page, next := sessionhistory.Merge(parts, q.Limit)
 	for _, it := range page {
+		it.V.Session.Title = transcript.ListTitle(it.V.Session.Title) // as the live list's rows (sessionListIn, #16343)
 		ans.Rows = append(ans.Rows, it.V)
 	}
 	if next != nil {

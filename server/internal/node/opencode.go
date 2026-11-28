@@ -62,7 +62,7 @@ func (n *Node) mergeOpencodeRow(s *proto.Session) {
 	if r.Title != "" {
 		s.Title, s.TitleManual, s.TitleSource = r.Title, r.TitleManual, r.TitleSource
 	}
-	s.OutputTokens = r.OutputTokens
+	s.SetOutputTokens(int(r.OutputTokensValue()))
 	if r.LastText != "" {
 		s.LastText = r.LastText
 	}

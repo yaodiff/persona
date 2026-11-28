@@ -271,7 +271,7 @@ internal data class CalendarUpdatePreparation(
         val title = current.title.ifEmpty { res.getString(R.string.phonetools_untitled) }
         val lines = mutableListOf(res.getString(R.string.phonetools_calendar_change, title))
         current.calendarName?.let { lines += res.getString(R.string.phonetools_calendar_calendar, it) }
-        if (change.start != null) {
+        if (change.start != null || change.end != null) {
             lines += res.getString(R.string.phonetools_calendar_time_change,
                 calendarRange(currentStart, currentEnd, current.allDay, res, zone),
                 calendarRange(after.start, after.end, after.allDay, res, zone))

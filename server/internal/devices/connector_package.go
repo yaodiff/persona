@@ -41,7 +41,7 @@ var errNoConnector = errors.New("no Persona Link build for this platform")
 // makes one: what a node reports of itself cannot have it sent the connector as its build.
 func (d *Devices) connectorKey(goos, arch string) packageKey {
 	cfg := d.config()
-	return packageKey{goos: goos, arch: arch, program: programConnector, hub: cfg.HubVersion, base: cfg.NodePackagesURL}
+	return packageKey{goos: goos, arch: arch, program: programConnector, own: d.edition(), hub: cfg.HubVersion, base: cfg.NodePackagesURL}
 }
 
 // platformWord is an OS or architecture as Go names them (linux, arm64): it goes into a file name and a URL.
@@ -49,7 +49,7 @@ var platformWord = lazyre.New(`^[a-z0-9]+$`)
 
 // lookupConnector finds the connector of the hub's version for k's platform, in order: the hub's own (the node binary
 // dir's, then the bundled dir's persona-link-<os>-<arch>, only with a .version beside it that says the hub's, as
-// deploy.sh writes it after the binary, and Go build info of that platform and program); the release of the hub's
+// deploy.sh writes it after the binary, and Go build info of that platform, program and manager edition); the release of the hub's
 // version (dl/<version>/manifest.json's links, or latest.json's from a source without dl/<version>/ when it is that
 // release). A newer release is never taken in its place (a node build's fallback is judged by the node protocol,
 // which says nothing of the connector). While the site does not answer, the build fetched or found before stands.
@@ -71,6 +71,10 @@ func (d *Devices) lookupConnector(ctx context.Context, k packageKey) (nodePackag
 			d.logf("connector package for %s-%s: ignore local %s: %v", k.goos, k.arch, name, err)
 			continue
 		}
+		if err := checkPackageEdition(p, k.own); err != nil {
+			d.logf("connector package for %s-%s: ignore local %s: %v", k.goos, k.arch, name, err)
+			continue
+		}
 		return nodePackage{Version: k.hub, Program: programConnector, goos: k.goos, arch: k.arch, path: p}, nil
 	}
 	if k.base == "" || k.hub == "dev" || !safeVersion.MatchString(k.hub) {
@@ -85,14 +89,14 @@ func (d *Devices) lookupConnector(ctx context.Context, k packageKey) (nodePackag
 		pkg.flat = flat
 		return pkg, nil
 	}
-	m, err := d.fetchManifest(ctx, k.base+"/"+url.PathEscape(k.hub)+"/manifest.json")
+	m, err := d.fetchManifest(ctx, k.base+"/"+url.PathEscape(k.hub)+"/"+update.ReleaseManifestName(d.edition()))
 	if err == nil {
 		return release(m, false)
 	}
 	if errors.Is(err, errNoManifest) {
 		// A source without dl/<version>/ (a GitHub repository's releases/latest/download) serves the release of the
 		// hub's version as its latest.json while that is the newest.
-		m, err = d.fetchManifest(ctx, k.base+"/latest.json")
+		m, err = d.fetchManifest(ctx, k.base+"/"+update.FeedName(d.edition()))
 		switch {
 		case err == nil && m.Version == k.hub:
 			return release(m, true)

@@ -20,6 +20,8 @@ type (
 	ListOptions       = mailwire.ListOptions
 	ListResult        = mailwire.ListResult
 	SetFlagsRequest   = mailwire.SetFlagsRequest
+	MoveRequest       = mailwire.MoveRequest
+	MoveResult        = mailwire.MoveResult
 	SendRequest       = mailwire.SendRequest
 	MessageIDs        = mailwire.MessageIDs
 	AccountRow        = mailwire.AccountRow
@@ -44,6 +46,7 @@ const (
 	ToolSearch         = mailwire.ToolSearch
 	ToolRead           = mailwire.ToolRead
 	ToolSend           = mailwire.ToolSend
+	ToolMove           = mailwire.ToolMove
 	ToolSaveAttachment = mailwire.ToolSaveAttachment
 
 	MaxSavedAttachment = mailwire.MaxSavedAttachment

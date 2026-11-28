@@ -45,6 +45,9 @@ export interface CandidateDraftEntry {
   effort: string;
   permission_mode: string;
   speed: string;
+  /** The four dimensions' runtime and channel (PUT /model-profiles/{id} keeps them beside the launcher alias). */
+  runtime?: string;
+  channel?: string;
 }
 
 export interface TierDraftEntry {
@@ -115,6 +118,8 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
           : [
               {
                 launcher: tier.launcher ?? "",
+                ...(tier.runtime ? { runtime: tier.runtime } : {}),
+                ...(tier.channel ? { channel: tier.channel } : {}),
                 model: tier.model,
                 effort: tier.effort,
                 permission_mode: tier.permission_mode,
@@ -135,6 +140,8 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
           effort: c.effort ?? "",
           permission_mode: c.permission_mode ?? "",
           speed: c.speed ?? "",
+          ...(c.runtime ? { runtime: c.runtime } : {}),
+          ...(c.channel ? { channel: c.channel } : {}),
         })),
       };
     });
@@ -227,9 +234,10 @@ export function profileDraftProblems(draft: ProfileDraft, launcherKinds?: Readon
     tier.candidates.forEach((cand, index) => {
       const where = t("settings-modelprofiles.tier_candidate_where", { tier: tierLabel, index: index + 1 });
       const launcher = cand.launcher.trim();
-      if (!launcher) {
+      // a candidate given by its runtime and channel alone gets its launcher alias from the hub on save
+      if (!launcher && !cand.runtime?.trim() && !cand.channel?.trim()) {
         problems.push(t("settings-modelprofiles.err_tier_candidate_launcher", { tier: tierLabel, index: index + 1 }));
-      } else if (!validProfileValue(launcher) || launcher.includes(" ")) {
+      } else if (launcher && (!validProfileValue(launcher) || launcher.includes(" "))) {
         problems.push(t("settings-modelprofiles.err_value", { where, field: "launcher" }));
       }
       const model = cand.model.trim();
@@ -296,6 +304,10 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     if (!tierName) continue;
     const candidates: ModelProfileTierCandidate[] = entry.candidates.map((cand) => {
       const item: ModelProfileTierCandidate = { launcher: cand.launcher.trim() };
+      const runtime = cand.runtime?.trim();
+      const channel = cand.channel?.trim();
+      if (runtime) item.runtime = runtime;
+      if (channel) item.channel = channel;
       const model = cand.model.trim();
       const effort = cand.effort.trim();
       const permissionMode = cand.permission_mode.trim();
@@ -309,6 +321,8 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     });
     const primary = candidates[0] ?? { launcher: "" };
     const out: ModelProfileTier = { launcher: primary.launcher };
+    if (primary.runtime) out.runtime = primary.runtime;
+    if (primary.channel) out.channel = primary.channel;
     if (primary.model) out.model = primary.model;
     if (primary.effort) out.effort = primary.effort;
     if (primary.permission_mode) out.permission_mode = primary.permission_mode;

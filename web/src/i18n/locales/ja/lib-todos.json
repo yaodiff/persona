@@ -1,5 +1,6 @@
 {
   "auto_done": "自動完了",
+  "supervisor_processing": "監督が対応中",
   "model_request_failed": "モデルへのリクエストに失敗しました",
   "unassigned": "ToDo なし",
   "unassigned_hint": "どのToDoにも関連付けられていないエージェントです。ターミナルで自分で開いたものや、Larkやスマートフォンなどほかの場所から開始されたものです。行を右クリック（または行末の ⋯）›「ToDoに関連付け…」で関連付けられます。",

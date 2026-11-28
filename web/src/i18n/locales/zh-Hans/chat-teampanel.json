@@ -1,11 +1,11 @@
 {
   "strip_label": "子 Agent",
-  "summary": "子 Agent {count} 个 · {running} 个在跑",
+  "summary": "共 {count} 个子 Agent · {running} 个运行中",
   "waiting": "等待子 Agent",
-  "scroll_left": "滚动到前面的子 Agent",
-  "scroll_right": "滚动到更多子 Agent",
-  "no_sides": "没有分支会话",
-  "sides_scroll_left": "滚动到前面的分支会话",
-  "sides_scroll_right": "滚动到更多分支会话",
+  "scroll_left": "滚动至更早的子 Agent",
+  "scroll_right": "滚动至更多子 Agent",
+  "no_sides": "暂无分支会话",
+  "sides_scroll_left": "滚动至更早的分支会话",
+  "sides_scroll_right": "滚动至更多分支会话",
   "side_sessions": "分支会话"
 }

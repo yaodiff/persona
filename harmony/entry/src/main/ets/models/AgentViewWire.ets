@@ -52,7 +52,7 @@ export type AgentReason =
   | ReasonSeen
   | ReasonNotRunning
   | ReasonHostUnknown;
-export const AGENT_REASON_KINDS = ["cards", "terminal_dialog", "turn", "background", "unseen", "just_finished", "asks", "usage_limit", "model", "start_refused", "restart_interrupted", "seen", "not_running", "host_unknown"] as const;
+export const AGENT_REASON_KINDS: readonly string[] = ["cards", "terminal_dialog", "turn", "background", "unseen", "just_finished", "asks", "usage_limit", "model", "start_refused", "restart_interrupted", "seen", "not_running", "host_unknown"];
 
 /**
  * needs_you: pending cards (questions, plans, permissions, forms) stand for it, its folded children's included.

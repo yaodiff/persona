@@ -10,7 +10,7 @@ import { assistantFooter } from "./Settings";
 describe("assistantFooter", () => {
   it("says there is no computer yet when the hub has none, with no gaps", () => {
     const none = assistantFooter("", true)!;
-    expect(none).toContain("还没接上电脑");
+    expect(none).toContain("尚未连接电脑");
     expect(none).not.toMatch(/在\s+的\s+里/);
   });
 

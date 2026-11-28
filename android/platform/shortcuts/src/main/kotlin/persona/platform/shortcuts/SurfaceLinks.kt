@@ -46,8 +46,33 @@ internal object SurfaceLinks {
 
     fun agents(context: Context): Intent = view(context, NotificationRoute(AppTab.Agents).uri())
 
+    /** The Persona tab (main conversation root). */
+    fun persona(context: Context): Intent = view(context, NotificationRoute(AppTab.Persona).uri())
+
+    /** Opens the main conversation directly when its key is known, otherwise the Persona tab. */
+    fun mainChat(context: Context, mainSession: SessionKey?): Intent =
+        mainSession?.let { conversation(context, it, assistant = true) } ?: persona(context)
+
     /** The Persona tab with the cursor in its composer ("Ask Persona"). */
     fun ask(context: Context): Intent = view(context, Uri.parse(AskPersonaLink))
+
+    /** Opens a specific conversation with its composer focused and keyboard up. */
+    fun askConversation(context: Context, key: SessionKey, assistant: Boolean?): Intent {
+        val builder = Uri.Builder().scheme("persona").authority("open")
+            .appendQueryParameter("target", "chat")
+            .appendQueryParameter("machine", key.machineId)
+            .appendQueryParameter("session", key.sessionId)
+            .appendQueryParameter("focus", "composer")
+        when (assistant) {
+            true -> builder.appendQueryParameter("kind", "assistant")
+            false -> builder.appendQueryParameter("kind", "agent")
+            null -> Unit
+        }
+        return view(context, builder.build())
+    }
+
+    /** A tap on the Ask Persona widget: the main chat composer when paired, otherwise the pairing page. */
+    fun askWidget(context: Context, paired: Boolean): Intent = if (paired) ask(context) else app(context)
 
     /** Agents › To-dos with "New to-do" open ("New to-do"). */
     fun newTodo(context: Context): Intent = view(context, Uri.parse(NewTodoLink))

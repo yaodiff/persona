@@ -1,13 +1,13 @@
 {
   "title": "历史记录",
   "sessions": "历史记录",
-  "content": "会话或终端内容",
+  "content": "会话或标签页",
   "back": "返回历史记录",
   "terminal_unavailable": "当前无法打开终端",
-  "pick_session": "打开一个会话",
-  "pick_session_detail": "从列表选择会话，即可查看聊天记录。",
+  "pick_session": "打开会话",
+  "pick_session_detail": "从列表中选择一个会话，即可查看对话内容。",
   "pending": "待处理",
-  "pending_empty": "没有待处理的会话或请求。",
+  "pending_empty": "暂无待处理的会话或请求。",
   "pending_request": "待处理请求",
   "all": "历史记录"
 }

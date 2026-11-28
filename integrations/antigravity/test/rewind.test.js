@@ -27,6 +27,7 @@ const nativeRecord = (step) => ({
 })
 
 async function fixture(t, extra = {}) {
+  const { runtimeOptions, ...snapshotExtra } = extra
   const home = mkdtempSync(join(tmpdir(), 'agy-rewind-'))
   const config = join(home, 'config')
   const logs = join(config, 'brain', RAW, '.system_generated/logs')
@@ -36,7 +37,7 @@ async function fixture(t, extra = {}) {
   writeFileSync(join(home, 'calls.jsonl'), '')
   const nativeFile = join(home, 'trajectory.json')
   const snapshot = {
-    status: 'CASCADE_RUN_STATUS_IDLE', trajectory: { cascadeId: RAW, steps: records.map(nativeRecord) }, ...extra,
+    status: 'CASCADE_RUN_STATUS_IDLE', trajectory: { cascadeId: RAW, steps: records.map(nativeRecord) }, ...snapshotExtra,
   }
   writeFileSync(nativeFile, JSON.stringify(snapshot))
   const db = new DatabaseSync(join(config, 'conversation_summaries.db'))
@@ -46,7 +47,7 @@ async function fixture(t, extra = {}) {
   writeFileSync(binary, `#!/bin/sh\nexec '${process.execPath}' '${FAKE}' '${home}' "$@"\n`)
   chmodSync(binary, 0o700)
   const node = await startFakeNode(t)
-  const options = { home, agyDir: config, agyBin: binary, socketPath: node.path, log: () => {} }
+  const options = { home, agyDir: config, agyBin: binary, socketPath: node.path, log: () => {}, ...runtimeOptions }
   let runtime = createAgyRuntime(options)
   t.after(async () => { await runtime.stop(); db.close(); rmSync(home, { recursive: true, force: true }) })
   runtime.start()
@@ -530,6 +531,88 @@ test('native progress cannot clear a cut until the replacement export catches up
   assert.deepEqual(texts(caughtUp), replacement.map((step) => step.content))
 })
 
+// The export keeps the abandoned steps and numbers the next turn after its last line, as the fake's prompt export
+// does, while the native trajectory continues right after the steps the rewind kept (#14297).
+function proceed({ transcript, nativeFile, db }, question, answer) {
+  const index = readFileSync(transcript, 'utf8').trim().split('\n').length
+  const steps = [
+    { ...records[2], step_index: index, content: question, created_at: later },
+    { ...records[3], step_index: index + 1, content: answer, created_at: later },
+  ]
+  appendFileSync(transcript, steps.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  snapshot.trajectory.steps.push(...steps.map(nativeRecord))
+  writeFileSync(nativeFile, JSON.stringify(snapshot))
+  db.prepare('UPDATE conversation_summaries SET step_count = ?, last_modified_time = ?')
+    .run(snapshot.trajectory.steps.length, new Date().toISOString())
+}
+
+test('a conversation that continues after a rewind shows its new steps behind the retained prefix (#14297)', async (t) => {
+  const fx = await fixture(t)
+  const { node, rewind, calls } = fx
+  await rewind()
+  const rewound = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(rewound), ['Repeat', 'First answer'])
+  assert.ok(rewound.history.endsWith(':cut:2'))
+  await node.peer.call('session.watch', { session_id: SESSION, since_seq: rewound.to_seq })
+
+  proceed(fx, 'New question', 'New answer')
+  const continued = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(continued), ['Repeat', 'First answer', 'New question', 'New answer'])
+  assert.notEqual(continued.history, rewound.history, 'the page moves past the remembered cut')
+  assert.ok(continued.to_seq > rewound.to_seq)
+  await until('the continued page is pushed', () => node.all('session.items')
+    .some((batch) => batch.history === continued.history && batch.items.some((item) => item.text === 'New answer')))
+
+  proceed(fx, 'Later question', 'Later answer')
+  const appended = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(appended), [...texts(continued), 'Later question', 'Later answer'])
+  assert.equal(appended.history, continued.history, 'later steps append')
+  const checks = calls().filter((call) => call.method === 'GetCascadeTrajectory').length
+  assert.deepEqual(texts(await node.peer.call('session.items', { session_id: SESSION })), texts(appended))
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectory').length, checks, 'a confirmed cut is not checked again')
+})
+
+test('a rewind after the conversation continued cuts at the visible step and the conversation continues again (#14297)', async (t) => {
+  const fx = await fixture(t)
+  const { node, rewind } = fx
+  const page = () => node.peer.call('session.items', { session_id: SESSION })
+  await rewind()
+  proceed(fx, 'New question', 'New answer')
+  proceed(fx, 'Later question', 'Later answer')
+  const continued = await page()
+  assert.deepEqual(texts(continued), ['Repeat', 'First answer', 'New question', 'New answer', 'Later question', 'Later answer'])
+
+  await rewind({ prompt: 'Later question' })
+  const again = await page()
+  assert.deepEqual(texts(again), ['Repeat', 'First answer', 'New question', 'New answer'])
+  assert.notEqual(again.history, continued.history)
+  proceed(fx, 'Last question', 'Last answer')
+  const resumed = await page()
+  assert.deepEqual(texts(resumed), [...texts(again), 'Last question', 'Last answer'])
+
+  await rewind({ prompt: 'New question', prompts_after: 1 })
+  const first = await page()
+  assert.deepEqual(texts(first), ['Repeat', 'First answer'])
+  assert.notEqual(first.history, resumed.history)
+})
+
+test('a native rewind after the conversation continued hides the steps it dropped (#14297)', async (t) => {
+  const fx = await fixture(t)
+  const { node, rewind, nativeFile, db } = fx
+  await rewind()
+  proceed(fx, 'New question', 'New answer')
+  proceed(fx, 'Later question', 'Later answer')
+  const continued = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(texts(continued).length, 6)
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  writeFileSync(nativeFile, JSON.stringify({ ...snapshot, trajectory: { ...snapshot.trajectory, steps: snapshot.trajectory.steps.slice(0, 4) } }))
+  db.prepare('UPDATE conversation_summaries SET step_count = 4, last_modified_time = ?').run(new Date().toISOString())
+  const rewound = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(texts(rewound), ['Repeat', 'First answer', 'New question', 'New answer'])
+  assert.notEqual(rewound.history, continued.history)
+})
+
 test('a stale native check cannot erase a cut installed by a newer rewind', async (t) => {
   const { node, home, transcript, rewind, db, nativeFile } = await fixture(t)
   await rewind()
@@ -717,4 +800,197 @@ test('settled Persona ACP turn recovers when summary row is not yet present whil
   assert.equal(node.last('runtime.sessions').sessions.find((s) => s.session_id === SESSION).status, 'unknown')
   const externalPage = await node.peer.call('session.items', { session_id: SESSION })
   assert.notEqual(externalPage.items.at(-1).kind, 'turn_duration')
+})
+
+test('full rewind to step 0 reports idle instead of unknown no_relevant_step immediately and after restart', async (t) => {
+  const { node, rewind, db, restart } = await fixture(t)
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+  await rewind({ occurrence: 2, prompts_after: 1 })
+  await until('rewound empty conversation settles to idle', () => row()?.status === 'idle')
+  db.prepare('UPDATE conversation_summaries SET last_modified_time = ?').run('2025-01-01T00:00:00Z')
+  await restart()
+  // Trigger cut reconciliation via session.items so the empty native trajectory is verified after restart.
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items, [])
+  await until('restarted empty rewound conversation reports idle', () => row()?.status === 'idle')
+})
+
+test('settled Persona ACP turn survives transient unspecified/empty summary_not_idle while staying fail-closed on active, unrecognized, and failed DB states', async (t) => {
+  const { node, runtime, transcript, db, restart } = await fixture(t, {
+    promptPlan: [{ reply: 'Settled across reconciliation', export: true }],
+  })
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+  const refresh = async (title) => {
+    const before = node.all('runtime.sessions').length
+    await node.peer.call('session.rename', { session_id: SESSION, title })
+    await until('inventory refreshed', () => node.all('runtime.sessions').length > before)
+    return row()
+  }
+
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Run work' })
+  await until('Persona-owned ACP prompt settled', () => runtime.idle())
+
+  // Transient empty and UNSPECIFIED summary statuses keep settled done in-memory and across restart
+  // when step_count does not exceed the exported steps (lagging or caught up at maxStep + 1 = 6).
+  for (const transientStatus of ['', 'CASCADE_RUN_STATUS_UNSPECIFIED']) {
+    for (const stepCount of [4, 6]) {
+      db.prepare('UPDATE conversation_summaries SET status = ?, step_count = ? WHERE conversation_id = ?').run(transientStatus, stepCount, RAW)
+      assert.equal((await refresh(`in-mem-${transientStatus || 'empty'}-${stepCount}`)).status, 'done')
+      await restart()
+      assert.equal(row().status, 'done', `restarted settled turn stays done under ${transientStatus || '<empty>'} (step_count=${stepCount})`)
+    }
+    // Unexported native steps (step_count > maxStep + 1) must stay fail-closed unknown even under UNSPECIFIED/empty.
+    db.prepare('UPDATE conversation_summaries SET status = ?, step_count = 7 WHERE conversation_id = ?').run(transientStatus, RAW)
+    assert.equal((await refresh(`ahead-${transientStatus || 'empty'}`)).status, 'unknown')
+  }
+  db.prepare('UPDATE conversation_summaries SET status = ?, step_count = 4 WHERE conversation_id = ?').run('CASCADE_RUN_STATUS_UNSPECIFIED', RAW)
+
+  // Unrecognized future status must stay unknown (never guessed as done).
+  db.prepare('UPDATE conversation_summaries SET status = ? WHERE conversation_id = ?').run('FUTURE_STATUS', RAW)
+  assert.equal((await refresh('future-status')).status, 'unknown')
+
+  // Active native statuses and not_fully_idle always win and report working.
+  for (const active of [
+    ['CASCADE_RUN_STATUS_RUNNING', 0],
+    ['CASCADE_RUN_STATUS_CANCELING', 0],
+    ['CASCADE_RUN_STATUS_BUSY', 0],
+    ['CASCADE_RUN_STATUS_UNSPECIFIED', 1],
+  ]) {
+    db.prepare('UPDATE conversation_summaries SET status = ?, not_fully_idle = ? WHERE conversation_id = ?').run(active[0], active[1], RAW)
+    assert.equal((await refresh(`active-${active[0]}-${active[1]}`)).status, 'working')
+  }
+
+  // Locked summary DB must report unknown (never masked by listedTranscriptCache).
+  db.prepare('UPDATE conversation_summaries SET status = ?, not_fully_idle = 0 WHERE conversation_id = ?').run('CASCADE_RUN_STATUS_UNSPECIFIED', RAW)
+  assert.equal((await refresh('cached-settled')).status, 'done')
+  db.exec('BEGIN EXCLUSIVE')
+  try {
+    assert.equal((await refresh('locked-db')).status, 'unknown')
+  } finally {
+    db.exec('ROLLBACK')
+  }
+  assert.equal((await refresh('recovered-db')).status, 'done')
+
+  // Later unverified external step invalidates settled recovery even under UNSPECIFIED.
+  appendFileSync(transcript, JSON.stringify({ step_index: 6, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: later, content: 'External follow-up' }) + '\n')
+  assert.equal((await refresh('external-step')).status, 'unknown')
+})
+
+test('settled tool-only Persona ACP turn recovers as idle across summary_behind and unspecified status without emitting turn_duration', async (t) => {
+  const { node, runtime, transcript, db, restart } = await fixture(t, {
+    promptPlan: [
+      { toolStart: true, tool: true, export: true, calls: [{ name: 'run_command', args: { CommandLine: 'echo ok' } }], toolOutput: 'ok' },
+      { toolStart: true, tool: true, export: true, calls: [{ name: 'run_command', args: { CommandLine: 'echo two' } }], toolOutput: 'two' },
+      { error: 'Follow-up failed' },
+    ],
+  })
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+  const refresh = async (title) => {
+    const before = node.all('runtime.sessions').length
+    await node.peer.call('session.rename', { session_id: SESSION, title })
+    await until('inventory refreshed', () => node.all('runtime.sessions').length > before)
+    return row()
+  }
+
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Run silent tool' })
+  await until('tool-only turn settled', () => runtime.idle())
+  // Summary DB still lags at step_count = 4 while exported transcript has steps 4 (USER_INPUT), 5 (PLANNER_RESPONSE tool_call), 6 (GENERIC).
+  await until('tool-only turn reports idle under summary_behind', () => row()?.status === 'idle')
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(page.items.some((it) => it.kind === 'turn_duration' && it.seq >= 5), false, 'tool-only idle turn must not emit turn_duration')
+
+  // Survives companion restart under summary_behind and under CASCADE_RUN_STATUS_UNSPECIFIED.
+  await restart()
+  assert.equal(row().status, 'idle', 'restarted tool-only turn stays idle under summary_behind')
+  db.prepare('UPDATE conversation_summaries SET status = ? WHERE conversation_id = ?').run('CASCADE_RUN_STATUS_UNSPECIFIED', RAW)
+  await restart()
+  assert.equal(row().status, 'idle', 'restarted tool-only turn stays idle under UNSPECIFIED')
+
+  // A later unverified running step invalidates the persisted tool-only marker.
+  appendFileSync(transcript, JSON.stringify({ step_index: 7, type: 'GENERIC', status: 'RUNNING', created_at: later, content: 'Still running' }) + '\n')
+  assert.equal((await refresh('later-running-tool')).status, 'unknown')
+
+  // Even in-memory (without restart), a later external DONE GENERIC step cannot hijack or overwrite the settled tool-only turn.
+  db.prepare('UPDATE conversation_summaries SET status = ? WHERE conversation_id = ?').run('CASCADE_RUN_STATUS_IDLE', RAW)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Run second silent tool' })
+  await until('second tool-only turn settled', () => runtime.idle())
+  await until('second tool-only turn reports idle', () => row()?.status === 'idle')
+  appendFileSync(transcript, JSON.stringify({ step_index: 11, type: 'GENERIC', status: 'DONE', created_at: later, content: 'External tool output' }) + '\n')
+  assert.equal((await refresh('later-external-done-tool')).status, 'unknown')
+  await restart()
+  assert.equal(row().status, 'unknown', 'later external DONE GENERIC step did not overwrite persisted marker')
+
+  // A failed follow-up clears the marker and leaves the session unknown.
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Will fail' })
+  await until('failed follow-up settled', () => runtime.idle())
+  await restart()
+  assert.equal(row().status, 'unknown')
+})
+
+test('tool-only settled recovery refuses zero-result or failed tool turns and requires exact GENERIC count before binding', async (t) => {
+  const { node, runtime, transcript, restart } = await fixture(t, {
+    promptPlan: [
+      { toolStartOnly: true, export: true, calls: [{ name: 'run_command', args: { CommandLine: 'echo incomplete' } }], toolOutput: 'incomplete' },
+      { toolStart: true, toolFailed: true, export: true, calls: [{ name: 'run_command', args: { CommandLine: 'false' } }], toolOutput: 'boom' },
+      { toolStart: true },
+    ],
+  })
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+  const refresh = async (title) => {
+    const before = node.all('runtime.sessions').length
+    await node.peer.call('session.rename', { session_id: SESSION, title })
+    await until('inventory refreshed', () => node.all('runtime.sessions').length > before)
+    return row()
+  }
+
+  // Tool started without a completed tool_call_update (toolResults === 0 < liveToolsById.size === 1) must stay fail-closed.
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Incomplete tool' })
+  await until('incomplete tool turn settled', () => runtime.idle())
+  assert.equal((await refresh('incomplete-tool')).status, 'unknown')
+
+  // Tool ending with status 'failed' (GENERIC status ERROR, 0 DONE results) must stay fail-closed.
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Failed tool' })
+  await until('failed tool turn settled', () => runtime.idle())
+  assert.equal((await refresh('failed-tool')).status, 'unknown')
+
+  // Delayed export (persistedKey === '') for a 1-tool turn must reject 2 GENERIC steps (extra step from another turn).
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Delayed one-tool turn' })
+  await until('delayed tool turn settled', () => runtime.idle())
+  appendFileSync(transcript, [
+    { step_index: 10, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: later, content: 'Delayed one-tool turn' },
+    { step_index: 11, type: 'GENERIC', status: 'DONE', created_at: later, content: 'First tool output' },
+    { step_index: 12, type: 'GENERIC', status: 'DONE', created_at: later, content: 'Unexpected second tool output' },
+  ].map((s) => JSON.stringify(s)).join('\n') + '\n')
+  assert.equal((await refresh('extra-generic-before-bind')).status, 'unknown')
+  await restart()
+  assert.equal(row().status, 'unknown', 'extra GENERIC steps did not persist an idle marker')
+})
+
+test('autonomous wake clears pending unpersisted tool-only settled state so later GENERIC output stays unknown', async (t) => {
+  const { node, runtime, home, transcript } = await fixture(t, {
+    runtimeOptions: { exportPollMs: 40, autonomousIdleMs: 450, exportSettleTimeoutMs: 450 },
+    promptPlan: [{ toolStart: true, wakeOnFile: 'trigger-wake' }],
+  })
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+  const refresh = async (title) => {
+    const before = node.all('runtime.sessions').length
+    await node.peer.call('session.rename', { session_id: SESSION, title })
+    await until('inventory refreshed', () => node.all('runtime.sessions').length > before)
+    return row()
+  }
+
+  // Tool-only turn finishes before export arrives, leaving settledTurns with persistedKey === ''.
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Tool before wake' })
+  await until('tool turn settled', () => runtime.idle())
+  // Trigger an autonomous wake; liveTurnForUpdate must clear settledTurns / TURN_COMPLETION / noCutChecks.
+  writeFileSync(join(home, 'trigger-wake'), '')
+  await until('autonomous wake working', () => !runtime.idle() && row()?.status === 'working')
+  await until('autonomous wake retired on inactivity', () => runtime.idle() && row()?.status !== 'working')
+
+  // Later export matching the old tool count cannot hijack the cleared settledTurns record.
+  appendFileSync(transcript, [
+    { step_index: 4, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: later, content: 'Tool before wake' },
+    { step_index: 5, type: 'GENERIC', status: 'DONE', created_at: later, content: 'Wake intermediate output' },
+  ].map((s) => JSON.stringify(s)).join('\n') + '\n')
+  assert.equal((await refresh('after-wake-export')).status, 'unknown')
 })

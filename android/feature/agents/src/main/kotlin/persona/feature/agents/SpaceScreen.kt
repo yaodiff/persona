@@ -88,7 +88,7 @@ internal fun SpaceScreen(
                 }
             }
         }
-        JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
+        JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
     }
 }
 

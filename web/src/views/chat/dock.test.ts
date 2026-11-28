@@ -54,8 +54,8 @@ describe("cardLine", () => {
   it("says what each card asks, else what it waits for", () => {
     expect(cardLine(ix({ questions: [{ question: "用哪个框架？", options: [] }] as Interaction["questions"] }))).toBe("用哪个框架？");
     expect(cardLine(ix({ kind: "permission", tool_name: "Bash", tool_input: { description: "跑测试" } }))).toBe("跑测试");
-    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等你审批");
-    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等你处理");
+    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等待你审批");
+    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等待你处理");
   });
 });
 
@@ -67,6 +67,12 @@ describe("nextWaiting (#4091)", () => {
   });
   it("tells the same session id on another computer apart", () => {
     expect(nextWaiting([ix("a", "n", "s")], "m", "s")?.ix.id).toBe("a");
+  });
+  it("counts and opens only the authoritative request when a display copy exists", () => {
+    const original = ix("original", "m", "side");
+    const mirror = { ...ix("display", "m", "main"), mirror_of: original.id };
+    expect(nextWaiting([original, mirror], "m", "third")).toEqual({ ix: original, count: 1 });
+    expect(nextWaiting([original, mirror], "m", "side")).toBeNull();
   });
   it("is nothing when only this chat has cards, or none does", () => {
     expect(nextWaiting([ix("a", "m", "s")], "m", "s")).toBeNull();

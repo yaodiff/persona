@@ -99,7 +99,8 @@ func (n *Node) codexStartCLI(ctx context.Context, words, pane, assignments []str
 		// Otherwise its shell runs the first codex on its PATH, which the pane's rc files may change.
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, codexStartShellProgram(), "-ic", `
+		shell := codexStartShellProgram()
+		cmd := exec.CommandContext(ctx, shell, shellFlag(shell), `
 if [ -n "${ZSH_VERSION-}" ]; then
   (( $+functions[codex] )) && exit 0
   p=$(whence -p codex) || exit 0

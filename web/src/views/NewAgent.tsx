@@ -1,4 +1,5 @@
-// Start an agent on one of your computers: machine, folder (recent ones first), the first message, and at the right of its
+// Start an agent on one of your computers: machine, folder (browse-first breadcrumb path picker with secondary Recent view,
+// #14595), the first message, and at the right of its
 // box the model pill (#5104, as Cindy's new task: the user picks a model in the unified model panel, the launcher and its
 // engine come with it; views/NewAgentModel.tsx), where the profile's presets (#2225), the thinking effort and Claude Code's
 // ultracode switch (#3428: off each time, never remembered) also are. On top, the recent setups (#2134): a tap fills every
@@ -28,21 +29,24 @@ import { agentId, providerAgent } from "../lib/agent-kind";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import { formatFollowDetail, resolveFollowBinding, resolvedStartModel } from "../lib/new-agent-follow";
 import {
-  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, tierLeftOut, type PickerTier,
+  defaultModel, effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModel, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, tierLeftOut, type PickerTier,
   type UnavailableLauncher,
 } from "../lib/launcher-models";
 import { choiceCarries, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
+import { startSpeedOptions, startSpeedTier } from "../lib/session-speed";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, listedModeOption, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
   clearRecentSetups, forgetSetup, formHolds, loadRecentSetups, machineModel, recentCards, rememberSetup, setupKey, setupTime, type RecentCard, type RecentSetup,
 } from "../lib/recent-setups";
 import { baseName, shortPath } from "../lib/format";
+import { orderRecentFolders, pathBreadcrumbs } from "../lib/folder-picker";
 import { startingWith, typedFolder } from "../lib/typed-folder";
 import { addAgentWorktree, agentBranch, agentNameHint, suggestedPath, worktreeStatus, type WorktreeStatus } from "../lib/worktree";
 import { getState, useStore } from "../lib/store";
 import type { Launcher, Machine } from "../lib/types";
 import { Button, cx, Dialog, IconButton, Menu, Spinner, Switch, toast, useMenu } from "../ui/atoms";
+import { SegmentedTrack } from "../ui/Segmented";
 import { Pill } from "./settings/SettingsParts";
 import { startBlocked, ultracodeStartOffered } from "../lib/ultracode";
 import { UltracodeStartRow } from "./chat/Ultracode";
@@ -54,16 +58,21 @@ import { useScopedMachines } from "../lib/current-assistant";
 import { currentHosts, engineName, startHosts } from "../lib/engines";
 import { CODEX_APP_SOURCE, projectsFolder, startsInDesktopApp } from "../lib/desktop-start";
 import { initialLauncher, launcherBlock } from "../lib/launcher-health";
+import { opensAsOrcaChat, type DefaultOpens } from "../lib/orca-chat";
 import { navigate } from "../lib/router";
+import { hasFinePointer } from "../lib/viewport";
 import { providersPath } from "../lib/readiness";
 import { settingsHref } from "./settings/nav";
 import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../lib/provider-names";
 import { WorkSessionForm } from "./WorkSessionForm";
 import { NewAgentModel, useModelList } from "./NewAgentModel";
+import { ExecutionCheck } from "./execution/ExecutionCheck";
 import { ProjectDocumentContext, ProjectDocumentSource, projectDocumentText, type ProjectDocumentSnapshot } from "./NewAgentProjectDocument";
 
-const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern", "rex"]);
+// The terminal engines a document's start goes to as its first message, as any first message does: Orca's terminals too
+// (#17053), which open in the chosen folder since #17036. Paseo and the other runtimes are not terminals.
+const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "orca", "tern", "rex"]);
 
 // several forwarded at once (#3838): their bar, from the group's chunk, which Forward to has loaded by then
 const ForwardGroupBar = lazyPage(() => import("./chat/ForwardGroup").then((m) => m.ForwardGroupBar));
@@ -75,6 +84,15 @@ const NewFolderNaming = lazyPage(() => import("./NewAgentDesktop").then((m) => m
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
 const draftImageFile = (img: DraftImage) => base64File(img.name, img.mime, img.data);
+
+/** Classifies a launcher's permission-mode controls so preset picks and rendering share one rule (#8261, #17239). */
+function launcherPermissionKinds(agent: string, entry: Launcher | undefined, nativeOmp = false) {
+  const listed = listedModes(entry);
+  const agyModes = agent === "agy" ? listed : undefined;
+  const claudeModes = effortRule(agent) === "any" && (Boolean(agyModes) || !listed);
+  const providerModes = claudeModes || nativeOmp ? undefined : listed;
+  return { agyModes, claudeModes, providerModes };
+}
 
 interface Dirs {
   path: string;
@@ -138,18 +156,23 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // effort as picking them by hand would; a pick by hand after it unmarks it. Never saved.
   const [tiers, setTiers] = useState<PickerTier[]>([]);
   const [tier, setTier] = useState<PickerTier | null>(null);
+  // the four dimensions' check of what this start runs (views/execution/ExecutionCheck.tsx): blocked disables Start
+  const [execBlocked, setExecBlocked] = useState(false);
   // a launcher picked on the computer chosen before that this one can't run (#5104): the form went back to the default
   const [dropped, setDropped] = useState<{ name: string; computer: string } | null>(null);
   // the lists read again in this opening (once each: a list read since stays as it is)
   const readThisTime = useRef(new Set<string>());
   // ultracode for this start: off whenever the sheet opens, never saved (the server's rule: no choice carries over)
   const [ultracode, setUltracode] = useState(false);
+  const [speedChoice, setSpeedChoice] = useState<{ key: string; value: string }>();
   const features = useStore((s) => s.features);
   // Claude Code's permission mode for this start ("": the launcher's), remembered per computer like iOS's mode.<machine>
   const [mode, setMode] = useState("");
   // the mode picked for a launcher that lists its own (Paseo's other providers, #8261): its own ("") or Full access,
   // picked on this sheet and never remembered, so a mode left from a Claude Code start never reaches such a start
   const [providerMode, setProviderMode] = useState("");
+  // where a start that keeps the default opens, as the hub says (#17650, lib/orca-chat.ts); for the computer `launchersOf` names
+  const [defaultOpens, setDefaultOpens] = useState<DefaultOpens | undefined>();
   // Pre-preset mode values so dropping or switching away from a preset restores them without leaking across launchers.
   const presetModeRestore = useRef<{ mode: string; providerMode: string } | null>(null);
   const chooseMode = (next: string) => {
@@ -165,6 +188,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the listed folder's subfolders kept: those starting with this ("": all), for a typed path naming no folder yet
   const [dirsPrefix, setDirsPrefix] = useState("");
   const [browse, setBrowse] = useState("");
+  // Browse-first path picker (#14595): Recent folders sit behind a secondary toggle rather than crowding the browser.
+  const [folderView, setFolderView] = useState<"browse" | "recent">("browse");
+  const breadcrumbRef = useRef<HTMLElement>(null);
   // The folder the list follows (#9452, lib/typed-folder.ts): the folder field's text, filled in (the last start's, a card's, a
   // recent row's) or typed once typing pauses. Browsing from the list takes over until the field changes again.
   const [follow, setFollow] = useState({ text: "", typed: false });
@@ -172,17 +198,31 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   useEffect(() => () => clearTimeout(typing.current), []);
   const typeCwd = (text: string) => {
     pickCwd(text);
+    setFolderView("browse");
     clearTimeout(typing.current);
     typing.current = setTimeout(() => {
       setFollow({ text, typed: true });
       setBrowse("");
     }, 250);
   };
-  // the list shows a folder filled in: its subfolders, under the recent folders
+  // the list shows a folder filled in: its subfolders in Browse view
   const followFilled = (dir: string) => {
     clearTimeout(typing.current);
     setFollow({ text: dir, typed: false });
     setBrowse("");
+    setFolderView("browse");
+  };
+  // Single-state folder navigation (#14595): navigating in the picker always keeps cwd, breadcrumbs, and subfolders in lockstep.
+  const navigateFolder = (dir: string) => {
+    clearTimeout(typing.current);
+    pickCwd(dir);
+    setBrowse(dir);
+    setFolderView("browse");
+  };
+  const clearCwd = () => {
+    setCwd("");
+    setCwdPicked(false);
+    followFilled("");
   };
   const [loadingDirs, setLoadingDirs] = useState(false);
   const [prompt, setPrompt] = useState(() => localStorage.getItem("draft:new-agent") ?? "");
@@ -274,10 +314,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setRecents(loadRecentSetups());
     setPickedSetup("");
     setUltracode(false);
+    setSpeedChoice(undefined);
     setInWorktree(false);
     setWtBranch("");
     setWtError("");
     setRunTimes(1);
+    setFolderView("browse");
   }, [open]);
   // a worktree of its own (#6115): offered for a folder in a Git repository (what the computer says of it), off each
   // time the sheet opens
@@ -298,24 +340,25 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   useLayoutEffect(() => {
     if (!open) setProjectDocument(null);
   }, [open]);
-  // a Paseo workspace picked from the list (#8856) can still start in a new worktree of its repository, which Paseo
-  // makes as a workspace of its own; an Orca one makes its worktrees through Orca's own New Worktree
-  const paseoPicked = workspacePicked && workspace?.host === "paseo";
+  // a Paseo or Orca workspace picked from the list (#8856, #17050) can still start in a new worktree of its repository,
+  // which that engine makes: Paseo as a workspace of its own, Orca as a child of the one picked
+  const enginePicked = workspacePicked && (workspace?.host === "paseo" || workspace?.host === "orca");
+  const pickedEngine = enginePicked ? workspace?.host : undefined;
   const [repo, setRepo] = useState<WorktreeStatus | null>(null);
   useEffect(() => {
     setRepo(null);
     const dir = cwd.trim();
-    if (!open || !mid || !dir || (workspace && !paseoPicked)) return;
+    if (!open || !mid || !dir || (workspace && !pickedEngine)) return;
     const c = new AbortController();
-    // the engine it opens in says where its worktree goes (Paseo makes its own)
-    const kind = paseoPicked ? "paseo" : host || undefined;
+    // the engine it opens in says where its worktree goes (Paseo and Orca make their own)
+    const kind = pickedEngine ?? (host || undefined);
     const timer = setTimeout(() => void worktreeStatus(mid, dir, c.signal, kind).then((st) => { if (!c.signal.aborted) setRepo(st); }), 400);
     return () => {
       clearTimeout(timer);
       c.abort();
     };
-  }, [open, mid, cwd, workspace, paseoPicked, manager, credential, host]);
-  const worktreeOffered = (!workspace || paseoPicked) && Boolean(repo?.path);
+  }, [open, mid, cwd, workspace, pickedEngine, manager, credential, host]);
+  const worktreeOffered = (!workspace || enginePicked) && Boolean(repo?.path);
   // Back to a folder: typed, browsed or a recent one, on the computer's default engine.
   const clearWorkspace = () => {
     retirePreparation();
@@ -467,6 +510,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           setLaunchers(ls);
           setSkipped(r.unavailable ?? []);
           setTiers(r.tiers ?? []);
+          setDefaultOpens(r.default_opens);
           setLaunchersOf(mid);
           setUnified(hasUnified);
           setConfigured(effective);
@@ -566,17 +610,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const base = presetModeRestore.current ?? { mode, providerMode };
     pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
     const targetLauncher = launchers.find((l) => l.name === x.launcher);
-    const targetListed = listedModes(targetLauncher);
     const targetAgent = launcherAgent(x.launcher, launchers, undefined);
-    const targetClaudeModes = effortRule(targetAgent) === "any" && !targetListed;
-    if (targetListed) {
+    const { agyModes: targetAgyModes, claudeModes: targetClaudeModes, providerModes: targetProviderModes } = launcherPermissionKinds(targetAgent, targetLauncher);
+    if (targetProviderModes) {
       setMode(base.mode);
-      setProviderMode(x.permission_mode && targetListed.includes(x.permission_mode) ? x.permission_mode : "");
+      setProviderMode(x.permission_mode && targetProviderModes.includes(x.permission_mode) ? x.permission_mode : "");
       presetModeRestore.current = base;
     } else if (targetClaudeModes) {
       setProviderMode(base.providerMode);
       if (x.permission_mode) {
-        setMode(x.permission_mode);
+        setMode(!targetAgyModes || targetAgyModes.includes(x.permission_mode) ? x.permission_mode : "");
         presetModeRestore.current = base;
       } else {
         setMode(base.mode);
@@ -607,10 +650,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setTier(null);
     }
   }, [open, opensIn, nativeOmp, listLauncher, agent]);
-  // what a start on it takes besides the model (#8261): Claude Code's modes and efforts, or the permission modes a
-  // launcher lists (Paseo's other providers) and the efforts its model lists, or Codex's reported efforts alone
-  const claudeModes = effortRule(agent) === "any" && !listedModes(listEntry);
-  const providerModes = claudeModes || nativeOmp ? undefined : listedModes(listEntry);
+  // what a start on it takes besides the model (#8261): Claude Code's modes and efforts (or Antigravity's subset when
+  // its runtime narrows permission_modes), or the permission modes a launcher lists (Paseo's other providers) and the
+  // efforts its model lists, or Codex's reported efforts alone
+  const { agyModes, claudeModes, providerModes } = launcherPermissionKinds(agent, listEntry, nativeOmp);
+  const claudeModeOptions = agyModes ? PERMISSION_MODES.filter((m) => agyModes.includes(m.id)) : PERMISSION_MODES;
+  const effectiveClaudeMode = agyModes && mode && !agyModes.includes(mode) ? "" : mode;
   // Codex CLI can omit the first message when prompt_optional is advertised. The App needs one to expose its new chat.
   const codex = agent === "codex";
   const needsFirst = codex && (desktopStart || listEntry?.prompt_optional !== true);
@@ -704,6 +749,14 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     return () => controller.abort();
   }, [open, mid, listing, nearPath, nearPrefix, workspace, manager, credential]);
   useEffect(() => { if (!desktopStart) setNaming(false); }, [desktopStart]);
+  const recentFolders = useMemo(() => orderRecentFolders(dirs?.recent), [dirs?.recent]);
+  const showRecent = folderView === "recent" && recentFolders.length > 0;
+  const breadcrumbs = useMemo(() => pathBreadcrumbs(dirs?.path ?? ""), [dirs?.path]);
+  const visibleEntries = useMemo(() => startingWith(dirs?.entries, dirsPrefix), [dirs?.entries, dirsPrefix]);
+  useLayoutEffect(() => {
+    const nav = breadcrumbRef.current;
+    if (nav) nav.scrollLeft = nav.scrollWidth;
+  }, [dirs?.path, showRecent]);
   const defaultRuns = unified && launchersOf === mid ? pickerLauncher("", followedBinding("", configured)) : "";
   const defaultEntry = launchers.find((l) => l.name === defaultRuns);
   const defaultBlock = defaultRuns ? launcherBlock(defaultEntry) : null;
@@ -722,16 +775,42 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const ultracodeShown = !desktopStart && !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
   // what of the picked preset this launcher can't take, said once its list is in
   const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
+  const picks = startPicks({ ...startModelOptions, model, effort });
+  const startModel = resolvedStartModel({ model: picks.model, followed, launcher: listEntry, list: models.list });
+  const speedModel = !loadingModels && !desktopStart && agent === "codex" && features.includes("session_start_service_tier") && models.list?.supports_start_service_tier
+    ? (startModel ? listedModel(models.list.models, startModel) : defaultModel(models.list.models))
+    : undefined;
+  const speedOptions = startSpeedOptions(speedModel);
+  const speedKey = speedOptions && JSON.stringify([mid, startHost, listLauncher, speedModel?.id]);
+  const speed = speedOptions?.some(({ id }) => id === speedChoice?.value) && speedChoice?.key === speedKey
+    ? speedChoice?.value
+    : "standard";
+  useEffect(() => {
+    setSpeedChoice((choice) => choice?.key === speedKey ? choice : undefined);
+  }, [speedKey]);
   const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
   // the follow row's second line: what Model settings › New agent runs (the unified effective binding, by display names)
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
   const followDetail = formatFollowDetail(unified ? configured : null, defaultRuns, defaultList, names) || modelDefault;
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
+  // with the computer's switch on, a start that keeps the default opens as its Orca chat (#17650): the hub says which, the
+  // form only checks that this start still keeps the default
+  const orcaChat = launchersOf === mid && !desktopStart && !projectDocument ? opensAsOrcaChat(defaultOpens, {
+    launcher, tier: Boolean(tier), model, host: opensIn, mode: claudeModes ? effectiveClaudeMode : "",
+    ultracode: ultracodeShown && !ultracodeBlocked && ultracode, serviceTier: startSpeedTier(speedModel, speed),
+  }) : null;
 
   // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
   // knowledge entry's New agent), which a card would replace.
   const cards = useMemo(() => recentCards(recents, machines), [recents, machines]);
   const presetFolder = Boolean(preset?.machineId && preset.cwd !== undefined);
+  // Opened on a place (a project's +, a space's or a board card's New agent, #13523): where it starts is settled, so the
+  // caret goes to the first message, as picking a recent setup puts it. With a fine pointer only: on a touch screen the
+  // keyboard would come up over the sheet before it is read (the Dialog keeps it down for that, ui/overlay.ts).
+  const placed = presetFolder || Boolean(preset?.workspace);
+  useEffect(() => {
+    if (open && placed && hasFinePointer()) firstMessage.current?.focus();
+  }, [open, placed]);
   const settled = launchersOf === mid && !loadingModels;
   const pickedCard = pickedSetup ? cards.find((c) => setupKey(c.setup) === pickedSetup) : undefined;
   const pickedShown = pickedCard && (!settled || formHolds(pickedCard.setup, { machine: mid, cwd, launcher, model, mode, effort })) ? pickedSetup : "";
@@ -787,13 +866,13 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const dir = desktopScratch ? "" : cwd.trim();
     if (dir) localStorage.setItem(`new.cwd.${mid}`, dir);
     if (launcher && !unified) localStorage.setItem(`new.launcher.${mid}`, launcher);
-    const picks = startPicks({ ...startModelOptions, model, effort });
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
-    const permissionMode = claudeModes ? mode
+    const permissionMode = claudeModes ? effectiveClaudeMode
       : providerModes ? (providerMode && providerModes.includes(providerMode) ? providerMode : "")
       : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
-    if (claudeModes) {
+    const presetFilteredMode = Boolean(agyModes && tier && listLauncher === tier.launcher && tier.permission_mode && !agyModes.includes(tier.permission_mode) && presetModeRestore.current);
+    if (claudeModes && !presetFilteredMode && (!agyModes || !mode || agyModes.includes(mode))) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
     }
@@ -808,7 +887,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       : undefined;
     // what every start of this sheet goes with (each run of a comparison too)
     const launcherDefaultEffort = agent === "agy" && !!launcher && !picks.effort;
-    const target = { launcher: projectDocument || desktopStart ? listLauncher : launcher, ...picks,
+    const serviceTier = startSpeedTier(speedModel, speed);
+    const target = { launcher: projectDocument || desktopStart || serviceTier ? listLauncher : launcher, ...picks, serviceTier,
       nameHint: projectDocument ? `${projectDocument.snapshot.project}/${projectDocument.snapshot.document} r${projectDocument.snapshot.revision}` : undefined,
       launcherDefaultEffort: launcherDefaultEffort || undefined, permissionMode: permissionMode || undefined,
       host: projectDocument ? documentHost : opensIn, ultracode: ultra,
@@ -816,7 +896,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const launchDisplay = {
       displayLauncher: listLauncher || undefined,
       displayEngine: listLauncher ? agentId(providerAgent(agent, listLauncher)) : undefined,
-      displayModel: resolvedStartModel({ model: picks.model, followed, launcher: listEntry, list: models.list }),
+      displayModel: startModel,
     };
     const launch = (dir: string, workspaceId: string | undefined) => {
       if (!current()) return;
@@ -834,14 +914,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       dismiss();
     };
     // in a worktree of its own (#6115): made first, by the engine it opens in; a failure says why here, and nothing starts.
-    // From a picked Paseo workspace (#8856) the start goes into the workspace Paseo made for the worktree, not the one picked.
-    if ((!workspace || paseoPicked) && inWorktree && worktreeOffered && !desktopScratch) {
+    // From a picked Paseo or Orca workspace (#8856, #17050) the start goes into the workspace that engine made for the
+    // worktree, not the one picked.
+    if ((!workspace || enginePicked) && inWorktree && worktreeOffered && !desktopScratch) {
       // Compare runs (#8916): the sheet closes at once on the runs' page, which shows each worktree and start as it goes
       // (lib/compare-runner.ts); the task stays in this tab for a run's retry, so the draft goes now
       if (runCount > 1) {
         const hint = agentNameHint(prompt, cwd);
         const id = startCompare({ mid, cwd: cwd.trim(), nameHint: hint, branch: wtBranch.trim() || agentBranch(hint), count: runCount, spec: target,
-          paseo: paseoPicked, text: snapshot.text, attachments: snapshot.attachments });
+          intoWorkspace: enginePicked, text: snapshot.text, attachments: snapshot.attachments });
         rememberSetup({ ...setup, at: setupTime() });
         releaseAttachments(attachmentsRef.current);
         attachmentsRef.current = [];
@@ -856,7 +937,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setWtError("");
       void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner }, opensIn)
         .then(
-          (wt) => launch(wt.path, paseoPicked ? wt.workspace_id || undefined : undefined),
+          (wt) => launch(wt.path, enginePicked ? wt.workspace_id || undefined : undefined),
           (e) => {
             if (!current()) return;
             submitted.current = false;
@@ -939,7 +1020,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
             <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
-            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
+            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || execBlocked || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
               {runCount > 1 ? t("newagent.start_runs", { count: runCount }) : t("newagent.start")}
             </Button>
           </>
@@ -1003,40 +1084,136 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           </Field>}
           <Field label={t("newagent.folder")}>
             {desktopScratch && <Suspense fallback={null}><DesktopTemporaryRow codex={codexApp} /></Suspense>}
-            <input
-              value={desktopScratch ? "" : cwd}
-              onChange={(e) => typeCwd(e.target.value)}
-              placeholder={t("newagent.folder_placeholder")}
-              spellCheck={false}
-              className="h-9 w-full rounded-control bg-inset px-3 font-mono text-[12.5px] text-ink shadow-hairline outline-none placeholder:font-sans placeholder:text-ink-3 focus:shadow-[0_0_0_1px_var(--line-strong)]"
-            />
-            <div className="mt-1.5 max-h-52 overflow-y-auto rounded-control bg-surface p-1 shadow-hairline">
-              {!browse && !(following && follow.typed) && (dirs?.recent?.length ?? 0) > 0 && (
-                <>
-                  <div className="px-2 pt-1 pb-0.5 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{t("newagent.recent")}</div>
-                  {dirs!.recent!.slice(0, 6).map((d) => (
-                    <DirRow key={d.path} name={d.name || baseName(d.path)} path={d.path} sub={shortPath(d.path)} selected={!desktopScratch && cwd === d.path} onPick={() => { pickCwd(d.path); followFilled(d.path); }} />
-                  ))}
-                </>
-              )}
-              <div className="flex items-center gap-1 px-2 pt-1.5 pb-0.5 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">
-                {listing && dirs?.parent && (
-                  <button type="button" aria-label={t("newagent.parent_folder")} onClick={() => setBrowse(dirs!.parent!)} className="-ml-1 flex size-4.5 items-center justify-center rounded-[4px] hover:bg-hover hover:text-ink">
-                    <Icon name="chevronLeft" size={12} stroke={2.4} />
-                  </button>
+            <div className="relative">
+              <input
+                value={desktopScratch ? "" : cwd}
+                onChange={(e) => typeCwd(e.target.value)}
+                placeholder={t("newagent.folder_placeholder")}
+                spellCheck={false}
+                className={cx(
+                  "h-9 w-full rounded-control bg-inset px-3 font-mono text-[12.5px] text-ink shadow-hairline outline-none placeholder:font-sans placeholder:text-ink-3 focus:shadow-[0_0_0_1px_var(--line-strong)]",
+                  !desktopScratch && cwd && "pr-8",
                 )}
-                <span className="min-w-0 flex-1 truncate normal-case tracking-normal">{dirs?.path ? shortPath(dirs.path) : t("newagent.home_folder")}</span>
-                {loadingDirs && <Spinner size={10} />}
-                {desktopStart && dirs?.path && !naming && <Suspense fallback={null}><NewFolderButton onClick={() => setNaming(true)} /></Suspense>}
-              </div>
-              {naming && dirs?.path && (
-                <Suspense fallback={null}>
-                  <NewFolderNaming key={dirs.path} folder={dirs.path} onCancel={() => setNaming(false)} onUse={(made) => { pickCwd(made); setNaming(false); }} />
-                </Suspense>
+              />
+              {!desktopScratch && cwd && (
+                <button
+                  type="button"
+                  aria-label={t("newagent.clear_folder")}
+                  onClick={clearCwd}
+                  className="touch-hit absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-[4px] text-ink-3 hover:bg-hover hover:text-ink"
+                >
+                  <Icon name="x" size={12} stroke={2.2} />
+                </button>
               )}
-              {startingWith(dirs?.entries, dirsPrefix).map((d) => (
-                <DirRow key={d.path} name={d.name} path={d.path} git={d.is_git} selected={!desktopScratch && cwd === d.path} onPick={() => pickCwd(d.path)} onOpen={() => setBrowse(d.path)} />
-              ))}
+            </div>
+            <div className="mt-1.5 flex max-h-52 flex-col overflow-hidden rounded-control bg-surface shadow-hairline">
+              <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-2 py-1">
+                {showRecent ? (
+                  <span className="min-w-0 flex-1 truncate text-submeta font-medium text-ink-3">{t("newagent.recent_folders")}</span>
+                ) : (
+                  <div className="flex min-w-0 flex-1 items-center gap-1">
+                    {dirs?.parent && dirs.parent !== dirs.path && (
+                      <button
+                        type="button"
+                        aria-label={t("newagent.parent_folder")}
+                        onClick={() => navigateFolder(dirs.parent!)}
+                        className="touch-hit -ml-1 flex size-5 shrink-0 items-center justify-center rounded-[4px] text-ink-3 hover:bg-hover hover:text-ink"
+                      >
+                        <Icon name="chevronLeft" size={12} stroke={2.4} />
+                      </button>
+                    )}
+                    {breadcrumbs.length > 0 ? (
+                      <nav ref={breadcrumbRef} aria-label={t("newagent.folder_path")} className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-label">
+                        {breadcrumbs.map((seg, i) => {
+                          const last = i === breadcrumbs.length - 1;
+                          return (
+                            <span key={seg.path} className="flex shrink-0 items-center gap-0.5">
+                              {i > 0 && <span aria-hidden className="px-0.5 text-ink-3">/</span>}
+                              <button
+                                type="button"
+                                data-breadcrumb-path={seg.path}
+                                aria-current={last ? "location" : undefined}
+                                title={seg.path}
+                                onClick={() => navigateFolder(seg.path)}
+                                className={cx(
+                                  "touch-hit rounded-[4px] px-1 py-0.5 whitespace-nowrap transition-colors hover:bg-hover hover:text-ink",
+                                  last ? "font-medium text-ink" : "text-ink-2",
+                                )}
+                              >
+                                {seg.label}
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </nav>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate text-label text-ink-3">{t("newagent.home_folder")}</span>
+                    )}
+                  </div>
+                )}
+                {loadingDirs && <Spinner size={10} />}
+                {!showRecent && desktopStart && dirs?.path && !naming && <Suspense fallback={null}><NewFolderButton onClick={() => setNaming(true)} /></Suspense>}
+                {recentFolders.length > 0 && (
+                  <SegmentedTrack
+                    role="tablist"
+                    label={t("newagent.folder_view")}
+                    data-testid="folder-view-toggle"
+                    className="flex h-6 shrink-0 items-center rounded-[6px] p-0.5"
+                    thumbClassName="rounded-[4px]"
+                  >
+                    {(["browse", "recent"] as const).map((view) => {
+                      const selected = (showRecent ? "recent" : "browse") === view;
+                      return (
+                        <button
+                          key={view}
+                          type="button"
+                          role="tab"
+                          aria-selected={selected}
+                          data-selected={selected}
+                          onClick={() => setFolderView(view)}
+                          className={cx(
+                            "touch-hit relative z-[1] h-5 whitespace-nowrap rounded-[4px] px-1.5 text-submeta font-medium transition-colors duration-150",
+                            selected ? "text-ink" : "text-ink-3 hover:text-ink",
+                          )}
+                        >
+                          {t(view === "browse" ? "newagent.browse" : "newagent.recent")}
+                        </button>
+                      );
+                    })}
+                  </SegmentedTrack>
+                )}
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                {showRecent ? (
+                  recentFolders.map((d) => (
+                    <DirRow
+                      key={d.path}
+                      name={d.name || baseName(d.path)}
+                      path={d.path}
+                      sub={shortPath(d.path)}
+                      selected={!desktopScratch && cwd === d.path}
+                      onPick={() => navigateFolder(d.path)}
+                    />
+                  ))
+                ) : (
+                  <>
+                    {naming && dirs?.path && (
+                      <Suspense fallback={null}>
+                        <NewFolderNaming key={dirs.path} folder={dirs.path} onCancel={() => setNaming(false)} onUse={(made) => { navigateFolder(made); setNaming(false); }} />
+                      </Suspense>
+                    )}
+                    {visibleEntries.length > 0 ? (
+                      visibleEntries.map((d) => (
+                        <DirRow key={d.path} name={d.name} path={d.path} git={d.is_git} selected={!desktopScratch && cwd === d.path} drillable onPick={() => navigateFolder(d.path)} />
+                      ))
+                    ) : (
+                      !loadingDirs && dirs && !naming && (
+                        <div className="px-2 py-2 text-center text-label text-ink-3">{t("newagent.no_subfolders")}</div>
+                      )
+                    )}
+                  </>
+                )}
+              </div>
             </div>
             {desktopStart && <Suspense fallback={null}><DesktopFolderNote codex={codexApp} scratch={desktopScratch} onUseTemporary={() => setCwdPicked(false)} /></Suspense>}
           </Field></>}
@@ -1102,15 +1279,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {claudeModes && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} className="flex flex-wrap gap-1.5">
-                <Choice radio selected={mode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
-                {PERMISSION_MODES.map((m) => (
-                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
+                <Choice radio selected={effectiveClaudeMode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
+                {claudeModeOptions.map((m) => (
+                  <Choice key={m.id} radio selected={effectiveClaudeMode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
               </div>
-              <p className={cx("mt-1.5 text-[11.5px]", mode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
-                {mode === BYPASS_MODE ? BYPASS_WARNING : PERMISSION_MODES.find((m) => m.id === mode)?.detail ?? t("newagent.permission_mode_hint")}
+              <p className={cx("mt-1.5 text-[11.5px]", effectiveClaudeMode === BYPASS_MODE ? "text-red" : "text-ink-3")}>
+                {effectiveClaudeMode === BYPASS_MODE ? BYPASS_WARNING : claudeModeOptions.find((m) => m.id === effectiveClaudeMode)?.detail ?? t("newagent.permission_mode_hint")}
               </p>
             </Field>
           )}
@@ -1180,6 +1357,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                     unavailable={skipped}
                     follow={unified ? { label: t("newagent.follow_row"), active: launcher === "", detail: followDetail, warning: defaultBlock?.reason } : undefined}
                     fallback={modelDefault || t("chat-modelpill.default_model")}
+                    speed={speedOptions && speedKey ? { options: speedOptions, value: speed, onChange: (value) => setSpeedChoice({ key: speedKey, value }) } : undefined}
                     ultracode={ultracodeShown ? <div data-testid="new-agent-ultracode"><UltracodeStartRow on={ultracode} onChange={setUltracode} blocked={ultracodeBlocked} /></div> : undefined}
                     ultracodeOn={ultracodeShown && !ultracodeBlocked && ultracode}
                     onChoice={pickModel}
@@ -1203,6 +1381,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               </div>
             </div>
             <ModelNotes>
+              {orcaChat && (
+                <Note data-testid="new-agent-orca-chat" icon="info">
+                  {t(orcaChat.dropped ? "newagent.opens_orca_chat_own" : "newagent.opens_orca_chat", { name: orcaChat.display_name || orcaChat.launcher })}
+                </Note>
+              )}
               {dropped && (
                 <Note data-testid="new-agent-dropped" icon="info">{t("newagent.carry_dropped", { name: dropped.name, computer: dropped.computer })}</Note>
               )}
@@ -1243,6 +1426,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                 </Note>
               )}
             </ModelNotes>
+            <div data-testid="new-agent-execution" className="mt-1.5 empty:hidden">
+              <ExecutionCheck
+                machine={mid}
+                launcher={runs}
+                model={model}
+                effort={effort}
+                onBlocked={setExecBlocked}
+                onPick={(p) => pickModel({ launcher: p.launcher, model: p.model ?? "", effort: p.effort ?? "" })}
+              />
+            </div>
             {helpLauncher && helpBlock && (
               <LauncherBlockedHelp
                 launcher={helpLauncher}
@@ -1392,20 +1585,23 @@ function Choice({ selected, onClick, title, radio, children }: { selected: boole
   );
 }
 
-// A folder to start in: picked with a click, opened with a double click or its chevron.
-function DirRow({ name, path, sub, git, selected, onPick, onOpen }: { name: string; path: string; sub?: string; git?: boolean; selected: boolean; onPick: () => void; onOpen?: () => void }) {
+// A folder to start in: single-click navigates into it and updates cwd in lockstep (#14595).
+function DirRow({ name, path, sub, git, selected, drillable, onPick }: { name: string; path: string; sub?: string; git?: boolean; selected: boolean; drillable?: boolean; onPick: () => void }) {
   return (
-    <div className={cx("group/dir flex h-8 items-center gap-2 rounded-[6px] px-2 transition-colors pointer-coarse:min-h-11", selected ? "bg-accent-tint" : "hover:bg-hover")}>
-      <button type="button" onClick={onPick} onDoubleClick={onOpen} className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left" title={path}>
-        <Icon name={git ? "git" : "folder"} size={13} className={selected ? "text-accent-ink" : "text-ink-3"} />
-        <span className={cx("shrink-0 truncate text-[12.5px]", selected ? "font-medium text-accent-ink" : "text-ink")}>{name}</span>
-        {sub && <span className="min-w-0 truncate font-mono text-[11px] text-ink-3">{sub}</span>}
-      </button>
-      {onOpen && (
-        <button type="button" aria-label={t("newagent.open_folder", { name })} onClick={onOpen} className="touch-hit flex size-5 items-center justify-center rounded-[4px] text-ink-3 opacity-0 transition-opacity group-hover/dir:opacity-100 hover:bg-hover-2 hover:text-ink focus-visible:opacity-100 [@media(hover:none)]:opacity-100">
-          <Icon name="chevronRight" size={12} stroke={2.4} />
-        </button>
+    <button
+      type="button"
+      data-dir-row
+      onClick={onPick}
+      title={path}
+      className={cx(
+        "group/dir flex h-8 w-full items-center gap-2 rounded-[6px] px-2 text-left transition-colors pointer-coarse:min-h-11",
+        selected ? "bg-accent-tint" : "hover:bg-hover",
       )}
-    </div>
+    >
+      <Icon name={git ? "git" : "folder"} size={13} className={cx("shrink-0", selected ? "text-accent-ink" : "text-ink-3")} />
+      <span className={cx("shrink-0 truncate text-[12.5px]", selected ? "font-medium text-accent-ink" : "text-ink")}>{name}</span>
+      {sub && <span className="min-w-0 truncate font-mono text-[11px] text-ink-3">{sub}</span>}
+      {drillable && <Icon name="chevronRight" size={12} stroke={2.4} className="ml-auto shrink-0 text-ink-3 transition-colors group-hover/dir:text-ink" />}
+    </button>
   );
 }

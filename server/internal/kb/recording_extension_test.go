@@ -12,8 +12,7 @@ import (
 )
 
 func extMinutesWrite(id string, at time.Time, markdown string) RecordingWrite {
-	end := at.Add(45 * time.Minute)
-	return RecordingWrite{ID: recordingwire.ID(id), Title: "Weekly sync", StartedAt: at, EndedAt: &end, Language: "en",
+	return RecordingWrite{ID: recordingwire.ID(id), Title: "Weekly sync", StartedAt: at, EndedAt: at.Add(45 * time.Minute), Language: "en",
 		Minutes: &recordingwire.RecordingWriteMinutes{Markdown: markdown, Attendees: []string{"A", "B"},
 			Points:  []recordingwire.MinutesPoint{{Text: "Shipped the importer"}},
 			Actions: []recordingwire.MinutesAction{{ID: "a1", What: "Write the release notes"}}}}
@@ -33,7 +32,7 @@ func TestPutExtensionRecordingCreatesAndUpdates(t *testing.T) {
 	}
 	w := extMinutesWrite(id, now.Add(-2*time.Hour), "# Weekly sync\n\n- Shipped the importer")
 	w.Projects = []string{"alpha"}
-	w.Meeting = &recordingwire.RecordingWriteMeeting{Kind: KindEvent, ID: recordingwire.ItemID("ev-1")}
+	w.Meeting = &recordingwire.RecordingWriteMeeting{Kind: recordingwire.CalendarEvents, ID: recordingwire.ItemID("ev-1")}
 	res, err := e.PutExtensionRecording(w, "minutes-ext", now)
 	if err != nil || !res.Created || res.Revision != 1 || res.MinutesVersion != 1 {
 		t.Fatalf("create: %+v %v", res, err)
@@ -159,16 +158,15 @@ func TestPutExtensionRecordingChecksTheWrite(t *testing.T) {
 	now := time.Date(2026, 11, 20, 12, 0, 0, 0, goldenZone)
 	id := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	at := now.Add(-time.Hour)
-	before := at.Add(-time.Minute)
 	for name, w := range map[string]RecordingWrite{
 		"not a uuid":        extMinutesWrite("meeting-1", at, "# x"),
 		"no start":          {ID: recordingwire.ID(id), Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
-		"ends before":       {ID: recordingwire.ID(id), StartedAt: at, EndedAt: &before, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
+		"ends before":       {ID: recordingwire.ID(id), StartedAt: at, EndedAt: at.Add(-time.Minute), Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
 		"nothing":           {ID: recordingwire.ID(id), StartedAt: at},
 		"empty markdown":    {ID: recordingwire.ID(id), StartedAt: at, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "  "}},
 		"no project":        {ID: recordingwire.ID(id), StartedAt: at, Projects: []string{"nope"}, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
-		"no meeting":        {ID: recordingwire.ID(id), StartedAt: at, Meeting: &recordingwire.RecordingWriteMeeting{Kind: KindEvent, ID: "nope"}, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
-		"meeting not event": {ID: recordingwire.ID(id), StartedAt: at, Meeting: &recordingwire.RecordingWriteMeeting{Kind: KindChat, ID: "c"}, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
+		"no meeting":        {ID: recordingwire.ID(id), StartedAt: at, Meeting: &recordingwire.RecordingWriteMeeting{Kind: recordingwire.CalendarEvents, ID: "nope"}, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
+		"meeting not event": {ID: recordingwire.ID(id), StartedAt: at, Meeting: &recordingwire.RecordingWriteMeeting{Kind: recordingwire.CalendarKind(KindChat), ID: "c"}, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x"}},
 		"action without id": {ID: recordingwire.ID(id), StartedAt: at, Minutes: &recordingwire.RecordingWriteMinutes{Markdown: "# x", Actions: []recordingwire.MinutesAction{{What: "w"}}}},
 	} {
 		if _, err := e.PutExtensionRecording(w, "minutes-ext", now); !errors.Is(err, ErrBadRecording) {
@@ -177,5 +175,33 @@ func TestPutExtensionRecordingChecksTheWrite(t *testing.T) {
 	}
 	if _, ok := e.Store.Recording(id); ok {
 		t.Fatal("a refused write stored a recording")
+	}
+}
+
+// Extension writes drop hub-owned segment fields including speaker and speaker_unsure (#17674).
+func TestPutExtensionRecordingDropsSpeakerFields(t *testing.T) {
+	e := goldenEngine(t, nil)
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, goldenZone)
+	id := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	w := RecordingWrite{
+		ID:        recordingwire.ID(id),
+		StartedAt: now.Add(-time.Hour),
+		Transcript: []RecordingSegment{
+			{Start: 0, End: 5, Text: "Hello everyone", N: 9, Source: "hub", Echo: true, Speaker: "s1", SpeakerUnsure: true},
+		},
+	}
+	if _, err := e.PutExtensionRecording(w, "minutes-ext", now); err != nil {
+		t.Fatal(err)
+	}
+	d, err := e.Get(KindRecording, id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Segments) != 1 {
+		t.Fatalf("got %d segments, want 1", len(d.Segments))
+	}
+	sg := d.Segments[0]
+	if sg.N != 0 || sg.Source != "" || sg.Echo || sg.Speaker != "" || sg.SpeakerUnsure {
+		t.Fatalf("hub-owned segment fields were not dropped: %+v", sg)
 	}
 }

@@ -77,7 +77,13 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 	}
 	// A runtime's launcher, as a start in ctx's host runs it: where that host's engine runs only its own launchers, its
 	// provider of the name, whatever launcher of the shell's or of Persona's has it too (#8140).
-	if h := n.runtimeOfIn(ctx, name); h != nil {
+	h := n.runtimeOfIn(ctx, name)
+	if h == nil && !n.usesAgyPane(ctx, name, "") {
+		if m, ok := n.managedLauncher(name); ok && m.AgentType() == agyAgent {
+			h = n.runtimes.launcherRuntime(agyAgent)
+		}
+	}
+	if h != nil {
 		if result, handled := n.runtimeLauncherCheck(ctx, h, name, dir, prompt, model); handled {
 			return result
 		}

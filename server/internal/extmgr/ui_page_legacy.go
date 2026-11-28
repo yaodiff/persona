@@ -218,6 +218,12 @@ func (h *Manager) pageLegacy(ctx context.Context, p *extension.Extension, hp *hu
 func (h *Manager) pageLegacyFinish(s *pageSession) {
 	ps := &h.uiPages
 	ps.mu.Lock()
+	for s.pauseDone != nil {
+		existing := s.pauseDone
+		ps.mu.Unlock()
+		<-existing
+		ps.mu.Lock()
+	}
 	if s.closed {
 		s.legacyUse = false
 		ps.mu.Unlock()
@@ -227,9 +233,10 @@ func (h *Manager) pageLegacyFinish(s *pageSession) {
 	s.recovering = false
 	s.suspended = true
 	s.expires = time.Now().Add(5 * time.Minute)
-	s.pauseDone = make(chan struct{})
+	done := make(chan struct{})
+	s.pauseDone = done
 	ps.mu.Unlock()
-	_ = h.pagePause(s)
+	_ = h.pagePause(s, done)
 	ps.mu.Lock()
 	s.legacyUse = false
 	ps.mu.Unlock()

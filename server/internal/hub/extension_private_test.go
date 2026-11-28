@@ -636,11 +636,14 @@ func TestTheUsersOwnExtensionReadsTheTracks(t *testing.T) {
 		}
 	}
 	eventually(t, 5*time.Second, "the cards", func() bool { return h.interactionOwner("ix_health") != "" })
+	var seq uint64
 	owners := func(ids ...string) {
-		a := &h.assistant
-		a.mu.Lock()
-		a.profile = &assistantwire.Profile{MachineID: "mb", ExtensionOwners: ids}
-		a.mu.Unlock()
+		t.Helper()
+		seq++
+		if err := b.call(t, assistantwire.MethodSnapshot, assistantwire.Snapshot{Epoch: "b", Seq: seq,
+			Profile: &assistantwire.Profile{MachineID: "mb", ExtensionOwners: ids}}, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	owners("bx")

@@ -144,6 +144,14 @@ struct AssistantProfileView: View {
                     row("Saved Prompts", Theme.Icon.quickCommands, detail: savedPromptsDetail)
                 }
                 .accessibilityIdentifier("assistant-saved-prompts")
+                #if os(iOS)
+                if UIDevice.current.userInterfaceIdiom == .phone {
+                    NavigationLink { ReplySpeechSettings() } label: {
+                        row("Read Replies Aloud", Theme.Icon.answersAloud, detail: nil)
+                    }
+                    .accessibilityIdentifier("reply-speech-settings")
+                }
+                #endif
             } header: {
                 Text("In Chats")
             } footer: {
@@ -304,6 +312,14 @@ struct AssistantProfileView: View {
                         buiRow("Saved Prompts", Theme.Icon.quickCommands, detail: savedPromptsDetail)
                     }
                     .accessibilityIdentifier("assistant-saved-prompts")
+                    #if os(iOS)
+                    if UIDevice.current.userInterfaceIdiom == .phone {
+                        NavigationLink { ReplySpeechSettings() } label: {
+                            buiRow("Read Replies Aloud", Theme.Icon.answersAloud, detail: nil)
+                        }
+                        .accessibilityIdentifier("reply-speech-settings")
+                    }
+                    #endif
                 }
                 if let quiet = quietTasks {
                     BUIListSection(String(localized: "Task Notifications"), footer: Self.quietFooter) {

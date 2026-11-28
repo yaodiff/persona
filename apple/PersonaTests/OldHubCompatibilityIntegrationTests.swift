@@ -56,7 +56,8 @@ import Testing
             card = try await api.interactions().first { $0.sessionID == key.sessionID && $0.kind == .permission }
             return card != nil
         }
-        _ = try await api.resolve(try #require(card).id, Resolution(allow: true), opID: UUID())
+        let current = try #require(card)
+        _ = try await api.resolve(current.id, Resolution(allow: true), opID: UUID(), occurrence: current.createdAtWire)
         try await until("permission-approved echo") {
             try await api.items(key, beforeSeq: nil).items.contains { $0.text == "echo: ask compatibility fixture" }
         }

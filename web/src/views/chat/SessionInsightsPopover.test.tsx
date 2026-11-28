@@ -436,7 +436,7 @@ describe("ContextMeter + lazy SessionInsightsPopover", () => {
     expect(dialog.querySelector("[data-insights-ttft]")?.textContent).toBe("1.45 s");
     expect(dialog.querySelector("[data-insights-speed-latest]")?.textContent).toBe("40 tok/s");
     expect(dialog.querySelector("[data-insights-speed-avg]")?.textContent).toBe("40 tok/s");
-    expect(dialog.querySelector("[data-insights-speed-latest]")?.previousElementSibling?.textContent).toBe("最近有数据的回合速率");
+    expect(dialog.querySelector("[data-insights-speed-latest]")?.previousElementSibling?.textContent).toBe("最近实测轮次速率");
     expect(dialog.querySelector("[data-insights-speed-peak]")).toBeNull();
   });
 

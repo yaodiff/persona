@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { t } from "../../i18n";
 import { Toasts } from "../../ui/atoms";
-import { ImageViewer } from "./ImageViewer";
+import { ChatImageViewer, ImageViewer } from "./ImageViewer";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -189,4 +189,117 @@ it("downloads an embedded data image with its original bytes", async () => {
   const saved = createURL.mock.calls[0][0] as Blob;
   expect(saved.type).toBe("image/png");
   expect(await blobBytes(saved)).toEqual(png);
+});
+
+const openTabButton = () => document.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-imageviewer.open_in_new_tab")}"]`)!;
+
+it.each([
+  "data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+PC9zdmc+",
+  "DATA:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+  "javascript:alert(1)",
+  "https:/admin",
+  "https://user:pw@evil.example/pic.png",
+  "/api/../admin",
+  "/api/v1/lark/media/../../admin",
+  "/api/v1/lark/media/%252e%252e/admin",
+  "/api/v1/lark/media/..%2fadmin",
+  "/api/v1/lark/media/foo%5cbar",
+  "/api/v1/lark/media/..#x",
+  "blob:https://evil.example/00000000-0000-0000-0000-000000000000",
+])("refuses to open unsafe image URL %s in a new tab", async (badSrc) => {
+  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  await act(async () => root.render(<><Toasts /><ImageViewer images={[{ id: "bad", src: badSrc }]} start={0} onClose={() => {}} /></>));
+  await act(async () => openTabButton().click());
+  await flush();
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(createURL).not.toHaveBeenCalled();
+  expect(openSpy).not.toHaveBeenCalled();
+});
+
+it("opens safe raster data:, hub /api/, and https:// images in a new tab with noopener,noreferrer", async () => {
+  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  const dataSrc = `data:image/png;base64,${btoa(String.fromCharCode(...png))}`;
+  await openLoaded("embedded.png", dataSrc);
+  fetchMock.mockImplementationOnce(nativeFetch);
+  await act(async () => openTabButton().click());
+  await flush();
+  expect(createURL).toHaveBeenCalledTimes(1);
+  expect((createURL.mock.calls[0][0] as Blob).type).toBe("image/png");
+  expect(openSpy).toHaveBeenCalledExactlyOnceWith("blob:synthetic-download", "_blank", "noopener,noreferrer");
+  await act(async () => vi.advanceTimersByTime(60_000));
+  expect(revokeURL).toHaveBeenCalledExactlyOnceWith("blob:synthetic-download");
+
+  openSpy.mockClear();
+  await act(async () => root.render(<><Toasts /><ImageViewer images={[{ id: "hub", src: source }]} start={0} onClose={() => {}} /></>));
+  await act(async () => openTabButton().click());
+  await flush();
+  expect(openSpy).toHaveBeenCalledExactlyOnceWith(source, "_blank", "noopener,noreferrer");
+
+  openSpy.mockClear();
+  await act(async () => root.render(<><Toasts /><ImageViewer images={[{ id: "web", src: "https://example.com/pic.png" }]} start={0} onClose={() => {}} /></>));
+  await act(async () => openTabButton().click());
+  await flush();
+  expect(openSpy).toHaveBeenCalledExactlyOnceWith("https://example.com/pic.png", "_blank", "noopener,noreferrer");
+});
+
+it("refuses a same-origin blob: URL whose fetched MIME type is SVG", async () => {
+  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  const sameOriginBlob = `blob:${location.origin}/svg-payload`;
+  fetchMock.mockResolvedValueOnce(new Response("<svg/>", { status: 200, headers: { "Content-Type": "image/svg+xml" } }));
+  await act(async () => root.render(<><Toasts /><ImageViewer images={[{ id: "svg-blob", src: sameOriginBlob }]} start={0} onClose={() => {}} /></>));
+  await act(async () => openTabButton().click());
+  await flush();
+  expect(createURL).not.toHaveBeenCalled();
+  expect(openSpy).not.toHaveBeenCalled();
+});
+
+it("opens parameterized raster data: and same-origin blob: URLs with normalized parameterless MIME", async () => {
+  const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+  const paramData = `data:image/png;charset=utf-8;base64,${btoa(String.fromCharCode(...png))}`;
+  await openLoaded("param.png", paramData);
+  fetchMock.mockResolvedValueOnce(new Response(png, { status: 200, headers: { "Content-Type": "image/png; charset=utf-8" } }));
+  await act(async () => openTabButton().click());
+  await flush();
+  expect(createURL).toHaveBeenCalledTimes(1);
+  expect((createURL.mock.calls[0][0] as Blob).type).toBe("image/png");
+  expect(openSpy).toHaveBeenCalledExactlyOnceWith("blob:synthetic-download", "_blank", "noopener,noreferrer");
+
+  createURL.mockClear();
+  openSpy.mockClear();
+  const sameOriginBlob = `blob:${location.origin}/param-png`;
+  fetchMock.mockResolvedValueOnce(new Response(png, { status: 200, headers: { "Content-Type": "image/jpeg; charset=binary" } }));
+  await act(async () => root.render(<><Toasts /><ImageViewer images={[{ id: "blob-param", src: sameOriginBlob }]} start={0} onClose={() => {}} /></>));
+  await act(async () => openTabButton().click());
+  await flush();
+  expect(createURL).toHaveBeenCalledTimes(1);
+  expect((createURL.mock.calls[0][0] as Blob).type).toBe("image/jpeg");
+  expect(openSpy).toHaveBeenCalledExactlyOnceWith("blob:synthetic-download", "_blank", "noopener,noreferrer");
+});
+
+it("falls back from malformed item.image.mime to hub imageURL in ChatImageViewer", async () => {
+  const b64 = btoa(String.fromCharCode(...png));
+  await act(async () =>
+    root.render(
+      <ChatImageViewer
+        mid="m1"
+        sid="s1"
+        onClose={() => {}}
+        item={{ id: "img-bad-mime", kind: "image", image: { mime: "text/html,payload", data: b64 } } as never}
+      />,
+    ),
+  );
+  expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toMatch(/^\/api\/v1\/sessions\/m1\/s1\/items\/img-bad-mime\/image/);
+
+  await act(async () =>
+    root.render(
+      <ChatImageViewer
+        key="good"
+        mid="m1"
+        sid="s1"
+        onClose={() => {}}
+        item={{ id: "img-good-mime", kind: "image", image: { mime: "image/png; charset=utf-8", data: b64 } } as never}
+      />,
+    ),
+  );
+  expect(document.querySelector('[role="dialog"] img')?.getAttribute("src")).toBe(`data:image/png;base64,${b64}`);
 });

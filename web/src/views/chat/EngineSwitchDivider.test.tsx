@@ -47,9 +47,9 @@ describe("EngineSwitchDivider", () => {
     expect(html).toContain('aria-label="已从 Claude Code 切换到 Codex"');
     expect(html).toContain("已从 Claude Code 切换到 Codex");
     expect(html).toMatch(/title="gpt-5\.5"[^>]*>GPT-5\.5</); // as the model lists name it, the id on hover
-    expect(html).toContain("已用摘要接续");
-    expect(html).not.toContain("已续接原任务");
-    expect(renderToStaticMarkup(<EngineSwitchDivider sw={sw({ resumed: true, from: "codex", to: "claude" })} id="x" mid="m" sid="s" />)).toContain("已续接原任务");
+    expect(html).toContain("已通过摘要继续");
+    expect(html).not.toContain("已恢复原会话");
+    expect(renderToStaticMarkup(<EngineSwitchDivider sw={sw({ resumed: true, from: "codex", to: "claude" })} id="x" mid="m" sid="s" />)).toContain("已恢复原会话");
   });
 
   it("leaves the model out when the block names none", () => {

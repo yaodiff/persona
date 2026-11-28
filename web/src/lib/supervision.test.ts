@@ -40,7 +40,7 @@ describe("supervision", () => {
     const todo = { ...base, supervision: sup({ state: "parked", parked }) };
     expect(reviewState(todo)).toBe("parked");
     expect(reviewBadge(todo)).toEqual({ label: "已搁置", tone: "muted" });
-    expect(parkedLine(todo)).toMatch(/^搁置到 .*2026.* · 设计组要先定图标$/);
+    expect(parkedLine(todo)).toMatch(/^搁置至 .*2026.* · 设计组要先定图标$/);
     expect(reviewVerdictLabel("parked")).toBe("已搁置");
     // closed, or without what it waits for (its agent works again): not parked
     expect(reviewState({ ...todo, done_at: "2026-11-12T09:00:00Z" })).toBe("");
@@ -58,15 +58,27 @@ describe("supervision", () => {
     expect(progressLine(sup({ progress: { kind: "progress", step: 3, steps: 5, text: "在跑迁移" } }))).toBe("第 3/5 步 · 在跑迁移");
     expect(progressLine(sup({ progress: { kind: "progress", step: 2, text: "在跑迁移" } }))).toBe("第 2 步 · 在跑迁移");
     expect(progressLine(sup({ progress: { kind: "progress", text: "在跑迁移" } }))).toBe("在跑迁移");
-    expect(progressLine(sup({ progress: { kind: "question", step: 2, steps: 5, text: "要不要停写？" } }))).toBe("问 Persona：要不要停写？");
-    expect(reportLine("blocked", "等 CI")).toBe("卡住了：等 CI");
-    expect(reportLine("done", "PR 已合并")).toBe("说做完了：PR 已合并");
+    expect(progressLine(sup({ progress: { kind: "question", step: 2, steps: 5, text: "要不要停写？" } }))).toBe("向 Persona 提问：要不要停写？");
+    expect(reportLine("blocked", "等 CI")).toBe("遇到阻塞：等 CI");
+    expect(reportLine("done", "PR 已合并")).toBe("回报已完成：PR 已合并");
+  });
+
+  it("ignores legacy Codex terminal startup notices stored in supervision progress (#14822)", () => {
+    for (const text of [
+      "Codex will start in the terminal to use the requested reasoning effort. Approvals and questions will use the terminal screen.",
+      "为使用指定的推理强度，Codex 将通过终端启动。审批和提问将通过终端画面处理。",
+      "指定された推論レベルを使うため、Codex はターミナルで起動します。承認や質問はターミナル画面を通じて行います。",
+    ]) {
+      const legacy = sup({ progress: { kind: "progress", text, line: "终端启动说明" } });
+      expect(progressLine(legacy)).toBeUndefined();
+      expect(reportText(legacy)).toBeUndefined();
+    }
   });
 
   it("words the report in the hub's paraphrase when it has one, and keeps the original for the details (#3181)", () => {
     const progress = { kind: "progress" as const, step: 3, steps: 5, text: "Ran the **migration** on staging: 41 tables moved", line: "迁移跑完，41 张表已搬" };
     expect(progressLine(sup({ progress }))).toBe("第 3/5 步 · 迁移跑完，41 张表已搬");
-    expect(progressLine(sup({ progress: { ...progress, kind: "question", line: "先灰度还是直接全量" } }))).toBe("问 Persona：先灰度还是直接全量");
+    expect(progressLine(sup({ progress: { ...progress, kind: "question", line: "先灰度还是直接全量" } }))).toBe("向 Persona 提问：先灰度还是直接全量");
     // no line yet, no model, or an older hub: the agent's words, as before
     expect(progressLine(sup({ progress: { ...progress, line: undefined } }))).toBe("第 3/5 步 · Ran the **migration** on staging: 41 tables moved");
     expect(progressLine(sup({ progress: { ...progress, line: "  " } }))).toBe("第 3/5 步 · Ran the **migration** on staging: 41 tables moved");
@@ -84,7 +96,7 @@ describe("supervision", () => {
   it("names each state", () => {
     expect(reviewBadge({ ...base, supervision: sup({}) })?.label).toBe("督办中");
     expect(reviewBadge({ ...base, supervision: sup({ state: "pending_review" }) })).toEqual({ label: "待验收", tone: "accent" });
-    expect(reviewBadge({ ...base, supervision: sup({ state: "rework", round: 2 }) })?.label).toBe("返工第 2 轮");
+    expect(reviewBadge({ ...base, supervision: sup({ state: "rework", round: 2 }) })?.label).toBe("第 2 轮返工");
     expect(reviewBadge({ ...base, supervision: sup({ state: "needs_user" }) })?.tone).toBe("orange");
     expect(reviewBadge({ ...base, done_at: "2026-11-05T09:00:00Z", supervision: sup({ state: "accepted" }) })?.label).toBe("已验收");
   });
@@ -160,10 +172,10 @@ describe("evidenceAuthorLabel", () => {
     // Main conversation resolves to MAIN_TITLE ("Persona").
     expect(evidenceAuthorLabel("supervisor:main-conv", ctx)).toBe("Persona");
     // Deleted, missing, or cross-manager conversations fall back to localized supervisor role.
-    expect(evidenceAuthorLabel("supervisor:deleted-conv", ctx)).toBe("主管");
-    expect(evidenceAuthorLabel("supervisor:other-mgr-conv", ctx)).toBe("主管");
-    expect(evidenceAuthorLabel("supervisor:agy-231f5e13-deadbeef", ctx)).toBe("主管");
-    expect(evidenceAuthorLabel("supervisor:", ctx)).toBe("主管");
+    expect(evidenceAuthorLabel("supervisor:deleted-conv", ctx)).toBe("督办");
+    expect(evidenceAuthorLabel("supervisor:other-mgr-conv", ctx)).toBe("督办");
+    expect(evidenceAuthorLabel("supervisor:agy-231f5e13-deadbeef", ctx)).toBe("督办");
+    expect(evidenceAuthorLabel("supervisor:", ctx)).toBe("督办");
   });
 
   it("resolves agent:<machine>/<session> via session lookup and sessionTitle, scoped to manager", () => {
@@ -193,7 +205,7 @@ describe("evidenceAuthorLabel", () => {
 
     const expectations: Array<["en" | "zh-Hans" | "ja", string, string, string]> = [
       ["en", "Supervisor", "Agent", "Reviewer"],
-      ["zh-Hans", "主管", "Agent", "评审"],
+      ["zh-Hans", "督办", "Agent", "评审"],
       ["ja", "監督", "エージェント", "レビュアー"],
     ];
 

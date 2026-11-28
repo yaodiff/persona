@@ -5,7 +5,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError, errorText, sessionPath } from "./api";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { hasModes } from "./session-actions";
 import { flushPushes, getSession, hubHas, upsertSession } from "./store";
 import type { PlanTask } from "./feed";
@@ -27,7 +27,7 @@ const isClaude = (s: Pick<Session, "agent">) => !s.agent || s.agent === "claude"
  *  runtime's Claude (Orca) has the chips but no terminal for the node to type the switch into. */
 export function ultracodeOffered(s: Session | undefined, features: string[]): boolean {
   if (!s || s.assistant || s.source_kind || !hubHas(features, ULTRACODE_FEATURE)) return false;
-  return isClaude(s) && hasModes(s) && stateOf(s) !== "offline";
+  return isClaude(s) && hasModes(s) && activityOf(s) !== "offline";
 }
 
 /** The workflow mark on a row and on the thinking chip: the node saw it on (unknown is not on). */
@@ -38,7 +38,7 @@ export function ultracodeOn(s: Pick<Session, "ultracode" | "assistant" | "agent"
 /** The workflow mark on an Agent list row (and so on a to-do): on, and not offline: the node keeps the last value it saw
  *  after the process is gone, and a resume starts it off. */
 export function ultracodeMarkShown(s: Session): boolean {
-  return stateOf(s) !== "offline" && ultracodeOn(s);
+  return activityOf(s) !== "offline" && ultracodeOn(s);
 }
 
 /** The workflow mark on a to-do (#12): one of its agents shows it on its Agent list row; before any agent started, the

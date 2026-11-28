@@ -156,15 +156,13 @@ func (h *Hub) applyResumeLauncher(ctx context.Context, m *Machine, sid string, p
 // autoTabName is a short name for the herdr tab of a new agent, from its first message (the manager's
 // agents.tab_name). "" when there is no message, or no name came: the node names it agent-<n>.
 func (h *Hub) autoTabName(ctx context.Context, prompt string) string {
-	var res struct {
-		Name string `json:"name"`
-	}
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if !h.waitManager(cctx) {
 		return ""
 	}
-	if err := h.asst().call(cctx, assistantwire.MethodAgentTabName, map[string]any{"prompt": prompt}, &res); err != nil {
+	res, err := callAssistant(cctx, h.asst(), assistantwire.AgentTabNameMethod, assistantwire.AgentTabNameParams{Prompt: prompt})
+	if err != nil {
 		h.logf("tab name: %v", err)
 		return ""
 	}

@@ -12,6 +12,7 @@
   "close_refused": "The computer would not close this agent, so it is still open",
   "close_failed": "Closing the agent on its computer failed, so it may still be open",
   "close_upgrade": "Update the assistant to archive and close agents",
+  "task_closed": "Stopped because its to-do was closed. The conversation and terminal are kept; resume the Agent from its terminal to continue.",
   "waiting_recovery": "This agent is waiting at a dialog or for input; that does not necessarily mean it needs approval. Inspect it on its computer. If a read-only screen such as Settings or Status is open, dismiss it without approving anything. Let queued messages finish or explicitly cancel only the messages you intend to cancel, then exit the agent when safe and retry archiving. Nothing was approved or removed from its queue; its transcript is kept.",
   "close_only_busy": "Closing this agent would stop its loop, queued messages or server. Archive it without close or force to keep those running, or wait until they finish.",
   "force_unverified": "The current session state could not be verified on its computer. Reconnect the computer and retry; nothing was closed or archived.",

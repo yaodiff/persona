@@ -1,6 +1,6 @@
 {
-  "mermaid": "Mermaid 图",
-  "plantuml": "PlantUML 图",
+  "mermaid": "Mermaid 图表",
+  "plantuml": "PlantUML 图表",
   "image_missing": "图片无法显示",
   "link": "链接",
   "sheet": "电子表格",
@@ -11,8 +11,8 @@
   "embed": "内嵌内容",
   "file": "文件",
   "slide": "第 {n} 页",
-  "isv": "第三方小组件，在飞书中查看",
-  "block_unsupported": "这个内容块暂不支持，在飞书中查看",
+  "isv": "第三方小组件，请在飞书中查看",
+  "block_unsupported": "暂不支持此内容块，请在飞书中查看",
   "image": "图片",
   "open": "打开"
 }

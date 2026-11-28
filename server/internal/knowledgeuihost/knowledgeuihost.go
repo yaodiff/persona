@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -25,6 +27,7 @@ const ModuleID = "knowledge-ui"
 
 // Layer is what the core asks of the knowledge pages' module.
 type Layer interface {
+	ProviderCheckpoint(e *kb.Engine, cfg *assistantwire.KBHistory, binding assistantwire.KBImportProvider, day string, now time.Time) (wire.KBImportCheckpointResult, bool)
 	// Tool runs one of the history import's assistant tools (kb_history_plan, kb_history_status, kb_history_stop,
 	// kb_history_resume).
 	Tool(ctx context.Context, name string, args json.RawMessage) (string, error)

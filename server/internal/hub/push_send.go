@@ -233,7 +233,7 @@ func (p *Pusher) sendLiveActivityThen(d Device, token string, payload map[string
 // status (relayRefusal), unknown when nothing answered.
 func sendFailure(err error) pushResult {
 	var refusal *relayRefusal
-	if errors.Is(err, errNotSent) || errors.As(err, &refusal) {
+	if errors.Is(err, errNotSent) || errors.Is(err, apns.ErrInvalidDeviceToken) || errors.As(err, &refusal) {
 		return pushRefused
 	}
 	return pushUnknown

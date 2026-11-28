@@ -120,4 +120,12 @@ describe("entry rows", () => {
     const row = host.querySelector("button");
     expect(row?.textContent).toContain(countsText({ on: 2, failing: 1 }));
   });
+
+  it("can explain subscriptions where the row appears without the subscriptions page", async () => {
+    hub.features = [SUBSCRIPTIONS_FEATURE];
+    hub.summary = [line({ subscribable: true, on: 1, failing: 0 })];
+    act(() => root.render(<SubscriptionsEntry pick={(l) => l.extension === "apps"} scope={{ ext: "apps" }} description="Subscriptions bring new items into your Inbox." />));
+    await settle();
+    expect(host.textContent).toContain("Subscriptions bring new items into your Inbox.");
+  });
 });

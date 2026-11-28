@@ -1,0 +1,50 @@
+[
+  {
+    "type": "system",
+    "subtype": "init"
+  },
+  {
+    "type": "assistant",
+    "usage_report": {
+      "session": {
+        "total_cost_usd": 0,
+        "total_api_duration_ms": 0
+      },
+      "rate_limits": {
+        "limits": [
+          {
+            "kind": "session",
+            "group": "session",
+            "percent": 55,
+            "resets_at": "2026-11-21T16:00:00+00:00",
+            "scope": null
+          },
+          {
+            "kind": "weekly_all",
+            "group": "weekly",
+            "percent": 72,
+            "resets_at": "2026-11-27T09:00:00+00:00",
+            "scope": null
+          },
+          {
+            "kind": "weekly_scoped",
+            "group": "weekly",
+            "percent": 18,
+            "resets_at": "2026-11-27T09:00:00+00:00",
+            "scope": {
+              "model": {
+                "display_name": "Sonnet"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "result": "You are currently using your subscription to power your Claude Code usage\n\nCurrent session: 55% used · resets Nov 21 at 4pm (UTC)\nCurrent week (all models): 72% used · resets Nov 27 at 9am (UTC)\n\nLast 7d · 403 requests · 12 sessions"
+  }
+]

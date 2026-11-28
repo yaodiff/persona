@@ -19,7 +19,7 @@ nonisolated enum RecordingDayConsentPoint: CaseIterable, Identifiable, Sendable 
     case textGoesToTheModel
     /// Agents and extensions allowed to read the knowledge base can read it.
     case readersOfKnowledge
-    /// The text is kept `recording_days`, the recap as long as meeting minutes.
+    /// The text's retention is `recording_text_days` (forever or days), and the recap as long as meeting minutes.
     case howLongItIsKept
 
     var id: Self { self }
@@ -34,9 +34,9 @@ nonisolated enum RecordingDayConsentPoint: CaseIterable, Identifiable, Sendable 
         }
     }
 
-    /// - Parameter transcriptDays: how long the hub keeps a recording's text (`recording_days`, as reconciliation last
-    ///   said it).
-    func text(transcriptDays: Int) -> String {
+    /// - Parameter textDays: how long the hub keeps a recording's text (`text_days`; 0 is forever), as reconciliation
+    ///   last said it.
+    func text(textDays: Int) -> String {
         switch self {
         case .everyoneIsRecorded:
             String(localized: "It records all the sound around you, other people included. Ask them first: some places require everyone's consent.")
@@ -47,7 +47,7 @@ nonisolated enum RecordingDayConsentPoint: CaseIterable, Identifiable, Sendable 
         case .readersOfKnowledge:
             String(localized: "Agents and extensions allowed to read the knowledge base can read it too.")
         case .howLongItIsKept:
-            String(localized: "The text is kept for \(transcriptDays) days, and the day's recap as long as meeting minutes, which is forever by default.")
+            String(localized: "The text is \(RecordingRetentionText.kept(textDays)), and the day's recap is kept as long as meeting minutes, which is forever by default.")
         }
     }
 }
@@ -57,8 +57,8 @@ nonisolated enum RecordingDayConsentPoint: CaseIterable, Identifiable, Sendable 
 /// pinned under them. Agree is the one way to agree; Not Now and a swipe down leave everything as it was. Readable at
 /// every text size: the points scroll, the buttons stay.
 struct RecordingDayConsentView: View {
-    /// How long the hub keeps a recording's text (`recording_days`).
-    var transcriptDays: Int
+    /// How long the hub keeps a recording's text (`text_days`; 0 is forever).
+    var textDays: Int
     /// The user's answer: true for Agree. The presenter stores it and closes the sheet.
     var answer: (Bool) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -111,7 +111,7 @@ struct RecordingDayConsentView: View {
             ThemedIcon(point.symbol).font(Theme.Font.heading).foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.icon)
                 .accessibilityHidden(true)
-            Text(point.text(transcriptDays: transcriptDays)).font(Theme.Font.body)
+            Text(point.text(textDays: textDays)).font(Theme.Font.body)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)

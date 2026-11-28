@@ -27,7 +27,7 @@ import (
 // list its own /model menu shows. That list is in no config file — settings.json and config.toml hold the default
 // model and the gateway; the CLI makes the list from its aliases and what the gateway's /models answers — so the node
 // asks the CLI itself, run the way the launcher runs it: Claude Code answers its initialize control request (headless,
-// stream-json) with `models`, Codex's app-server answers model/list, and Antigravity prints its catalog with `agy models`.
+// stream-json) with `models`, Codex's app-server answers model/list, and Antigravity and TRAE CLI print their catalogs.
 // Nothing is sent to a model. The node also reads a managed provider's gateway models (launcher_gateway_models.go):
 // the CLI's answer has them only when its discovery cache was that gateway's.
 
@@ -83,11 +83,11 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 	}
 	if h != nil && !n.usesAgyPane(ctx, name, agentType) {
 		res, _ := launcherModelsOf(h, runtimeName)
-		return n.liveRuntimeModels(ctx, h, runtimeName, refresh, res)
+		return n.liveRuntimeModels(ctx, h, runtimeName, name, refresh, res)
 	}
 	agent := n.launcherModelsAgent(ctx, name, agentType)
 	if agent == ompAgent {
-		// omp accepts a typed model on a new herdr start, unless its launcher pins it.
+		// omp accepts a typed model on a new herdr or Orca start, unless its launcher pins it.
 		res := proto.LauncherModels{Agent: agent, Models: []proto.AgentModel{}}
 		if err := n.checkOmpStartModel(ctx, name, modelCheckProbe); err != nil {
 			res.Locked = err.Error()
@@ -107,7 +107,7 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 	launcherModelsCache.Unlock()
 	ask := func() (any, error) {
 		res := proto.LauncherModels{Agent: agent, Models: []proto.AgentModel{}}
-		if agent != "claude" && agent != "codex" && agent != agyAgent {
+		if agent != "claude" && agent != "codex" && agent != agyAgent && agent != traexAgent {
 			return res, nil
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), launcherModelsTimeout)
@@ -150,6 +150,9 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		}
 		launcherModelsCache.at[key], launcherModelsCache.got[key] = time.Now(), res
 		launcherModelsCache.Unlock()
+		if agent == agyAgent && n.hasLiveAgyPane() {
+			n.notifySessionsSoon()
+		}
 		return res, nil
 	}
 	if ok && !refresh {
@@ -250,12 +253,12 @@ func (n *Node) launcherModelsAgent(ctx context.Context, name, agentType string) 
 	return "claude" // a probe that failed: as claude, like every other start
 }
 
-// agentModelsCommand asks the launcher for its agent's models in dir. Managed Claude launchers skip the shell when
-// the executable and its interpreter are already available. Custom Claude launchers use the shell for aliases.
-func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string) (*exec.Cmd, error) {
-	_, managed := n.managedLauncher(name)
+// agentModelsCommand asks the launcher for its agent's models in dir. Managed Claude and Codex launchers skip the
+// shell when the executable and its interpreter are already available.
+func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string, traexArgs ...string) (*exec.Cmd, error) {
+	m, managed := n.managedLauncher(name)
 	var args []string
-	if agent != "codex" && agent != agyAgent {
+	if agent == "claude" {
 		// No hooks: this claude is no session of the user's (Persona's own, or a hook of theirs, would see one start).
 		ours := filepath.Join(dir, "settings.json")
 		if err := os.WriteFile(ours, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
@@ -264,10 +267,20 @@ func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string) 
 		args = []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 			"--settings", n.claudeSettings(ctx, name, ours, dir)}
 	}
-	if managed && agent == "claude" && canProbeManagedClaudeDirectly() {
+	if managed && (agent == "claude" && canProbeManagedClaudeDirectly() || agent == "codex" && canProbeManagedCodexDirectly()) {
+		if agent == "codex" {
+			args = []string{"app-server"}
+		}
 		cmd := exec.CommandContext(ctx, n.bin, append([]string{"launch", name}, args...)...)
 		cmd.Dir = dir
 		cmd.Env = append(cmd.Environ(), managedModelProbeEnv+"=1")
+		if agent == "codex" && m.BaseURL != "" && !slices.Contains(envNames(managedEnv(m)), "CODEX_HOME") {
+			codexHome := filepath.Join(dir, "codex-home")
+			if err := os.Mkdir(codexHome, 0o700); err != nil {
+				return nil, fmt.Errorf("create temporary Codex home: %w", err)
+			}
+			cmd.Env = append(withoutEnv(cmd.Env, []string{"CODEX_HOME"}), "CODEX_HOME="+codexHome)
+		}
 		return cmd, nil
 	}
 	shell, err := interactiveShell()
@@ -278,6 +291,13 @@ func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string) 
 	switch agent {
 	case agyAgent:
 		launcher += " models"
+	case traexAgent:
+		// Frame the JSON separately from output printed by the interactive shell's startup files.
+		launcher = `builtin printf '\036'; ` + launcher + ` "$@"`
+		args = traexArgs
+		if len(args) == 0 {
+			args = []string{"debug", "models"}
+		}
 	case "codex":
 		if managed {
 			// `personad launch` runs codex itself, not the shell's codex codexShell wraps: without the subcommand
@@ -288,7 +308,7 @@ func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string) 
 	default:
 		launcher += ` "$@"`
 	}
-	cmd := exec.CommandContext(ctx, shell, append([]string{"-ic", launcher, "persona"}, args...)...)
+	cmd := exec.CommandContext(ctx, shell, append([]string{shellFlag(shell), launcher, "persona"}, args...)...)
 	cmd.Dir = dir
 	return cmd, nil
 }
@@ -307,6 +327,23 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 	killGroupOnCancel(cmd)
 	if agent == agyAgent {
 		return discoverAgyModels(ctx, cmd, name)
+	}
+	if agent == traexAgent {
+		models, err := readTraexModelCommand(cmd)
+		if (err == nil && len(models) > 0) || ctx.Err() != nil {
+			return models, err
+		}
+		// Older versions may only have the public catalog, which omits per-model effort metadata.
+		fallback, fallbackErr := n.agentModelsCommand(ctx, name, agent, dir, "models", "--json")
+		if fallbackErr != nil {
+			return nil, errors.Join(err, fallbackErr)
+		}
+		killGroupOnCancel(fallback)
+		models, fallbackErr = readTraexModelCommand(fallback)
+		if fallbackErr != nil {
+			return nil, errors.Join(err, fallbackErr)
+		}
+		return models, nil
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -356,6 +393,58 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 	}
 }
 
+func readTraexModelCommand(cmd *exec.Cmd) ([]proto.AgentModel, error) {
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("TRAE CLI model catalog: %w", err)
+	}
+	_, catalog, ok := bytes.Cut(out, []byte{0x1e})
+	if !ok {
+		return nil, errors.New("TRAE CLI model catalog: missing catalog marker")
+	}
+	return traexModelList(catalog)
+}
+
+// Both catalogs use config_name for -m. The debug catalog has the visibility and effort fields.
+func traexModelList(out []byte) ([]proto.AgentModel, error) {
+	type row struct {
+		codexCachedModel
+		ID   string `json:"config_name"`
+		Name string `json:"name"`
+	}
+	var doc struct {
+		Models []row `json:"models"`
+	}
+	var catalog []row
+	out = bytes.TrimSpace(out)
+	var err error
+	if len(out) > 0 && out[0] == '{' {
+		err = json.Unmarshal(out, &doc)
+		catalog = doc.Models
+	} else {
+		err = json.Unmarshal(out, &catalog)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("decode TRAE CLI model catalog: %w", err)
+	}
+	models := []proto.AgentModel{}
+	seen := map[string]bool{}
+	for _, m := range catalog {
+		if !m.visible() || !proto.ValidModelID(m.ID) || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		efforts, def, _ := m.efforts()
+		efforts = proto.ProjectEfforts(efforts, proto.CodexEffortLevels)
+		if !slices.Contains(efforts, def) {
+			def = ""
+		}
+		models = append(models, proto.AgentModel{ID: m.ID, Name: firstOf(m.Name, m.DisplayName, m.Slug, m.ID),
+			Description: m.Description, Efforts: efforts, DefaultEffort: def})
+	}
+	return models, nil
+}
+
 // discoverAgyModels waits for the catalog command to exit so a failed discovery cannot cache a partial list.
 func discoverAgyModels(ctx context.Context, cmd *exec.Cmd, name string) ([]proto.AgentModel, error) {
 	var stderr, stdoutTail tailBuffer
@@ -390,6 +479,7 @@ func discoverAgyModels(ctx context.Context, cmd *exec.Cmd, name string) ([]proto
 		return nil, fmt.Errorf("%s models returned no models", name)
 	}
 	recordAgyModelWindows(windows)
+	recordAgyModelCatalog(models)
 	return models, nil
 }
 

@@ -54,7 +54,7 @@ func TestNodeProgramHubCallScopes(t *testing.T) {
 	rev := extensionNodeRevision(reg.GetExact("example-helper"))
 
 	call := func(machine, method string, revision int64, params string) (json.RawMessage, error) {
-		raw, _ := json.Marshal(proto.PluginNodeHubCall{ID: proto.PluginNodeExtensionID("example-helper"), Revision: revision, Method: method, Params: json.RawMessage(params)})
+		raw, _ := json.Marshal(proto.PluginNodeHubCall{ID: proto.PluginNodeExtensionID("example-helper"), Revision: revision, Method: method, Params: proto.PluginNodeHubCallParams(params)})
 		out, err := h.NodeProgramHubCall(ctx, machine, raw)
 		if err != nil {
 			return nil, err
@@ -112,7 +112,7 @@ func TestNodeProgramHubCallScopes(t *testing.T) {
 			t.Fatalf("%s at revision %d: %v", tc.machine, tc.revision, err)
 		}
 	}
-	raw, _ = json.Marshal(proto.PluginNodeHubCall{ID: "someone-else", Revision: rev, Method: assistantwire.MethodKBUpdate, Params: json.RawMessage(`{}`)})
+	raw, _ = json.Marshal(proto.PluginNodeHubCall{ID: "someone-else", Revision: rev, Method: assistantwire.MethodKBUpdate, Params: proto.PluginNodeHubCallParams(`{}`)})
 	if _, err := h.NodeProgramHubCall(ctx, "box", raw); code(err) != extension.CodePermissionDenied {
 		t.Fatalf("another extension's id: %v", err)
 	}

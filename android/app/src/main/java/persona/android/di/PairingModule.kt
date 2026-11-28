@@ -40,6 +40,7 @@ object PairingModule {
         machines: MachineManagement, models: ModelConfiguration, extensions: ExtensionManagement, providers: ProviderSetup,
         connectors: ConnectorsManagement, channels: ChannelManagement, platform: persona.android.platform.PlatformPairing,
         hubUpdates: HubUpdates, managers: HubManagers, sent: HubSent, translation: TranslationSettings, triage: AgentTriage, knowledgeSelection: KnowledgeSelection, capsule: persona.android.capsule.CapsuleRuntime,
+        digitalAssistantModel: persona.android.assist.AssistModelRuntime,
         attempts: PairingAttempts, application: Application, readiness: AssistantReadinessSource, feishuBot: FeishuBotSettings,
         standing: StandingAuthorizationsSource, extensionTrust: ExtensionTrustSource,
     ) = SettingsServices(pairing, connection, sessions, updates, diagnostics, binding = devices.binding,
@@ -47,7 +48,8 @@ object PairingModule {
         disconnect = { pairing.unpair() }, endpoints = runtime.endpoints, machines = machines, models = models, extensions = extensions, providers = providers,
         channels = channels, feishuBot = feishuBot, hubUpdates = hubUpdates, managers = managers, sent = sent,
         hubs = runtime.hubGroups, tunnels = runtime.hubTunnels, addHub = platform.adding, connectors = connectors,
-        translation = translation, triage = triage, knowledgeSelection = knowledgeSelection, capsule = capsule, pairingAttempts = attempts, readiness = readiness,
+        translation = translation, triage = triage, knowledgeSelection = knowledgeSelection, capsule = capsule,
+        digitalAssistantModel = digitalAssistantModel, pairingAttempts = attempts, readiness = readiness,
         standing = standing, extensionTrust = extensionTrust, developing = (application as PersonaApp).developingPersona,
         appUpdateStore = persona.feature.settings.AppUpdateStore(application, updates, devices.binding),
         desktops = (application as PersonaApp).desktops, clearCacheFiles = { files -> persona.core.data.CacheClearing.delete(files) })

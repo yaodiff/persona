@@ -252,11 +252,15 @@ func (c *catalog) resolve(ctx context.Context, id string) (*Provider, string, er
 	return p, model, nil
 }
 
-// voices is GET /voices?model=: the service's list (live dialect, GET <url>/voices), else the dialect's built-in one.
+// voices is GET /voices?model=: when a streaming TTS endpoint is configured, its voice list (GET <voices URL>,
+// #17843); otherwise the realtime service's list (live dialect, GET <url>/voices), else the dialect's built-in one.
 // While the service's list cannot be read it answers with the last good one for that model, else the built-in one,
 // marked Stale (#2411): a call can still pick a voice, and the app asks again later. Only a model id that names no
 // provider, or no upstream at all, is an error.
 func (c *catalog) voices(ctx context.Context, id string) (voiceList, error) {
+	if tts := c.cfg.TTS(); tts.Configured() {
+		return c.ttsVoices(ctx, tts), nil
+	}
 	p, model, err := c.resolve(ctx, id)
 	if err != nil {
 		if id != "" || errors.Is(err, errNoUpstream) || errors.Is(err, errNoProvider) {
@@ -315,6 +319,124 @@ func (c *catalog) voices(ctx context.Context, id string) (voiceList, error) {
 
 // lastVoicesKey keeps the latest list a provider gave for any of its models.
 func lastVoicesKey(provider string) string { return "voices-latest:" + provider }
+
+const ttsVoicesCacheKey = "voices:tts"
+
+// ttsVoicesTimeout bounds GET <voices URL> to the TTS endpoint so a slow or unreachable endpoint does not stall the app.
+var ttsVoicesTimeout = 5 * time.Second
+
+// ttsVoices reads the configured TTS endpoint's optional GET .../v1/audio/voices list (#17843), cached for catalogTTL
+// (10 minutes). A 404/405/501 means the endpoint has no voice list (default voice only, not stale); any other failure
+// serves the last good list marked stale, or the default voice alone marked stale when no list was ever read.
+func (c *catalog) ttsVoices(ctx context.Context, tts TTSEndpoint) voiceList {
+	v, wasStale, err := c.getOrLast(ttsVoicesCacheKey, func() (any, error) {
+		raw, err := getTTSVoices(ctx, tts)
+		if err != nil {
+			var status *httpStatusError
+			if errors.As(err, &status) && status.noSuchEndpoint() {
+				return ttsDefaultOnly(tts.DefaultVoice()), nil
+			}
+			return nil, err
+		}
+		return parseTTSVoices(raw, tts.DefaultVoice())
+	})
+	if err != nil && v == nil {
+		return stale(ttsDefaultOnly(tts.DefaultVoice()))
+	}
+	list := v.(voiceList)
+	if wasStale {
+		return stale(list)
+	}
+	return list
+}
+
+func ttsDefaultOnly(defaultVoice string) voiceList {
+	if defaultVoice == "" {
+		return voiceList{Voices: []VoiceChoice{}}
+	}
+	return voiceList{Voices: []VoiceChoice{{ID: defaultVoice}}, Default: defaultVoice}
+}
+
+func getTTSVoices(ctx context.Context, tts TTSEndpoint) ([]byte, error) {
+	u, err := url.Parse(tts.VoicesURL())
+	if err != nil {
+		return nil, errors.New("the TTS voices address does not parse")
+	}
+	ctx, cancel := context.WithTimeout(ctx, ttsVoicesTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tts.VoicesURL(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if key := tts.Key(); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	res, err := directClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, &httpStatusError{path: u.Path, status: res.StatusCode, body: clipRunes(string(raw), 200)}
+	}
+	return raw, nil
+}
+
+// parseTTSVoices decodes either {"voices":[{"id","name","languages"}],"default":...} or {"voices":["a","b"]}.
+// defaultVoice (tts_default_voice) is always included and marked default when set; otherwise the endpoint's default
+// wins, else the first voice.
+func parseTTSVoices(raw []byte, defaultVoice string) (voiceList, error) {
+	var res struct {
+		Voices       []json.RawMessage `json:"voices"`
+		Default      string            `json:"default"`
+		DefaultVoice string            `json:"defaultVoice"`
+		DefaultSnek  string            `json:"default_voice"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return voiceList{}, err
+	}
+	out := voiceList{Voices: []VoiceChoice{}}
+	seen := map[string]bool{}
+	for _, item := range res.Voices {
+		var v VoiceChoice
+		var s string
+		if err := json.Unmarshal(item, &s); err == nil {
+			v.ID = strings.TrimSpace(s)
+		} else if err := json.Unmarshal(item, &v); err == nil {
+			v.ID = strings.TrimSpace(v.ID)
+		} else {
+			continue
+		}
+		if !voicePattern.MatchString(v.ID) || seen[v.ID] {
+			continue
+		}
+		seen[v.ID] = true
+		out.Voices = append(out.Voices, v)
+	}
+	epDefault := strings.TrimSpace(firstNonEmpty(res.Default, res.DefaultVoice, res.DefaultSnek))
+	if epDefault != "" && !voicePattern.MatchString(epDefault) {
+		epDefault = ""
+	}
+	switch {
+	case defaultVoice != "":
+		if !seen[defaultVoice] {
+			out.Voices = append([]VoiceChoice{{ID: defaultVoice}}, out.Voices...)
+		}
+		out.Default = defaultVoice
+	case epDefault != "":
+		if !seen[epDefault] {
+			out.Voices = append([]VoiceChoice{{ID: epDefault}}, out.Voices...)
+		}
+		out.Default = epDefault
+	case len(out.Voices) > 0:
+		out.Default = out.Voices[0].ID
+	}
+	return out, nil
+}
 
 // builtinVoices is a dialect's own list: Codex's voices for gpt-live-1-codex (cove), none for the fake one (it speaks
 // no audio), else the public GPT-Live API's (marin).

@@ -223,3 +223,146 @@ func TestChannelImageOnlyFetchesWebAddresses(t *testing.T) {
 		t.Fatalf("fetched %v", f)
 	}
 }
+
+// When no picture of an answer can be sent, each is still named by its address in its place: the Markdown image
+// would show as code on a plain channel. With no fetcher at all it is the same (#11986, review of #12158).
+func TestChannelAnswerNamesEveryPictureWhenNoneIsSent(t *testing.T) {
+	answer := "看图\n\n![坏的](https://pics.example/missing.png)\n\n完"
+	lang := i18n.Lang("zh-Hans")
+	link := i18n.T(lang, "assistant-channels_plugin.image_link", i18n.Args{"alt": i18n.Verbatim("坏的"), "url": i18n.Verbatim("https://pics.example/missing.png")})
+	s, sends, _ := picturesRig(t, true)
+	s2, sends2, _ := picturesRig(t, true)
+	s2.channelPicture, s2.remoteImages = nil, nil
+	for i, svc := range []*Service{s, s2} {
+		if err := svc.channelSend(context.Background(), "examplechat", "run-1", answer, channel.OutAnswer, ""); err != nil {
+			t.Fatal(err)
+		}
+		got := [][]map[string]any{sends(), sends2()}[i]
+		if len(got) != 1 || got[0]["images"] != nil || got[0]["text"] != "看图\n\n"+link+"\n\n完" {
+			t.Fatalf("rig %d sent %v", i, got)
+		}
+	}
+}
+
+// Pictures in an indented code block (four spaces or a tab) stay text and are never fetched; a picture indented up to
+// three spaces is still a block image (#11986, review of #12158).
+func TestChannelAnswerLeavesIndentedCodeAlone(t *testing.T) {
+	s, sends, fetched := picturesRig(t, true)
+	answer := strings.Join([]string{
+		"这样写：",
+		"",
+		"    ![示意](https://pics.example/code.png)",
+		"",
+		"\t![制表符](https://pics.example/tab.png)",
+		"",
+		"   ![图](https://pics.example/chart.png)",
+	}, "\n")
+	if err := s.channelSend(context.Background(), "examplechat", "run-1", answer, channel.OutAnswer, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := sends()
+	if len(got) != 1 || len(images(t, got[0])) != 1 {
+		t.Fatalf("sent %v", got)
+	}
+	text := got[0]["text"].(string)
+	for _, want := range []string{"    ![示意](https://pics.example/code.png)", "\t![制表符](https://pics.example/tab.png)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lost %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "chart.png") {
+		t.Errorf("text:\n%s", text)
+	}
+	if f := fetched(); len(f) != 1 || !strings.Contains(f[0], "chart.png") {
+		t.Errorf("fetched %v", f)
+	}
+}
+
+// TestChannelAnswerSendsPicturesUnderListItems: a picture indented under a list item, after a blank line, is a
+// paragraph of that item, not code (CommonMark: an item's code needs four columns past its content), so it is sent;
+// four columns past the item's content it is code and stays text.
+func TestChannelAnswerSendsPicturesUnderListItems(t *testing.T) {
+	s, sends, fetched := picturesRig(t, true)
+	answer := strings.Join([]string{
+		"Steps:",
+		"",
+		"10. Open the page",
+		"",
+		"    ![shot](https://pics.example/list.png)",
+		"",
+		"- Then the menu",
+		"",
+		"  ![menu](https://pics.example/bullet.png)",
+		"",
+		"      ![code](https://pics.example/item-code.png)",
+		"",
+		"  1. A nested step",
+		"",
+		"     ![nested](https://pics.example/nested.png)",
+		"",
+		"  ```",
+		"  ![fenced](https://pics.example/item-fence.png)",
+		"  ```",
+		"",
+		"Done.",
+		"",
+		"    ![after](https://pics.example/after.png)",
+	}, "\n")
+	if err := s.channelSend(context.Background(), "examplechat", "run-1", answer, channel.OutAnswer, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := sends()
+	if len(got) != 1 || len(images(t, got[0])) != 3 {
+		t.Fatalf("sent %v", got)
+	}
+	text := got[0]["text"].(string)
+	for _, want := range []string{"      ![code](https://pics.example/item-code.png)", "  ![fenced](https://pics.example/item-fence.png)",
+		"    ![after](https://pics.example/after.png)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lost %q:\n%s", want, text)
+		}
+	}
+	for _, gone := range []string{"list.png", "bullet.png", "nested.png"} {
+		if strings.Contains(text, gone) {
+			t.Errorf("text still has %s:\n%s", gone, text)
+		}
+	}
+	if f := fetched(); len(f) != 3 {
+		t.Errorf("fetched %v", f)
+	}
+}
+
+func TestListItemContentColumn(t *testing.T) {
+	for _, c := range []struct {
+		line    string
+		content int
+		ok      bool
+	}{
+		{"- a", 2, true}, {"* a", 2, true}, {"+ a", 2, true}, {"1. a", 3, true}, {"10) a", 4, true},
+		{"  - a", 4, true}, {"-   a", 4, true}, {"-      a", 2, true}, {"-", 2, true}, {"1.", 3, true},
+		{"-a", 0, false}, {"1.a", 0, false}, {"1234567890. a", 0, false}, {"text", 0, false},
+		{"- - -", 0, false}, {"***", 0, false}, {"![x](https://pics.example/x.png)", 0, false},
+	} {
+		content, ok := listItem(c.line)
+		if ok != c.ok || (ok && content != c.content) {
+			t.Errorf("listItem(%q) = %d, %v; want %d, %v", c.line, content, ok, c.content, c.ok)
+		}
+	}
+}
+
+// TestChannelAnswerFenceNeedsLessThanFourColumns: three backticks four columns in, continuing a paragraph, are text of
+// that paragraph (CommonMark), not a fence, so the picture after them is still sent.
+func TestChannelAnswerFenceNeedsLessThanFourColumns(t *testing.T) {
+	s, sends, _ := picturesRig(t, true)
+	answer := "Run this:\n    ```\n\n![shot](https://pics.example/after-fence.png)"
+	if err := s.channelSend(context.Background(), "examplechat", "run-1", answer, channel.OutAnswer, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := sends()
+	if len(got) != 1 || len(images(t, got[0])) != 1 {
+		t.Fatalf("sent %v", got)
+	}
+	if text := got[0]["text"].(string); strings.Contains(text, "after-fence.png") {
+		t.Errorf("text:\n%s", text)
+	}
+}

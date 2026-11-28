@@ -60,7 +60,7 @@ describe("收件箱的行菜单", () => {
     expect(rowMenu(item({ mutes: [sender] }), false).some((x) => x.key === "folder")).toBe(false);
     const m = rowMenu(item({ mutes: [sender], folder: "work/alerts" }), false, true);
     expect(m.map((x) => x.key)).toEqual(["done", "todo", "mute:sender:u1", "policy:sender:u1", "folder"]);
-    expect([m[4].label, m[4].hint, m[4].divider]).toEqual(["移到文件夹…", "work/alerts", true]);
+    expect([m[4].label, m[4].hint, m[4].divider]).toEqual(["移动到文件夹…", "work/alerts", true]);
   });
 });
 

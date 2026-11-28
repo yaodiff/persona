@@ -162,7 +162,18 @@ func TestAgyPaneDropsStartScriptTitleAndUsesFirstPrompt(t *testing.T) {
 		{". /home/user/.persona/agent-start-3733190294.sh", true},
 		{". '/home/user/.persona/agent-start-123.sh' && true abc123", true},
 		{"source /home/user/.persona/agent-start-9.sh", true},
+		{". /Users/u/.persona-nas/agent-start-3456784508.sh && true", true},
+		{". /Users/u/.persona-nas/agent-start-3456784508.sh && tr", true},
+		{". /Users/u/.persona-nas/agent-start-3456784508.sh && tr…", true},
+		{". '/Users/u/Persona Data/agent-start-123.sh' && true", true},
+		{`source "/Users/u/Persona Data/agent-start-123.sh" && tru`, true},
 		{"Fix agent-start-123.sh bug", false},
+		{"source /home/user/start.sh && true", false},
+		{"echo /home/user/.persona/agent-start-9.sh && true", false},
+		{". /home/user/.persona/agent-start-9.sh && trash", false},
+		{". /home/user/.persona/agent-start-9.sh && true && ls", false},
+		{". /home/user/.persona/agent-start-custom.sh && true", false},
+		{`. '/home/user/.persona/agent-start-9.sh" && true`, false},
 		{"agy", false},
 		{"", false},
 	} {
@@ -173,7 +184,7 @@ func TestAgyPaneDropsStartScriptTitleAndUsesFirstPrompt(t *testing.T) {
 
 	n, f, home := herdrNode(t)
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
-	const startScriptTitle = ". /home/user/.persona/agent-start-3733190294.sh"
+	const startScriptTitle = ". /home/user/.persona/agent-start-3733190294.sh && true"
 	const prompt = "Fix the agy placeholder title bug"
 
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
@@ -210,10 +221,11 @@ func TestAgyPaneDropsStartScriptTitleAndUsesFirstPrompt(t *testing.T) {
 	}
 
 	// Even a pane with no recorded start prompt never displays Persona's agent-start-*.sh command as its title.
-	orphan := agentOf(agyAgent, "", proto.StatusIdle, agyTestPane, "w1:t1", "w1", home, ". /home/user/.persona/agent-start-99999.sh")
+	const orphanTitle = ". /home/user/.persona/agent-start-99999.sh && tr"
+	orphan := agentOf(agyAgent, "", proto.StatusIdle, agyTestPane, "w1:t1", "w1", home, orphanTitle)
 	f.reply("session.snapshot", snapshot(nil, nil, []any{orphan}, nil))
 	row := agyTestPaneRow(t, n)
-	if row.Title == ". /home/user/.persona/agent-start-99999.sh" {
+	if row.Title == orphanTitle {
 		t.Fatalf("orphan agy pane kept start script title %q", row.Title)
 	}
 }

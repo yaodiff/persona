@@ -19,6 +19,7 @@
   "load_diff": "差分を読み込む",
   "load_rest": "残りを読み込む",
   "markdown_hint": "Markdown 対応 · ⌘↵ で送信",
+  "navigate_hint": "{mod}+クリックか {mod}+B：定義へ移動 · {alt}+F7：使用箇所 · {back}：戻る",
   "no_changes": "変更なし",
   "no_comments": "まだコメントはありません",
   "no_files": "ファイルなし",

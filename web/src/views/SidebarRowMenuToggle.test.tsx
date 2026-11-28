@@ -94,6 +94,21 @@ async function renderSidebar() {
   await flush();
 }
 
+it("lists just the counted Agents when In a tab is selected and shells are enabled", async () => {
+  await renderSidebar();
+  expect(link("Shell pane")).toBeDefined();
+  expect(link("Build docs")).toBeDefined();
+
+  const chip = host.querySelector<HTMLButtonElement>(`[role="radio"][aria-label="${t("lib-agent-filter.terminal")} 2"]`);
+  expect(chip).not.toBeNull();
+  await press(chip!);
+  expect(chip!.getAttribute("aria-checked")).toBe("true");
+  expect(link("Lead pane")).toBeDefined();
+  expect(link("Split pane")).toBeDefined();
+  expect(link("Build docs")).toBeUndefined();
+  expect(link("Shell pane")).toBeUndefined();
+});
+
 const personaRow = () => host.querySelector(`a[aria-description="${t("sidebar.persona_main")}"]`) ?? undefined;
 const rows: [string, () => Element | undefined][] = [
   ["the Persona main row", personaRow],
@@ -164,8 +179,8 @@ describe("a paged Agents row's ⋯", () => {
   }
 
   it("opens the row's menu and closes it on a second press", async () => {
-    // by state: a grouping the paged list draws (#6662), its Working section open on the row
-    localStorage.setItem("persona.agentGrouping", "state");
+    // By machine reads the section from the paging endpoint.
+    localStorage.setItem("persona.agentGrouping", "machine");
     localStorage.removeItem("sidebar.terminals");
     vi.stubGlobal("WebSocket", FakeSocket);
     // the list draws only the rows in view of its scroller: give it one with a size (jsdom has no layout)

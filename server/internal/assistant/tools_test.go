@@ -1339,7 +1339,7 @@ func TestAskUserRefusesDuplicateQuestionText(t *testing.T) {
 		for _, x := range texts {
 			qs = append(qs, q(x))
 		}
-		raw, _ := json.Marshal(map[string]any{"questions": qs})
+		raw, _ := json.Marshal(map[string]any{"why_owner": "priority", "questions": qs})
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		carded := make(chan bool, 1)

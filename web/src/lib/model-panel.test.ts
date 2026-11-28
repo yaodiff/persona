@@ -41,7 +41,7 @@ const opus: PanelModel = { id: "opus", name: "Opus 5.5", resolved: "claude-opus-
 const sonnet: PanelModel = { id: "sonnet", name: "Sonnet 5", resolved: "claude-sonnet-5", description: "Fast and smart", efforts: CLAUDE_EFFORTS, defaultEffort: "medium" };
 const haiku: PanelModel = { id: "haiku", name: "Haiku 4.5", efforts: [] };
 const typedBefore: PanelModel = { id: "vendor/model-x", name: "vendor/model-x", efforts: [], custom: true };
-const gpt: PanelModel = { id: "gpt-5.5", name: "GPT 5.5", efforts: ["minimal", "low", "medium", "high", "xhigh"], defaultEffort: "medium", fast: true };
+const gpt: PanelModel = { id: "gpt-5.5", name: "GPT 5.5", efforts: ["minimal", "low", "medium", "high", "xhigh"], defaultEffort: "medium", speeds: [{ id: "standard" }, { id: "fast" }] };
 
 const claude = (over: Partial<PanelProvider> = {}): PanelProvider => ({ id: "claude", name: "Claude", engine: "claude", models: [opus, sonnet, haiku, typedBefore], typable: true, ...over });
 const gateway = (over: Partial<PanelProvider> = {}): PanelProvider => ({ id: "gw", name: "Gateway", engine: "claude", models: [{ ...opus, id: "gw-opus", resolved: undefined, name: "Gateway Opus" }], ...over });
@@ -99,7 +99,7 @@ describe("the sections of a view", () => {
   });
 
   it("Favorites lists the saved setups only; Recent the last ones applied, the one running now marked", () => {
-    const favorites: PanelFavorite[] = [{ uid: "f1", provider: "codex", model: "gpt-5.5", fast: true }];
+    const favorites: PanelFavorite[] = [{ uid: "f1", provider: "codex", model: "gpt-5.5", speed: "fast" }];
     expect(shape({ view: { kind: "favorites" }, favorites })).toEqual(["favorites [favorite:gpt-5.5]"]);
     const recent = [{ provider: "claude", model: "opus", effort: "xhigh" }, { provider: "claude", model: "opus", effort: "low" }, { provider: "gone", model: "x" }];
     expect(shape({ view: { kind: "recent" }, recent })).toEqual(["recent [recent:opus*, recent:opus]"]);
@@ -201,7 +201,7 @@ describe("the setup a row sends", () => {
 
   it("the model that runs now: what runs", () => {
     expect(rowSetup(claude(), opus, state())).toEqual({ provider: "claude", model: "opus", effort: "xhigh" });
-    expect(rowSetup(codex(), gpt, state({ current: { provider: "codex", model: "gpt-5.5", effort: "low", fast: true } }))).toEqual({ provider: "codex", model: "gpt-5.5", effort: "low", fast: true });
+    expect(rowSetup(codex(), gpt, state({ current: { provider: "codex", model: "gpt-5.5", effort: "low", speed: "fast" } }))).toEqual({ provider: "codex", model: "gpt-5.5", effort: "low", speed: "fast" });
   });
 
   it("another model opens at its own default, not at the effort running now (#12315)", () => {
@@ -212,14 +212,14 @@ describe("the setup a row sends", () => {
 
   it("an override wins for its effort, and is the only source of Fast", () => {
     expect(rowSetup(claude(), sonnet, state(), { effort: "low" })).toEqual({ provider: "claude", model: "sonnet", effort: "low" });
-    expect(rowSetup(codex(), gpt, state(), { effort: "high", fast: true })).toEqual({ provider: "codex", model: "gpt-5.5", effort: "high", fast: true });
+    expect(rowSetup(codex(), gpt, state(), { effort: "high", speed: "fast" })).toEqual({ provider: "codex", model: "gpt-5.5", effort: "high", speed: "fast" });
     // Fast on a model that has none, an effort it doesn't take: left out
-    expect(rowSetup(claude(), sonnet, state(), { effort: "ultra", fast: true })).toEqual({ provider: "claude", model: "sonnet" });
+    expect(rowSetup(claude(), sonnet, state(), { effort: "ultra", speed: "fast" })).toEqual({ provider: "claude", model: "sonnet" });
   });
 
   it("a saved copy drops what the model no longer takes; one whose list isn't read stays as it is", () => {
-    expect(copySetup({ provider: "claude", model: "opus", effort: "ultra", fast: true }, opus, true)).toEqual({ provider: "claude", model: "opus" });
-    expect(copySetup({ provider: "codex", model: "gpt-5.5", effort: "low", fast: true }, gpt, true)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "low", fast: true });
+    expect(copySetup({ provider: "claude", model: "opus", effort: "ultra", speed: "fast" }, opus, true)).toEqual({ provider: "claude", model: "opus" });
+    expect(copySetup({ provider: "codex", model: "gpt-5.5", effort: "low", speed: "fast" }, gpt, true)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "low", speed: "fast" });
     expect(copySetup({ provider: "x", model: "m", effort: "low" }, { id: "m", name: "m", efforts: [] }, false)).toEqual({ provider: "x", model: "m", effort: "low" });
   });
 
@@ -236,7 +236,7 @@ describe("the setup a row sends", () => {
 
 describe("what is kept", () => {
   it("favorites: a copy each, an identical setup once, removed by uid, edited without twins", () => {
-    let f = addFavorite([], { provider: "claude", model: "opus", effort: "high", fast: false }, "a");
+    let f = addFavorite([], { provider: "claude", model: "opus", effort: "high" }, "a");
     expect(f).toEqual([{ uid: "a", provider: "claude", model: "opus", effort: "high" }]);
     expect(addFavorite(f, { provider: "claude", model: "opus", effort: "high" }, "b")).toBe(f);
     f = addFavorite(f, { provider: "claude", model: "opus", effort: "low" }, "b");
@@ -260,16 +260,16 @@ describe("what is kept", () => {
 
   it("overrides: merged per model, an emptied one goes, reset removes it", () => {
     let o = setOverride({}, "claude", "opus", { effort: "low" });
-    o = setOverride(o, "claude", "opus", { fast: true });
-    expect(o).toEqual({ [overrideKey("claude", "opus")]: { effort: "low", fast: true } });
-    expect(setOverride(o, "claude", "opus", { effort: undefined, fast: undefined })).toEqual({});
+    o = setOverride(o, "claude", "opus", { speed: "fast" });
+    expect(o).toEqual({ [overrideKey("claude", "opus")]: { effort: "low", speed: "fast" } });
+    expect(setOverride(o, "claude", "opus", { effort: undefined, speed: undefined })).toEqual({});
     expect(resetOverride(o, "claude", "opus")).toEqual({});
     expect(resetOverride(o, "claude", "sonnet")).toBe(o);
   });
 
   it("the same setup ignores empty parts", () => {
-    expect(sameSetup({ provider: "p", model: "m", effort: "", fast: false }, { provider: "p", model: "m" })).toBe(true);
-    expect(sameSetup({ provider: "p", model: "m", fast: true }, { provider: "p", model: "m" })).toBe(false);
+    expect(sameSetup({ provider: "p", model: "m", effort: "", speed: "standard" }, { provider: "p", model: "m" })).toBe(true);
+    expect(sameSetup({ provider: "p", model: "m", speed: "fast" }, { provider: "p", model: "m" })).toBe(false);
   });
 });
 
@@ -375,12 +375,12 @@ describe("the running model's row", () => {
   });
 
   it("shows its Fast as it runs, not a saved override", () => {
-    const m: PanelModel = { id: "gpt-x", name: "x", efforts: ["low", "high"], fast: true };
+    const m: PanelModel = { id: "gpt-x", name: "x", efforts: ["low", "high"], speeds: [{ id: "standard" }, { id: "fast" }] };
     const p = { id: "codex", models: [m] };
-    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x" } }, { fast: true }).fast).toBeUndefined();
-    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x", fast: true } }, {}).fast).toBe(true);
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x" } }, { speed: "fast" }).speed).toBeUndefined();
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x", speed: "fast" } }, {}).speed).toBe("fast");
     // another model's row still takes its override
-    expect(rowSetup(p, m, { current: { provider: "codex", model: "other" } }, { fast: true }).fast).toBe(true);
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "other" } }, { speed: "fast" }).speed).toBe("fast");
   });
 });
 

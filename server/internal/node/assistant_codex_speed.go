@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -27,9 +26,7 @@ func (c *codexConn) speedRow(s *proto.Session) {
 	defer c.mu.Unlock()
 	s.ServiceTier = c.serviceTier
 	tiers := c.models[firstNonEmpty(c.speedModel, s.Model)].tiers
-	if len(tiers) > 0 {
-		s.ServiceTiers = append([]proto.ServiceTier{{ID: "default", Name: "Standard"}}, tiers...)
-	}
+	s.ServiceTiers = codexSpeedChoices(tiers)
 }
 
 func (c *codexConn) setSpeed(ctx context.Context, tier string) error {
@@ -37,12 +34,13 @@ func (c *codexConn) setSpeed(ctx context.Context, tier string) error {
 	thread, revision := c.threadID, c.serviceTierRevision
 	tiers := c.models[c.speedModel].tiers
 	c.mu.Unlock()
-	if thread == "" || len(tiers) == 0 || tier != "default" && !slices.ContainsFunc(tiers, func(t proto.ServiceTier) bool { return t.ID == tier }) {
+	native := codexNativeSpeed(tiers, tier)
+	if thread == "" || native == "" {
 		return fmt.Errorf("this model does not advertise the requested Codex speed")
 	}
 	call, cancel := context.WithTimeout(ctx, codexEffortTimeout)
 	defer cancel()
-	if err := c.call(call, "thread/settings/update", map[string]any{"threadId": thread, "serviceTier": tier}, nil); err != nil {
+	if err := c.call(call, "thread/settings/update", map[string]any{"threadId": thread, "serviceTier": native}, nil); err != nil {
 		return fmt.Errorf("couldn't change Codex speed: %w", err)
 	}
 	c.mu.Lock()

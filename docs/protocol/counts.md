@@ -6,9 +6,9 @@ managers in a surface's scope (`docs/plans/plan-derived-counts.md`, #11679). **W
 users see one number for each name on every screen and device; Agents users can trust that the badge, the list and the
 Lock Screen agree. This doc is the contract: what the view holds, what each count id means, and how a count may change.
 
-**Status (#15512, #15650, #15893, #15896):** the schema, its generated types and the wire samples exist, each manager
-tells the hub its view (step 7a of the plan, "The manager's view" below; the To-dos list's count since step 12's server
-part), and the hub relays it to the clients that ask (step 7b, "The hub's relay" below; its rows in
+**Status (#15512, #15650, #15893, #15896, #15397):** the schema, its generated types and the wire samples exist. Each
+manager tells the hub its view (step 7a, "The manager's view" below), including the To-dos and Persona counts from
+step 12. The hub relays it to clients that ask (step 7b, "The hub's relay" below, and the rows in
 `docs/protocol/protocol.md` "Counts view"). No client draws a view yet: they do from steps 8 to 10, keeping views as
 `spec/fixtures/counts/views.json` says. Until a client draws the view, every number it shows is still its own.
 
@@ -33,9 +33,10 @@ core draw no badges; the schema guards both languages against a hand-written cop
       "keys": [{"id": "agent:studio/s3"}, {"id": "card:ix-a", "cards": ["ix-a"]}],
       "held": [{"id": "agent:studio/s1", "why": "muted"}]  // listed, not counted
     },
-    "todos_needs_you": {"n": 3, "more": 3}                 // a count that lists none of its rows
+    "todos_needs_you": {"n": 3, "more": 3},                // a count that lists none of its rows
+    "persona_cards": {"n": 1, "keys": [{"id": "card:ix-b", "cards": ["ix-b"]}]}
   },
-  "totals": {"agents_needs_you": 2, "todos_needs_you": 3}  // optional: each count's n again
+  "totals": {"agents_needs_you": 2, "todos_needs_you": 3, "persona_cards": 1}
 }
 ```
 
@@ -69,15 +70,16 @@ core draw no badges; the schema guards both languages against a hand-written cop
   `{"type":"todos"}` that asks while a read waits or runs (on a slow store, up to its 30 s) starts no second one, and a
   `{"type":"todos"}` that went out meanwhile has the manager read the list once more after it. Until a run has counted
   its to-dos, each round asks for a count, and the view leaves `todos_needs_you` out.
-- **Who writes what.** `fleetcount.AgentsNeedsYou` decides the rows on the Agents list's surface; package assistant
-  calls it, then the adapter's `Fleet.View` (`server/internal/assistant/fleetcount/fleetcountadapt/view.go`), which
-  writes `counts` and `totals` in one pass over the decided rows, so a total never disagrees with its rows. Package
-  assistant adds `epoch`, `rev`, `as_of` and `build`. `spec/fixtures/counts/surfaces.json` names `Fleet.View` as each
-  count's `producer`, and the adapter's tests hold it to the table.
+- **Who writes what.** `fleetcount.AgentsNeedsYou` decides the Agents rows and `fleetcount.PersonaCards` decides which
+  cards count for Persona. The live round supplies quiet agents for the Persona count alone
+  (`fleetInputsForRound` in `server/internal/assistant/fleet_live.go`). The adapter's `Fleet.View`
+  (`server/internal/assistant/fleetcount/fleetcountadapt/view.go`) writes `counts` and `totals` from the same
+  tallies. Package assistant adds `epoch`, `rev`, `as_of` and `build`. `spec/fixtures/counts/surfaces.json`
+  names `Fleet.View` as each count's `producer`, and the adapter's tests hold it to the table.
 - **The bound.** A view takes at most 16 KB as JSON (`CountsViewMaxBytes`), the most the hub keeps.
-  `keys` and `held` list at most 200 rows each: the counted rows first, since they are the number, then the held ones,
-  each list stopping at the first row that would pass the bound (1 KB is kept for the rest of the view). The counted
-  rows `keys` leaves out are `more`; a held row the bound leaves out is not listed, and counts nowhere either way.
+  Each count's `keys` and `held` list at most 200 rows each. The adapter budgets Agents `keys`, Agents `held`,
+  and then Persona `keys`. Each list stops at the first row that would pass its limit, with 1 KB reserved for the
+  rest of the view. Counted rows omitted from `keys` are included in `more`.
 
 ## The hub's relay
 
@@ -126,8 +128,8 @@ reports"):
 - `agent:<machine>/<session>`: a session that waits. A child's and a side session's cards are under the row of the
   session the hub folds them under (`folded_under`). Its `cards` are its pending cards, oldest first; absent when it
   waits in its terminal with no card.
-- `card:<interaction id>`: a card on no session (`personad ask` outside a terminal engine). Its `cards` hold that one
-  card.
+- `card:<interaction id>` identifies an individual Persona card or a sessionless Agents card
+  (`personad ask` outside a terminal engine). Its `cards` hold that one card.
 
 A card id is the interaction id `POST /api/v1/interactions/{id}/resolve` takes, so a client can match the cards the
 owner just answered against the rows they belong to.
@@ -139,10 +141,9 @@ owner just answered against the rows they belong to.
 | `muted` | The owner muted the agent or its space |
 | `held` | Its only cards are questions the assistant is still deciding whether it may answer for the owner (D11 of `docs/plans/plan-derived-counts.md`) |
 
-A quiet task's agent is in neither list: the round that makes the view leaves those agents out before any count is
-decided (`fleetInputsInto` in `server/internal/assistant/fleet_live.go`), so a client draws quiet rows from its own
-list. Listing them would be a new optional reason, `quiet`, with that cost stated. A word a client does not know decodes
-to the generated enum's unknown and is never counted.
+A client draws quiet agent rows from its own list. The manager supplies those agents only for `persona_cards`, where
+each eligible card has its own key. Listing quiet agent rows under `agents_needs_you` would require a new optional
+reason, `quiet`. A word a client does not know decodes to the generated enum's unknown and is never counted.
 
 ### Who writes `why`
 
@@ -183,10 +184,25 @@ the rows itself; listing them in the view would be a schema addition (a row key 
 manager has counted its to-dos ("The to-dos' counts" above). Written by `Fleet.View`, which is handed the counts as
 they are, so no record is made for them. In the view since #15896.
 
+### `persona_cards`
+
+Pending cards for the owner on Persona conversations and quiet tasks' agents (D9 and D11 of the plan), one per card.
+The card's asking session determines eligibility even when a child or side is folded under another row.
+Muted sessions or spaces, directory-hidden sessions, cards held by Persona or a supervisor and `mirror_of` display
+copies are excluded. Pending forms and untold owner cards count. A terminal wait contributes only through its
+pending card. A card on no session belongs to `agents_needs_you`. A named session absent from the inventory has
+no known Persona or quiet role.
+
+`Fleet.View` writes these cards from `fleetcount.PersonaCards`, pinned by `spec/fixtures/persona-cards`. Its oldest
+cards are listed as `card:<id>` keys up to the row and byte limits. `n` includes every eligible card, `more` accounts
+for cards omitted from `keys`, and excluded cards have no `held` entries. A manager that computes the count sends
+`n` and its total even at zero. Earlier builds omit the field. The Live Activity uses its own standing-card rule
+(D4).
+
 ### Later ids
 
-`inbox_unread`, `inbox_action` and `persona_cards` come one at a time, each after its decision in the plan's section 6
-(D7, D9), each with its fixture and its line here. `surfaces.json` lists their rules until then. Until the Inbox has a
+`inbox_unread` and `inbox_action` come after their decision in the plan's section 6 (D7), each with its fixture and
+its line here. `surfaces.json` lists their rules until then. Until the Inbox has a
 core of its own, its count comes into the view as one more input of `Fleet.View`: the number package assistant works
 out today (the Inbox items' `status()` fold), never a record made for it, as the to-dos' did (`todos_needs_you`). Once
 the view's schema carries an id, its row in `surfaces.json` names its `producer`, and the guard fails until it does. The composer's Needs you is not a count id: it stays the `assistant_needs` payload of

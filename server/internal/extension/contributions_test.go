@@ -104,6 +104,37 @@ func TestContributionSwitches(t *testing.T) {
 	}
 }
 
+// Skills, assistant commands and MCP servers carry a display-only title; without one the switch keeps the id.
+func TestContributionTitlesOfAssistantItems(t *testing.T) {
+	m, err := Parse(with(t, func(m map[string]any) {
+		m["contributes"] = map[string]any{
+			"skills": []any{
+				map[string]any{"id": "search", "title": "Search code", "dir": "skills/search"},
+				map[string]any{"id": "plain", "dir": "skills/plain"},
+			},
+			"assistant": []any{map[string]any{
+				"id": "search-command", "title": "Search command", "skills": []any{"skills/search"},
+			}},
+			"mcp_servers": []any{map[string]any{
+				"id": "search-server", "title": "Search server", "command": "search-server",
+			}},
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ point, id, want string }{
+		{"skills", "search", "Search code"},
+		{"skills", "plain", "plain"},
+		{"assistant", "search-command", "Search command"},
+		{"mcp_servers", "search-server", "Search server"},
+	} {
+		if got := ContributionTitle(m, c.point, c.id); got != c.want {
+			t.Errorf("%s/%s: %q, want %q", c.point, c.id, got, c.want)
+		}
+	}
+}
+
 func TestWithoutKeepsTheManifest(t *testing.T) {
 	full, err := Parse(with(t, func(map[string]any) {}))
 	if err != nil {

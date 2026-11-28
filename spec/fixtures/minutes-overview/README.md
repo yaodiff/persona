@@ -47,7 +47,7 @@ this README says so.
 
 ## Checks
 
-- Hub: `cd server && go test ./internal/kb -run 'MinutesOverviewFixture|MinutesOverview$'`
+- Hub: `cd server && go test ./internal/modules/recording/writers -run 'MinutesOverviewFixture|MinutesOverview$'`
   (`server/internal/modules/recording/writers/minutes_overview_test.go`; the rules in `server/internal/modules/recording/writers/minutes_overview.go`).
   `TestMinutesOverviewFixture` cleans each overview as the clients do and compares the segments and the layout, and
   renders the Markdown of the cases that have one; `TestMinutesOverview` has a model's answer in the summary card's

@@ -733,3 +733,94 @@ func TestMarkConversationSegmentDispatchedPersistsWithoutInputs(t *testing.T) {
 		t.Fatalf("unknown segment should fail closed: dispatched=%v err=%v", dispatched, err)
 	}
 }
+
+func TestClaimConversationInputSkipsLockWithoutPendingInput(t *testing.T) {
+	d, url := historyDB(t)
+	ctx := t.Context()
+	op := prepareLogicalSwitch(t, d)
+	if err := d.ActivateConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, 1); err != nil {
+		t.Fatal(err)
+	}
+	other, err := Open(ctx, url, ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+
+	// Active switch with 0 pending inputs: ClaimConversationInput must not take FOR UPDATE NOWAIT.
+	tx, err := other.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var epoch int64
+	if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id='root-machine' AND session_id='root-chat' FOR UPDATE`).Scan(&epoch); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2); err != nil || row != nil {
+		t.Fatalf("active idle claim collided with row lock: row=%+v err=%v", row, err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Post-acceptance close_pending=true with 0 pending inputs: ClaimConversationInput must not collide
+	// with BeginConversationSwitch's FOR UPDATE NOWAIT, while BeginConversationSwitch preserves its NOWAIT fence.
+	accepted, err := d.AcceptIdleConversationSwitch(ctx, "root-machine", "root-chat", op.OperationID, 1)
+	if err != nil || !accepted {
+		t.Fatalf("AcceptIdleConversationSwitch: accepted=%v err=%v", accepted, err)
+	}
+	c, err := d.LogicalConversation(ctx, "root-machine", "root-chat")
+	if err != nil || c == nil || c.Switch != nil || !c.Segments[0].ClosePending {
+		t.Fatalf("expected retired source with close_pending=true: %+v %v", c, err)
+	}
+	tx, err = other.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id='root-machine' AND session_id='root-chat' FOR SHARE`).Scan(&epoch); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2); err != nil || row != nil {
+		t.Fatalf("close_pending idle claim collided with FOR SHARE: row=%+v err=%v", row, err)
+	}
+	if err := d.BeginConversationSwitch(ctx, "root-machine", "root-chat", ConversationSwitch{
+		OperationID: "blocked-by-share", ExpectedEpoch: 2, SourceSegment: "second", Request: json.RawMessage(`{"launcher":"other"}`),
+	}); !errors.Is(err, ErrConversationSwitchBusy) {
+		t.Fatalf("BeginConversationSwitch lost NOWAIT fence under FOR SHARE: %v", err)
+	}
+	active, ok := c.Active()
+	if !ok {
+		t.Fatal("missing active segment")
+	}
+	if err := d.ObserveConversationRevision(ctx, active.MachineID, active.SessionID, active.SourceRevision); err != nil {
+		t.Fatalf("unchanged revision took NOWAIT under FOR SHARE: %v", err)
+	}
+	if err := d.ObserveConversationRevision(ctx, active.MachineID, active.SessionID, active.SourceRevision+1); !errors.Is(err, ErrConversationSwitchBusy) {
+		t.Fatalf("changed revision lost NOWAIT under FOR SHARE: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// With a pending input, ClaimConversationInput still acquires FOR UPDATE NOWAIT and succeeds once unlocked.
+	if err := d.EnqueueConversationInput(ctx, "root-machine", "root-chat", "queued-1", 2, json.RawMessage(`{"text":"hello"}`)); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = other.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id='root-machine' AND session_id='root-chat' FOR SHARE`).Scan(&epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2); !errors.Is(err, ErrConversationSwitchBusy) {
+		t.Fatalf("pending claim lost NOWAIT under FOR SHARE: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row, err := d.ClaimConversationInput(ctx, "root-machine", "root-chat", 2)
+	if err != nil || row == nil || row.ClientMsgID != "queued-1" {
+		t.Fatalf("claim after lock release: row=%+v err=%v", row, err)
+	}
+}

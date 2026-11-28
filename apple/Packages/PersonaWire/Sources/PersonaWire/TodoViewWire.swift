@@ -261,6 +261,7 @@ public nonisolated enum TodoLineKey: Codable, Hashable, Sendable {
     case failedStart
     case agentAsks
     case interrupted
+    case stoppedUnfinished
     case decision
     case decisionDefault
     case cannot
@@ -285,13 +286,14 @@ public nonisolated enum TodoLineKey: Codable, Hashable, Sendable {
     /// A value this app does not know, kept as it came.
     case unknown(String)
 
-    public static let all: [TodoLineKey] = [.failedStart, .agentAsks, .interrupted, .decision, .decisionDefault, .cannot, .awaitsReply, .working, .personaWorking, .starting, .background, .parked, .finished, .accepted, .deployed, .prOpen, .usageLimit, .runWaits, .finishedSeen, .completed, .canceled, .reported, .superseded, .someday]
+    public static let all: [TodoLineKey] = [.failedStart, .agentAsks, .interrupted, .stoppedUnfinished, .decision, .decisionDefault, .cannot, .awaitsReply, .working, .personaWorking, .starting, .background, .parked, .finished, .accepted, .deployed, .prOpen, .usageLimit, .runWaits, .finishedSeen, .completed, .canceled, .reported, .superseded, .someday]
 
     public init(rawValue: String) {
         switch rawValue {
         case "failed_start": self = .failedStart
         case "agent_asks": self = .agentAsks
         case "interrupted": self = .interrupted
+        case "stopped_unfinished": self = .stoppedUnfinished
         case "decision": self = .decision
         case "decision_default": self = .decisionDefault
         case "cannot": self = .cannot
@@ -322,6 +324,7 @@ public nonisolated enum TodoLineKey: Codable, Hashable, Sendable {
         case .failedStart: "failed_start"
         case .agentAsks: "agent_asks"
         case .interrupted: "interrupted"
+        case .stoppedUnfinished: "stopped_unfinished"
         case .decision: "decision"
         case .decisionDefault: "decision_default"
         case .cannot: "cannot"

@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { BrowserWindow, ipcMain, net, protocol, screen } from "electron";
 import { notificationRoute } from "./contract.cjs";
 import { ISLAND_SCHEME, ISLAND_URL, islandFile } from "./island-page.js";
-import { EMPTY_ISLAND, islandDisplay, islandRect, islandSides, islandState, islandView } from "./island-model.js";
+import { EMPTY_ISLAND, ISLAND_WINDOW, islandDisplay, islandRect, islandSides, islandState, islandView } from "./island-model.js";
 import type { IslandState, IslandStatus } from "./island-model.js";
 
 /** How long the pointer may be away before the open list closes: crossing the pill's edge does not close it. */
@@ -19,9 +19,10 @@ export function installIslandProtocol(): void {
 
 /**
  * The island at the MacBook notch (#7669): a frameless, always-on-top window that takes no focus, over the menu bar
- * around the notch. It draws the latest state the web sent (`setState`) from its local page (island-page.ts), opens
- * into a list while the pointer is over it, and hands a clicked row's route to `openRoute`, the notification-click
- * path. macOS only; off until the person turns it on in Settings, and hidden while there is nothing to show.
+ * around the notch, its top corners square against the top of the screen (`ISLAND_WINDOW`). It draws the latest state
+ * the web sent (`setState`) from its local page (island-page.ts), opens downward into a list while the pointer is over
+ * it, and hands a clicked row's route to `openRoute`, the notification-click path. macOS only; off until the person
+ * turns it on in Settings, and hidden while there is nothing to show.
  */
 export class NotchIsland {
   private window: BrowserWindow | undefined;
@@ -70,24 +71,8 @@ export class NotchIsland {
   private create(): void {
     if (this.window && !this.window.isDestroyed()) return;
     const w = new BrowserWindow({
+      ...ISLAND_WINDOW,
       ...this.rect(),
-      show: false,
-      frame: false,
-      transparent: true,
-      backgroundColor: "#00000000",
-      resizable: false,
-      movable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      focusable: false,
-      skipTaskbar: true,
-      hasShadow: false,
-      type: "panel",
-      acceptFirstMouse: true,
-      enableLargerThanScreen: true,
-      alwaysOnTop: true,
-      title: "Persona",
       webPreferences: {
         preload: join(import.meta.dirname, "island-preload.cjs"),
         contextIsolation: true,

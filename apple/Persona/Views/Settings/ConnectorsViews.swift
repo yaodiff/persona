@@ -279,10 +279,11 @@ nonisolated enum ConnectorRow: Hashable, Identifiable {
     /// A hub that lists Feishu says whether it has mail; one that does not (from before M6, or no list yet) gets both
     /// rows, as before. Feishu's row (its page reads `/api/v1/lark/…`) is there only while the hub has Feishu chats
     /// (`LarkFeatures`, the Lark extension).
-    static func rows(_ list: [HubConnector], lark: Bool = true) -> [ConnectorRow] {
+    /// Mail's row (its page reads `/api/v1/mail/…`) is there only while the hub's mail module is on (`MailAccess`, #15995).
+    static func rows(_ list: [HubConnector], lark: Bool = true, mail: Bool = true) -> [ConnectorRow] {
         let listed = list.contains { $0.id == "lark" }
         let legacy: [ConnectorRow] = listed ? (list.contains { $0.id == "mail" } ? [.mail, .lark] : [.lark]) : [.mail, .lark]
-        return legacy.filter { lark || $0 != .lark } + list.filter { $0.id != "mail" && $0.id != "lark" }.map(ConnectorRow.hub)
+        return legacy.filter { (lark || $0 != .lark) && (mail || $0 != .mail) } + list.filter { $0.id != "mail" && $0.id != "lark" }.map(ConnectorRow.hub)
     }
 }
 
@@ -361,7 +362,7 @@ nonisolated enum ConnectorRow: Hashable, Identifiable {
     init(deps: Deps = .live) { self.deps = deps }
 
     var groups: [ManagerGroup<HubConnector>]? { nil }
-    func rows(lark: Bool) -> [ConnectorRow] { ConnectorRow.rows(connectors, lark: lark) }
+    func rows(lark: Bool, mail: Bool = true) -> [ConnectorRow] { ConnectorRow.rows(connectors, lark: lark, mail: mail) }
     func manager(of c: HubConnector) -> String? { manager }
 
     func load(listed: Bool) async {
@@ -427,7 +428,7 @@ struct ConnectorsSection: View {
                 }
                 .settingsListRow(SettingsPage.phoneData)
                 #endif
-                ForEach(hub.rows(lark: model.larkFeatures.chats)) { row in
+                ForEach(hub.rows(lark: model.larkFeatures.chats, mail: MailModule.access.offersMail)) { row in
                     switch row {
                     case .mail:
                         NavigationLink(value: SettingsPage.mail) {
@@ -457,7 +458,7 @@ struct ConnectorsSection: View {
         } footer: {
             footer
         }
-        .task(id: "\(model.assistantManagerID ?? "")|\(model.settingsPath.count)|\(model.config?.url.absoluteString ?? "")|\(LarkModule.botEntry.isOffered)") { await load() }
+        .task(id: "\(model.assistantManagerID ?? "")|\(model.settingsPath.count)|\(model.config?.url.absoluteString ?? "")|\(LarkModule.botEntry.isOffered)|\(MailModule.access.offersMail)") { await load() }
     }
 
     /// A hub connector's row, opening its manager's copy.
@@ -481,7 +482,8 @@ struct ConnectorsSection: View {
         // An older hub has no connectors (feature "connectors"): its list stays as it was.
         let listed = model.hubFeatures.contains("connectors")
         let chats = model.larkFeatures.chats
-        async let a = try? api.mailAccounts()
+        let offersMail = MailModule.access.offersMail // off: no row, and its accounts are not read (#15995)
+        async let a = offersMail ? try? api.mailAccounts() : nil
         // An assistant without the chat connector says not set up (`LarkStatus.absent`), not a blank row.
         async let l = chats ? api.chatConnectorStatus().status : nil
         let offersBot = LarkModule.botEntry.isOffered
@@ -586,6 +588,12 @@ struct FeishuConnectorView: View {
             Section {
                 Toggle("Show Messages on Home", isOn: $larkHome.enabled)
                 .accessibilityIdentifier("feishu-home-enabled")
+                if larkHome.enabled {
+                    Toggle(String(localized: "lark.messages.agentsToggle", defaultValue: "AI Assistants in Messages",
+                                  comment: "Settings switch: list personal AI assistants with the Lark chats on the Messages page"),
+                           isOn: $larkHome.agentsInMessages)
+                    .accessibilityIdentifier("feishu-home-agents")
+                }
             } footer: {
                 Text("Adds a Messages entry on Home to browse all direct and group chats. It shares accounts and chat history with the Inbox.")
             }

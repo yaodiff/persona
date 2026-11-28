@@ -41,12 +41,7 @@ func TestSupervisedCommandScreenStaysWithItsSupervisor(t *testing.T) {
 	plain := commandScreen("ordinary", "unrelated-session")
 	plainAnswer := e.raise(plain)
 	waitFor(t, "the unsupervised dialog routed to the main conversation", func() bool {
-		for _, m := range laterFor(e.s, "conv1") {
-			if m.From == cardAgentQuestion && strings.Contains(m.Text, "interaction_id="+plain.ID) {
-				return true
-			}
-		}
-		return false
+		return hasRelayFrom(e.s, "conv1", cardAgentQuestion, "interaction_id="+plain.ID)
 	})
 	if !e.lastShown(plain.ID).Delegating {
 		t.Fatal("an unsupervised non-owner dialog was not marked delegating")
@@ -148,6 +143,22 @@ func TestSupervisorScreenAllowAndTheUsersDialogs(t *testing.T) {
 	}
 	answerOf(t, rmAnswered)
 	e.settle()
+}
+
+func TestExternalImportsScreenIsUserOnly(t *testing.T) {
+	ix := proto.Interaction{Kind: proto.IxScreen, Dialog: &screen.Dialog{
+		Question: "Allow external CLAUDE.md file imports?",
+		Options: []screen.Option{
+			{Key: "1", Label: " Yes, allow external imports "},
+			{Key: "2", Label: "No, continue without external imports"},
+		},
+	}}
+	if why := userScreen(ix); why != "authorizes the agent's access, which only the user grants" {
+		t.Fatalf("userScreen = %q", why)
+	}
+	if !routable(ix) || terminalQuestion(ix) {
+		t.Fatal("the supervisor must escalate the dialog to the user")
+	}
 }
 
 func TestSupervisedScreenAndUserScreen(t *testing.T) {

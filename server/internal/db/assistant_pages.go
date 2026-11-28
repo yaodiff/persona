@@ -1012,25 +1012,6 @@ func (d *DB) RecentlyRemovedAssistantPages(ctx context.Context, now time.Time) (
 		AND removed_at > $1 ORDER BY removed_at DESC, id DESC LIMIT $2`, now.Add(-AssistantPageRemovedLife), AssistantPagesRemovedMost))
 }
 
-// AssistantPageVersions are a page's stored versions, the latest first.
-func (d *DB) AssistantPageVersions(ctx context.Context, id string) ([]AssistantPageVersionRow, error) {
-	rows, err := d.pool.Query(ctx, `SELECT page_id, version, title, view, by_kind, by_machine, by_session, by_device, note, at
-		FROM assistant_page_versions WHERE page_id = $1 ORDER BY version DESC`, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []AssistantPageVersionRow{}
-	for rows.Next() {
-		var v AssistantPageVersionRow
-		if err := rows.Scan(&v.PageID, &v.Version, &v.Title, &v.View, &v.By.Kind, &v.By.Machine, &v.By.Session, &v.By.Device, &v.By.Note, &v.At); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
-}
-
 // PurgeAssistantPages deletes the pages removed AssistantPageRemovedLife or longer before now (listed, declined and
 // expired alike), with their versions, taps, readings and grants.
 func (d *DB) PurgeAssistantPages(ctx context.Context, now time.Time) (int64, error) {

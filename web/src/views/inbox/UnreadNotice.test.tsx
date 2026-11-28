@@ -20,7 +20,7 @@ describe("这一轮没读到的来源", () => {
     const html = draw(hub);
     expect(html).toContain('role="status"');
     expect(html).toContain("示例聊天：这一轮没读到：超时了");
-    expect(html).toContain("ext-tracker：这一轮没读到，列表可能不全");
+    expect(html).toContain("ext-tracker：本轮未能成功读取，列表可能不完整");
     expect(html).not.toContain("GitHub");
     expect(html).toContain("bg-field");
     expect(html).not.toContain("bg-orange-tint");

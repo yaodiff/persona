@@ -42,6 +42,8 @@ func inboxSendRefusal(err error) *rpc.Error {
 			code = assistantwire.CodeInboxSourceSignedOut
 		case cliwire.KindMissingPermission:
 			code = assistantwire.CodeInboxSendDenied
+		case cliwire.KindBotNotInChat:
+			code = assistantwire.CodeInboxBotNotInChat
 		case cliwire.KindRateLimited:
 			code, retryAfter = assistantwire.CodeInboxSendRateLimited, cli.RetryAfter.Seconds()
 		}
@@ -75,6 +77,7 @@ var inboxSendKeys = map[string]string{
 	assistantwire.CodeInboxSourceUnavailable: "inbox-errors.send_source_unavailable",
 	assistantwire.CodeInboxSourceSignedOut:   "inbox-errors.send_signed_out",
 	assistantwire.CodeInboxSendDenied:        "inbox-errors.send_denied",
+	assistantwire.CodeInboxBotNotInChat:      "inbox-errors.bot_not_in_chat",
 	assistantwire.CodeInboxSendRateLimited:   "inbox-errors.send_rate_limited",
 	assistantwire.CodeInboxSendFailed:        "inbox-errors.send_failed",
 	assistantwire.CodeInboxSendUnrecorded:    "inbox-errors.send_unrecorded",

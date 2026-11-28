@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { initI18n, t } from "../../i18n";
 import type { OutboxEntry } from "../../lib/outbox";
 import { dedupeQueuedOutbox, OutboxBubbles } from "./OutboxBubbles";
 
@@ -37,7 +38,7 @@ describe("dedupeQueuedOutbox", () => {
   });
 });
 
-describe("OutboxBubbles queued deduplication", () => {
+describe("OutboxBubbles", () => {
   let host: HTMLDivElement;
   let root: Root;
 
@@ -63,5 +64,31 @@ describe("OutboxBubbles queued deduplication", () => {
     act(() => root.render(<OutboxBubbles mid="m" sid="s" entries={entries} queued={["Run the test suite..."]} />));
     const rendered = [...host.querySelectorAll<HTMLElement>("[data-outbox]")].map((el) => el.dataset.outbox);
     expect(rendered).toEqual(["other", "f1"]);
+  });
+
+  it.each([
+    { lang: "en", label: "Open terminal", reason: "A dialog is open on the computer: “Choose a workspace”. Deal with it, then send" },
+    { lang: "zh-Hans", label: "打开终端", reason: "电脑上开着对话框「Choose a workspace」，先处理它再发" },
+    { lang: "ja", label: "ターミナルを開く", reason: "コンピューターでダイアログ「Choose a workspace」が開いています。先に対応してから送信してください" },
+  ] as const)("shows the named refusal and action in $lang", async ({ lang, label, reason }) => {
+    await initI18n(lang);
+    const failed = entry({ id: "f1", text: "Go on", state: "failed", code: "dialog_open", dialog: "Choose a workspace", dialogMachine: "box", dialogSession: "agent" });
+    act(() => root.render(<OutboxBubbles mid="m" sid="s" entries={[failed]} />));
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain(reason);
+    expect([...alert!.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      label, t("chat-outboxbubbles.retry"), t("chat-outboxbubbles.delete"),
+    ]);
+  });
+
+  it.each([
+    { name: "missing target", patch: {} },
+    { name: "partial target", patch: { dialogMachine: "box" } },
+    { name: "uncertain delivery", patch: { dialogMachine: "box", dialogSession: "agent", inDoubt: true } },
+  ])("omits Open terminal for $name", async ({ patch }) => {
+    await initI18n("en");
+    const failed = entry({ id: "f1", text: "Go on", state: "failed", code: "dialog_open", ...patch });
+    act(() => root.render(<OutboxBubbles mid="m" sid="s" entries={[failed]} />));
+    expect(host.textContent).not.toContain("Open terminal");
   });
 });

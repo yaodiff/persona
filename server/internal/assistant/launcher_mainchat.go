@@ -27,6 +27,8 @@ import (
 // one the machine has that can't run it (refused, with why in the user's language), or not there at all (gone).
 // Plain claude fits without asking; a list that can't be read fits too, as launchersHere has it: nothing is refused
 // or replaced on a guess.
+type inboxAssistantFitKey struct{}
+
 type mainChatFit int
 
 const (
@@ -86,6 +88,13 @@ func (s *Service) mainChatFitState(ctx context.Context, machine, name string, re
 			return mainChatFitResult{fit: mainChatGone, transient: true, discoveryErr: err} // a failed retry is not recovery
 		}
 		return mainChatFitResult{fit: mainChatFits, discoveryErr: err} // an ordinary unreadable list is not proof of a miss
+	}
+	if cctx.Value(inboxAssistantFitKey{}) == true {
+		for _, launcher := range picker {
+			if launcher.Name == name && cmp.Or(launcher.AgentType, launcher.Agent) == "traex" {
+				return mainChatFitResult{fit: mainChatFits}
+			}
+		}
 	}
 	fits, fitErr := s.assistantLaunchersOf(cctx, machine, picker)
 	if !slices.ContainsFunc(picker, func(l ConfiguredLauncher) bool {

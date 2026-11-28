@@ -14,15 +14,15 @@
   "expand": "展开",
   "collapse": "收起",
   "earlier_other": "查看更早 {count} 条回复",
-  "reading_other": "{count} 条回复，正在读取",
+  "reading_other": "{count} 条回复，正在加载",
   "line": "{name}：{text}",
   "colon": "：",
   "separator": "，",
-  "read_failed": "回复没读到",
+  "read_failed": "无法加载回复",
   "retry": "重试",
   "thread": "话题",
   "replies_other": "{count} 条回复",
   "older": "更早的回复",
-  "loading": "正在读回复",
-  "no_replies": "还没有回复"
+  "loading": "正在加载回复",
+  "no_replies": "暂无回复"
 }

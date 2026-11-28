@@ -41,7 +41,7 @@ const pending = (path: string) => hub.requests.filter((r) => r.path === path);
 const answer = async (r: Request, value: unknown) => act(async () => r.resolve(value));
 const fail = async (r: Request) => act(async () => r.reject(new TypeError("Failed to fetch")));
 const hello = async (msg: Record<string, unknown> = { type: "hello" }) => act(async () => hub.hello.forEach((l) => l(msg)));
-const offline = () => host.textContent?.includes("连不上 hub") ?? false;
+const offline = () => host.textContent?.includes("无法连接 hub") ?? false;
 
 beforeEach(() => {
   lists.clear();
@@ -122,7 +122,7 @@ describe("the knowledge map", () => {
     await answer(pending("/kb/topics")[1], { items: [] });
     await answer(pending("/assistant")[1], { kb_topics: true });
     expect(offline()).toBe(false);
-    expect(host.textContent).toContain("还没有");
+    expect(host.textContent).toContain("暂无主题");
 
     // drawn: a later hello does not read every entry again
     await hello();
@@ -132,7 +132,7 @@ describe("the knowledge map", () => {
   it("reads a map drawn without some entries again on the next hello, keeping it drawn meanwhile", async () => {
     const topics = { items: [{ kind: "topics", id: "alpha", name: "Alpha topic", relevance: 0 }, { kind: "topics", id: "beta", name: "Beta topic", relevance: 0 }] };
     const detail = (id: string) => ({ detail: { kind: "topics", id, path: "", meta: {}, summary: "" } });
-    const missing = () => host.textContent?.includes("有 1 个主题没读到") ?? false;
+    const missing = () => host.textContent?.includes("有 1 个主题无法读取") ?? false;
     act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
     await answer(pending("/assistant")[0], {});
     await answer(pending("/kb/topics")[0], topics);

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
@@ -462,6 +464,22 @@ func classifyLauncherError(text string) string {
 		}
 	}
 	return errKindOther
+}
+
+// codedLauncherErrorKinds are the node's coded start failures that name their class themselves. Their words are in the
+// node's language, so the class comes from the code, never from a guess at the text.
+var codedLauncherErrorKinds = map[string]string{
+	proto.CodeCodexNotLoggedIn: errKindAuth, // Codex opened on its sign-in screen (node/codex_start.go)
+}
+
+// codedLauncherErrorKind is the class err's code names (codedLauncherErrorKinds), "" when it names none: its words
+// are then what classifyLauncherError reads.
+func codedLauncherErrorKind(err error) string {
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		return codedLauncherErrorKinds[re.Code]
+	}
+	return ""
 }
 
 // repairNow: a current failure the repairs know right away; the others wait for a second one in a row. Never a usage limit or

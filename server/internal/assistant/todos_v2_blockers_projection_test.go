@@ -26,9 +26,9 @@ func newCountingBlockerStore() *countingBlockerStore {
 	return &countingBlockerStore{memBlockerStore: newMemBlockerStore()}
 }
 
-func (c *countingBlockerStore) ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error) {
+func (c *countingBlockerStore) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
 	c.listActiveCalls.Add(1)
-	return c.memBlockerStore.ListActiveTodoBlockers(ctx)
+	return c.memBlockerStore.ListTodoReadinessBlockers(ctx, todoIDs)
 }
 
 func TestTodosV2BlockersDefaultExternalPRFetcherAutoWake(t *testing.T) {
@@ -108,56 +108,50 @@ func TestTodosV2BlockersDefaultExternalPRFetcherAutoWake(t *testing.T) {
 		mu.Unlock()
 	})
 
-	// 1. Network failure: sweep succeeds without stalling, deduplicates target_ref to 1 request, keeps edges active.
-	sumErr, err := s.ReconcileTodoBlockers(ctx, "")
-	if err != nil {
-		t.Fatalf("reconcile during upstream error: %v", err)
+	now := time.Now()
+	if err := s.refreshTodoBlockers(ctx, now); err != nil {
+		t.Fatal(err)
 	}
-	if sumErr.Evaluated != 2 || len(sumErr.ResolvedIDs) != 0 || len(sumErr.UnblockedTodoIDs) != 0 {
-		t.Fatalf("expected active blockers kept on network error, got %+v", sumErr)
+	if err := s.refreshTodoBlockers(ctx, now.Add(externalPRRetryMin/2)); err != nil {
+		t.Fatal(err)
 	}
 	mu.Lock()
 	if prRequests != 1 {
-		t.Fatalf("expected per-sweep deduplication to issue 1 request on error, got %d", prRequests)
+		t.Fatalf("shared PR received %d failed requests before backoff expired", prRequests)
 	}
 	failNext = false
-	prRequests = 0
 	mu.Unlock()
 
-	// 2. Open PR: still active, 1 deduplicated request across both blockers.
-	sumOpen, err := s.ReconcileTodoBlockers(ctx, "")
-	if err != nil {
-		t.Fatalf("reconcile while PR open: %v", err)
-	}
-	if len(sumOpen.ResolvedIDs) != 0 || len(sumOpen.UnblockedTodoIDs) != 0 {
-		t.Fatalf("expected blockers active while PR open, got %+v", sumOpen)
+	// The next successful read sees the PR open. A later tick within the TTL reuses it.
+	next := now.Add(2 * externalPRRetryMin)
+	if err := s.refreshTodoBlockers(ctx, next); err != nil {
+		t.Fatal(err)
 	}
 	mu.Lock()
-	if prRequests != 1 {
-		t.Fatalf("expected per-sweep cache to issue 1 request while open, got %d", prRequests)
-	}
 	prMerged = true
-	prRequests = 0
+	mu.Unlock()
+	if err := s.refreshTodoBlockers(ctx, next.Add(externalPRObservationTTL/2)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if prRequests != 2 || len(woke) != 0 {
+		t.Fatalf("open PR was refetched or cleared before TTL: requests=%d wakes=%v", prRequests, woke)
+	}
 	mu.Unlock()
 
-	// 3. Merged PR: default forge fetcher resolves both edges and wakes both downstream todos.
-	sumMerged, err := s.ReconcileTodoBlockers(ctx, "")
-	if err != nil {
-		t.Fatalf("reconcile after PR merged: %v", err)
+	if err := s.refreshTodoBlockers(ctx, next.Add(2*externalPRObservationTTL)); err != nil {
+		t.Fatal(err)
 	}
-	if len(sumMerged.ResolvedIDs) != 2 {
-		t.Fatalf("expected 2 resolved blockers, got %+v", sumMerged.ResolvedIDs)
+	if active, err := st.ListActiveTodoBlockers(ctx); err != nil || len(active) != 0 {
+		t.Fatalf("terminal observation left blockers active: %+v, %v", active, err)
 	}
 	wantWoke := []string{todoA.ID, todoB.ID}
 	if todoB.ID < todoA.ID {
 		wantWoke = []string{todoB.ID, todoA.ID}
 	}
-	if !reflect.DeepEqual(sumMerged.UnblockedTodoIDs, wantWoke) {
-		t.Fatalf("UnblockedTodoIDs = %v, want %v", sumMerged.UnblockedTodoIDs, wantWoke)
-	}
 	mu.Lock()
-	if prRequests != 1 {
-		t.Fatalf("expected per-sweep cache to issue 1 request on merge, got %d", prRequests)
+	if prRequests != 3 {
+		t.Fatalf("expected one fresh request on merge, got %d requests total", prRequests)
 	}
 	gotWoke := append([]string(nil), woke...)
 	mu.Unlock()
@@ -232,8 +226,8 @@ func TestTodosV2BlockersProjectionWaitingAndBoard(t *testing.T) {
 	if gotBlocked.View.Reason != assistantwire.TodoReasonParked || gotBlocked.View.Line == nil || gotBlocked.View.Line.Key != assistantwire.TodoLineKeyParked {
 		t.Fatalf("plainBlocked.View reason/line = %+v, want parked with line", gotBlocked.View)
 	}
-	if reason := gotBlocked.View.Line.Args[assistantwire.TodoLineArgReason]; !strings.Contains(reason, "example/upstream#101") {
-		t.Fatalf("plainBlocked wait reason = %q, want to name example/upstream#101", reason)
+	if target := gotBlocked.View.Line.Args[assistantwire.TodoLineArgReason]; target != "example/upstream#101" {
+		t.Fatalf("plainBlocked wait target = %q, want example/upstream#101", target)
 	}
 
 	// Needs-you task must stay in needs_you even when it also has an active blocker.
@@ -270,6 +264,55 @@ func TestTodosV2BlockersProjectionWaitingAndBoard(t *testing.T) {
 	}
 	if !foundInWaiting {
 		t.Fatalf("expected plainBlocked %s in board waiting group, got %+v", plainBlocked.ID, resp.Board.StatusGroups)
+	}
+}
+
+func TestTodosV2BlockersProjectionRanksAndRechecks(t *testing.T) {
+	st := newMemBlockerStore()
+	s, f := newQuietServiceOn(t, st)
+	setBlockersTodosV2Flag(t, s, true, false)
+	e := &todoEnv{t: t, s: s, f: f}
+	first := e.create("Wait for upstream work").ID
+	second := e.create("Wait for another change").ID
+	plain := e.create("Personal to-do").ID
+	closed := e.create("Finished task").ID
+	for _, id := range []string{first, second, closed} {
+		if _, err := s.AddTodoBlocker(t.Context(), id, todoBlockerKindExternalPR, "https://github.com/example/upstream/pull/101", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.must("PATCH", "/api/v1/todos/"+closed, `{"done":true}`)
+
+	list, full, err := s.todosViewed(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := full.byID()
+	ranks := []int{byID[first].Rank, byID[second].Rank}
+	if byID[first].Section != assistantwire.TodoListSectionWaiting || byID[second].Section != assistantwire.TodoListSectionWaiting ||
+		ranks[0]+ranks[1] != 1 || ranks[0] == ranks[1] {
+		t.Errorf("waiting section ranks = %v for views %+v and %+v; want 0 and 1", ranks, byID[first], byID[second])
+	}
+	if got := byID[plain]; got.Section != assistantwire.TodoListSectionTodo || got.Rank != 0 {
+		t.Errorf("only personal to-do in its section = %+v; want rank 0", got)
+	}
+	for _, row := range list {
+		if row.ID == closed && (row.View.Phase != assistantwire.TodoPhaseDone || row.Wait != nil || len(row.ActiveBlockers) != 0) {
+			t.Errorf("closed task still has active blocker evidence: view=%+v wait=%+v blockers=%+v", row.View, row.Wait, row.ActiveBlockers)
+		}
+	}
+
+	gen := s.todoViewGen()
+	ids := map[string]bool{first: true}
+	recheck, err := s.todoViewsOf(t.Context(), ids, s.todoViewNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recheck.waits) != 1 || recheck.waits[0] == nil || recheck.waits[0].Kind != assistantwire.TodoWaitKindPrMerge {
+		t.Errorf("recheck lost the blocker wait: %+v", recheck.waits)
+	}
+	if s.todoViewsSeen(gen, recheck, ids) {
+		t.Errorf("rechecking an unchanged blocker changed the published class: %+v", recheck.views)
 	}
 }
 

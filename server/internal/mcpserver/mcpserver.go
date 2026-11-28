@@ -61,18 +61,27 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 64*1024), 32*1024*1024)
 	enc := json.NewEncoder(out)
+	type inflightCall struct {
+		cancel context.CancelFunc
+	}
 	var (
-		mu       sync.Mutex // enc, inflight
-		inflight = map[string]context.CancelFunc{}
-		wg       sync.WaitGroup
-		werr     error
-		watching bool
+		mu        sync.Mutex // enc, inflight, werr, watching
+		inflight  = map[string][]*inflightCall{}
+		wg        sync.WaitGroup
+		werr      error
+		watching  bool
+		onCleanup = afterInflightCleanup
 	)
-	writeNotification := func(n notification) {
-		mu.Lock()
-		defer mu.Unlock()
-		if err := enc.Encode(n); err != nil && werr == nil {
-			werr = err
+	writeNotificationFor := func(nctx context.Context) func(notification) {
+		return func(n notification) {
+			mu.Lock()
+			defer mu.Unlock()
+			if nctx.Err() != nil {
+				return
+			}
+			if err := enc.Encode(n); err != nil && werr == nil {
+				werr = err
+			}
 		}
 	}
 	for sc.Scan() {
@@ -93,9 +102,12 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 					RequestID json.RawMessage `json:"requestId"`
 				}
 				_ = json.Unmarshal(req.Params, &p)
+				key := idKey(p.RequestID)
 				mu.Lock()
-				if cancel := inflight[idKey(p.RequestID)]; cancel != nil {
-					cancel()
+				calls := inflight[key]
+				delete(inflight, key)
+				for _, c := range calls {
+					c.cancel()
 				}
 				mu.Unlock()
 			}
@@ -103,8 +115,9 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 		}
 		rctx, cancel := context.WithCancel(ctx)
 		key := idKey(req.ID)
+		call := &inflightCall{cancel: cancel}
 		mu.Lock()
-		inflight[key] = cancel
+		inflight[key] = append(inflight[key], call)
 		mu.Unlock()
 		wg.Add(1)
 		go func() {
@@ -113,16 +126,30 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 			if token != nil {
 				rctx = withMCPWait(rctx)
 			}
-			stopProgress := keepAlive(rctx, token, writeNotification)
+			stopProgress := keepAlive(rctx, token, writeNotificationFor(rctx))
 			var listed *toolSnapshot
 			rctx = context.WithValue(rctx, toolsListedKey{}, func(snapshot toolSnapshot) { listed = &snapshot })
 			res, rerr := handle(rctx, version, req)
 			stopProgress() // no progress line after the answer
+			if onCleanup != nil {
+				defer onCleanup(key)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			cancelled := rctx.Err() != nil
-			if inflight[key] != nil {
-				delete(inflight, key)
+			if list := inflight[key]; len(list) > 0 {
+				kept := list[:0]
+				for _, c := range list {
+					if c != call {
+						kept = append(kept, c)
+					}
+				}
+				if len(kept) == 0 {
+					delete(inflight, key)
+				} else {
+					clear(list[len(kept):])
+					inflight[key] = kept
+				}
 			}
 			cancel()
 			if cancelled { // the client gave up on it: no answer (MCP: a cancelled request is not responded to)
@@ -138,7 +165,7 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 				wg.Add(1)
 				go func(snapshot toolSnapshot) {
 					defer wg.Done()
-					watchTools(ctx, snapshot, writeNotification)
+					watchTools(ctx, snapshot, writeNotificationFor(ctx))
 				}(*listed)
 			}
 		}()
@@ -392,11 +419,12 @@ func checkCallParams(name *string, args *json.RawMessage) *rpcError {
 	return nil
 }
 
-// dialNode and retryEvery are swapped out by tests. dialNode hangs up when its ctx is cancelled, so a cancelled tool
-// call ends on the node too (and with it the hub's call and its card, rpc.Peer.Cancels).
+// dialNode, retryEvery, and afterInflightCleanup are swapped out by tests. dialNode hangs up when its ctx is
+// cancelled, so a cancelled tool call ends on the node too (and with it the hub's call and its card, rpc.Peer.Cancels).
 var (
-	dialNode   = nodeclient.DialInterruptible
-	retryEvery = 500 * time.Millisecond
+	dialNode             = nodeclient.DialInterruptible
+	retryEvery           = 500 * time.Millisecond
+	afterInflightCleanup func(key string)
 )
 
 // callNode is dialNode for a tool call, tried again only while no node listens (nothing was sent): a resident node's

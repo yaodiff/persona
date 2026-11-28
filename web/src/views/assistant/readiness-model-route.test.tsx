@@ -72,10 +72,10 @@ const click = (label: string) => act(() => [...host.querySelectorAll("button")].
 
 describe("a model the main chat can't run", () => {
   it("opens the chat's own model panel from the card and the send button, not the wizard", () => {
-    expect(buttons()).toEqual(["换个模型", "试一句"]);
-    click("换个模型");
+    expect(buttons()).toEqual(["更换模型", "试一试"]);
+    click("更换模型");
     expect(opened).toBe(1);
-    expect(gate!.blocked?.label).toBe("换个模型");
+    expect(gate!.blocked?.label).toBe("更换模型");
     act(() => gate!.blocked!.onClick!());
     expect(opened).toBe(2);
     expect(location.pathname + location.search).toBe("/");
@@ -83,19 +83,19 @@ describe("a model the main chat can't run", () => {
 
   it("opens Settings › Models where the chat has no panel", () => {
     unpick();
-    click("换个模型");
+    click("更换模型");
     expect(location.pathname + location.search).toBe("/settings?tab=models");
   });
 
   it("leads with Try it once another model is picked, until that try ends", async () => {
     act(() => upsertSession({ ...main, model_pick: { launcher: "claude", model: "model-b" } }));
-    expect(buttons()).toEqual(["试一句", "换个模型"]);
-    expect(gate!.blocked?.label).toBe("试一句");
+    expect(buttons()).toEqual(["试一试", "更换模型"]);
+    expect(gate!.blocked?.label).toBe("试一试");
     await act(async () => gate!.blocked!.onClick!());
     expect(opened).toBe(0);
     expect(asked.some((u) => u.includes("probe=1"))).toBe(true);
     // the try of model-b still met model_route: another model is what's next
-    expect(buttons()).toEqual(["换个模型", "试一句"]);
+    expect(buttons()).toEqual(["更换模型", "试一试"]);
   });
 });
 
@@ -106,6 +106,6 @@ describe("stepActions", () => {
     expect(stepActions(route, true)).toEqual(["test_assistant", ["pick_model"]]);
     const login: ReadinessStep = { id: "model", state: "problem", code: "not_logged_in", action: { id: "connect_model" }, alt_actions: [{ id: "login_claude" }] };
     expect(stepActions(login, true)).toEqual(["connect_model", ["login_claude"]]);
-    expect(sendLabel(login, "connect_model")).toBe("先接上模型");
+    expect(sendLabel(login, "connect_model")).toBe("先连接模型");
   });
 });

@@ -45,7 +45,7 @@ func (h *orcaHost) agentProcs(maxAge time.Duration) (map[string][]orcaProc, erro
 // orcaProc is an agent process in front in one of Orca's terminals.
 type orcaProc struct {
 	pid   int
-	agent string // claude | codex | traex
+	agent string // claude | codex | traex | omp | agy
 	cwd   string
 	start time.Time // when it started (to the second; zero when unknown)
 }
@@ -91,10 +91,25 @@ func agentOfCmd(argv []string) string {
 		return "codex"
 	case traexAgent, "traecli":
 		return traexAgent
+	case ompAgent:
+		return ompAgent
 	case "node", "bun":
 		if len(argv) > 1 && (progName(argv[1]) == "codex" || strings.Contains(filepath.ToSlash(argv[1]), "/codex/")) {
 			return "codex"
 		}
+	}
+	return ""
+}
+
+// orcaAgentOfCmd is agentOfCmd for Orca's scans on Linux and macOS, which also take the Antigravity CLI: without it an
+// agy in an Orca terminal was no agent pane, so its conversation had no pane to go to and every message to it was
+// refused (#16531). Tern and Rex keep agentOfCmd as it is.
+func orcaAgentOfCmd(argv []string) string {
+	if k := agentOfCmd(argv); k != "" {
+		return k
+	}
+	if len(argv) > 0 && progName(argv[0]) == agyAgent {
+		return agyAgent
 	}
 	return ""
 }
@@ -207,7 +222,7 @@ func parseOrcaPSArgs(s string, now time.Time) map[int]orcaProc {
 		if !strings.Contains(stat, "+") || strings.HasPrefix(stat, "T") {
 			continue
 		}
-		agent := agentOfCmd(f[3:])
+		agent := orcaAgentOfCmd(f[3:])
 		if agent == "" {
 			continue
 		}
@@ -297,7 +312,7 @@ func scanOrcaProcsLinux() (map[string][]orcaProc, error) {
 		if err != nil {
 			continue
 		}
-		agent := agentOfCmd(strings.Split(strings.TrimRight(string(cmd), "\x00"), "\x00"))
+		agent := orcaAgentOfCmd(strings.Split(strings.TrimRight(string(cmd), "\x00"), "\x00"))
 		if agent == "" {
 			continue
 		}

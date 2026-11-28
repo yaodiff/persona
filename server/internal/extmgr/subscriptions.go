@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
@@ -169,12 +170,9 @@ type subscriptionModel struct{ h *Manager }
 // purposeModelInfo is what a model purpose runs on now, as the assistant resolves it (models.usable): not usable when
 // it cannot be asked.
 func (h *Manager) purposeModelInfo(ctx context.Context, purpose string) subscriptions.ModelInfo {
-	var res struct {
-		Usable   bool   `json:"usable"`
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-	}
-	if err := h.callAssistant(ctx, assistantwire.MethodModelsUsable, map[string]any{"purpose": purpose}, &res); err != nil || !res.Usable {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.ModelsUsableMethod,
+		assistantwire.ModelsUsableParams{Purpose: purpose})
+	if err != nil || !res.Usable {
 		return subscriptions.ModelInfo{}
 	}
 	return subscriptions.ModelInfo{OK: true, Provider: res.Provider, Model: res.Model}
@@ -188,12 +186,11 @@ func (m subscriptionModel) JSON(ctx context.Context, c subscriptions.ModelCall) 
 	for i, t := range c.Turns {
 		turns[i] = assistantwire.ModelMessage{Role: t.Role, Content: t.Content}
 	}
-	var out assistantwire.ModelCompleteResult
-	err := m.h.callAssistant(ctx, assistantwire.MethodModelsPurposeComplete, assistantwire.PurposeComplete{
+	out, err := buswire.Call(ctx, assistantCaller(m.h.callAssistant), assistantwire.ModelsPurposeCompleteMethod, assistantwire.PurposeComplete{
 		Purpose: assistantwire.PurposeSubscriptionRecipe,
 		Params: assistantwire.ModelCompleteParams{System: c.System, Messages: turns, MaxTokens: c.MaxTokens, JSONSchema: c.Schema,
 			TimeoutSeconds: subscriptionModelWait, Label: c.Label},
-	}, &out)
+	})
 	var re *rpc.Error
 	switch {
 	case errors.As(err, &re) && re.Code == assistantwire.CodeModelUnavailable:

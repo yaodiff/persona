@@ -112,10 +112,8 @@ func TestSetTodoRepositoryLinkRoleTouchesOnlyTargetLink(t *testing.T) {
 	}
 }
 
-// Delivery is stored as the empty value. Re-applying delivery on a link that is already delivery (the gate's common
-// case on every acceptance pass) must be a no-op: no revision bump and no literal "delivery" written into the row
-// (P2 review finding on PR #12566).
-func TestSetTodoRepositoryLinkRoleDeliveryRewriteIsNoOp(t *testing.T) {
+// A delivery write can bind a mirror that already has the delivery role. A repeated binding is idempotent.
+func TestSetTodoRepositoryLinkRoleBindsMirror(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
 	identity, _ := repository.Parse("https://github.com/example/web", "")
@@ -128,15 +126,19 @@ func TestSetTodoRepositoryLinkRoleDeliveryRewriteIsNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	url := identity.CanonicalURL + "/pull/3"
-	imported, changed, err := d.ImportTodoRepositoryLinkDetails(ctx, row.ID,
-		[]repository.LinkInput{{URL: url, Role: repository.LinkRoleDelivery}}, "explicit")
+	imported, changed, err := d.ImportTodoRepositoryLinks(ctx, row.ID, []string{url}, "report")
 	if err != nil || !changed {
 		t.Fatal(imported, changed, err)
 	}
-	before := imported.Revision
 	if got := imported.Repositories[0].Links[0].Role; got != "" {
 		t.Fatalf("seed role = %q, want empty stored delivery", got)
 	}
+	bound, err := d.SetTodoRepositoryLinkRole(ctx, row.ID, url, repository.LinkRoleDelivery)
+	if err != nil || bound.Revision != imported.Revision+1 {
+		t.Fatalf("delivery binding: rev %d err %v", bound.Revision, err)
+	}
+	assertStoredLinkProvenance(t, d, row.ID, map[string]string{url: "explicit"})
+	before := bound.Revision
 
 	again, err := d.SetTodoRepositoryLinkRole(ctx, row.ID, url, repository.LinkRoleDelivery)
 	if err != nil {
@@ -154,6 +156,7 @@ func TestSetTodoRepositoryLinkRoleDeliveryRewriteIsNoOp(t *testing.T) {
 	if err != nil || ref.Revision != before+1 {
 		t.Fatalf("reference rewrite: rev %d err %v", ref.Revision, err)
 	}
+	assertStoredLinkProvenance(t, d, row.ID, map[string]string{url: "unbound"})
 	back, err := d.SetTodoRepositoryLinkRole(ctx, row.ID, url, repository.LinkRoleDelivery)
 	if err != nil || back.Revision != before+2 {
 		t.Fatalf("delivery switch: rev %d err %v", back.Revision, err)
@@ -161,4 +164,5 @@ func TestSetTodoRepositoryLinkRoleDeliveryRewriteIsNoOp(t *testing.T) {
 	if got := back.Repositories[0].Links[0].Role; got != "" {
 		t.Fatalf("delivery switch left role %q, want empty", got)
 	}
+	assertStoredLinkProvenance(t, d, row.ID, map[string]string{url: "explicit"})
 }

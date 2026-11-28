@@ -1,0 +1,679 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "number_first_speech_order",
+      "kind": "number",
+      "description": "First-time numbering assigns s1, s2, s3 by each cluster's earliest start time and preserves turn order.",
+      "source": "#17674 Field contract (hub numbering)",
+      "input": {
+        "raw_turns": [
+          [12.0, 18.0, "c2"],
+          [2.5, 9.0, "c9"],
+          [18.0, 24.0, "c1"],
+          [25.0, 30.0, "c9"]
+        ]
+      },
+      "expected": {
+        "turns": [
+          [12.0, 18.0, "s2"],
+          [2.5, 9.0, "s1"],
+          [18.0, 24.0, "s3"],
+          [25.0, 30.0, "s1"]
+        ],
+        "next": 4,
+        "people": [
+          {"id": "s1"},
+          {"id": "s2"},
+          {"id": "s3"}
+        ]
+      }
+    },
+    {
+      "name": "pair_overlap_preserves_names_and_allocates_new",
+      "kind": "pair",
+      "description": "Later timeline pairs clusters with >=50% overlap to existing ids (keeping names) and allocates new ids from next when overlap is below half of both.",
+      "source": "#17674 Field contract (pairing a later timeline)",
+      "input": {
+        "prev_turns": [
+          [0.0, 40.0, "s1"],
+          [40.0, 70.0, "s2"],
+          [70.0, 90.0, "s3"]
+        ],
+        "next": 4,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "name": "Grace"},
+          {"id": "s3"}
+        ],
+        "raw_turns": [
+          [2.0, 38.0, "c2"],
+          [45.0, 65.0, "c1"],
+          [82.0, 102.0, "c3"],
+          [105.0, 120.0, "c4"]
+        ]
+      },
+      "expected": {
+        "turns": [
+          [2.0, 38.0, "s1"],
+          [45.0, 65.0, "s2"],
+          [82.0, 102.0, "s4"],
+          [105.0, 120.0, "s5"]
+        ],
+        "next": 6,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2", "name": "Grace"},
+          {"id": "s3"},
+          {"id": "s4"},
+          {"id": "s5"}
+        ]
+      }
+    },
+    {
+      "name": "pair_one_to_one_largest_overlap_first",
+      "kind": "pair",
+      "description": "When two new clusters both overlap one old speaker, the larger overlap takes the old id and the smaller gets a new id.",
+      "source": "#17674 Field contract (pairing a later timeline)",
+      "input": {
+        "prev_turns": [
+          [0.0, 100.0, "s1"]
+        ],
+        "next": 2,
+        "people": [
+          {"id": "s1", "name": "Ada"}
+        ],
+        "raw_turns": [
+          [0.0, 30.0, "c1"],
+          [30.0, 90.0, "c2"]
+        ]
+      },
+      "expected": {
+        "turns": [
+          [0.0, 30.0, "s2"],
+          [30.0, 90.0, "s1"]
+        ],
+        "next": 3,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2"}
+        ]
+      }
+    },
+    {
+      "name": "pair_half_threshold_either_side_qualifies",
+      "kind": "pair",
+      "description": "An overlap of 50% of the old speaker's speaking time pairs even when it is under 50% of the new cluster's time.",
+      "source": "#17674 Field contract (pairing a later timeline)",
+      "input": {
+        "prev_turns": [
+          [0.0, 10.0, "s1"]
+        ],
+        "next": 2,
+        "people": [
+          {"id": "s1", "name": "Ada"}
+        ],
+        "raw_turns": [
+          [5.0, 30.0, "c1"]
+        ]
+      },
+      "expected": {
+        "turns": [
+          [5.0, 30.0, "s1"]
+        ],
+        "next": 2,
+        "people": [
+          {"id": "s1", "name": "Ada"}
+        ]
+      }
+    },
+    {
+      "name": "trim_cuts_turns_past_length",
+      "kind": "trim",
+      "description": "Shortening a recording clamps turns crossing the new length and drops turns starting at or past it.",
+      "source": "#17674 Field contract (shortened recording)",
+      "input": {
+        "turns": [
+          [0.0, 10.0, "s1"],
+          [10.0, 25.0, "s2"],
+          [20.0, 30.0, "s1"],
+          [25.0, 40.0, "s3"]
+        ],
+        "length": 20.0
+      },
+      "expected": {
+        "turns": [
+          [0.0, 10.0, "s1"],
+          [10.0, 20.0, "s2"]
+        ]
+      }
+    },
+    {
+      "name": "align_overlap_70_percent_boundary",
+      "kind": "align",
+      "description": "Exact 70.0% overlap is unsure; 71.0% overlap (>70%) with >=1s is sure.",
+      "source": "#17674 Aligning lines to speakers (rule 3)",
+      "input": {
+        "turns": [
+          [0.0, 7.0, "s1"],
+          [7.0, 10.0, "s2"],
+          [10.0, 17.1, "s1"],
+          [17.1, 20.0, "s2"]
+        ],
+        "covered": [[0.0, 30.0]],
+        "timing": "exact",
+        "quality": "ok",
+        "next": 3,
+        "people": [
+          {"id": "s1"},
+          {"id": "s2"}
+        ],
+        "segments": [
+          {"start": 0.0, "end": 10.0, "source": "hub", "echo": false, "text": "exact seventy percent split"},
+          {"start": 10.0, "end": 20.0, "source": "hub", "echo": false, "text": "above seventy percent split"}
+        ]
+      },
+      "expected": {
+        "results": [
+          {"over": {"s1": 7.0, "s2": 3.0}, "speaker": "s1", "speaker_unsure": true},
+          {"over": {"s1": 7.1, "s2": 2.9}, "speaker": "s1", "speaker_unsure": false}
+        ]
+      }
+    },
+    {
+      "name": "align_merged_sum_flips_winner_and_certainty",
+      "kind": "align",
+      "description": "Layer one stores original ids (s1, s2, s4); layer two sums s4 merged_into s1 to 80% and marks s1 sure.",
+      "source": "#17674 Aligning lines to speakers (rules 1-3)",
+      "input": {
+        "turns": [
+          [0.0, 4.0, "s1"],
+          [4.0, 8.0, "s4"],
+          [8.0, 10.0, "s2"]
+        ],
+        "covered": [[0.0, 20.0]],
+        "timing": "turn",
+        "quality": "ok",
+        "next": 5,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2"},
+          {"id": "s4", "merged_into": "s1"}
+        ],
+        "segments": [
+          {"start": 0.0, "end": 10.0, "source": "hub", "echo": false, "text": "merged overlap becomes sure"}
+        ]
+      },
+      "expected": {
+        "results": [
+          {"over": {"s1": 4.0, "s2": 2.0, "s4": 4.0}, "speaker": "s1", "speaker_unsure": false}
+        ]
+      }
+    },
+    {
+      "name": "align_short_overlap_under_one_second_is_unsure",
+      "kind": "align",
+      "description": "100% overlap of 0.9 seconds is unsure (<1s); 100% overlap of 1.0 second is sure (>=1s).",
+      "source": "#17674 Aligning lines to speakers (rule 3)",
+      "input": {
+        "turns": [
+          [0.0, 0.9, "s1"],
+          [5.0, 6.0, "s1"]
+        ],
+        "covered": [[0.0, 10.0]],
+        "timing": "exact",
+        "quality": "ok",
+        "next": 2,
+        "people": [
+          {"id": "s1"}
+        ],
+        "segments": [
+          {"start": 0.0, "end": 0.9, "source": "hub", "echo": false, "text": "yes"},
+          {"start": 5.0, "end": 6.0, "source": "hub", "echo": false, "text": "right"}
+        ]
+      },
+      "expected": {
+        "results": [
+          {"over": {"s1": 0.9}, "speaker": "s1", "speaker_unsure": true},
+          {"over": {"s1": 1.0}, "speaker": "s1", "speaker_unsure": false}
+        ]
+      }
+    },
+    {
+      "name": "align_minor_speaker_always_unsure",
+      "kind": "align",
+      "description": "A minor speaker still labels its transcript line but is always marked unsure.",
+      "source": "#17674 Aligning lines to speakers (rule 3)",
+      "input": {
+        "turns": [
+          [0.0, 5.0, "s1"]
+        ],
+        "covered": [[0.0, 10.0]],
+        "timing": "exact",
+        "quality": "ok",
+        "next": 2,
+        "people": [
+          {"id": "s1", "minor": true}
+        ],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "just a quick comment"}
+        ]
+      },
+      "expected": {
+        "results": [
+          {"over": {"s1": 5.0}, "speaker": "s1", "speaker_unsure": true}
+        ]
+      }
+    },
+    {
+      "name": "align_low_quality_makes_every_line_unsure",
+      "kind": "align",
+      "description": "When meeting quality is low, a 100% 8-second overlap is still marked unsure.",
+      "source": "#17674 Aligning lines to speakers (rule 6)",
+      "input": {
+        "turns": [
+          [0.0, 8.0, "s1"]
+        ],
+        "covered": [[0.0, 10.0]],
+        "timing": "exact",
+        "quality": "low",
+        "next": 2,
+        "people": [
+          {"id": "s1", "name": "Ada"}
+        ],
+        "segments": [
+          {"start": 0.0, "end": 8.0, "source": "hub", "echo": false, "text": "clean overlap under low quality"}
+        ]
+      },
+      "expected": {
+        "results": [
+          {"over": {"s1": 8.0}, "speaker": "s1", "speaker_unsure": true}
+        ]
+      }
+    },
+    {
+      "name": "align_eligibility_spread_device_hole_echo_no_overlap",
+      "kind": "align",
+      "description": "Under spread timing, hub lines skip as unreliable_timing while device lines align; holes, echo and zero overlap skip with their respective reasons.",
+      "source": "#17674 Aligning lines to speakers (rules 2, 4, 5)",
+      "input": {
+        "turns": [
+          [0.0, 10.0, "s1"],
+          [10.0, 20.0, "s2"],
+          [40.0, 50.0, "s1"]
+        ],
+        "covered": [
+          [0.0, 25.0],
+          [40.0, 60.0]
+        ],
+        "timing": "spread",
+        "quality": "ok",
+        "next": 3,
+        "people": [
+          {"id": "s1"},
+          {"id": "s2"}
+        ],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "hub line under spread timing"},
+          {"start": 0.0, "end": 5.0, "source": "device", "echo": false, "text": "device line under spread timing"},
+          {"start": 28.0, "end": 35.0, "source": "device", "echo": false, "text": "line inside covered hole"},
+          {"start": 10.0, "end": 15.0, "source": "device", "echo": true, "text": "persona echo"},
+          {"start": 52.0, "end": 58.0, "source": "device", "echo": false, "text": "covered silence without turn"}
+        ]
+      },
+      "expected": {
+        "results": [
+          {"over": {}, "skip": "unreliable_timing"},
+          {"over": {"s1": 5.0}, "speaker": "s1", "speaker_unsure": false},
+          {"over": {}, "skip": "hole"},
+          {"over": {}, "skip": "echo"},
+          {"over": {}, "skip": "no_overlap"}
+        ]
+      }
+    },
+    {
+      "name": "stats_original_merged_and_minor",
+      "kind": "stats",
+      "description": "Computes per-original seconds and eligible line counts, sums them per merged person, and marks unmerged speakers under 20s as minor (20.0s is not minor).",
+      "source": "#17674 Field contract (stats and minor speakers)",
+      "input": {
+        "turns": [
+          [0.0, 25.0, "s1"],
+          [25.0, 40.0, "s4"],
+          [40.0, 59.9, "s5"],
+          [60.0, 80.0, "s2"]
+        ],
+        "covered": [[0.0, 90.0]],
+        "timing": "exact",
+        "next": 6,
+        "people": [
+          {"id": "s1", "name": "Ada"},
+          {"id": "s2"},
+          {"id": "s4", "merged_into": "s1"},
+          {"id": "s5"}
+        ],
+        "segments": [
+          {"start": 0.0, "end": 10.0, "source": "hub", "echo": false, "text": "first line"},
+          {"start": 10.0, "end": 20.0, "source": "hub", "echo": false, "text": "second line"},
+          {"start": 26.0, "end": 35.0, "source": "hub", "echo": false, "text": "merged speaker line"},
+          {"start": 41.0, "end": 50.0, "source": "hub", "echo": false, "text": "minor speaker line"},
+          {"start": 61.0, "end": 70.0, "source": "hub", "echo": true, "text": "echo skipped from count"},
+          {"start": 70.0, "end": 78.0, "source": "hub", "echo": false, "text": "twenty second boundary speaker"}
+        ]
+      },
+      "expected": {
+        "original": {
+          "s1": [25.0, 2],
+          "s2": [20.0, 1],
+          "s4": [15.0, 1],
+          "s5": [19.9, 1]
+        },
+        "merged": {
+          "s1": [40.0, 3],
+          "s2": [20.0, 1],
+          "s5": [19.9, 1]
+        },
+        "minor_ids": ["s5"]
+      }
+    },
+    {
+      "name": "quality_ok_baseline",
+      "kind": "quality",
+      "description": "Exactly 1/5 (20.0%) unlabelled substantive lines, 150s speech, 90% coverage, 4 attendees and balanced speakers passes as ok.",
+      "source": "#17674 Quality",
+      "input": {
+        "turns": [
+          [0.0, 80.0, "s1"],
+          [80.0, 150.0, "s2"]
+        ],
+        "covered": [[0.0, 180.0]],
+        "duration": 200.0,
+        "timing": "exact",
+        "attendees": 4,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 4.0, "source": "hub", "echo": false, "text": "line one"},
+          {"start": 10.0, "end": 14.0, "source": "hub", "echo": false, "text": "line two"},
+          {"start": 80.0, "end": 84.0, "source": "hub", "echo": false, "text": "line three"},
+          {"start": 90.0, "end": 94.0, "source": "hub", "echo": false, "text": "line four"},
+          {"start": 160.0, "end": 164.0, "source": "hub", "echo": false, "text": "one unlabelled of five"}
+        ]
+      },
+      "expected": {
+        "quality": "ok",
+        "reason": ""
+      }
+    },
+    {
+      "name": "quality_low_unlabelled_over_fifth",
+      "kind": "quality",
+      "description": "2 of 9 eligible substantive lines (including a 1.2s 8-CJK line, excluding a 1.2s English line, holes and echo) unlabelled (>20%) triggers too_many_unlabelled.",
+      "source": "#17674 Quality (rule 1, substantive lines)",
+      "input": {
+        "turns": [
+          [0.0, 80.0, "s1"],
+          [80.0, 150.0, "s2"]
+        ],
+        "covered": [[0.0, 180.0]],
+        "duration": 200.0,
+        "timing": "exact",
+        "attendees": 3,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 3.0, "source": "hub", "echo": false, "text": "labelled 1"},
+          {"start": 10.0, "end": 13.0, "source": "hub", "echo": false, "text": "labelled 2"},
+          {"start": 20.0, "end": 23.0, "source": "hub", "echo": false, "text": "labelled 3"},
+          {"start": 30.0, "end": 33.0, "source": "hub", "echo": false, "text": "labelled 4"},
+          {"start": 80.0, "end": 83.0, "source": "hub", "echo": false, "text": "labelled 5"},
+          {"start": 90.0, "end": 93.0, "source": "hub", "echo": false, "text": "labelled 6"},
+          {"start": 100.0, "end": 103.0, "source": "hub", "echo": false, "text": "labelled 7"},
+          {"start": 155.0, "end": 158.0, "source": "hub", "echo": false, "text": "unlabelled substantive by duration"},
+          {"start": 160.0, "end": 161.2, "source": "hub", "echo": false, "text": "我们今天先讨论这个"},
+          {"start": 165.0, "end": 166.2, "source": "hub", "echo": false, "text": "short english sentence not substantive"},
+          {"start": 185.0, "end": 190.0, "source": "hub", "echo": false, "text": "hole line excluded"},
+          {"start": 170.0, "end": 175.0, "source": "hub", "echo": true, "text": "echo line excluded"}
+        ]
+      },
+      "expected": {
+        "quality": "low",
+        "reason": "too_many_unlabelled"
+      }
+    },
+    {
+      "name": "quality_ok_unlabelled_holes_and_short_english_excluded",
+      "kind": "quality",
+      "description": "Unlabelled lines in covered holes and English lines under 2s are excluded from the unlabelled substantive ratio.",
+      "source": "#17674 Quality (rule 1 exclusions)",
+      "input": {
+        "turns": [
+          [0.0, 80.0, "s1"],
+          [80.0, 150.0, "s2"]
+        ],
+        "covered": [[0.0, 160.0]],
+        "duration": 200.0,
+        "timing": "exact",
+        "attendees": 3,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 3.0, "source": "hub", "echo": false, "text": "labelled 1"},
+          {"start": 10.0, "end": 13.0, "source": "hub", "echo": false, "text": "labelled 2"},
+          {"start": 20.0, "end": 23.0, "source": "hub", "echo": false, "text": "labelled 3"},
+          {"start": 80.0, "end": 83.0, "source": "hub", "echo": false, "text": "labelled 4"},
+          {"start": 90.0, "end": 93.0, "source": "hub", "echo": false, "text": "labelled 5"},
+          {"start": 152.0, "end": 155.0, "source": "hub", "echo": false, "text": "one unlabelled of six"},
+          {"start": 155.0, "end": 156.5, "source": "hub", "echo": false, "text": "many english words under two seconds"},
+          {"start": 157.0, "end": 158.5, "source": "hub", "echo": false, "text": "another short english utterance"},
+          {"start": 165.0, "end": 170.0, "source": "hub", "echo": false, "text": "hole line 1"},
+          {"start": 175.0, "end": 180.0, "source": "hub", "echo": false, "text": "hole line 2"},
+          {"start": 185.0, "end": 190.0, "source": "hub", "echo": false, "text": "hole line 3"}
+        ]
+      },
+      "expected": {
+        "quality": "ok",
+        "reason": ""
+      }
+    },
+    {
+      "name": "quality_low_dominant_speaker_with_three_attendees",
+      "kind": "quality",
+      "description": "One speaker holding 96% (>95%) of speaking time with 3 calendar attendees triggers single_speaker_dominant.",
+      "source": "#17674 Quality (rule 2)",
+      "input": {
+        "turns": [
+          [0.0, 96.0, "s1"],
+          [96.0, 100.0, "s2"]
+        ],
+        "covered": [[0.0, 120.0]],
+        "duration": 120.0,
+        "timing": "exact",
+        "attendees": 3,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "opening"}
+        ]
+      },
+      "expected": {
+        "quality": "low",
+        "reason": "single_speaker_dominant"
+      }
+    },
+    {
+      "name": "quality_ok_dominant_95_percent_exact",
+      "kind": "quality",
+      "description": "One speaker holding exactly 95.0% (not over 95%) with 3 attendees stays ok.",
+      "source": "#17674 Quality (rule 2 boundary)",
+      "input": {
+        "turns": [
+          [0.0, 95.0, "s1"],
+          [95.0, 100.0, "s2"]
+        ],
+        "covered": [[0.0, 120.0]],
+        "duration": 120.0,
+        "timing": "exact",
+        "attendees": 3,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "opening"}
+        ]
+      },
+      "expected": {
+        "quality": "ok",
+        "reason": ""
+      }
+    },
+    {
+      "name": "quality_ok_dominant_skipped_with_two_attendees",
+      "kind": "quality",
+      "description": "Dominant-speaker rule is skipped when calendar lists fewer than 3 attendees (or none).",
+      "source": "#17674 Quality (rule 2 attendee gate)",
+      "input": {
+        "turns": [
+          [0.0, 100.0, "s1"]
+        ],
+        "covered": [[0.0, 120.0]],
+        "duration": 120.0,
+        "timing": "exact",
+        "attendees": 2,
+        "next": 2,
+        "people": [{"id": "s1"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "monologue"}
+        ]
+      },
+      "expected": {
+        "quality": "ok",
+        "reason": ""
+      }
+    },
+    {
+      "name": "quality_low_too_little_speech",
+      "kind": "quality",
+      "description": "Total speech of 59.5s (<60s) triggers too_little_speech.",
+      "source": "#17674 Quality (rule 3a)",
+      "input": {
+        "turns": [
+          [0.0, 30.0, "s1"],
+          [30.0, 59.5, "s2"]
+        ],
+        "covered": [[0.0, 100.0]],
+        "duration": 100.0,
+        "timing": "exact",
+        "attendees": 2,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "short meeting"}
+        ]
+      },
+      "expected": {
+        "quality": "low",
+        "reason": "too_little_speech"
+      }
+    },
+    {
+      "name": "quality_low_under_half_covered",
+      "kind": "quality",
+      "description": "Covered audio of 99.0s out of 200.0s (49.5% < 50%) triggers low_coverage.",
+      "source": "#17674 Quality (rule 3b)",
+      "input": {
+        "turns": [
+          [0.0, 40.0, "s1"],
+          [40.0, 70.0, "s2"]
+        ],
+        "covered": [[0.0, 99.0]],
+        "duration": 200.0,
+        "timing": "exact",
+        "attendees": 2,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "partial coverage"}
+        ]
+      },
+      "expected": {
+        "quality": "low",
+        "reason": "low_coverage"
+      }
+    },
+    {
+      "name": "quality_ok_exact_60s_and_half_covered",
+      "kind": "quality",
+      "description": "Exactly 60.0s of speech and exactly 50.0% recording coverage stay ok.",
+      "source": "#17674 Quality (rule 3 boundaries)",
+      "input": {
+        "turns": [
+          [0.0, 30.0, "s1"],
+          [30.0, 60.0, "s2"]
+        ],
+        "covered": [[0.0, 100.0]],
+        "duration": 200.0,
+        "timing": "exact",
+        "attendees": 2,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "boundary speech"}
+        ]
+      },
+      "expected": {
+        "quality": "ok",
+        "reason": ""
+      }
+    },
+    {
+      "name": "quality_low_over_seven_attendees",
+      "kind": "quality",
+      "description": "Calendar listing 8 attendees (>7) triggers too_many_attendees.",
+      "source": "#17674 Quality (rule 4)",
+      "input": {
+        "turns": [
+          [0.0, 60.0, "s1"],
+          [60.0, 120.0, "s2"]
+        ],
+        "covered": [[0.0, 150.0]],
+        "duration": 150.0,
+        "timing": "exact",
+        "attendees": 8,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "large meeting"}
+        ]
+      },
+      "expected": {
+        "quality": "low",
+        "reason": "too_many_attendees"
+      }
+    },
+    {
+      "name": "quality_ok_exactly_seven_attendees",
+      "kind": "quality",
+      "description": "Calendar listing 7 attendees (not >7) stays ok.",
+      "source": "#17674 Quality (rule 4 boundary)",
+      "input": {
+        "turns": [
+          [0.0, 60.0, "s1"],
+          [60.0, 120.0, "s2"]
+        ],
+        "covered": [[0.0, 150.0]],
+        "duration": 150.0,
+        "timing": "exact",
+        "attendees": 7,
+        "next": 3,
+        "people": [{"id": "s1"}, {"id": "s2"}],
+        "segments": [
+          {"start": 0.0, "end": 5.0, "source": "hub", "echo": false, "text": "seven person meeting"}
+        ]
+      },
+      "expected": {
+        "quality": "ok",
+        "reason": ""
+      }
+    }
+  ]
+}

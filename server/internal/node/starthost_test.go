@@ -90,18 +90,15 @@ func TestStartOpensInTheNamedHost(t *testing.T) {
 	if hh.asked() != 1 || oh.asked() != 1 {
 		t.Errorf("default start: herdr asked %d, orca asked %d (%v)", hh.asked(), oh.asked(), err)
 	}
-	// A TRAE CLI resume named into Orca is refused before any host is asked (Orca continues only Claude, #5548); a
-	// Claude resume of a session this computer has a record of opens there.
+	// A TRAE CLI resume named into Orca opens there as on herdr (#17044), and so does a Claude resume of a session this
+	// computer has a record of.
 	const id = "0d000000-0000-4000-8000-0000000000ee"
 	n.state.put(id, sessionState{Launcher: "claude", Cwd: t.TempDir()})
-	if _, err := n.start(withStartHost(context.Background(), "orca"), t.TempDir(), traexAgent, "", id, "", "", "", "", "", ""); !isRefusal(err, "orca_resume") {
-		t.Errorf("TRAE CLI resume into Orca: %v", err)
-	}
-	if oh.asked() != 1 {
-		t.Errorf("orca asked for a refused resume")
+	if _, err := n.start(withStartHost(context.Background(), "orca"), t.TempDir(), traexAgent, "", id, "", "", "", "", "", ""); isRefusal(err, "orca_resume") || oh.asked() != 2 || hh.asked() != 1 {
+		t.Errorf("TRAE CLI resume into Orca: orca asked %d, herdr asked %d (%v)", oh.asked(), hh.asked(), err)
 	}
 	_, err = n.start(withStartHost(context.Background(), "orca"), t.TempDir(), "", "", id, "", "", "", "", "", "")
-	if oh.asked() != 2 || hh.asked() != 1 {
+	if oh.asked() != 3 || hh.asked() != 1 {
 		t.Errorf("Claude resume into Orca: orca asked %d, herdr asked %d (%v)", oh.asked(), hh.asked(), err)
 	}
 }

@@ -208,7 +208,7 @@ describe("task wait information", () => {
 
   it.each([
     ["en", "Comment on #912"],
-    ["zh-Hans", "#912 \u4e0b\u7684\u7559\u8a00"],
+    ["zh-Hans", "#912 \u4e0b\u7684\u8bc4\u8bba"],
     ["ja", "#912 \u306e\u30b3\u30e1\u30f3\u30c8"],
   ])("localizes a GitHub comment source in %s", async (locale, label) => {
     await initI18n(locale);

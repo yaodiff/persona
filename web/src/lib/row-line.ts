@@ -2,8 +2,8 @@
 // does not have to hover or open each one: the same words as the to-dos page's agent rows (todos.json kicker_*).
 import { stateName } from "./state-labels";
 import { t } from "../i18n";
-import { sessionPreview, stateOf } from "./format";
-import { usageLimitLabel } from "./usage-limit";
+import { sessionPreview, viewOf } from "./format";
+import { usageLimitClock, usageLimitLabel } from "./usage-limit";
 import { replyAsk } from "./agent-groups";
 import { interactionAsk } from "./inbox";
 import { plainMarkdown } from "./plain-markdown";
@@ -41,18 +41,49 @@ const MAX = 160;
  * needs you, the unread tint for Awaiting Reply), colon included when text follows.
  */
 export function rowLine(s: Session, ix?: Interaction, awaiting = false, finished = false): { lead?: string; text: string; tone?: "needs" | "reply" } | undefined {
-  const st = stateOf(s);
+  const { phase: st, reason } = viewOf(s);
+  if (s.view) {
+    if (!reason) return undefined;
+    switch (reason.kind) {
+      case "asks": {
+        const text = plainMarkdown(reason.question ?? "").slice(0, MAX);
+        const lead = stateName("awaits_reply");
+        return { lead: text ? t("todos.kicker_line", { kicker: lead }) : lead, text, tone: "reply" };
+      }
+      case "usage_limit": {
+        const time = reason.resets_at && usageLimitClock(reason.resets_at);
+        return { text: time ? t(reason.resumes ? "lib-usage-limit.resumes" : "lib-usage-limit.resets", { time })
+          : t(reason.resumes ? "lib-usage-limit.resumes_later" : "lib-usage-limit.short") };
+      }
+      case "restart_interrupted":
+        return { text: t(reason.resumable ? "lib-state-labels.restarted_resumable" : "lib-state-labels.restarted") };
+      case "model": return { text: t("lib-state-labels.model_error") };
+      case "start_refused": return { text: stateName("failed") };
+      case "terminal_dialog": return { text: s.attention_reason || t("lib-state-labels.terminal_dialog") };
+      case "cards":
+        if (reason.held || !ix) return { text: reason.held ? t("lib-state-labels.cards_held") : t("lib-state-labels.cards", { count: reason.n }) };
+        break;
+      case "background": return { text: reason.waiting ? stateName("bg_waiting") : t("lib-state-labels.background") };
+      case "just_finished": return { text: stateName("just_finished") };
+      case "host_unknown": return { text: stateName("unknown") };
+      case "not_running": return { text: stateName("offline") };
+      case "unseen": return { text: plainMarkdown(s.last_text || stateName("unread")).slice(0, MAX) };
+      case "seen": return { text: stateName("idle") };
+      case "turn": return undefined;
+      default: return undefined;
+    }
+  }
   // A Codex opened with no first message: it waits for one, from here or its terminal (lib/codex-waiting.ts).
   if (waitsForFirstMessage(s) && st === "idle") return { text: t("sidebar.codex_waiting") };
   // A usage limit is a wait, not "needs you" and not an unseen finish: the row says when it resumes.
   const limit = st !== "needs_you" ? usageLimitLabel(s) : undefined;
   if (limit) return { text: limit };
-  if (awaiting && st === "idle") {
+  if (awaiting && st === "done") {
     const text = plainMarkdown(replyAsk(s)).slice(0, MAX);
     const lead = stateName("awaits_reply");
     return text ? { lead: t("todos.kicker_line", { kicker: lead }), text, tone: "reply" } : { lead, text: "", tone: "reply" };
   }
-  if (st !== "needs_you" && st !== "unread" && !(finished && st === "idle")) return undefined;
+  if (st !== "needs_you" && reason?.kind !== "unseen" && !finished) return undefined;
   if (st === "needs_you" && ix) {
     const kicker = interactionKicker(ix);
     const text = plainMarkdown(interactionAsk(ix)).slice(0, MAX);

@@ -1,33 +1,34 @@
 import Foundation
 
 // All-day recording's retention on the phone (docs/assistant/day-recap.md「Retention and privacy」): a day's audio goes at
-// the earliest of 3 days after its first final recap, 7 days after its day and `recording_days` after its day, whether or
+// the earliest of 3 days after its first final recap, 7 days after its day and `audio_days` after its day, whether or
 // not its text reached the hub (the store holds the same deadline for audio that arrives late,
 // `RecordingDayRecord.audioDeadline`); the whole day (audio, text, upload state, the library's row) goes once it began
-// more than `recording_days` ago, like the hub's transcript. Never reads health data.
+// more than `audio_days` ago, like the hub's phone copies. Forever (`0`) never purges the day. Never reads health data.
 
 /// When a day's audio and the day itself go, from its record alone (unit tested).
 nonisolated enum RecordingDayRetention {
     static let day = RecordingDayRecord.secondsPerDay
 
     /// The seqs whose audio is due at `now`: every chunk still holding audio once the day's deadline passed, transcribed
-    /// or not (an untranscribed one's time stays an `untranscribed` gap). `recordingDays`: the hub's, nil while unknown.
-    static func audioDue(_ record: RecordingDayRecord, now: Date, recordingDays: Int?) -> [Int] {
-        guard let deadline = record.audioDeadline(recordingDays: recordingDays), deadline <= now else { return [] }
+    /// or not (an untranscribed one's time stays an `untranscribed` gap). `audioDays`: the hub's, nil while unknown;
+    /// 0 is forever and still keeps the 7-day maximum.
+    static func audioDue(_ record: RecordingDayRecord, now: Date, audioDays: Int?) -> [Int] {
+        guard let deadline = record.audioDeadline(audioDays: audioDays), deadline <= now else { return [] }
         return record.chunks.values.filter(\.hasAudio).map(\.seq).sorted()
     }
 
     /// The day's audio deadline when it is still ahead and audio is left for it, to wake for.
-    static func nextDeadline(_ record: RecordingDayRecord, now: Date, recordingDays: Int?) -> Date? {
+    static func nextDeadline(_ record: RecordingDayRecord, now: Date, audioDays: Int?) -> Date? {
         guard record.chunks.values.contains(where: \.hasAudio),
-              let deadline = record.audioDeadline(recordingDays: recordingDays), deadline > now else { return nil }
+              let deadline = record.audioDeadline(audioDays: audioDays), deadline > now else { return nil }
         return deadline
     }
 
     /// Whether a day that began at `start` (`recording_started_at`, how the hub counts its window) is older than `days`
-    /// (the hub's `recording_days`): the hub no longer keeps its text, and the phone doesn't either.
+    /// (the hub's `audio_days`): the phone drops its own copies. Forever (`0`) never expires.
     static func isExpired(start: Date, now: Date, days: Int) -> Bool {
-        start < now.addingTimeInterval(-Double(days) * day)
+        days > 0 && start < now.addingTimeInterval(-Double(days) * day)
     }
 }
 
@@ -40,7 +41,7 @@ nonisolated enum RecordingDayRetention {
 
     private let store: RecordingDayStore
     private let library: RecordingLibrary
-    private let days: () -> Int?
+    private let audioDays: () -> Int?
     private let now: () -> Date
     private let forget: (UUID) -> Void
     private let debounce: Duration
@@ -58,16 +59,16 @@ nonisolated enum RecordingDayRetention {
     private static let maximumGap: TimeInterval = 6 * 3600
 
     /// - Parameters:
-    ///   - days: the hub's `recording_days` once it said it (`RecordingSync`), nil before: until then no day is purged
+    ///   - audioDays: the hub's `audio_days` once it said it (`RecordingSync`), nil before: until then no day is purged
     ///     for its age (the hub may keep them longer than the default), and the audio's deadline is the other two.
     ///   - forget: a purged day's transcription and upload let go of it, and the watch is asked to delete its copy.
     ///   - debounce: how long triggers in a row gather into one run.
     init(store: RecordingDayStore = .shared, library: RecordingLibrary = .shared,
-         days: @escaping () -> Int? = { RecordingSync.shared.store.daysKnown ? RecordingSync.shared.store.days : nil },
+         audioDays: @escaping () -> Int? = { RecordingSync.shared.store.daysKnown ? RecordingSync.shared.audioRetentionDays : nil },
          now: @escaping () -> Date = { .now },
          forget: @escaping (UUID) -> Void = { RecordingDaySync.shared.removedHere($0) },
          debounce: Duration = .seconds(2)) {
-        self.store = store; self.library = library; self.days = days; self.now = now; self.forget = forget
+        self.store = store; self.library = library; self.audioDays = audioDays; self.now = now; self.forget = forget
         self.debounce = debounce
     }
 
@@ -94,7 +95,7 @@ nonisolated enum RecordingDayRetention {
         schedule(force: true)
     }
 
-    /// Deletes the audio that is due and purges the days past `recording_days`. `force`: whatever the last run's time
+    /// Deletes the audio that is due and purges the days past `audio_days`. `force`: whatever the last run's time
     /// (the catch-up, a deadline).
     func run(force: Bool = false) async {
         if !force, let last = lastRun, now().timeIntervalSince(last) < Self.minimumGap, last <= now() { return }
@@ -112,7 +113,7 @@ nonisolated enum RecordingDayRetention {
             }
         }
         lastRun = now()
-        let window = days()
+        let window = audioDays()
         var soonest: Date?
         let ids = await store.ids()
         for id in ids {
@@ -121,9 +122,9 @@ nonisolated enum RecordingDayRetention {
                 purge(id)
                 continue
             }
-            let due = RecordingDayRetention.audioDue(record, now: now(), recordingDays: window)
+            let due = RecordingDayRetention.audioDue(record, now: now(), audioDays: window)
             if !due.isEmpty { await store.removeAudio(id, seqs: due) }
-            if let next = RecordingDayRetention.nextDeadline(record, now: now(), recordingDays: window) {
+            if let next = RecordingDayRetention.nextDeadline(record, now: now(), audioDays: window) {
                 soonest = min(soonest ?? next, next)
             }
         }

@@ -40,6 +40,7 @@ fun SettingsPage.toInitialPage(): String = when (this) {
     SettingsPage.NotificationBackground -> "notification-background"
     SettingsPage.KnowledgeSelection -> "knowledge-selection"
     SettingsPage.StandingAuthorizations -> "standing-authorizations"
+    SettingsPage.DigitalAssistant -> "digital-assistant"
 }
 
 /** The legacy ledger page opens at its new location; the root and unknown names have no destination. */

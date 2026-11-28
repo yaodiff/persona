@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -650,6 +651,71 @@ func TestHerdrAgyPanePresenceMergesCompanionRow(t *testing.T) {
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agyTestAgent(agyTestPane, home, "")}, nil))
 	_ = n.refreshHosts(t.Context())
 	if got := n.agyConversation(agyTestRow, agyTestPane); got != "" {
+		t.Fatalf("ambiguous presence locks bound to %q, want empty", got)
+	}
+}
+
+// An agy in an Orca terminal resolves its conversation from the presence/<uuid>.lock its foreground process holds open
+// (Linux), as a classic herdr pane's does, so the pane merges with the companion row before any hook fired or after a
+// node restart, and a call that drives the companion's row finds the pane instead of a lock with no pane (#16531).
+func TestOrcaAgyPanePresenceMergesCompanionRow(t *testing.T) {
+	n, _, o, procs, home := orcaNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	const pane = "tab1:leaf1"
+	paneID := "orca:" + pane
+	acpRow := "agy-" + agyTestID
+	n.runtimes = newRuntimeRegistry()
+	companion := n.runtimes.add(nil)
+	companion.ready, companion.hello.Runtime = true, agyAgent
+	n.runtimes.setSessions(companion, []proto.Session{
+		{SessionID: acpRow, Agent: agyAgent, Cwd: home, Status: proto.StatusDone, Title: "Real agy task", LastText: "All fixed."},
+	})
+	agyTestFile(t, n.agyDataRoot(), agyTestID, `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"Fix the auth bug"}
+{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","content":"All fixed."}
+`)
+	oldPresence := agyPresenceOf
+	presencePIDs := map[int]string{4242: agyTestID}
+	agyPresenceOf = func(pid int) string { return presencePIDs[pid] }
+	t.Cleanup(func() { agyPresenceOf = oldPresence })
+
+	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", ""))
+	setProcesses := func(pids ...int) {
+		args, env := "", ""
+		for _, pid := range pids {
+			args += fmt.Sprintf("%d S+ 01:00 agy\n", pid)
+			env += fmt.Sprintf("%d agy ORCA_PANE_KEY=%s\n", pid, pane)
+		}
+		procs.set(pane, parseOrcaPSEnv(env, parseOrcaPSArgs(args, time.Now()), nil)[pane]...)
+	}
+	setProcesses(4242)
+	paneRow := otherSession(host.Agent{Agent: agyAgent, PaneID: paneID})
+	agyRows := func() []proto.Session {
+		var rows []proto.Session
+		for _, s := range listSessions(t, n) {
+			if s.Agent == agyAgent {
+				rows = append(rows, s)
+			}
+		}
+		return rows
+	}
+	if rows := agyRows(); len(rows) != 1 || rows[0].SessionID != paneRow || rows[0].Title != "Real agy task" ||
+		rows[0].LastText != "All fixed." {
+		var got []string
+		for _, s := range rows {
+			got = append(got, s.SessionID+" / "+s.Title+" / "+s.LastText)
+		}
+		t.Fatalf("got agy rows %q, want the Orca pane's %s alone with the companion's title and reply", got, paneRow)
+	}
+	if id, a, held := n.agyOpenCall("session.send", acpRow); !held || id != paneRow || a.PaneID != paneID {
+		t.Fatalf("a send to %s goes to %q (pane %q, held %v), want the Orca pane's row", acpRow, id, a.PaneID, held)
+	}
+
+	// Two foreground agy processes holding different presence locks fail closed: no conversation is guessed.
+	presencePIDs[4243] = agyOtherTestID
+	setProcesses(4242, 4243)
+	staleScan(n.hosts.Get(host.Orca).(*orcaHost))
+	_ = n.refreshHosts(t.Context())
+	if got := n.agyConversation(paneRow, paneID); got != "" {
 		t.Fatalf("ambiguous presence locks bound to %q, want empty", got)
 	}
 }

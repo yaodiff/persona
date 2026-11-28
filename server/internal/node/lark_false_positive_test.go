@@ -14,6 +14,7 @@ import (
 )
 
 func TestLarkLeadingGlobalOptions(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct {
 		name, command, risk, path, actor, deny string
 		calls                                  int

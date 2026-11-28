@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +63,56 @@ func newDatabase(t *testing.T) string {
 	return url
 }
 
+var migratedTemplates = struct {
+	sync.Mutex
+	dbs map[db.Sets]string
+}{dbs: map[db.Sets]string{}}
+
+// newMigratedDatabase is a database of its own next to the test's with sets' migrations
+// applied (cloned from a template migrated once per test binary), dropped at the end.
+// Tests needing an unmigrated database must call newDatabase instead.
+func newMigratedDatabase(t testing.TB, sets db.Sets) string {
+	t.Helper()
+	base := os.Getenv(dbtest.Env)
+	if base == "" {
+		t.Skip(dbtest.Env + " not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	migratedTemplates.Lock()
+	tpl, ok := migratedTemplates.dbs[sets]
+	if !ok {
+		url, err := dbtest.Template(ctx, base)
+		if err != nil {
+			migratedTemplates.Unlock()
+			t.Fatal(err)
+		}
+		d, err := db.Open(ctx, url, sets)
+		if err != nil {
+			migratedTemplates.Unlock()
+			t.Fatal(err)
+		}
+		d.Close()
+		tpl = db.DatabaseName(url)
+		migratedTemplates.dbs[sets] = tpl
+	}
+	migratedTemplates.Unlock()
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	name := "persona_owndb_t_" + hex.EncodeToString(b)
+	url, err := dbtest.Clone(ctx, base, tpl, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if admin, err := pgx.Connect(context.Background(), base); err == nil {
+			_, _ = admin.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
+			_ = admin.Close(context.Background())
+		}
+	})
+	return url
+}
+
 func execIn(t *testing.T, url, q string) {
 	t.Helper()
 	c, err := pgx.Connect(context.Background(), url+"&application_name=persona-test")
@@ -93,7 +144,7 @@ func countIn(t *testing.T, url, q string) int {
 // still in use, leaves it on the hub's database for that start, and once it moved it never goes back.
 func TestTheBuiltinManagerMovesItsData(t *testing.T) {
 	ctx := context.Background()
-	shared, own := newDatabase(t), newDatabase(t)
+	shared, own := newMigratedDatabase(t, db.AllSets), newDatabase(t)
 	hub, err := db.Open(ctx, shared, db.AllSets) // the database before the move: both sides' tables
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +226,7 @@ func TestTheBuiltinManagerMovesItsData(t *testing.T) {
 // the manager's: the hub's stay.
 func TestDropSharedTables(t *testing.T) {
 	ctx := context.Background()
-	shared, own := newDatabase(t), newDatabase(t)
+	shared, own := newMigratedDatabase(t, db.AllSets), newDatabase(t)
 	hub, err := db.Open(ctx, shared, db.AllSets)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +271,7 @@ func TestDropSharedTables(t *testing.T) {
 // A fresh install: the hub's database never had the manager's tables, and gets none; the manager starts on its own.
 func TestAFreshInstallStartsOnItsOwnDatabase(t *testing.T) {
 	ctx := context.Background()
-	shared, own := newDatabase(t), newDatabase(t)
+	shared, own := newMigratedDatabase(t, db.HubSet), newDatabase(t)
 	hub, err := db.Open(ctx, shared, db.HubSet)
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +361,7 @@ func providing(url string, created *bool) provisioner {
 // database is another, unknown one does not start on the stale copy either.
 func TestAStartThatDoesNotKnowTheMove(t *testing.T) {
 	ctx := context.Background()
-	shared, own := newDatabase(t), newDatabase(t)
+	shared, own := newMigratedDatabase(t, db.AllSets), newDatabase(t)
 	hub, err := db.Open(ctx, shared, db.AllSets)
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +394,7 @@ func TestAStartThatDoesNotKnowTheMove(t *testing.T) {
 // Two starts at once: one copies, the other waits for it and runs on what it copied.
 func TestTwoStartsAtOnce(t *testing.T) {
 	ctx := context.Background()
-	shared, own := newDatabase(t), newDatabase(t)
+	shared, own := newMigratedDatabase(t, db.AllSets), newDatabase(t)
 	hub, err := db.Open(ctx, shared, db.AllSets)
 	if err != nil {
 		t.Fatal(err)
@@ -378,7 +429,7 @@ func TestTwoStartsAtOnce(t *testing.T) {
 // again over its kept data starts.
 func TestALostOwnDatabase(t *testing.T) {
 	ctx := context.Background()
-	shared, own := newDatabase(t), newDatabase(t)
+	shared, own := newMigratedDatabase(t, db.AllSets), newDatabase(t)
 	hub, err := db.Open(ctx, shared, db.AllSets)
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +455,7 @@ func TestALostOwnDatabase(t *testing.T) {
 // start (a database it made is found again at the next).
 func TestNoMoveWithoutKeepingWhere(t *testing.T) {
 	ctx := context.Background()
-	shared, own := newDatabase(t), newDatabase(t)
+	shared, own := newMigratedDatabase(t, db.AllSets), newDatabase(t)
 	hub, err := db.Open(ctx, shared, db.AllSets)
 	if err != nil {
 		t.Fatal(err)

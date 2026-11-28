@@ -1,7 +1,7 @@
 {
   "hub_unreachable": "Can't reach the hub",
   "load_failed": "The terminal didn't load. Refresh the page and try again.",
-  "not_in_herdr": "The session isn't running in herdr",
+  "not_running_in": "The session isn't running in {engine}",
   "watch_only_computer": "This computer only allows watching, not control",
   "taken": "Another device took control of this terminal",
   "lost": "The terminal is back to the computer's size",

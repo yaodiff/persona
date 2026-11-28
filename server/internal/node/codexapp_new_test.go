@@ -366,7 +366,7 @@ func TestACodexAppStartRefusesWhatTheAppCannotRun(t *testing.T) {
 func TestTheCodexAppLauncherIsOfferedWhereTheAppRuns(t *testing.T) {
 	n, _, _, _ := codexAppNode(t)
 	list, added := n.withCodexAppLauncher([]proto.Launcher{{Name: "codex"}})
-	if !added || list[1] != (proto.Launcher{Name: "codex-app", Source: "codex_app", Agent: "codex"}) {
+	if !added || list[1] != (proto.Launcher{Name: "codex-app", Source: "codex_app", Agent: "codex", DisplayName: "Codex App"}) {
 		t.Fatalf("list %+v", list)
 	}
 	if models, err := n.launcherModels(context.Background(), "codex-app", "", false); err != nil || models.Agent != "codex" || len(models.Models) != 0 || models.Locked != "" {

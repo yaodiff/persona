@@ -197,7 +197,7 @@ final class RecentSetupsUITests: XCTestCase {
         see(app.buttons.matching(NSPredicate(format: "identifier == 'newChat.directory' AND label CONTAINS 'weather'")).firstMatch,
             "weather", timeout: 15)
         see(app.buttons["newChat.launcher"], "启动器 row").tap()
-        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'codex'")).firstMatch, "codex launcher").tap()
+        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Codex'")).firstMatch, "codex launcher").tap()
         see(app.buttons["newChat.model"], "模型 row", timeout: 15).tap()
         see(app.buttons["newChat.model.gpt-5.5-codex"], "a Codex model").tap()
         let go = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "开始对话")).firstMatch
@@ -247,7 +247,7 @@ final class RecentSetupsUITests: XCTestCase {
         let weather = app.buttons.matching(NSPredicate(format: "identifier == 'newChat.directory' AND label CONTAINS 'weather'")).firstMatch
         reveal(weather, "the card's folder")
         let launcher = reveal(app.buttons["newChat.launcher"], "启动器 row")
-        wait("the card's launcher") { says(launcher).contains("codex") }
+        wait("the card's launcher") { says(launcher).contains("Codex") }
         let codexModel = reveal(app.buttons["newChat.model"], "模型 row")
         wait("the card's model") { says(codexModel).contains("gpt-5.5-codex") }
         XCTAssertTrue(started.isEmpty, "a card only fills the form")
@@ -260,7 +260,7 @@ final class RecentSetupsUITests: XCTestCase {
         let modelRow = reveal(app.buttons["newChat.model"], "模型 row")
         wait("the card's model") { says(modelRow).localizedCaseInsensitiveContains("opus") }
         let launcherRow = reveal(app.buttons["newChat.launcher"], "启动器 row")
-        wait("follows Model Configuration again") { !says(launcherRow).isEmpty && !says(launcherRow).contains("codex") }
+        wait("follows Model Configuration again") { !says(launcherRow).isEmpty && !says(launcherRow).contains("Codex") }
         let modeRow = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH '权限模式'")).firstMatch, "权限模式 row")
         wait("Allow Everything") { modeRow.exists && modeRow.staticTexts["完全访问"].exists }
         let effortRow = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH '思考强度'")).firstMatch, "思考强度 row")

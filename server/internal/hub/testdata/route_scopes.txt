@@ -39,6 +39,8 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    /api/v1/plugins/
 -                    /api/v1/subscriptions
 -                    /api/v1/subscriptions/
+-                    /api/v1/text-lookup
+-                    /api/v1/text-lookup/
 -                    DELETE /api/v1/admin/devices/{credential_id}/owner
 -                    DELETE /api/v1/admin/devices/{id}
 -                    DELETE /api/v1/admin/extensions/{id}
@@ -74,6 +76,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/connectors/sent/chat-rules/{id}
 -                    DELETE /api/v1/connectors/{id}/archive
 -                    DELETE /api/v1/connectors/{id}/data
+-                    DELETE /api/v1/execution/channels/{name}
 -                    DELETE /api/v1/extensions/-/operations/{op}
 -                    DELETE /api/v1/extensions/{id}/-/dev
 -                    DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}
@@ -96,6 +99,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/machines/{mid}/held-starts/{op}
 -                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
+-                    DELETE /api/v1/model-profiles
 -                    DELETE /api/v1/model-profiles/{id}
 push.grading         DELETE /api/v1/push/grading/layer
 -                    DELETE /api/v1/push/web/{device}
@@ -105,6 +109,7 @@ push.grading         DELETE /api/v1/push/grading/layer
 -                    DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}
 -                    DELETE /api/v1/subscriptions/{id}
 -                    DELETE /api/v1/task-trust
+-                    DELETE /api/v1/text-lookup/words/{word}
 -                    DELETE /api/v1/todos/{id}
 todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
 -                    DELETE /api/v1/todos/{id}/blockers/{blockerId}
@@ -116,6 +121,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE {base}/bindings/{key}
 -                    DELETE {base}/bots/{bot}
 -                    DELETE {base}/markets/{mid}
+-                    DELETE {base}/markets/{mid}/keys/{kid}
 -                    GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json
 -                    GET /api/v1/admin/devices
 -                    GET /api/v1/admin/devices/{credential_id}/owner
@@ -139,6 +145,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    GET /api/v1/agent-shares/{share_id}
 -                    GET /api/v1/agent-shares/{share_id}/messages
 agents.read          GET /api/v1/agents
+-                    GET /api/v1/agents/botmux-owner-candidates
 -                    GET /api/v1/agents/display-settings
 -                    GET /api/v1/agents/hidden
 -                    GET /api/v1/agents/outbox
@@ -162,6 +169,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 spaces               GET /api/v1/assistant/conversations/{id}/categories
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
+-                    GET /api/v1/assistant/conversations/{id}/model/last-good
 -                    GET /api/v1/assistant/conversations/{id}/segments
 -                    GET /api/v1/assistant/conversations/{id}/switch/{operation}
 -                    GET /api/v1/assistant/directions/offers
@@ -182,11 +190,14 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/health/intake/changes
 -                    GET /api/v1/assistant/health/items
 -                    GET /api/v1/assistant/history
+-                    GET /api/v1/assistant/integrations
+-                    GET /api/v1/assistant/integrations/{kind}/{id}
 leaders.read         GET /api/v1/assistant/leaders
 machines.read        GET /api/v1/assistant/machine-resources
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/north-star
 -                    GET /api/v1/assistant/organization/snapshot
+-                    GET /api/v1/assistant/outbound-messages
 tasks.schedule       GET /api/v1/assistant/placement/pending
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
@@ -210,6 +221,7 @@ assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks/cron
 spaces               GET /api/v1/assistant/track-kinds
 spaces               GET /api/v1/assistant/tracks
+spaces               GET /api/v1/assistant/tracks/launchers
 spaces               GET /api/v1/assistant/tracks/{slug}/conversations
 spaces               GET /api/v1/assistant/tracks/{slug}/space-md
 -                    GET /api/v1/assistant/urgent-call
@@ -218,6 +230,7 @@ assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/auth/readonly-sessions
 -                    GET /api/v1/auth/tokens
 -                    GET /api/v1/bots/feishu
+-                    GET /api/v1/bots/feishu/group-access
 bots.feishu.identity GET /api/v1/bots/feishu/identity
 -                    GET /api/v1/channels
 -                    GET /api/v1/channels/{id}
@@ -233,6 +246,8 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/devices/{id}/prefs
 -                    GET /api/v1/devices/{id}/sessions
 -                    GET /api/v1/endpoints
+-                    GET /api/v1/execution/catalog
+-                    GET /api/v1/execution/channels
 -                    GET /api/v1/extensions
 -                    GET /api/v1/extensions/-/audit
 -                    GET /api/v1/extensions/-/catalog/{mid}/{id}/icon
@@ -347,6 +362,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/launchers/{name}/start-options
 -                    GET /api/v1/machines/{mid}/network
 -                    GET /api/v1/machines/{mid}/omp-settings
+-                    GET /api/v1/machines/{mid}/orca-chat-starts
 -                    GET /api/v1/machines/{mid}/panes
 -                    GET /api/v1/machines/{mid}/ports
 -                    GET /api/v1/machines/{mid}/ports/{port}
@@ -408,15 +424,20 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
 -                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
 -                    GET /api/v1/sessions/{mid}/{sid}/skills
+-                    GET /api/v1/settings/web-fonts
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
 -                    GET /api/v1/subscriptions/-/graph
 -                    GET /api/v1/subscriptions/catalog
 -                    GET /api/v1/subscriptions/summary
 -                    GET /api/v1/subscriptions/{id}
+-                    GET /api/v1/task-plans
 -                    GET /api/v1/task-plans/{id}
 -                    GET /api/v1/task-trust
+-                    GET /api/v1/text-lookup
 todos.read           GET /api/v1/todos
+-                    GET /api/v1/todos/decisions/groups
+-                    GET /api/v1/todos/mergetrain
 todos.read           GET /api/v1/todos/places
 -                    GET /api/v1/todos/revision
 todos.read           GET /api/v1/todos/{id}
@@ -427,11 +448,14 @@ todos.read           GET /api/v1/todos/{id}/decisions
 -                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
+-                    GET /api/v1/todos/{id}/trace
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
 todos.read           GET /api/v1/todos/{id}/workspace-rules
 -                    GET /api/v1/usage
 -                    GET /api/v1/usage/days
 -                    GET /api/v1/usage/hours
+-                    GET /api/v1/usage/projects
+-                    GET /api/v1/usage/projects/detail
 -                    GET /api/v1/usage/windows
 agents.read          GET /api/v1/workspace-board
 agents.read          GET /api/v1/workspace-board/activity
@@ -445,6 +469,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {base}/catalog
 -                    GET {base}/market-settings
 -                    GET {base}/markets
+-                    GET {base}/markets/{mid}/keys
 -                    GET {bus.Path}
 -                    GET {devicewire.DevelopmentPackagesPath}/{commit}/{version}/{file}
 -                    GET {devicewire.RelayPath}
@@ -500,6 +525,8 @@ agents.control       POST /api/v1/agents/sessions/{id}/read
 assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/archive
 -                    POST /api/v1/assistant/conversations/{id}/compact
+-                    POST /api/v1/assistant/conversations/{id}/inputs/resolve
+-                    POST /api/v1/assistant/conversations/{id}/model/restore
 -                    POST /api/v1/assistant/conversations/{id}/route
 assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/switch
@@ -529,6 +556,7 @@ leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/main/clear
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
+-                    POST /api/v1/assistant/outbound-messages
 tasks.schedule       POST /api/v1/assistant/placement/{todo_id}/assign
 tasks.schedule       POST /api/v1/assistant/placement/{todo_id}/defer
 -                    POST /api/v1/assistant/places
@@ -583,6 +611,8 @@ decisions.raise      POST /api/v1/decisions/{id}/withdraw
 -                    POST /api/v1/devices/{id}/lock-tests
 -                    POST /api/v1/devices/{id}/lock-tests/{test_id}/receipt
 -                    POST /api/v1/error-reports
+-                    POST /api/v1/execution/channels/rollback
+-                    POST /api/v1/execution/validate
 -                    POST /api/v1/extensions/-/dev
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
@@ -605,6 +635,7 @@ market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/hub/recovery/bundles/{id}/verify
 -                    POST /api/v1/hub/update
 -                    POST /api/v1/hub/update/backups/{id}/apply
+-                    POST /api/v1/hub/update/cancel
 -                    POST /api/v1/hub/update/check
 inbox.write          POST /api/v1/inbox/bulk
 inbox.write          POST /api/v1/inbox/done
@@ -639,6 +670,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/launchers/import/parse
 -                    POST /api/v1/launchers/test
 -                    POST /api/v1/launchers/{name}/check
+-                    POST /api/v1/launchers/{name}/refresh-key
 -                    POST /api/v1/launchers/{name}/restore
 -                    POST /api/v1/looks/uploads
 -                    POST /api/v1/machines/{id}/confirm
@@ -684,6 +716,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes/git
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
+-                    POST /api/v1/machines/{mid}/preview/grant
 -                    POST /api/v1/machines/{mid}/preview/start
 -                    POST /api/v1/machines/{mid}/processes/{pid}/kill
 -                    POST /api/v1/machines/{mid}/reconnect
@@ -708,6 +741,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/managers/{id}/code
 -                    POST /api/v1/managers/{id}/machines
 -                    POST /api/v1/managers/{id}/sources
+-                    POST /api/v1/model-profiles/deactivate
 -                    POST /api/v1/model-profiles/rollback
 -                    POST /api/v1/model-profiles/{id}/apply
 notify               POST /api/v1/notify
@@ -724,6 +758,7 @@ push.grading         POST /api/v1/push/grading/preview
 -                    POST /api/v1/recordings/{id}/minutes/todos
 -                    POST /api/v1/recordings/{id}/photos
 -                    POST /api/v1/recordings/{id}/segments
+-                    POST /api/v1/recordings/{id}/speakers
 -                    POST /api/v1/resources/{action}
 -                    POST /api/v1/saved-agent-searches
 agents.control       POST /api/v1/sessions
@@ -763,6 +798,8 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/task-plans/{id}/dismiss
 -                    POST /api/v1/task-plans/{id}/start
 -                    POST /api/v1/task-plans/{id}/workspace-preview
+-                    POST /api/v1/text-lookup/lookup
+-                    POST /api/v1/text-lookup/words
 todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/decisions/batch
 -                    POST /api/v1/todos/import/reminders
@@ -780,7 +817,9 @@ todos.write          POST /api/v1/todos
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/handoff
+-                    POST /api/v1/todos/{id}/merge
 -                    POST /api/v1/todos/{id}/retry
+-                    POST /api/v1/todos/{id}/split
 -                    POST /api/v1/todos/{id}/start/answer
 todos.write          POST /api/v1/todos/{id}/workspace-naming/plans
 todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
@@ -797,6 +836,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST {base}/bots/{bot}/scopes
 -                    POST {base}/catalog/preview
 -                    POST {base}/markets
+-                    POST {base}/markets/{mid}/keys
 -                    POST {base}/markets/{mid}/refresh
 -                    POST {base}/oauth
 -                    POST {bus.JoinPath}
@@ -845,11 +885,13 @@ spaces               PUT /api/v1/assistant/tracks/{slug}
 spaces               PUT /api/v1/assistant/tracks/{slug}/space-md
 -                    PUT /api/v1/assistant/urgent-call
 -                    PUT /api/v1/bots/feishu
+-                    PUT /api/v1/bots/feishu/group-access
 -                    PUT /api/v1/channels/{id}
 -                    PUT /api/v1/connectors/github/auth
 -                    PUT /api/v1/connectors/{id}/settings
 -                    PUT /api/v1/devices/{id}/prefs
 -                    PUT /api/v1/devices/{id}/widgets
+-                    PUT /api/v1/execution/channels/{name}
 -                    PUT /api/v1/extensions/-/upgrades
 -                    PUT /api/v1/extensions/{id}/-/auto-upgrade
 -                    PUT /api/v1/extensions/{id}/-/config
@@ -888,6 +930,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/herdr/sessions/blocked
 -                    PUT /api/v1/machines/{mid}/iphone
 -                    PUT /api/v1/machines/{mid}/omp-settings
+-                    PUT /api/v1/machines/{mid}/orca-chat-starts
 -                    PUT /api/v1/model-config/purposes/{id}
 -                    PUT /api/v1/model-profiles/{id}
 -                    PUT /api/v1/mutes
@@ -901,8 +944,10 @@ push.grading         PUT /api/v1/push/grading/layer
 -                    PUT /api/v1/recordings/{id}
 -                    PUT /api/v1/recordings/{id}/audio
 -                    PUT /api/v1/recordings/{id}/private
+-                    PUT /api/v1/recordings/{id}/speakers/turns
 -                    PUT /api/v1/recordings/{id}/title
 -                    PUT /api/v1/resources
+-                    PUT /api/v1/settings/web-fonts
 -                    PUT /api/v1/subscriptions/{id}
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          PUT /api/v1/todos/{id}/repositories

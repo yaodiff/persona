@@ -67,7 +67,7 @@ class ComposerModelLabelsShotsTest {
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             rule.waitForIdle()
-            rule.onNodeWithText("6.1 Sol").assertExists()
+            rule.onNodeWithText("GPT-6.1 Sol").assertExists()
             rule.onNodeWithText("gpt-6.1-sol").assertDoesNotExist()
             rule.onNodeWithText("输入消息").assertExists()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
@@ -83,10 +83,10 @@ class ComposerModelLabelsShotsTest {
             }
         }
         session = session.copy(model = "gpt-6.1")
-        rule.onNodeWithText("6.1").assertExists()
-        rule.onNodeWithText("6.1 Sol").assertDoesNotExist()
+        rule.onNodeWithText("GPT-6.1").assertExists()
+        rule.onNodeWithText("GPT-6.1 Sol").assertDoesNotExist()
         session = session.copy(model = "claude-opus-5-5")
-        rule.onNodeWithText("6.1").assertDoesNotExist()
+        rule.onNodeWithText("GPT-6.1").assertDoesNotExist()
         rule.onNodeWithText("claude-opus-5-5").assertDoesNotExist()
         session = session.copy(model = null)
         rule.onNodeWithText("输入消息").assertExists()

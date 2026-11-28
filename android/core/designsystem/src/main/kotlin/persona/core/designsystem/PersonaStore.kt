@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.LookCurrent
 import persona.core.contracts.api.PersonaInfo
+import persona.core.contracts.api.PersonaManifest
 import persona.core.contracts.api.PersonaPacks
 import persona.core.contracts.api.PersonaPacksUnsupported
 import java.io.File
@@ -37,7 +38,7 @@ import java.io.File
  */
 class PersonaStore(context: Context, private val style: AppStyleStore, private val packs: () -> PersonaPacks?) {
     private val app = context.applicationContext
-    private val root = File(app.filesDir, "personas")
+    private val root = rootDir(app)
     private val index = File(root, "index.json")
     private val thumbnails = File(root, ".thumbnails")
     private val lock = Mutex()
@@ -69,13 +70,11 @@ class PersonaStore(context: Context, private val style: AppStyleStore, private v
     @Volatile private var synced = false
     private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private fun directory(p: PersonaInfo) = File(File(root, p.id), p.rev)
+    private fun directory(p: PersonaInfo) = packageDir(root, p)
     fun onPhone(p: PersonaInfo) = directory(p).isDirectory
     private fun thumbnail(p: PersonaInfo) = File(thumbnails, "${p.id}-${p.rev}.png")
 
-    private fun readIndex(): List<PersonaInfo> = runCatching {
-        JsonCodec.decodeFromString<List<PersonaInfo>>(index.readText()).filter { it.usable }
-    }.getOrDefault(emptyList())
+    private fun readIndex(): List<PersonaInfo> = readIndexFile(index)
 
     /** Lists the hub's packages; the chosen one is downloaded when its rev is new, and revs nobody uses go. */
     suspend fun refresh() = lock.withLock {
@@ -293,6 +292,23 @@ class PersonaStore(context: Context, private val style: AppStyleStore, private v
     companion object {
         /** Settings' cards show faces 64 dp wide, at up to 3 pixels a dp. */
         const val THUMBNAIL_PX = 192
+
+        private fun rootDir(context: Context) = File(context.applicationContext.filesDir, "personas")
+        private fun packageDir(root: File, p: PersonaInfo) = File(File(root, p.id), p.rev)
+        private fun readIndexFile(file: File): List<PersonaInfo> = runCatching {
+            JsonCodec.decodeFromString<List<PersonaInfo>>(file.readText()).filter { it.usable }
+        }.getOrDefault(emptyList())
+
+        /**
+         * The chosen persona package's colours from disk when installed on this phone; null for built-ins or absent
+         * packages. Lets home-screen widgets follow [ThemeColor.Persona] without starting [PersonaStore] or hitting the hub.
+         */
+        fun currentColors(context: Context, personaId: String): PersonaManifest.Colors? {
+            val root = rootDir(context)
+            return readIndexFile(File(root, "index.json"))
+                .firstOrNull { it.id == personaId && packageDir(root, it).isDirectory }
+                ?.manifest?.colors
+        }
     }
 }
 

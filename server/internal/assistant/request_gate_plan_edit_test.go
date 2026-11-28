@@ -15,7 +15,7 @@ import (
 // Even when the edited slot is the claimed one, both changes must survive.
 func TestRequestPrerequisitesPlanEditPreservesConcurrentClaim(t *testing.T) {
 	ctx := t.Context()
-	url := newDatabase(t)
+	url := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(ctx, url, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

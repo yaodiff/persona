@@ -215,7 +215,7 @@ func TestProviderORProviderEditsDriveDeltasAndCounts(t *testing.T) {
 	deltaValues.Set("since", baseline.Revision)
 	delta := mustQuery(t, &index, providerORParse(t, deltaValues))
 	if got, want := sessionIDs(delta), []string{"demo:enter"}; !reflect.DeepEqual(got, want) ||
-		!reflect.DeepEqual(delta.Remove, []string{"demo:leave-two", "demo:leave-one"}) || len(delta.Added) != 0 || delta.Total != 2 {
+		!reflect.DeepEqual(delta.Remove, []string{"demo:leave-two", "demo:leave-one"}) || !reflect.DeepEqual(delta.Added, []string{"demo:enter"}) || delta.Total != 2 {
 		t.Fatalf("provider-edit delta = %+v, want enter %v and leave two rows", delta, want)
 	}
 	after, err := index.Counts(providerORParse(t, values))

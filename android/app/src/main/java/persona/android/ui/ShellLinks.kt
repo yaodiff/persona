@@ -223,7 +223,11 @@ internal fun resolveHubPage(page: HubPage, namespace: String?, sessions: List<Se
 
 /** Message and web links keep their existing direct-navigation behavior; cold starts apply the same route to the stacks. */
 private fun openResolvedHubPage(route: ResolvedRoute, navigator: Navigator): Boolean {
-    if (route.focusComposer) persona.feature.assistant.AssistantComposerFocus.request()
+    if (route.focusComposer) {
+        val chat = route.key as? ChatRoute
+        if (chat != null) persona.feature.chat.ChatComposerFocus.request(SessionKey(chat.machineId, chat.sessionId))
+        else persona.feature.assistant.AssistantComposerFocus.request()
+    }
     if (route.key == AssistantRoute) navigator.selectTab(route.tab) else navigator.navigate(route.key)
     return true
 }

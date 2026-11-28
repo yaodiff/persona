@@ -55,3 +55,23 @@ func TestSentReadChecksGrantedScope(t *testing.T) {
 		}
 	}
 }
+
+func TestKnowledgeImportScopeAlwaysNeedsSeparateConsent(t *testing.T) {
+	old := &Manifest{ID: "example", Version: "1.0.0", Permissions: Permissions{HubAPI: true}}
+	next := &Manifest{ID: "example", Version: "2.0.0", Permissions: Permissions{Hub: []string{ScopeKBImportStatus, ScopeSentRead}}}
+	installed := &Extension{Manifest: old, Full: old, Record: Record{Granted: old.Permissions, GrantedDigest: Digest(old)}}
+	if !MorePermissions(installed, next) || Digest(old) == Digest(next) || slices.Contains(EveryScope(), ScopeKBImportStatus) {
+		t.Fatal("a legacy full-hub grant must not carry import progress access on upgrade")
+	}
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		title, ok := ScopeTitleIn(lang, ScopeKBImportStatus)
+		if !ok || title == "" || strings.Contains(title, "extension-permissions.") {
+			t.Fatalf("%s: missing import scope translation", lang)
+		}
+		for _, lines := range [][]PermissionLine{ExplainIn(lang, next), AddedIn(lang, old, next)} {
+			if !slices.ContainsFunc(lines, func(l PermissionLine) bool { return l.Key == "hub" && strings.Contains(l.Detail, title) }) {
+				t.Fatalf("%s: missing import scope from consent", lang)
+			}
+		}
+	}
+}

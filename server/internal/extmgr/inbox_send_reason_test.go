@@ -92,6 +92,26 @@ func noSecrets(t *testing.T, what, text string) {
 	}
 }
 
+func TestInboxSenderOverrideCrossesAppBoundary(t *testing.T) {
+	for _, identity := range []string{"bot", "user"} {
+		t.Run(identity, func(t *testing.T) {
+			argsPath := filepath.Join(t.TempDir(), "args")
+			bin, runs := fakeLarkCLI(t, "printf '%s\\n' \"$*\" > '"+argsPath+"'\nprintf '{\"code\":0,\"data\":{}}\\n'")
+			h, _ := sendTestManager(t, bin, 5*time.Second)
+			raw, _ := json.Marshal(map[string]any{"source": cliwire.ConnectorID, "sender_identity": identity, "send_id": "selected-sender",
+				"reply": connector.InboxReply{Thread: "larkcli:chat:oc_example_chat", Text: "Example reply."}})
+			_, _, err := h.AppCall(context.Background(), assistantwire.AppCall{AppID: assistantwire.AppInbox, Method: assistantwire.InboxReply, Params: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args, err := os.ReadFile(argsPath)
+			if err != nil || !strings.Contains(string(args), "--as "+identity+" --format json") || fakeRuns(t, runs) != 1 {
+				t.Fatalf("selected sender did not reach the CLI exactly once: args=%q err=%v", args, err)
+			}
+		})
+	}
+}
+
 // Each way a reply through a connector fails comes back to the manager as one coded reason, with a fixed sentence and
 // nothing of what the CLI printed; the log says the kind, not the words. A refused send went nowhere, so its record is
 // forgotten and the same reply asked again is tried again (#9125).
@@ -103,6 +123,8 @@ func TestInboxReplyFailuresAreCoded(t *testing.T) {
 		name, thread, body, code string
 		missingBin               bool
 	}{
+		{name: "bot is not in the group", thread: chat, code: assistantwire.CodeInboxBotNotInChat,
+			body: stderr(`{"error":{"type":"api","code":230002,"message":"Bot not in the chat"}}`)},
 		{name: "not installed", thread: chat, missingBin: true, code: assistantwire.CodeInboxSourceUnavailable},
 		{name: "signed out", thread: chat, code: assistantwire.CodeInboxSourceSignedOut,
 			body: stderr(`{"error":{"type":"authentication","subtype":"not_logged_in","message":"t-EXAMPLE-SECRET-TOKEN: stderr"}}`)},

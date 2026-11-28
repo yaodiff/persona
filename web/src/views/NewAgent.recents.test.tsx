@@ -222,7 +222,7 @@ describe("New agent's recent setups (#2134)", () => {
     act(() => card("other").click());
     await flush();
     expect(folder()).toBe("/code/other");
-    expect(pill().title).toBe("Codex · Codex 5.5 · Codex");
+    expect(pill().title).toBe("Codex · Codex 5.5");
     expect(pill().querySelector("[data-pill-engine]")!.getAttribute("data-pill-engine")).toBe("codex");
     expect(card("other").getAttribute("aria-pressed")).toBe("true");
     expect(launched).toHaveLength(0);
@@ -236,10 +236,10 @@ describe("New agent's recent setups (#2134)", () => {
       setup({ machine: "studio", launcher: "claude", model: "sonnet" }),
     ]);
     await open();
-    expect(pill().title).toBe("Claude Code · Default · Claude Code"); // the Mac has no recent setup: the default
+    expect(pill().title).toBe("Claude Code · Default"); // the Mac has no recent setup: the default
     act(() => machineChip("Studio").click());
     await flush();
-    expect(pill().title).toBe("Claude Code · Opus 5.5 · Claude Code");
+    expect(pill().title).toBe("Claude Code · Opus 5.5");
     await pick("model:work\ndefault");
     expect(pill().title).toBe("Claude Code · Default · work");
     act(() => machineChip("MacBook").click());
@@ -251,7 +251,7 @@ describe("New agent's recent setups (#2134)", () => {
     localStorage.setItem("new.launcher.mac", "claude");
     seed([setup({ model: "sonnet" })]);
     await open();
-    expect(pill().title).toBe("Claude Code · Sonnet 5 · Claude Code");
+    expect(pill().title).toBe("Claude Code · Sonnet 5");
   });
 
   it("an offline computer's card is dimmed, says so, and can't be picked", async () => {

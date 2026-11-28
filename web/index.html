@@ -22,7 +22,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Persona</title>
     <!-- --page, light and dark: the page before the CSS bundle is in (the script below sets .dark first) -->
-    <style>html{background:#f1f1f4}html.dark{background:#0b0b0c}</style>
+    <style>html{background:#f1f1f4}html.dark{background:#0b0b0c}html[data-surface-style="liquid-glass"]{background:transparent}</style>
     <script src="compatibility-bootstrap.js"></script>
     <script>
       // Pick the theme before the first paint so a dark page never flashes white.
@@ -39,24 +39,40 @@
         // text size (src/ui/look.ts) too, so the first paint is at its size.
         var size = localStorage.getItem("persona.text-size");
         if (size === "small" || size === "large") document.documentElement.dataset.textSize = size;
+        // surface style (src/ui/look.ts): opt-in Liquid Glass before first paint.
+        if (localStorage.getItem("persona.surface-style") === "liquid-glass") {
+          document.documentElement.dataset.surfaceStyle = "liquid-glass";
+          var desktop = window.personaDesktop;
+          if (desktop && desktop.platform === "darwin" && typeof desktop.setSurfaceStyle === "function") {
+            document.documentElement.dataset.desktopGlass = "1";
+          }
+          var gt = Number(localStorage.getItem("persona.glass-translucency"));
+          var g = Number.isFinite(gt) && localStorage.getItem("persona.glass-translucency") ? Math.round(Math.min(100, Math.max(0, gt))) : 75;
+          document.documentElement.style.setProperty("--glass-t", (g / 100).toFixed(2));
+        }
       } catch (e) {}
     </script>
     <script>
-      // Browser-local fonts before first paint. Keep in sync with ui/font-preference.ts (contract-tested).
+      // Cached font choices before first paint. Keep in sync with ui/font-preference.ts (contract-tested).
       (function () {
         function refreshFonts() {
           var fonts;
           try { fonts = JSON.parse(localStorage.getItem("persona.font") || "null"); }
           catch (e) { fonts = null; }
-          var presets = { sans: { system: "system-ui", georgia: "Georgia", sourceHan: "Source Han Serif SC" }, mono: { system: "ui-monospace", menlo: "Menlo", consolas: "Consolas" } };
+          var presets = { sans: { inter: "Inter", system: "system-ui", georgia: "Georgia", sourceHan: "Source Han Serif SC" }, mono: { jetbrains: "JetBrains Mono", system: "ui-monospace", sfMono: "SF Mono", fira: "Fira Code", cascadia: "Cascadia Code", menlo: "Menlo", consolas: "Consolas" } };
           var fallbacks = {
             sans: 'Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif',
             mono: '"JetBrains Mono", "SF Mono", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, Menlo, Consolas, monospace'
           };
           var declarations = [];
+          var prose = "";
           ["sans", "mono"].forEach(function (kind) {
             var choice = fonts && typeof fonts === "object" && fonts[kind];
             if (!choice || typeof choice !== "object") return;
+            if (kind === "sans" && choice.preset === "serif") {
+              prose = '.prose-j { font-family: Georgia, "Songti SC", "Hiragino Mincho ProN", "Noto Serif CJK SC", "Source Han Serif SC", SimSun, serif; }';
+              return;
+            }
             var family = null;
             if (choice.preset === "custom" && typeof choice.family === "string" && choice.family.trim().length > 0 && choice.family.trim().length <= 100 && !/[\u0000-\u001f\u007f,;{}<>]/u.test(choice.family)) family = choice.family.trim();
             else if (typeof choice.preset === "string" && Object.hasOwn(presets[kind], choice.preset)) family = presets[kind][choice.preset];
@@ -66,7 +82,7 @@
             if (kind === "mono") declarations.push("--font-inline-code: var(--font-mono);");
           });
           var fontStyle = document.getElementById("persona-font");
-          if (!declarations.length) {
+          if (!declarations.length && !prose) {
             if (fontStyle) fontStyle.remove();
             return;
           }
@@ -75,7 +91,7 @@
             fontStyle.id = "persona-font";
             document.head.appendChild(fontStyle);
           }
-          var css = ":root { " + declarations.join(" ") + " }";
+          var css = (declarations.length ? ":root { " + declarations.join(" ") + " }" : "") + prose;
           if (fontStyle.textContent !== css) fontStyle.textContent = css;
         }
         refreshFonts();

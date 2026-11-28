@@ -39,5 +39,15 @@
   "bg_stalled_hours_other": "Background commands quiet for {count} hr",
   "bg_stalled_days_one": "Background command quiet for {count} day",
   "bg_stalled_days_other": "Background commands quiet for {count} days",
-  "bg_stalled_hint": "Its background commands have used no CPU and written no output for a while, so they may be stuck. It still counts as Working: a running tool is work, and whether to stop it is up to you."
+  "bg_stalled_hint": "Its background commands have used no CPU and written no output for a while, so they may be stuck. It still counts as Working: a running tool is work, and whether to stop it is up to you.",
+  "phase_idle": "Idle",
+  "error": "Error",
+  "background": "Working in the background",
+  "model_error": "The model returned an error",
+  "terminal_dialog": "Waiting for a terminal response",
+  "cards_held": "Waiting for review",
+  "cards_other": "{count} pending requests",
+  "restarted": "Computer restarted",
+  "cards_one": "{count} pending request",
+  "restarted_resumable": "Computer restarted · Continue to resume"
 }

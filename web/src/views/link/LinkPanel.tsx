@@ -353,11 +353,13 @@ function DocBody({
 
 function Unsupported({ content, url }: { content: Extract<DocContent, { kind: "unsupported" }>; url: string }) {
   const manager = useLinkManager();
+  const imageSrc = content.image ? mediaURL(content.image, manager) : "";
+  const fileHref = content.file ? mediaURL(`/api/v1/lark/raw/documents/drive/files/${enc(content.file)}/download`, manager) : "";
   return (
     <div className="flex flex-col items-center gap-3 pt-12 text-center" style={{ animation: `fade-up 300ms ${EASE} both` }}>
-      {content.image ? (
-        <a href={mediaURL(content.image, manager)} target="_blank" rel="noreferrer noopener" className="block w-full">
-          <img src={mediaURL(content.image, manager)} alt={content.title} className="w-full rounded-card bg-inset shadow-hairline" />
+      {imageSrc ? (
+        <a href={imageSrc} target="_blank" rel="noreferrer noopener" className="block w-full">
+          <img src={imageSrc} alt={content.title} className="w-full rounded-card bg-inset shadow-hairline" />
         </a>
       ) : (
         <span className="flex size-14 items-center justify-center rounded-[14px] bg-field text-ink-2">
@@ -369,16 +371,16 @@ function Unsupported({ content, url }: { content: Extract<DocContent, { kind: "u
         <div className="mt-1 text-[12.5px] text-ink-2">{content.message}</div>
       </div>
       <div className="mt-2 flex flex-wrap justify-center gap-2">
-        {content.file && (
+        {fileHref && (
           <a
-            href={mediaURL(`/api/v1/lark/raw/documents/drive/files/${enc(content.file)}/download`, manager)}
+            href={fileHref}
             download
             className="inline-flex h-8 items-center gap-1.5 rounded-control bg-ink px-3 text-[12.5px] font-medium whitespace-nowrap text-surface"
           >
             <Icon name="arrowDown" size={14} stroke={2.1} /> {t("link-linkpanel.download")}
           </a>
         )}
-        <Button tone={content.file ? "secondary" : "primary"} icon="external" onClick={() => openTab(url)}>
+        <Button tone={fileHref ? "secondary" : "primary"} icon="external" onClick={() => openTab(url)}>
           {t("link-linkpanel.open_tab")}
         </Button>
       </div>

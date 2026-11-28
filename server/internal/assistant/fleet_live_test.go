@@ -37,7 +37,8 @@ func TestBuildFleet(t *testing.T) {
 	muted := agent("muted", proto.StateWorking, nil)
 	muted.Muted = true
 	agents = append(agents, muted)
-	ixs := []proto.Interaction{{ID: "ix1", MachineID: "m", SessionID: "p", Kind: proto.IxPermission, Summary: "Bash: go test ./...", CreatedAt: t0}}
+	occurrence := t0.Add(123456789 * time.Nanosecond)
+	ixs := []proto.Interaction{{ID: "ix1", MachineID: "m", SessionID: "p", Kind: proto.IxPermission, Summary: "Bash: go test ./...", CreatedAt: occurrence}}
 
 	st := buildFleet(agents, ixs)
 	if st.Phase != "needsYou" || st.NeedsYou != 1 || st.Working != 2 || st.Unread != 1 {
@@ -52,6 +53,14 @@ func TestBuildFleet(t *testing.T) {
 	}
 	if first.Place != "box · web" { // slot "2" is just the index: not repeated
 		t.Fatalf("place %q", first.Place)
+	}
+	raw, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if json.Unmarshal(raw, &wire) != nil || wire["interactionCreatedAt"] != occurrence.Format(time.RFC3339Nano) {
+		t.Fatalf("Live Activity occurrence = %v, want %s (item %s)", wire["interactionCreatedAt"], occurrence.Format(time.RFC3339Nano), raw)
 	}
 	if st.Items[1].ID != "m/w1" || st.Items[2].ID != "m/w2" {
 		t.Fatalf("working order %+v", st.Items)

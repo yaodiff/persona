@@ -11,12 +11,13 @@ describe("zh-Hans words that were English", () => {
     expect(t("work-session.harness_changed")).not.toMatch(/harness/i);
   });
 
-  it("names the rename dialog's tab field in Chinese, herdr kept as the engine's name", () => {
-    expect(t("chat-sessiondialogs.tab_name")).toBe("herdr 标签名");
+  it("names the rename dialog's tab field in Chinese, the session's engine kept by its name", () => {
+    expect(t("chat-sessiondialogs.tab_name", { engine: "herdr" })).toBe("herdr 标签名");
+    expect(t("chat-sessiondialogs.tab_name", { engine: "Orca" })).toBe("Orca 标签名");
   });
 
   it("heads the palette's node commands in the menus' words", () => {
-    expect(t("lib-node-palette.section_pane", { name: "整理发布说明" })).toBe("窗格 · 整理发布说明");
+    expect(t("lib-node-palette.section_pane", { name: "整理发布说明" })).toBe("终端 · 整理发布说明");
     expect(t("lib-node-palette.section_tab", { name: "zsh" })).toBe("标签页 · zsh");
     expect(t("lib-node-palette.section_space", { name: "weather" })).toBe("空间 · weather");
   });

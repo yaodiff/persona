@@ -10,15 +10,22 @@ import type { Interaction } from "../../lib/types";
 import { Button, Kbd, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
+import { isCommandInput, permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
 import { DIFF_TOOLS, DiffBlocks, editDiffs } from "./ActionRow";
 import { useChatCardTapGuard } from "./card-tap-guard";
+import { CommandInputCard } from "./CommandInputCard";
 import { Card, CODE_BOX, permissionFrom, resolve, useCardKeys } from "./Interactions";
 import { usePermissionText } from "./permission-text";
 
 const ApprovalQuestion = lazyPage(() => import("./ApprovalQuestion").then((m) => m.ApprovalQuestion));
 
+/** A permission card: a command waiting for a line (#14527) has a card of its own, in this chunk so the chat's first
+ *  screen carries none of it; any other is a tool approval. */
 export function PermissionCard({ ix }: { ix: Interaction }) {
+  return isCommandInput(ix) ? <CommandInputCard ix={ix} /> : <ToolPermissionCard ix={ix} />;
+}
+
+function ToolPermissionCard({ ix }: { ix: Interaction }) {
   const [busy, setBusy] = useState(false);
   const [replyBusy, setReplyBusy] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
@@ -55,7 +62,7 @@ export function PermissionCard({ ix }: { ix: Interaction }) {
       title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true })}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true })}
       busy={busy || replyBusy}
       footer={
         <>

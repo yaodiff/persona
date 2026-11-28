@@ -38,6 +38,10 @@ func newPublisher(t *testing.T, version string, build int64) *fakePublisher {
 	return newPublisherWith(t, version, build, func(*update.Manifest) {})
 }
 
+func testFeedPath() string {
+	return "/dl/" + update.FeedName(update.ThisEdition)
+}
+
 // newPublisherWith is newPublisher with the manifest changed first (its commit and ancestors).
 func newPublisherWith(t *testing.T, version string, build int64, edit func(*update.Manifest)) *fakePublisher {
 	t.Helper()
@@ -49,15 +53,23 @@ func newPublisherWith(t *testing.T, version string, build int64, edit func(*upda
 		Files: map[string]update.File{runtime.GOOS + "-" + runtime.GOARCH: {Name: name, Size: int64(len(gz)),
 			SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}}}
 	edit(&m)
+	// The fixture is a release of the binary under test: a core-only hub reads and accepts only the core feed.
+	m.Edition = update.ThisEdition.Marker()
+	plat := runtime.GOOS + "-" + runtime.GOARCH
+	file := m.Files[plat]
+	if update.ThisEdition.Marker() != "" {
+		file.Served = update.ThisEdition.Served(file.Name)
+	}
+	m.Files[plat] = file
 	data, _ := json.Marshal(m)
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p.asked != nil {
 			p.asked(r.URL.Path)
 		}
 		switch r.URL.Path {
-		case "/dl/latest.json":
+		case testFeedPath():
 			w.Write(data)
-		case "/dl/" + name:
+		case "/dl/" + file.Remote():
 			if p.corrupt {
 				w.Write(bytes.Repeat([]byte{0}, len(gz)))
 				return
@@ -761,8 +773,8 @@ func TestUpdateNodesBinariesInPlace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.gz")); !os.IsNotExist(err) {
 		t.Fatal("the download itself went in with the binaries")
 	}
-	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.version")); !os.IsNotExist(err) {
-		t.Fatal("the old build's version file stayed beside the release's")
+	if b, err := os.ReadFile(filepath.Join(nodes, "personad-darwin-arm64.version")); err != nil || string(b) != "v2\n" {
+		t.Fatalf("package version = %q, %v", b, err)
 	}
 	_ = local // the manager decides what to redeploy (internal/devices TestUpdateNodesSkipsTheHubsOwn)
 }
@@ -781,16 +793,24 @@ func TestUpdateDownloadsEveryNodePlatformInTheRelease(t *testing.T) {
 			body := gz(script)
 			sum, binSum := sha256.Sum256(body), sha256.Sum256(script)
 			name := "personad-" + plat + ".gz"
-			m.Files[plat] = update.File{Name: name, Size: int64(len(body)),
+			f := update.File{Name: name, Size: int64(len(body)),
 				SHA256: hex.EncodeToString(sum[:]), BinarySHA256: hex.EncodeToString(binSum[:])}
-			served["/dl/"+name] = body
+			if update.ThisEdition.Marker() != "" {
+				f.Served = update.ThisEdition.Served(name)
+			}
+			m.Files[plat] = f
+			served["/dl/"+f.Remote()] = body
 		}
 		// A Windows build keeps its .exe (#10968): releases up to 0.9.1 left it out, and the hub kept the old one.
 		body := gz(script)
 		sum, binSum := sha256.Sum256(body), sha256.Sum256(script)
-		m.Files["windows-amd64"] = update.File{Name: "personad-windows-amd64.exe.gz", Size: int64(len(body)),
+		f := update.File{Name: "personad-windows-amd64.exe.gz", Size: int64(len(body)),
 			SHA256: hex.EncodeToString(sum[:]), BinarySHA256: hex.EncodeToString(binSum[:])}
-		served["/dl/personad-windows-amd64.exe.gz"] = body
+		if update.ThisEdition.Marker() != "" {
+			f.Served = update.ThisEdition.Served(f.Name)
+		}
+		m.Files["windows-amd64"] = f
+		served["/dl/"+f.Remote()] = body
 	})
 	p.extra = served
 	var mu sync.Mutex
@@ -832,7 +852,8 @@ func TestUpdateDownloadsEveryNodePlatformInTheRelease(t *testing.T) {
 	}
 	mu.Unlock()
 	for _, plat := range want {
-		if path := "/dl/personad-" + plat + ".gz"; counts[path] != 1 {
+		path := "/dl/" + update.ThisEdition.Served("personad-"+plat+".gz")
+		if counts[path] != 1 {
 			t.Fatalf("%s was fetched %d times, want 1 (all fetches: %v)", path, counts[path], counts)
 		}
 	}

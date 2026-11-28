@@ -1,5 +1,7 @@
 // One owner-bound page on the existing authenticated app socket. No automatic write retries.
 import { credentialOwner } from "./api";
+import { safeWebURL } from "./format";
+import { composeText } from "./extension-ui";
 import { appSocketReady, getState, onAppSocket, onPrivateUIStream, send } from "./store";
 import { decodeStreamEnvelope, ExtensionUIStreamSession, NATIVE_STREAM_COMPONENTS, STREAM_LIMITS, same, type StreamPageOptions } from "./extension-ui-stream";
 import type { Action, UIStreamActionResult, UIStreamEvent, UIStreamReceipt, UIStreamRequest } from "./extension-wire";
@@ -101,8 +103,12 @@ export class AppUIStreamPage {
         if (r.status !== "rejected" && r.version !== event.version + 1) throw new Error("Invalid consumed-event fence");
         if (new TextEncoder().encode(JSON.stringify(r.result ?? {})).length > 64 * 1024 || new TextEncoder().encode(r.result?.push?.state ?? "").length > 16 * 1024) throw new Error("Receipt result byte limit");
         if (r.result?.open_url) {
-          const url = new URL(r.result.open_url);
-          if (url.protocol !== "https:" || url.username || url.password) throw new Error("Unsafe receipt URL");
+          // The one in-app link a receipt may carry: a page's own quick prompt (persona://compose?prompt=<id>&text=<text>),
+          // which the hub matched against the extension's manifest (extmgr.checkOpenURL); the page puts its text in the
+          // composer (NativeExtensionUI). Every other URL stays credential-free https.
+          if (!composeText(r.result.open_url) && !safeWebURL(r.result.open_url, true)) {
+            throw new Error("Unsafe receipt URL");
+          }
         }
         const old = this.receipts.get(this.identity(r));
         if (old && !same(old, r)) throw new Error("Conflicting receipt replay");

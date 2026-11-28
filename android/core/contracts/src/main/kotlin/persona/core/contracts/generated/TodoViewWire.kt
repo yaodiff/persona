@@ -244,6 +244,7 @@ sealed interface TodoLineKey {
     data object FailedStart : TodoLineKey { override val raw: String = "failed_start" }
     data object AgentAsks : TodoLineKey { override val raw: String = "agent_asks" }
     data object Interrupted : TodoLineKey { override val raw: String = "interrupted" }
+    data object StoppedUnfinished : TodoLineKey { override val raw: String = "stopped_unfinished" }
     data object Decision : TodoLineKey { override val raw: String = "decision" }
     data object DecisionDefault : TodoLineKey { override val raw: String = "decision_default" }
     data object Cannot : TodoLineKey { override val raw: String = "cannot" }
@@ -270,12 +271,13 @@ sealed interface TodoLineKey {
     data class Unknown(override val raw: String) : TodoLineKey
 
     companion object {
-        val ALL: List<TodoLineKey> = listOf(TodoLineKey.FailedStart, TodoLineKey.AgentAsks, TodoLineKey.Interrupted, TodoLineKey.Decision, TodoLineKey.DecisionDefault, TodoLineKey.Cannot, TodoLineKey.AwaitsReply, TodoLineKey.Working, TodoLineKey.PersonaWorking, TodoLineKey.Starting, TodoLineKey.Background, TodoLineKey.Parked, TodoLineKey.Finished, TodoLineKey.Accepted, TodoLineKey.Deployed, TodoLineKey.PrOpen, TodoLineKey.UsageLimit, TodoLineKey.RunWaits, TodoLineKey.FinishedSeen, TodoLineKey.Completed, TodoLineKey.Canceled, TodoLineKey.Reported, TodoLineKey.Superseded, TodoLineKey.Someday)
+        val ALL: List<TodoLineKey> = listOf(TodoLineKey.FailedStart, TodoLineKey.AgentAsks, TodoLineKey.Interrupted, TodoLineKey.StoppedUnfinished, TodoLineKey.Decision, TodoLineKey.DecisionDefault, TodoLineKey.Cannot, TodoLineKey.AwaitsReply, TodoLineKey.Working, TodoLineKey.PersonaWorking, TodoLineKey.Starting, TodoLineKey.Background, TodoLineKey.Parked, TodoLineKey.Finished, TodoLineKey.Accepted, TodoLineKey.Deployed, TodoLineKey.PrOpen, TodoLineKey.UsageLimit, TodoLineKey.RunWaits, TodoLineKey.FinishedSeen, TodoLineKey.Completed, TodoLineKey.Canceled, TodoLineKey.Reported, TodoLineKey.Superseded, TodoLineKey.Someday)
 
         fun of(raw: String): TodoLineKey = when (raw) {
             "failed_start" -> TodoLineKey.FailedStart
             "agent_asks" -> TodoLineKey.AgentAsks
             "interrupted" -> TodoLineKey.Interrupted
+            "stopped_unfinished" -> TodoLineKey.StoppedUnfinished
             "decision" -> TodoLineKey.Decision
             "decision_default" -> TodoLineKey.DecisionDefault
             "cannot" -> TodoLineKey.Cannot

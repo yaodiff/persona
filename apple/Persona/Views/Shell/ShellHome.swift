@@ -235,6 +235,9 @@ struct ShellNeedsYou: View {
         #endif
         // The current assistant's, as its Agents and Inbox pages list them.
         let agents = model.scopedInteractions.filter { !model.isMuted($0.sessionKey) }.map(Line.agent)
+        #if os(iOS)
+        if model.hiddenNavigationPages.contains(.inbox) { return agents }
+        #endif
         let inbox = InboxStore.shared.scopedItems
             .filter { !$0.isDone && $0.triage == .action }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }

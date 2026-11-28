@@ -28,7 +28,7 @@ import (
 // errNotReady: the run was skipped because the computer or the model is not set up yet.
 var errNotReady = i18n.Err("assistant-schedule.not_ready_skipped")
 
-// feedNotice is a line the hub writes into a conversation (ref empty; body: {"text"}).
+// feedNotice is a line the hub writes into a conversation (ref is the to-do ID for a task notice; body: {"text"}).
 const feedNotice = "notice"
 
 // noticeBody is a notice's body.

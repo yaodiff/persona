@@ -36,4 +36,30 @@ struct AnsweringInteractionsTests {
         a.begin("ix1") // answered again later: a fresh start
         #expect(a.putsBack("ix1"))
     }
+
+    @Test func anOldCompletionCannotClearAReplacementInFlight() {
+        var a = AnsweringInteractions()
+        a.begin("ix1", occurrence: "2026-11-21T12:00:00Z")
+        a.begin("ix1", occurrence: "2026-11-21T12:00:01Z")
+        a.finish("ix1", occurrence: "2026-11-21T12:00:00Z")
+        #expect(a.contains("ix1"))
+        a.hubEnded("ix1", occurrence: "2026-11-21T12:00:01Z")
+        #expect(!a.putsBack("ix1", occurrence: "2026-11-21T12:00:01Z"))
+    }
+
+    @Test func anOldHubEndAndFailureCannotEndOrRestoreAReplacement() {
+        var a = AnsweringInteractions()
+        a.begin("ix1", occurrence: "2026-11-21T12:00:00Z")
+        a.begin("ix1", occurrence: "2026-11-21T12:00:01Z")
+        a.hubEnded("ix1", occurrence: "2026-11-21T12:00:00Z")
+        #expect(a.putsBack("ix1", occurrence: "2026-11-21T12:00:01Z"))
+        #expect(!a.putsBack("ix1", occurrence: "2026-11-21T12:00:00Z"))
+    }
+
+    @Test func equivalentOccurrenceTextStillIdentifiesTheSameFlight() {
+        var a = AnsweringInteractions()
+        a.begin("ix1", occurrence: "2026-11-21T20:00:00.123456789+08:00")
+        a.hubEnded("ix1", occurrence: "2026-11-21T12:00:00.123456789Z")
+        #expect(!a.putsBack("ix1", occurrence: "2026-11-21T20:00:00.123456789+08:00"))
+    }
 }

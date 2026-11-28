@@ -1,12 +1,12 @@
 {
-  "page_title": "找不到这个页面",
-  "page_detail": "地址可能打错了，或者这个页面已经不在了。",
-  "page_back": "回到总览",
-  "agent_title": "找不到这个对话",
-  "agent_detail": "它可能已经被删掉了，或者链接不完整。",
-  "agent_back": "回到个人 Agent 列表",
-  "todo_gone": "找不到这个待办，可能已经删掉了。",
-  "kb_title": "找不到这一条",
-  "kb_detail": "它可能已经被删掉或改了名字。",
-  "kb_gone": "找不到这一条，可能已经删掉或改了名字。"
+  "page_title": "找不到页面",
+  "page_detail": "访问地址可能有误，或该页面已不存在。",
+  "page_back": "返回总览",
+  "agent_title": "找不到该对话",
+  "agent_detail": "该对话可能已被删除，或链接不完整。",
+  "agent_back": "返回个人 Agent 列表",
+  "todo_gone": "该待办已不存在，可能已被删除。",
+  "kb_title": "找不到该条目",
+  "kb_detail": "该条目可能已被删除或重命名。",
+  "kb_gone": "该条目已不存在，可能已被删除或重命名。"
 }

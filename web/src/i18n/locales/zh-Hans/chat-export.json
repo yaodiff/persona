@@ -1,17 +1,17 @@
 {
   "title": "导出对话",
-  "intro": "把整段对话从第一条消息到最后一条存成一个 Markdown 文件。",
+  "intro": "将整段对话（从第一条消息到最后一条消息）保存为 Markdown 文件。",
   "work": "包含工作步骤",
-  "work_hint": "工具调用及其结果、思考过程，以及 Agent 在两次回复之间说的话。",
-  "reading": "正在读取对话… 已读 {n} 条",
+  "work_hint": "包含工具调用及其结果、思考过程，以及 Agent 在回复之间输出的说明。",
+  "reading": "正在读取对话… 已读取 {n} 条",
   "ready": "{n} 条消息 · {size}",
-  "partial_note": "部分消息未能读取；最早保留的消息时间为 {from}。",
+  "partial_note": "部分消息未能读取，最早保留的消息时间为 {from}。",
   "partial_unknown": "部分消息未能读取。",
-  "changed": "读取过程中对话变了，请重试。",
+  "changed": "读取过程中对话内容发生了变化，请重试。",
   "retry": "重试",
   "copy": "复制",
   "download": "下载 .md",
-  "copied": "已把对话复制为 Markdown。",
+  "copied": "已将对话复制为 Markdown。",
   "downloaded": "已保存 {name}。",
   "you": "你",
   "from": "来自 {name}",
@@ -26,6 +26,6 @@
   "image": "图片",
   "visualization": "可视化",
   "cut_unknown": "部分内容未导出。",
-  "cut": "还有 {n} 个字没有导出",
-  "partial": "部分消息未能读取；最早保留的消息时间为 {from}。"
+  "cut": "另有 {n} 个字符未导出",
+  "partial": "部分消息未能读取，最早保留的消息时间为 {from}。"
 }

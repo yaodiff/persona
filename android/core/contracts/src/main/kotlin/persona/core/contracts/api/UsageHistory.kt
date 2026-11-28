@@ -84,6 +84,88 @@ data class UsageHours(
     val agents: List<UsageAgentShare> = emptyList(),
 )
 
+/** One project's tokens in one of the three ranges. */
+@Serializable
+data class UsageProject(
+    val key: String = "",
+    val kind: String = "unknown",
+    val group: String = "unknown",
+    val name: String = "",
+    val host: String? = null,
+    val machines: Int = 0,
+    val share: Double = 0.0,
+    val tokens: UsageTokens = UsageTokens(),
+)
+
+@Serializable
+data class UsageProjectRange(
+    val days: Int = 0,
+    val total: UsageTokens = UsageTokens(),
+    val projects: List<UsageProject> = emptyList(),
+    @SerialName("not_split") val notSplit: UsageTokens = UsageTokens(),
+)
+
+@Serializable
+data class UsageProjects(
+    val zone: String = "",
+    val ranges: List<UsageProjectRange> = emptyList(),
+    val stored: Boolean = false,
+)
+
+/** One named part of a project's breakdown. */
+@Serializable
+data class UsagePart(
+    val key: String = "",
+    val name: String? = null,
+    val tokens: UsageTokens = UsageTokens(),
+)
+
+/** One folder or linked worktree a project used on a computer. */
+@Serializable
+data class UsagePlace(
+    val machine: String = "",
+    @SerialName("machine_name") val machineName: String? = null,
+    val place: String = "",
+    val worktree: Boolean = false,
+    val tokens: UsageTokens = UsageTokens(),
+)
+
+@Serializable
+data class UsageProjectBreakdown(
+    val days: Int = 0,
+    val total: UsageTokens = UsageTokens(),
+    val share: Double = 0.0,
+    @SerialName("cache_hit") val cacheHit: Double = 0.0,
+    val machines: List<UsagePart> = emptyList(),
+    val agents: List<UsagePart> = emptyList(),
+    val models: List<UsagePart> = emptyList(),
+    val launchers: List<UsagePart> = emptyList(),
+    val places: List<UsagePlace> = emptyList(),
+)
+
+@Serializable
+data class UsageProjectDay(
+    val date: String = "",
+    val tokens: UsageTokens = UsageTokens(),
+)
+
+@Serializable
+data class UsageProjectHour(
+    val t: Long = 0,
+    val hour: Int = 0,
+    val tokens: UsageTokens = UsageTokens(),
+)
+
+@Serializable
+data class UsageProjectDetail(
+    val zone: String = "",
+    val project: UsageProject = UsageProject(),
+    val ranges: List<UsageProjectBreakdown> = emptyList(),
+    val days: List<UsageProjectDay> = emptyList(),
+    val hours: List<UsageProjectHour> = emptyList(),
+    val stored: Boolean = false,
+)
+
 /** Token history for the selected assistant's manager. */
 interface UsageHistoryApi {
     /** GET /api/v1/usage/days: at most 371 complete daily buckets, oldest first and today last. */
@@ -91,4 +173,10 @@ interface UsageHistoryApi {
 
     /** GET /api/v1/usage/hours: one to seven days by the clock, including repeated clock-change hours. */
     suspend fun usageHours(days: Int = 7): UsageHours
+
+    /** GET /api/v1/usage/projects: today, the last 3 and 7 days; null from a hub before the route. */
+    suspend fun usageProjects(): UsageProjects?
+
+    /** GET /api/v1/usage/projects/detail: one project's same three ranges and its days, hours and parts. */
+    suspend fun usageProjectDetail(key: String): UsageProjectDetail
 }

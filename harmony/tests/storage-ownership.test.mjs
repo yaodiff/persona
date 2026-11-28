@@ -5,7 +5,7 @@ import { isHubStateKey } from '../entry/src/main/ets/core/StorageOwnership.ts';
 test('forgetting a Hub matches every manager cache and operation without prefix collisions',()=>{
  for(const hub of ['hub-a','hub:["quoted"]\\name'])for(const manager of ['personal','work']){
   const scope=JSON.stringify([hub,manager]),target=JSON.stringify([scope,'session','machine','session']);
-  for(const key of ['snapshot:'+scope,'outbox:'+scope,'outbox:'+scope+':op-id','mutations:'+scope+':id','view:'+scope+':navigation','draft:'+target,'transcript:'+target,'attachments:'+JSON.stringify([hub,manager,'machine','session'])]){
+  for(const key of ['snapshot:'+scope,'outbox:'+scope,'outbox:'+scope+':op-id','mutations:'+scope+':id','view:'+scope+':navigation','xiaoyi:'+scope+':a2a-contexts','xiaoyi:'+scope+':push-outbox','draft:'+target,'transcript:'+target,'attachments:'+JSON.stringify([hub,manager,'machine','session'])]){
    assert.equal(isHubStateKey(key,hub),true,key);assert.equal(isHubStateKey(key,hub+'-other'),false,key);
   }
  }

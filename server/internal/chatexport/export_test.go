@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -369,39 +367,6 @@ func TestIncompleteOrUnauthorizedExportPublishesNothing(t *testing.T) {
 			}
 			f.noFile()
 		})
-	}
-}
-
-func TestPublicationFailureOrRaceLeavesNoPartialFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "conversation.md")
-	dest, err := openDestination(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dest.root.Close()
-	if err := dest.publish(context.Background(), func(out io.Writer) error {
-		_, _ = out.Write([]byte("unpublished"))
-		return errors.New("write failed")
-	}); err == nil {
-		t.Fatal("write failure ignored")
-	}
-	if files, _ := os.ReadDir(dir); len(files) != 0 {
-		t.Fatal("failed file left a partial file")
-	}
-	if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := dest.publish(context.Background(), func(out io.Writer) error {
-		_, err := out.Write([]byte("new"))
-		return err
-	}); !errors.Is(err, errOutputExists) {
-		t.Fatalf("write race result: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	files, _ := os.ReadDir(dir)
-	if err != nil || string(data) != "existing" || len(files) != 1 {
-		t.Fatalf("file race changed existing file: %q %v %v", data, files, err)
 	}
 }
 

@@ -204,6 +204,38 @@ func TestDurableHistoryDefaultOnAssistantScopeAndOfflineRestart(t *testing.T) {
 	}
 }
 
+func TestInlineViewSourceReadBypassesDurableHistory(t *testing.T) {
+	s, _, database, rt := historyFixture(t)
+	ctx := t.Context()
+	const sid = "side-chat"
+	if err := s.historySync(ctx, database, "server", proto.Session{SessionID: sid, Assistant: true, Rev: 100}); err != nil {
+		t.Fatal(err)
+	}
+	// Native export can replace a provisional item ID without changing the session revision.
+	rt.mu.Lock()
+	rt.items[len(rt.items)-1].ID = "exported#0"
+	rt.mu.Unlock()
+	params := map[string]any{"session_id": sid, "turns": 1, "lazy_images": true}
+	for _, tt := range []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{name: "normal read", ctx: ctx, want: "a3"},
+		{name: "inline view source read", ctx: context.WithValue(ctx, inlineViewSourceKey{}, true), want: "exported#0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var page historyPage
+			if err := s.call(tt.ctx, "server", DeviceSessionItems, params, &page); err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Items) != 2 || page.Items[1].ID != tt.want {
+				t.Fatalf("read returned %+v, want last item %q", page.Items, tt.want)
+			}
+		})
+	}
+}
+
 func TestDurableHistoryIncrementalGenerationAndRollback(t *testing.T) {
 	s, f, database, rt := historyFixture(t)
 	c := proto.Session{SessionID: "main-chat", Assistant: true, Rev: 100}

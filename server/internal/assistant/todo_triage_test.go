@@ -174,6 +174,37 @@ func TestTriageLeavesDismissedAgentsOut(t *testing.T) {
 	}
 }
 
+func TestExplicitParkOutranksStoppedExternalWait(t *testing.T) {
+	now := time.Now()
+	todo := listedTodo{Todo: Todo{ID: "example", Stage: "review",
+		Agents:      []TodoAgent{{MachineID: "box", SessionID: "worker"}},
+		Supervision: &Supervision{State: reviewParked}}}
+	session := proto.Session{MachineID: "box", SessionID: "worker", State: proto.StateIdle,
+		Work: &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal}}
+	check := func(want, rule string) {
+		t.Helper()
+		got := triageTodo(todo, lookupOf([]proto.Session{session}), now, time.Time{}, time.UTC, false)
+		if got.Section != want || got.Rule != rule {
+			t.Fatalf("got %s/%s, want %s/%s", got.Section, got.Rule, want, rule)
+		}
+	}
+	check(triagePR, ruleParked)
+	session.Background = []proto.BackgroundTask{{Kind: "command"}}
+	check(triageWorking, ruleAgentRunning)
+	session.Background = nil
+	session.Hierarchy = &proto.SessionHierarchy{Children: &proto.SessionChildren{Total: 1, Working: 1}}
+	check(triageWorking, ruleAgentRunning)
+	session.Hierarchy = nil
+	session.Work.Phase = proto.WorkWorking
+	check(triageWorking, ruleAgentRunning)
+	session.Work.Phase = proto.WorkBlocked
+	todo.Ask = &todoAsk{Outcome: outcomeDecide, Verdict: "Choose a release track", AskedAt: now}
+	check(triageWaiting, ruleOwnerDecides)
+	todo.Ask = nil
+	session.State = proto.StateNeedsYou
+	check(triageWaiting, ruleAgentAsks)
+}
+
 func TestTriageWaitingForMergeUsesFreshMatchingPRFacts(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	url := "https://example.com/repo/pull/42"

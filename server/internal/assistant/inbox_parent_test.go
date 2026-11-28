@@ -47,8 +47,8 @@ func parentHub(t *testing.T, ids ...string) *inboxHub {
 	return h
 }
 
-// The user hangs an item under another item, a todo or a session; one that would make a cycle, sit too deep, name an
-// unknown kind or a missing item is refused, and null or {} takes it off.
+// The user hangs an item under another item, a todo, a session or a personal Agent; one that would make a cycle, sit too
+// deep, name an unknown kind or a missing item is refused, and null or {} takes it off.
 func TestInboxParentPutAndDelete(t *testing.T) {
 	h := parentHub(t, "a", "b", "c")
 	mux := h.routes()
@@ -74,6 +74,8 @@ func TestInboxParentPutAndDelete(t *testing.T) {
 		"itself":      {"a", `{"kind":"inbox","id":"a"}`, 409},
 		"kind":        {"a", `{"kind":"chat","id":"x"}`, 400},
 		"empty id":    {"a", `{"kind":"todo","id":""}`, 400},
+		"agent id":    {"a", `{"kind":"agent","id":"nosource"}`, 400},
+		"agent key":   {"a", `{"kind":"agent","id":"source:"}`, 400},
 		"no parent":   {"a", `{"kind":"inbox","id":"nope"}`, 404},
 		"no item":     {"nope", `{"kind":"todo","id":"t1"}`, 404},
 		"not json":    {"a", `{`, 400},
@@ -85,6 +87,9 @@ func TestInboxParentPutAndDelete(t *testing.T) {
 	}
 	if code, _ := put("a", `{"kind":"session","id":"m1/s1"}`); code != 200 {
 		t.Fatalf("a under a session: %d", code)
+	}
+	if code, out := put("a", `{"kind":"agent","id":"gateway:agent/key"}`); code != 200 {
+		t.Fatalf("a under a personal Agent: %d %v", code, out)
 	}
 	if code, out := put("c", `null`); code != 200 || out["parent"] != nil {
 		t.Fatalf("clear with null: %d %v", code, out)
@@ -127,6 +132,10 @@ func TestInboxParentOffers(t *testing.T) {
 	if *it.Parent != (InboxParent{Kind: ParentTodo, ID: "t1", By: ParentByConnector}) {
 		t.Fatalf("connector's did not replace continues: %+v", it.Parent)
 	}
+	b.offerParent(it, thingParent(connector.InboxThing{Parent: &connector.ThingParent{Kind: "agent", ID: "gateway:agent/key"}}))
+	if *it.Parent != (InboxParent{Kind: ParentAgent, ID: "gateway:agent/key", By: ParentByConnector}) {
+		t.Fatalf("connector's personal Agent was not kept: %+v", it.Parent)
+	}
 	b.offerParent(it, &InboxParent{Kind: ParentInbox, ID: "a", By: ParentByContinues})
 	if it.Parent.By != ParentByConnector {
 		t.Fatalf("continues replaced the connector's: %+v", it.Parent)
@@ -150,7 +159,7 @@ func TestInboxParentOffers(t *testing.T) {
 }
 
 // The tree of an item lists its ancestors up to the todo on top and its children oldest first; a todo's lists the
-// items right under it.
+// items right under it, and a personal Agent can end the chain.
 func TestInboxTree(t *testing.T) {
 	h := parentHub(t, "a", "b", "c", "d")
 	h.inbox.items["a"].Parent = &InboxParent{Kind: ParentTodo, ID: "t1", By: ParentByUser}
@@ -176,6 +185,15 @@ func TestInboxTree(t *testing.T) {
 	}
 	if code, out := inboxCall(t, mux, "GET", "/api/v1/inbox/tree/session/m1/s1", ""); code != 200 || len(out["children"].([]any)) != 0 {
 		t.Fatalf("session tree: %d %v", code, out)
+	}
+	h.inbox.items["d"].Parent = &InboxParent{Kind: ParentAgent, ID: "gateway:agent/key", By: ParentByUser}
+	if code, out := inboxCall(t, mux, "GET", "/api/v1/inbox/tree/inbox/d", ""); code != 200 {
+		t.Fatalf("personal Agent parent tree: %d %v", code, out)
+	} else if ups := out["ancestors"].([]any); len(ups) != 1 || ups[0].(map[string]any)["kind"] != "agent" || ups[0].(map[string]any)["item"] != nil {
+		t.Fatalf("personal Agent ancestors %v", ups)
+	}
+	if code, out := inboxCall(t, mux, "GET", "/api/v1/inbox/tree/agent/gateway:agent%2Fkey", ""); code != 200 || len(out["children"].([]any)) != 1 {
+		t.Fatalf("personal Agent tree: %d %v", code, out)
 	}
 	if code, _ := inboxCall(t, mux, "GET", "/api/v1/inbox/tree/inbox/nope", ""); code != 404 {
 		t.Fatalf("missing item: %d", code)

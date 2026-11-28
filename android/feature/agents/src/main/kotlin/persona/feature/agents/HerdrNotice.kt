@@ -45,8 +45,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** The machine's engine is herdr as chosen: a machine with no terminal engine (empty host set) keeps `engine` herdr and is not. */
-internal val Machine.usesHerdr: Boolean get() = Engines.judged(this) in setOf("herdr", "herdr-both")
+/**
+ * Classic herdr is in the machine's engine set (`engine_hosts`; an older hub's single engine stands for its set), whether or not
+ * it is the default host (#17037). A machine with no terminal engine (empty host set) keeps `engine` herdr and is not.
+ */
+internal val Machine.usesHerdr: Boolean get() = "herdr" in Engines.hosts(this)
 
 internal fun Machine.herdrStopped(state: HerdrState?): Boolean =
     online && usesHerdr && state?.known == true && !state.running
@@ -177,4 +180,13 @@ internal fun HerdrNotice(machineName: String, starting: Boolean, onStart: () -> 
             })), { menu = false })
         }
     }
+}
+
+/**
+ * "Orca isn't running" on a computer whose engine set has Orca and whose node says it is installed and not running
+ * (Engines.orcaStopped, #17037). Persona cannot open Orca for the user, so the row says what to do and has no button.
+ */
+@Composable
+internal fun OrcaNotice(machineName: String) {
+    JNotice(text = stringResource(R.string.agents_orca_stopped), title = machineName, status = Status.Unknown)
 }

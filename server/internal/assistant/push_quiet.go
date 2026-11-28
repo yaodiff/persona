@@ -10,7 +10,7 @@ import (
 // The hub's low-distraction mode, as the assistant honours it (docs/server/server.md "Low-distraction
 // mode"). The hub filters the phone pushes by level; what never was a hub push is the assistant's to hold back: with
 // the switch on, an escalated card pushes only when what it asks is the owner's alone (escalateLevel), a card parked
-// with its supervisor leaves the owner one held notice (ask_route.go quietRemind), and conclusions, "Please verify"
+// with its supervisor emits only an internal reminder (ask_route.go quietRemind), and conclusions, "Please verify"
 // asks and leader progress reach the owner through the briefing and the board instead of a card (quietHoldsAsk,
 // leaderReportLevel). With the switch off, everything is as before. Either way no agent card climbs to the owner on
 // its own (askTick): that is the supervisor's, switch or not.

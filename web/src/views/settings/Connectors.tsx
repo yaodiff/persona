@@ -30,7 +30,7 @@ interface LarkStatus {
 
 /** `headerBack`: the page's top bar has the way back (a phone), so an item's page draws no Back of its own. `openBeside`:
  *  the item open beside this list (Settings' two columns), whose row the list marks. */
-export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void; headerBack?: boolean; openBeside?: string | null }) {
+export function Connectors({ open, onOpen, onChannel, headerBack, openBeside, manager: scope }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void; headerBack?: boolean; openBeside?: string | null; manager?: string }) {
   // An older hub has no connectors API (feature "connectors"): only mail and Feishu, as before.
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   // Mail only on a hub that has the mail module (its flag module.mail; an older hub without module flags has it).
@@ -40,7 +40,7 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
   const picked = useChosenManager();
   const [larkcli, setLarkcli] = useState<HubConnector | null | undefined>();
   const { id, manager } = parseOwnedSub(open ?? "");
-  const owner = manager ?? otherManager(picked ?? undefined);
+  const owner = manager ?? scope ?? otherManager(picked ?? undefined);
   useLayoutEffect(() => {
     if (!manager) return;
     if (id === "feishu-bot") return pinManagerAt(["/bots/feishu", "/channels/feishu", "/connectors/larkcli"], manager);
@@ -71,10 +71,10 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
       <p className="mb-5 px-1 text-[12.5px] leading-relaxed text-ink-3">
         {t("settings-connectors.intro")}
       </p>
-      {mail && beside !== "mail" && <Mail />}
-      {lark && beside !== "lark" && <Feishu />}
+      {mail && beside !== "mail" && <Mail manager={scope} />}
+      {lark && beside !== "lark" && <Feishu manager={scope} />}
       {beside !== "feishu-bot" && bot}
-      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} openBeside={openBeside} />}
+      {hasConnectors && <ConnectorList manager={scope} onOpen={onOpen} onLarkCli={setLarkcli} openBeside={openBeside} />}
       <Group anchor="sent">
         <Row icon="send" label={t("settings-sent.entry_label")} hint={t("settings-sent.hint")} onClick={() => onOpen(SENT_SUB)} />
       </Group>

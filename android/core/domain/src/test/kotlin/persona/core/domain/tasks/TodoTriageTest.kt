@@ -3,6 +3,7 @@ package persona.core.domain.tasks
 import java.time.Instant
 import java.time.ZoneOffset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +19,9 @@ import persona.core.contracts.TodoAgent
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoDelivery
 import persona.core.contracts.TodoPRStatus
+import persona.core.contracts.generated.TodoWait
+import persona.core.contracts.generated.TodoWaitKind
+import persona.core.contracts.generated.TodoWaitPRBlocker
 import persona.core.contracts.TodoState
 import persona.core.contracts.WorkState
 
@@ -935,5 +939,49 @@ class TodoTriageTest {
         val done = todo("done", doneAt = hoursAgo(2), prUrl = "https://example.com/pull/42?w=1")
         val unrelated = todo("other-failed", startError = "boom", doneAt = hoursAgo(3), prUrl = "https://example.com/pull/99?tab=files")
         assertEquals(setOf("failed"), supersededFailedStarts(listOf(failed, done, unrelated)))
+    }
+
+    @Test fun restStatusCoversOpenPRsParkedAndConcernsWithoutOverridingActiveOrDraft() {
+        val fresh = minutesAgo(5)
+        val stale = hoursAgo(2)
+        val prUrl = "https://github.com/org/repo/pull/7"
+        fun withPr(
+            draft: Boolean = false,
+            state: String = "open",
+            review: String = "approved",
+            checks: String = "success",
+            conflicts: Boolean = false,
+            checkedAt: String = fresh,
+        ) = todo("pr", prUrl = prUrl, prStatus = TodoPRStatus(prUrl, state, draft, review, checks, conflicts, checkedAt))
+
+        assertEquals(TodoRestStatus.PrWaitingMerge, withPr().restStatus(lookup, now))
+        assertEquals(TodoRestStatus.PrInReview, withPr(review = "required").restStatus(lookup, now))
+        assertEquals(TodoRestStatus.PrChecksPending, withPr(review = "pending", checks = "pending").restStatus(lookup, now))
+        assertEquals(TodoRestStatus.PrChecksFailed, withPr(checks = "failure").restStatus(lookup, now))
+        assertEquals(TodoRestStatus.PrChangesRequested, withPr(review = "changes_requested").restStatus(lookup, now))
+        assertEquals(TodoRestStatus.PrConflicts, withPr(conflicts = true, review = "changes_requested", checks = "failure").restStatus(lookup, now))
+        // Draft, stale, merged, closed stay null (standard NotStarted).
+        assertNull(withPr(draft = true).restStatus(lookup, now))
+        assertNull(withPr(checkedAt = stale).restStatus(lookup, now))
+        assertNull(withPr(state = "merged").restStatus(lookup, now))
+        assertNull(withPr(state = "closed").restStatus(lookup, now))
+
+        // Projected TodoWait (including bound repository PR waits) maps cleanly.
+        val waitPr = todo("wait-pr").copy(wait = TodoWait(kind = TodoWaitKind.PrMerge, prBlockers = listOf(TodoWaitPRBlocker.Conflicts)))
+        assertEquals(TodoRestStatus.PrConflicts, waitPr.restStatus(lookup, now))
+        val waitMergeReview = todo("wait-mr").copy(wait = TodoWait(kind = TodoWaitKind.MergeReview))
+        assertEquals(TodoRestStatus.ParkedMergeReview, waitMergeReview.restStatus(lookup, now))
+        val parked = todo("parked", supervision = Supervision(supervisor = "c", state = "parked"))
+        assertEquals(TodoRestStatus.Parked, parked.restStatus(lookup, now))
+
+        // Open concern without active agent -> Tracking; with open PR -> PR status; with active/idle agent -> null (Working/FollowUp).
+        val openConcern = todo("concern").withKind("concern")
+        assertEquals(TodoRestStatus.ConcernTracking, openConcern.restStatus(lookup, now))
+        assertEquals(TodoRestStatus.PrWaitingMerge, withPr().withKind("concern").restStatus(lookup, now))
+        assertNull(todo("working-concern", agents = listOf(agent("run"))).withKind("concern").restStatus(lookup, now))
+        assertNull(todo("idle-concern", agents = listOf(agent("idle"))).withKind("concern").restStatus(lookup, now))
+        assertNull(todo("done-concern", doneAt = minutesAgo(10)).withKind("concern").restStatus(lookup, now))
+        assertNull(withPr().copy(supervision = Supervision(supervisor = "c", state = "needs_user")).restStatus(lookup, now))
+        assertNull(todo("ordinary").restStatus(lookup, now))
     }
 }

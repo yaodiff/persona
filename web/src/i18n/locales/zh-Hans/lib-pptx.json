@@ -1,9 +1,9 @@
 {
   "invalid": "不是有效的 PowerPoint 文件（缺少 presentation.xml）",
   "image": "图片",
-  "smartart_unsupported": "SmartArt 图形在这里看不了，点右上角「转成 PDF」查看",
-  "object_unsupported": "这个对象在这里看不了，点右上角「转成 PDF」查看",
-  "chart_unsupported": "这张图表在这里看不了，点右上角「转成 PDF」查看",
+  "smartart_unsupported": "此处暂不支持显示 SmartArt 图形，可点击右上角「转成 PDF」查看。",
+  "object_unsupported": "此处暂不支持显示此对象，可点击右上角「转成 PDF」查看。",
+  "chart_unsupported": "此处暂不支持显示此图表，可点击右上角「转成 PDF」查看。",
   "series": "系列 {n}",
   "hidden": "已隐藏"
 }

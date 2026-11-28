@@ -226,7 +226,7 @@ private class AndroidContactsBackend(context: Context) : ContactsBackend {
                     // An aggregate of several raw contacts has one name row each: the first one (lowest id) is the one
                     // edited. Two rows inside the same raw contact are ambiguous and refused.
                     StructuredName.CONTENT_ITEM_TYPE -> if (nameRow == null) {
-                        nameRow = id; nameRaw = raw; given = cursor.getString(3).orEmpty(); family = cursor.getString(4).orEmpty()
+                        nameRow = id; nameRaw = raw; given = cursor.getString(4).orEmpty(); family = cursor.getString(5).orEmpty()
                     } else if (nameRaw == raw) {
                         unavailable("这个联系人有多个姓名行，暂不能安全修改 / This contact has multiple name rows and cannot be changed safely.")  // i18n-ignore: tool result for the model
                     }
@@ -267,7 +267,7 @@ private class AndroidContactsBackend(context: Context) : ContactsBackend {
     }
 
     private fun emailLabel(type: Int, custom: String?): String = when {
-        custom?.equals("iPhone", ignoreCase = true) == true -> "iphone"
+        type == Email.TYPE_CUSTOM && custom?.equals("iPhone", ignoreCase = true) == true -> "iphone"
         type == Email.TYPE_HOME -> "home"
         type == Email.TYPE_WORK -> "work"
         else -> "other"

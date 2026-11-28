@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -32,7 +33,7 @@ func (mailConnector) Name() string { return "邮件" }
 // less often. Its inbox is the mail rounds' (readMail), with the Add to Inbox switch (#5307).
 func (mailConnector) Manifest() connector.Manifest {
 	return connector.Manifest{Capabilities: []connector.Capability{connector.CapTools, connector.CapActions, connector.CapArchive},
-		AgentTools: []string{"mail_*"}, Poll: kbMailPoll, InboxSwitch: true}
+		AgentTools: []string{"mail_*"}, ConfirmAlways: []string{mailwire.ToolMove}, Poll: kbMailPoll, InboxSwitch: true}
 }
 
 // Archive paging: a page per ListMessages, at most mailArchivePages of them per mailbox and call, at
@@ -231,12 +232,13 @@ func pageReaches(page *mailwire.ListResult, floor uint32) bool {
 	return !page.HasMore || page.NextBeforeUID == 0 || page.NextBeforeUID <= floor+1
 }
 
-// Tools are mail's (prompts/mcp/mail) without mail_send, which is an action: the user allows each mail on the phone
-// (the gate), the card as it always was.
+func isMailAction(name string) bool { return name == mailwire.ToolSend || name == mailwire.ToolMove }
+
+// Tools are mail's read tools. Writes go through the connector gate.
 func (c mailConnector) Tools() []proto.Tool {
 	var out []proto.Tool
 	for _, t := range c.h.mail.Tools() {
-		if t.Name != mailwire.ToolSend {
+		if !isMailAction(t.Name) {
 			out = append(out, t)
 		}
 	}
@@ -244,12 +246,13 @@ func (c mailConnector) Tools() []proto.Tool {
 }
 
 func (c mailConnector) Actions() []proto.Tool {
+	var out []proto.Tool
 	for _, t := range c.h.mail.Tools() {
-		if t.Name == mailwire.ToolSend {
-			return []proto.Tool{t}
+		if isMailAction(t.Name) {
+			out = append(out, t)
 		}
 	}
-	return nil
+	return out
 }
 
 func (c mailConnector) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
@@ -264,10 +267,41 @@ func (c mailConnector) CallJSON(ctx context.Context, name string, args json.RawM
 	return c.h.mail.CallJSON(ctx, name, args)
 }
 
-// Describe refuses a mail_send that could not be sent before the user is asked.
-func (c mailConnector) Describe(_ context.Context, name string, args json.RawMessage) (connector.Action, string, error) {
+// mailMoveCall carries the prepared move from Describe to DoRef within this connector call. The registry invokes
+// them synchronously around the confirmation step. Ungated paths never acquire a prepared move.
+type mailMoveCall struct{ apply mailwire.PreparedMove }
+type mailMoveKey struct{}
+
+// Describe refuses an invalid write before the user is asked.
+func (c mailConnector) Describe(ctx context.Context, name string, args json.RawMessage) (connector.Action, string, error) {
+	act := connector.Action{Name: name}
+	if name == mailwire.ToolMove {
+		call, _ := ctx.Value(mailMoveKey{}).(*mailMoveCall)
+		if call == nil {
+			return act, "", mailMoveNeedsApproval(ctx)
+		}
+		summary, move, err := c.h.mail.PrepareMove(ctx, args)
+		if err != nil {
+			return act, "", mailMoveError(ctx, err)
+		}
+		call.apply = move
+		return act, summary, nil
+	}
 	summary, err := c.h.mail.SendSummary(args)
-	return connector.Action{Name: name}, summary, err
+	return act, summary, err
+}
+
+func mailMoveNeedsApproval(ctx context.Context) error {
+	return errors.New(i18n.T(i18n.From(ctx), "mail-errors.move_approval_required"))
+}
+
+func mailMoveError(ctx context.Context, err error) error {
+	text := i18n.Localize(err, i18n.From(ctx))
+	var coded interface{ Code() string }
+	if errors.As(err, &coded) {
+		return fmt.Errorf("%s: %s", coded.Code(), text)
+	}
+	return errors.New(text)
 }
 
 // Do sends it (the gate let it through).
@@ -281,6 +315,20 @@ var _ connector.RefActions = mailConnector{}
 // DoRef is Do with the Message-ID written into the header of the mail handed to the transport, without the angle
 // brackets (connector.RefActions); whether a provider keeps it as written has not been verified.
 func (c mailConnector) DoRef(ctx context.Context, name string, args json.RawMessage) (connector.DoResult, error) {
+	if name == mailwire.ToolMove {
+		call, _ := ctx.Value(mailMoveKey{}).(*mailMoveCall)
+		if call == nil || call.apply == nil || ctx.Err() != nil {
+			return connector.DoResult{}, mailMoveNeedsApproval(ctx)
+		}
+		apply := call.apply
+		call.apply = nil
+		result, err := apply(ctx)
+		if err != nil {
+			return connector.DoResult{}, mailMoveError(ctx, err)
+		}
+		raw, _ := json.Marshal(result)
+		return connector.DoResult{Text: string(raw)}, nil
+	}
 	res, messageID := c.h.mail.CallRef(ctx, name, args, nil)
 	text, err := toolText(res)
 	return connector.DoResult{Text: text, MessageRef: messageID}, err

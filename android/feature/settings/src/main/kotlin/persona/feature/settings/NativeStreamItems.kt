@@ -43,6 +43,7 @@ internal fun NativeStreamItem(item: ExtensionViewItem, display: ExtensionViewSta
         "row" -> NativeRow(node, item, state, local, modifier, handle, press, edit)
         "image" -> NativeImage(node, local, modifier)
         "grid", "carousel" -> NativeTiles(node, state, local, modifier, press, edit)
+        "map" -> ExtensionMap(item, display, handle(item.key.orEmpty()), modifier)
         "field" -> if (item.kind in setOf("text", "number", "multiline") || item.detail != null) {
             Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 if (item.kind in setOf("text", "number", "multiline")) JTextField(display.values[item.name].orEmpty(),

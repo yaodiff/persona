@@ -57,6 +57,11 @@ type sentTrace struct {
 // newConnectors is the connectors' registry for the gate's rules, with the ledger listening to what goes out.
 func (h *Manager) newConnectors(rules []connector.Rule) *connector.Registry {
 	r := connector.NewRegistry(rules)
+	if len(h.cfg.ConnectorAutoConfirm) > 0 {
+		if err := r.SetAutoConfirmPolicies(h.cfg.ConnectorAutoConfirm); err != nil {
+			h.logf("connector_auto_confirm: %v", err)
+		}
+	}
 	r.SetSent(h.recordSent)
 	return r
 }
@@ -64,6 +69,9 @@ func (h *Manager) newConnectors(rules []connector.Rule) *connector.Registry {
 // recordSent writes a row for a write that went out. A row that cannot be written does not undo the write, which
 // already happened: it is logged, without the text.
 func (h *Manager) recordSent(ctx context.Context, s connector.Sent) {
+	if s.Connector == "mail" && s.Action == mailwire.ToolMove {
+		return // Moving a message between mailboxes does not send anything as the owner.
+	}
 	st, _ := h.store.(sentStore)
 	if st == nil {
 		return
@@ -107,6 +115,25 @@ func sentRow(s connector.Sent, trace *sentTrace) db.SentAsUser {
 			if trace.answeredBy != "" {
 				through["answered_by"] = trace.answeredBy
 			}
+		}
+	case connector.ThroughAutoConfirm:
+		if ac := s.Through.AutoConfirm; ac != nil {
+			if v := shortValue(ac.Policy); v != "" {
+				through["policy"] = v
+			}
+			if v := shortValue(ac.Extension); v != "" {
+				through["extension"] = v
+			}
+			if v := shortValue(ac.Version); v != "" {
+				through["version"] = v
+			}
+			if v := shortValue(ac.Source); v != "" {
+				through["source"] = v
+			}
+			if v := shortValue(ac.Protocol); v != "" {
+				through["protocol"] = v
+			}
+			through["owner_authorized"] = ac.OwnerAuthorized
 		}
 	}
 	row.LetThrough = mustJSON(through)
@@ -421,8 +448,8 @@ func (h *Manager) RecordNodeSent(ctx context.Context, machineID string, raw json
 	}
 	method := strings.ToUpper(strings.TrimSpace(p.Method))
 	path := cutRunes(strings.TrimSpace(cleanText(p.Path)), sentValueMost)
-	if !nodeWriteMethods[method] || !strings.HasPrefix(path, "/") {
-		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.sent: method and path of a write (POST, PUT, PATCH, DELETE or OPTIONS, and a path from /)"}
+	if !nodeSentWrite(method, path) || !strings.HasPrefix(path, "/") {
+		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.sent: method and path must name a write or an Agent API side-effecting GET/HEAD"}
 	}
 	through, err := nodeLetThrough(p.LetThrough)
 	if err != nil {
@@ -475,6 +502,12 @@ func (h *Manager) isUserLarkRule(r *proto.LarkRule) bool {
 	}
 	return slices.ContainsFunc(connector.LarkRules(h.connectors.UserRules(), nil), same) &&
 		!slices.ContainsFunc(connector.LarkRules(h.cfg.ConnectorGate, h.cfg.LarkGate), same)
+}
+
+// nodeSentWrite matches the gate's write classification. Ordinary GET/HEAD
+// reports are refused; the Agent API's explicit side-effecting routes are writes.
+func nodeSentWrite(method, path string) bool {
+	return nodeWriteMethods[method] || proto.AgentAPIWriteGET(method, path)
 }
 
 // nodeWriteMethods are the methods the gate treats as writes (node/larkgate_rules.go larkRead: all but GET and HEAD).

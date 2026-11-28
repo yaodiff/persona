@@ -16,10 +16,10 @@ describe("handoffMessage", () => {
     expect(text).toContain("Travel Laptop（电脑 ID：laptop）");
     expect(text).toContain("Office Mini（电脑 ID：mini）");
     expect(text).toContain("待办「Ship 1.3」（待办 ID：t1），Agent「Widget」（会话 ID：s1）");
-    expect(text).toContain("Agent「Screenshots」（会话 ID：s2，没有关联待办）");
+    expect(text).toContain("Agent「Screenshots」（会话 ID：s2，无关联待办）");
     expect(text).toContain("continues");
     // the source stops only after the new one started
-    expect(text.indexOf("开始工作之后")).toBeLessThan(text.indexOf("再停掉 Travel Laptop"));
+    expect(text.indexOf("启动后")).toBeLessThan(text.indexOf("再停止 Travel Laptop"));
     expect(text.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(2);
   });
 });

@@ -34,7 +34,7 @@ registerHooks({
   load(url, context, next) {
     if(url==='persona-test:transport')return {format:'module',shortCircuit:true,source:`
       export class EndpointConfig {}
-      export class HttpFailure extends Error{constructor(status,code,resultUnknown=false,resultPending=false){super(code);Object.assign(this,{status,resultUnknown,resultPending});}}
+      export class HttpFailure extends Error{constructor(status,code,resultUnknown=false,resultPending=false){super(code);Object.assign(this,{status,code,resultUnknown,resultPending});}}
       export class HubTransport{async request(...args){return globalThis.__attachmentRequest(...args);}async requestBytes(...args){return {data:new globalThis.TextEncoder().encode(await globalThis.__attachmentRequest(...args)).buffer};}}
     `};
     if (url === 'persona-test:ability') return { format: 'module', source: 'export const common={}; export const wantConstant={Flags:{FLAG_AUTH_READ_URI_PERMISSION:1}};', shortCircuit: true };
@@ -75,14 +75,17 @@ registerHooks({
           async getImageInfo(){return{mimeType:runtime().imageMime,size:{width:runtime().imageWidth,height:runtime().imageHeight}}},
           async createPixelMap(options){return{options,async release(){}}},async release(){}
         }},
-        createImagePacker(){return{async packToData(pixels,options){return new Uint8Array(runtime().packBytes).buffer},async release(){}}}
+        createImagePacker(){return{async packToData(pixels,options){
+          runtime().packed.push({...options,...pixels.options.desiredSize});
+          return new Uint8Array(runtime().packBytes).buffer;
+        },async release(){}}}
       };`, shortCircuit: true };
     if (url === 'persona-test:media') return { format: 'module', source: `
       const runtime=()=>globalThis.__attachmentRuntime;
       export const photoAccessHelper={
         PhotoType:{IMAGE:1,VIDEO:2},PhotoViewMIMETypes:{IMAGE_TYPE:'image/*'},
         PhotoSelectOptions:class{},
-        PhotoViewPicker:class{async select(options){return{photoUris:runtime().photoUris.splice(0)}}},
+        PhotoViewPicker:class{async select(options){runtime().photoPickLimit=options.maxSelectNumber;return{photoUris:runtime().photoUris.splice(0)}}},
         getPhotoAccessHelper(context){return{async release(){},async getAssets(options){const asset=runtime().photoAssets.get(options.predicates.values.uri);return{getCount:()=>asset?1:0,getFirstObject:async()=>asset,close(){}}}}}
       };`, shortCircuit: true };
     if (url === 'persona-test:local') return { format: 'module', source: `
@@ -106,13 +109,14 @@ registerHooks({
 });
 
 const { ChatAttachments } = await import('../entry/src/main/ets/models/ChatAttachments.ets');
-const { ResourceRow } = await import('../entry/src/main/ets/models/Wire.ets');
+const { ResourceRow, ImageLimits } = await import('../entry/src/main/ets/models/Wire.ets');
 
 function resetRuntime() {
   const runtime = globalThis.__attachmentRuntime;
   runtime.db.clear(); runtime.files.clear(); runtime.directories.clear(); runtime.descriptors.clear();
   runtime.nextDescriptor = 1; runtime.pickedFiles = []; runtime.photoUris = []; runtime.photoAssets.clear();
   runtime.imageMime = 'image/jpeg'; runtime.imageWidth = 3200; runtime.imageHeight = 2400; runtime.packBytes = 1024;
+  runtime.packed = [];
   runtime.filePickerGate = undefined; runtime.putGate = undefined; runtime.putAckGate = undefined; runtime.epoch = 0;
 }
 
@@ -132,6 +136,7 @@ function row(id = 'session-a', machine = 'machine-a') {
 
 function model(targetRow, repository) {
   const value = {
+    features: [],
     profile: { id: 'hub-a', hubId: 'hub-a', manager: 'manager-a', baseUrl: 'https://primary.invalid/', pin: 'same-pin' }, selected: targetRow, epoch: 1, pairingEpoch: 0,
     pairingRevision() { return this.pairingEpoch; },
     scope() { return JSON.stringify([this.profile.id, this.profile.manager]); },
@@ -139,6 +144,7 @@ function model(targetRow, repository) {
     connectionGeneration() { return this.epoch; },
     owns(generation, scope) { return generation === this.epoch && scope === this.scope(); },
     canSend() { return true; },
+    imageLimits() { return new ImageLimits(); },
     repo() { return repository; },
   };
   return value;
@@ -440,11 +446,137 @@ test('oversized selected documents are rejected before sandbox copying or upload
  await attachments.open(model(session,repo),context(),session);await attachments.chooseFiles();
  assert.equal(attachments.errorKey,'chat_attachment_file_too_large');assert.deepEqual(attachments.attachments,[]);assert.equal(repo.uploads.length,0);runtime.reportedSizes=undefined;
 });
-test('an image encoder that cannot fit the JSON budget cannot dispatch an oversized request',async()=>{
- resetRuntime();const runtime=globalThis.__attachmentRuntime,session=row(),repo=repository(),attachments=new ChatAttachments(),uri='photo://picker/large.png';
- runtime.files.set(uri,new Uint8Array([1,2,3]));runtime.photoUris=[uri];runtime.photoAssets.set(uri,{uri,displayName:'large.png',photoType:1});runtime.imageMime='image/png';runtime.packBytes=4*1024*1024;
- await attachments.open(model(session,repo),context(),session);await attachments.choosePhotos();assert.equal(attachments.attachments.length,1);
- await assert.rejects(attachments.prepareSend('Read'),/chat_attachment_request_too_large/);assert.equal(repo.uploads.length,0);assert.equal(attachments.attachments.length,1);
+async function pickedPictures(byteArrays, limits = {}, repo = repository(), space = '') {
+  resetRuntime();
+  const runtime = globalThis.__attachmentRuntime, session = row(), attachments = new ChatAttachments();
+  if (space) session.raw = JSON.stringify({ space });
+  const client = model(session, repo);
+  client.imageLimits = () => Object.assign(new ImageLimits(), limits);
+  runtime.imageMime = 'image/png';
+  for (const [index, bytes] of byteArrays.entries()) {
+    const name = 'image-' + index + '.png', uri = 'photo://picker/' + name;
+    runtime.files.set(uri, Uint8Array.from(bytes));
+    runtime.photoUris.push(uri);
+    runtime.photoAssets.set(uri, { uri, displayName: name, photoType: 1 });
+  }
+  await attachments.open(client, context(), session);
+  await attachments.choosePhotos();
+  assert.equal(attachments.attachments.length, byteArrays.length);
+  return { runtime, client, session, repo, attachments };
+}
+
+test('a resized photo follows the hub long side and JPEG quality; its untouched original is uploaded if it cannot fit', async () => {
+  const { runtime, client, session, repo, attachments } = await pickedPictures([[1, 2, 3]], { maxSide: 1440, imageBytes: 10 });
+  const prepared = await attachments.prepareSend('Read');
+  assert.deepEqual(runtime.packed.map(p => [p.format, p.quality, p.width, p.height]), [
+    ['image/jpeg', 75, 1440, 1080], ['image/jpeg', 60, 1440, 1080], ['image/jpeg', 60, 1280, 960],
+  ]);
+  assert.equal(prepared.images.length, 0);
+  assert.equal(prepared.overflowNoticeKey, 'chat_attachment_photos_size_as_files');
+  assert.match(prepared.text, /remote\.bin/);
+  assert.match(repo.uploads[0].path, /files\?name=image-0\.png&dest=attachment$/);
+  assert.deepEqual([...new Uint8Array(repo.uploads[0].bytes)], [1, 2, 3]);
+  await attachments.close();
+  // An acknowledged upload stays a file after restoring the draft under a different limit.
+  client.imageLimits = () => new ImageLimits();
+  await attachments.open(client, context(), session);
+  assert.equal((await attachments.prepareSend('Retry')).overflowNoticeKey, prepared.overflowNoticeKey);
+  assert.equal(repo.uploads.length, 1);
+  assert.equal(runtime.packed.length, 3);
+  await attachments.close();
+});
+
+test('base64 padding, the one MiB reserve and the photo count decide which originals become files', async () => {
+  const { runtime, repo, attachments } = await pickedPictures([[1], [2, 3, 4, 5], [6], [7]],
+    { requestBytes: 1024 * 1024 + 8, perMessage: 2 }, repository(), 'health');
+  runtime.imageWidth = 120; runtime.imageHeight = 80;
+  const prepared = await attachments.prepareSend('Read');
+  assert.deepEqual(prepared.images.map(p => [p.mime, p.data]), [['image/png', 'AQ=='], ['image/png', 'Bg==']]);
+  assert.equal(runtime.packed.length, 0);
+  assert.deepEqual(repo.uploads.map(u => [...new Uint8Array(u.bytes)]), [[2, 3, 4, 5], [7]]);
+  assert.ok(repo.uploads.every(u => u.path.endsWith('&dest=health')));
+  assert.equal(prepared.overflowNoticeKey, 'chat_attachment_photos_count_size_as_files');
+  await attachments.close();
+});
+
+test('a ready count-overflow photo keeps that cause on the next prepare instead of claiming size', async () => {
+  const { runtime, repo, attachments, client, session } = await pickedPictures([[1], [2]], { perMessage: 1 });
+  runtime.imageWidth = 120; runtime.imageHeight = 80;
+  const first = await attachments.prepareSend('Read');
+  assert.equal(first.overflowNoticeKey, 'chat_attachment_photos_count_as_files');
+  assert.equal(repo.uploads.length, 1);
+  assert.equal(attachments.attachments.find(item => item.status === 'ready')?.overflowReason, 'count');
+  await attachments.close();
+  await attachments.open(client, context(), session);
+  const second = await attachments.prepareSend('Retry');
+  // The ready photo was uploaded for perMessage, not bytes: a retry must not say the message was too large.
+  assert.equal(second.overflowNoticeKey, 'chat_attachment_photos_count_as_files');
+  assert.equal(repo.uploads.length, 1);
+  await attachments.close();
+});
+
+test('an unsupported photo is rejected even when its original would overflow the request', async () => {
+  const { runtime, repo, attachments } = await pickedPictures([[1, 2, 3]], { requestBytes: 1024 * 1024 });
+  runtime.imageMime = 'image/heic';
+  await assert.rejects(attachments.prepareSend('Read'), /chat_attachment_image_unsupported/);
+  assert.equal(repo.uploads.length, 0);
+  await attachments.close();
+});
+
+test('a failed image pack does not fall through to a file upload', async () => {
+  const { runtime, repo, attachments } = await pickedPictures([[1, 2, 3]], { maxSide: 1280 });
+  runtime.packBytes = 0;
+  await assert.rejects(attachments.prepareSend('Read'), /chat_attachment_image_unsupported/);
+  assert.equal(repo.uploads.length, 0);
+  await attachments.close();
+});
+
+test('a photo upload with an uncertain result is never repeated as a file or inline after reopening', async () => {
+  const repo = repository(async () => { throw Object.assign(Error('timed out'), { resultUnknown: true }); });
+  const { attachments, client, session } = await pickedPictures([[1], [2]], { perMessage: 1 }, repo);
+  await assert.rejects(attachments.prepareSend('First'), /chat_attachment_upload_unknown/);
+  await attachments.close();
+  client.imageLimits = () => new ImageLimits();
+  await attachments.open(client, context(), session);
+  await assert.rejects(attachments.prepareSend('Retry'), /chat_attachment_upload_unknown/);
+  assert.equal(repo.uploads.length, 1);
+  await attachments.close();
+});
+
+test('an older hub receives a photo through its legacy upload only after a definite refusal of the new destination', async () => {
+  const { HttpFailure } = await import('persona-test:transport');
+  for (const features of [[], ['some_older_feature']]) {
+    const repo = repository(async path => {
+      if (path.endsWith('&dest=attachment')) throw new HttpFailure(400, 'unknown_upload_destination');
+      assert.ok(!path.includes('&dest='));
+      return { path: '/tmp/original.png', name: 'original.png' };
+    });
+    const { attachments, client } = await pickedPictures([[1]], { requestBytes: 1024 * 1024 }, repo);
+    client.features = features;
+    const prepared = await attachments.prepareSend('Describe');
+    assert.equal(prepared.text, 'Describe /tmp/original.png');
+    assert.equal(repo.uploads.length, features.length ? 1 : 2);
+    await attachments.prepareSend('Retry');
+    assert.equal(repo.uploads.length, features.length ? 1 : 2);
+    await attachments.close();
+  }
+});
+
+test('photo uploads retain their destination on other errors, uncertain refusals and health conversations', async () => {
+  const { HttpFailure } = await import('persona-test:transport');
+  for (const [space, error] of [
+    ['health', new HttpFailure(400, 'unknown_upload_destination')],
+    ['', new HttpFailure(400, 'bad_request')],
+    ['', new HttpFailure(400, 'unknown_upload_destination', true)],
+  ]) {
+    const repo = repository(async () => { throw error; });
+    const { attachments } = await pickedPictures([[1]], { requestBytes: 1024 * 1024 }, repo, space);
+    await assert.rejects(attachments.prepareSend('Describe'));
+    assert.equal(repo.uploads.length, 1);
+    assert.ok(repo.uploads[0].path.endsWith('&dest=' + (space || 'attachment')));
+    assert.equal(attachments.attachments.length, 1);
+    await attachments.close();
+  }
 });
 test('photo requests apply the UTF-8 text limit to Chinese, emoji and serialized source context',async()=>{
  const {withSourceContext}=await import('../entry/src/main/ets/models/Compatibility.ets');
@@ -579,4 +711,137 @@ test('a received-image file stays with its acknowledged draft when close and nav
  assert.equal(restored.attachments.length,1);assert.equal(restored.attachments[0].localPath,acknowledged.localPath);
  assert.equal(restored.attachments[0].mime,acknowledged.mime);assert.equal(runtime.files.has(acknowledged.localPath),true);
  await restored.close();
+});
+
+test('photo picker follows remaining slots, keeps file slots separate and can still pick an overflow photo', async () => {
+  resetRuntime();
+  const runtime = globalThis.__attachmentRuntime, session = row(), client = model(session, repository());
+  const attachments = new ChatAttachments(), limits = new ImageLimits();
+  client.imageLimits = () => limits;
+  await attachments.open(client, context(), session);
+  const document = 'document://picker/movie.mp4';
+  runtime.files.set(document, new Uint8Array([1]));
+  runtime.pickedFiles = [document];
+  await attachments.chooseFiles();
+  const photo = 'photo://picker/example.jpg';
+  runtime.files.set(photo, new Uint8Array([1]));
+  runtime.photoAssets.set(photo, { uri: photo, displayName: 'example.jpg', photoType: 1 });
+  runtime.photoUris = Array(6).fill(photo);
+  await attachments.choosePhotos();
+  assert.equal(runtime.photoPickLimit, 20);
+  assert.equal(attachments.attachments.length, 7);
+  await attachments.choosePhotos();
+  assert.equal(runtime.photoPickLimit, 14);
+  limits.perMessage = 1000;
+  await attachments.choosePhotos();
+  assert.equal(runtime.photoPickLimit, 500);
+  limits.perMessage = 3;
+  runtime.photoUris = [photo];
+  await attachments.choosePhotos();
+  assert.equal(runtime.photoPickLimit, 1);
+  assert.equal(attachments.attachments.length, 8);
+  await attachments.close();
+  await attachments.open(client, context(), session);
+  assert.equal(attachments.attachments.length, 8, 'a smaller current limit must not invalidate a saved draft');
+  await attachments.close();
+});
+
+test('an acknowledged large photo selection is removed from storage after reopening', async () => {
+  resetRuntime();
+  const runtime = globalThis.__attachmentRuntime, session = row(), client = model(session, repository());
+  const limits = new ImageLimits();
+  limits.perMessage = 80;
+  client.imageLimits = () => limits;
+  const attachments = new ChatAttachments(), photo = 'photo://picker/review.jpg';
+  runtime.files.set(photo, new Uint8Array([1]));
+  runtime.photoAssets.set(photo, { uri: photo, displayName: 'review.jpg', photoType: 1 });
+  runtime.photoUris = Array(70).fill(photo);
+  await attachments.open(client, context(), session);
+  await attachments.choosePhotos();
+  const prepared = await attachments.prepareSend('Review these');
+  assert.equal(prepared.images.length, 70);
+  const snapshot = JSON.stringify(prepared.snapshot);
+  assert.ok(snapshot.length > 4096);
+  await attachments.close();
+  await ChatAttachments.commitStoredSnapshot(context(), snapshot, client.target());
+  await attachments.open(client, context(), session);
+  assert.deepEqual(attachments.attachments, []);
+  await attachments.close();
+});
+
+test('leaving while the upload marker is being saved keeps an unsent overflow photo retryable', async () => {
+  const { runtime, client, session, repo, attachments } = await pickedPictures([[1], [2]], { perMessage: 1 });
+  let markSaved, acknowledge;
+  const saved = new Promise(resolve => { markSaved = resolve; });
+  const acknowledgement = new Promise(resolve => { acknowledge = resolve; });
+  const set = runtime.db.set;
+  runtime.db.set = function(key, value) {
+    if (JSON.parse(value).attachments?.some(item => item.status === 'uploading')) {
+      delete this.set;
+      runtime.putAckGate = { entered: markSaved, promise: acknowledgement };
+    }
+    return set.call(this, key, value);
+  };
+  const preparing = attachments.prepareSend('Read these');
+  await saved;
+  client.selected = row('another-session');
+  acknowledge();
+  await assert.rejects(preparing);
+  assert.equal(repo.uploads.length, 0);
+  await attachments.close();
+
+  client.selected = session;
+  await attachments.open(client, context(), session);
+  const retried = await attachments.prepareSend('Read these');
+  assert.equal(retried.images.length, 1);
+  assert.equal(repo.uploads.length, 1);
+  assert.deepEqual([...new Uint8Array(repo.uploads[0].bytes)], [2]);
+  await attachments.close();
+});
+
+test('two active editors preparing the same overflow photo upload its original once', async () => {
+  const { client, session, repo, attachments } = await pickedPictures([[1], [2]], { perMessage: 1 });
+  const other = new ChatAttachments();
+  await other.open(client, context(), session);
+
+  // Both editors have read the same draft before either can claim the overflow upload.
+  let release;
+  const bothReady = new Promise(resolve => { release = resolve; });
+  let encoding = 0;
+  for (const editor of [attachments, other]) {
+    const encode = editor.encodeImage.bind(editor);
+    editor.encodeImage = async (...args) => {
+      if (++encoding === 2) release();
+      await bothReady;
+      return encode(...args);
+    };
+  }
+  const results = await Promise.allSettled([attachments.prepareSend('Read'), other.prepareSend('Read')]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(repo.uploads.length, 1);
+  assert.deepEqual([...new Uint8Array(repo.uploads[0].bytes)], [2]);
+  await attachments.close();
+  await other.close();
+});
+
+test('a photo whose overflow upload was refused goes inline once the edited draft fits', async () => {
+  const { HttpFailure } = await import('persona-test:transport');
+  const repo = repository(async () => { throw new HttpFailure(400, 'bad_request'); });
+  const { runtime, attachments, client, session } = await pickedPictures([[1], [2]], { perMessage: 1 }, repo);
+  runtime.imageWidth = 120;
+  runtime.imageHeight = 80;
+  await assert.rejects(attachments.prepareSend('First send'), /bad_request/);
+  assert.equal(attachments.attachments[1].status, 'failed');
+  await attachments.close();
+
+  await attachments.open(client, context(), session);
+  await attachments.remove(attachments.attachments[0].id);
+  const prepared = await attachments.prepareSend('Send the remaining photo');
+  assert.deepEqual(prepared.images.map(photo => photo.data), ['Ag==']);
+  assert.equal(prepared.overflowNoticeKey, '');
+  assert.equal(repo.uploads.length, 1);
+  await attachments.close();
+  await attachments.open(client, context(), session);
+  assert.equal(attachments.attachments[0].overflowReason, '');
+  await attachments.close();
 });

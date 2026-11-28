@@ -160,6 +160,7 @@ func (d *Devices) startTransfer(ctx context.Context, from, to *Machine, src prot
 		Total: info.Size, StartedAt: now, UpdatedAt: now,
 	}}
 	d.transfers.mu.Lock()
+	d.pruneTransfersLocked(now)
 	if d.transfers.byID == nil {
 		d.transfers.byID = map[string]*transfer{}
 	}
@@ -218,6 +219,7 @@ func (d *Devices) runTransfer(ctx context.Context, t *transfer, from, to *Machin
 	// The state is told first (a target that went away may hold the abort for its whole timeout); the transfer is over
 	// (done, what DELETE waits for) once the abort has been tried.
 	fail := func(err error) {
+		t.cancel()
 		d.finishTransfer(t, err, "")
 		abortUpload(to, uploadID)
 	}
@@ -256,9 +258,14 @@ func (d *Devices) runTransfer(ctx context.Context, t *transfer, from, to *Machin
 func streamChunks(ctx context.Context, from, to *Machine, req proto.FileChunkRequest, uploadID string, total int64,
 	h hash.Hash, check func() error, progress func(off int64)) error {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel() // the reader stops with it
 	chunks := make(chan transferChunk, transferWindow)
+	readerDone := make(chan struct{})
+	defer func() {
+		cancel()
+		<-readerDone
+	}()
 	go func() {
+		defer close(readerDone)
 		defer close(chunks)
 		for off := int64(0); off < total; {
 			q := req
@@ -412,6 +419,10 @@ func (d *Devices) runningTransfers() int {
 func (d *Devices) pruneTransfers(now time.Time) {
 	d.transfers.mu.Lock()
 	defer d.transfers.mu.Unlock()
+	d.pruneTransfersLocked(now)
+}
+
+func (d *Devices) pruneTransfersLocked(now time.Time) {
 	for id, t := range d.transfers.byID {
 		t.mu.Lock()
 		old := t.st.State != proto.TransferRunning && now.Sub(t.st.UpdatedAt) > transferKeep

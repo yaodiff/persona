@@ -4,7 +4,7 @@ import { agentName, sessionAgent } from "./agent-kind";
 import { WORKFLOWS_COMMAND } from "./background-panel";
 import { canSwitchModel, isModelCommand, requestModelPicker } from "./model-switch";
 import { hasLoop, LOOP_TEXT } from "./loop-command";
-import { sessionCan, stateOf } from "./format";
+import { sessionCan, activityOf } from "./format";
 import type { Session } from "./types";
 import { canPickPermissions, isPermissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from "./permissions-command";
 
@@ -45,7 +45,7 @@ function takesTypedCommands(s: Session | undefined): boolean {
  *  neither works nor waits for you, /loop and /workflows (its Background tasks panel, #5421) for Claude Code Agents. The
  *  agent's own slash commands (`agent`) are labelled with its name, the source the palette shows on their row. */
 export function agentCommands<C extends { text: string; agent?: boolean; source?: string }>(all: C[], s: Session | undefined): C[] {
-  const st = s ? stateOf(s) : "offline";
+  const st = s ? activityOf(s) : "offline";
   const who = s ? sessionAgent(s) : undefined;
   const name = agentName(who?.agent, who?.label);
   return all

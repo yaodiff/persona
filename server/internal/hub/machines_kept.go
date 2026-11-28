@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -97,8 +98,8 @@ func (h *Hub) clearKept(ctx context.Context, mid string) {
 		return
 	}
 	h.dropReservation(ctx, mid)
-	var gone devicewire.MachineRemoved // the manager it named lets it go too, when it is there
-	if err := h.keeperCall(ctx, was, devicewire.MethodMachinesRemove, devicewire.MachineRef{MachineID: mid}, &gone); err != nil {
+	// The manager it named lets it go too, when it is there.
+	if _, err := keeperCall(ctx, h, was, devicewire.MachinesRemoveMethod, devicewire.MachineRef{MachineID: mid}); err != nil {
 		h.logf("machines: [%s] removed from hub.json; %s, which kept it before, could not let it go now: %v", mid, was, err)
 	}
 }
@@ -196,6 +197,7 @@ func (h *Hub) setKept(ctx context.Context, mid, o string) error {
 			return fmt.Errorf("%w: %v", errOwnersUnknown, err)
 		}
 	}
+	before := h.machineOwner(mid)
 	d.mu.Lock()
 	next := make(map[string]string, len(d.kept)+1)
 	for k, v := range d.kept {
@@ -215,6 +217,9 @@ func (h *Hub) setKept(ctx context.Context, mid, o string) error {
 	d.mu.Lock()
 	d.kept = next
 	d.mu.Unlock()
+	if before != h.machineOwner(mid) {
+		h.fleetClientsRefresh()
+	}
 	return nil
 }
 
@@ -265,19 +270,20 @@ func (h *Hub) knownEntries() []MachineConfig {
 var errKeeperAway = errManagerOffline
 
 // keeperCall calls a devices.machines.* method on manager o: errKeeperAway when it is not connected.
-func (h *Hub) keeperCall(ctx context.Context, o, method string, params, out any) error {
+func keeperCall[P, R any](ctx context.Context, h *Hub, o string, method buswire.Method[P, R], params P) (R, error) {
 	if h.busConnOf(o) == nil {
-		return errKeeperAway
+		var zero R
+		return zero, errKeeperAway
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return h.callBus(cctx, o, method, params, out)
+	return buswire.Call(cctx, h.managerCaller(o), method, params)
 }
 
 // keptEntryFull is machine mid's entry as its keeper has it, secrets included (a move hands it on).
 func (h *Hub) keptEntryFull(ctx context.Context, o, mid string) (json.RawMessage, error) {
-	var out devicewire.MachineEntry
-	if err := h.keeperCall(ctx, o, devicewire.MethodMachinesGet, devicewire.MachineRef{MachineID: mid}, &out); err != nil {
+	out, err := keeperCall(ctx, h, o, devicewire.MachinesGetMethod, devicewire.MachineRef{MachineID: mid})
+	if err != nil {
 		return nil, err
 	}
 	if len(out.Entry) == 0 || machineEntryID(out.Entry) != mid {
@@ -290,7 +296,7 @@ func (h *Hub) keptEntryFull(ctx context.Context, o, mid string) (json.RawMessage
 // recorded, so a failure in between leaves the entry with o rather than a record of nothing. What the hub shows of it
 // until o reports it is the entry itself. d.moving is held.
 func (h *Hub) putKept(ctx context.Context, o, mid string, entry json.RawMessage) error {
-	if err := h.keeperCall(ctx, o, devicewire.MethodMachinesPut, devicewire.MachinePut{Entry: entry}, nil); err != nil {
+	if _, err := keeperCall(ctx, h, o, devicewire.MachinesPutMethod, devicewire.MachinePut{Entry: entry}); err != nil {
 		return err
 	}
 	if err := h.setKept(ctx, mid, o); err != nil {
@@ -304,8 +310,7 @@ func (h *Hub) putKept(ctx context.Context, o, mid string, entry json.RawMessage)
 
 // dropKept has manager o let machine mid go and forgets it. d.moving is held.
 func (h *Hub) dropKept(ctx context.Context, o, mid string) error {
-	var out devicewire.MachineRemoved
-	if err := h.keeperCall(ctx, o, devicewire.MethodMachinesRemove, devicewire.MachineRef{MachineID: mid}, &out); err != nil {
+	if _, err := keeperCall(ctx, h, o, devicewire.MachinesRemoveMethod, devicewire.MachineRef{MachineID: mid}); err != nil {
 		return err
 	}
 	if err := h.setKept(ctx, mid, ""); err != nil {
@@ -460,8 +465,7 @@ func (h *Hub) settleOwnList(o string) {
 				continue
 			}
 		}
-		var got devicewire.MachineEntry
-		err = h.keeperCall(ctx, o, devicewire.MethodMachinesGet, devicewire.MachineRef{MachineID: mc.ID}, &got)
+		got, err := keeperCall(ctx, h, o, devicewire.MachinesGetMethod, devicewire.MachineRef{MachineID: mc.ID})
 		var re *rpc.Error
 		switch {
 		case err == nil && sameEntry(got.Entry, staged):
@@ -478,7 +482,7 @@ func (h *Hub) settleOwnList(o string) {
 		if tried {
 			continue // put already: its next report settles it
 		}
-		if err := h.keeperCall(ctx, o, devicewire.MethodMachinesPut, devicewire.MachinePut{Entry: staged}, nil); err != nil {
+		if _, err := keeperCall(ctx, h, o, devicewire.MachinesPutMethod, devicewire.MachinePut{Entry: staged}); err != nil {
 			h.logf("machines: [%s] staged in hub.json for %s: put there: %v", mc.ID, o, err)
 			continue
 		}
@@ -494,8 +498,7 @@ func (h *Hub) settleOwnList(o string) {
 		if h.entryOwner(mid) == o || h.knownEntry(mid) == nil && h.keptBy(mid) == "" {
 			continue
 		}
-		var gone devicewire.MachineRemoved
-		if err := h.keeperCall(ctx, o, devicewire.MethodMachinesRemove, devicewire.MachineRef{MachineID: mid}, &gone); err != nil {
+		if _, err := keeperCall(ctx, h, o, devicewire.MachinesRemoveMethod, devicewire.MachineRef{MachineID: mid}); err != nil {
 			h.logf("machines: [%s] is not %s's now, but it still has it: taking it out: %v", mid, o, err)
 			continue
 		}
@@ -552,8 +555,7 @@ func canonical(raw json.RawMessage) string {
 func (h *Hub) moveOutOfHubJSON(ctx context.Context, o string, ids []string) error {
 	for _, mid := range ids {
 		if was := h.keptBy(mid); was != "" && was != o { // an old record (hub.json had it back): that one lets it go
-			var gone devicewire.MachineRemoved
-			if err := h.keeperCall(ctx, was, devicewire.MethodMachinesRemove, devicewire.MachineRef{MachineID: mid}, &gone); err != nil {
+			if _, err := keeperCall(ctx, h, was, devicewire.MachinesRemoveMethod, devicewire.MachineRef{MachineID: mid}); err != nil {
 				h.logf("machines: [%s] was kept by %s, which could not let it go now: %v", mid, was, err)
 			}
 		}
@@ -740,8 +742,7 @@ func (h *Hub) moveKept(ctx context.Context, mid, from, to string) error {
 			h.addMachineLive(mc)
 		}
 	}
-	var out devicewire.MachineRemoved
-	if err := h.keeperCall(ctx, from, devicewire.MethodMachinesRemove, devicewire.MachineRef{MachineID: mid}, &out); err != nil {
+	if _, err := keeperCall(ctx, h, from, devicewire.MachinesRemoveMethod, devicewire.MachineRef{MachineID: mid}); err != nil {
 		h.logf("machines: [%s] moved to %s; %s could not take it out of its own list: %v", mid, to, from, err)
 	}
 	return nil

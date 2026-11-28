@@ -1,8 +1,12 @@
 {
-  "send_to": "あなたの身分で Lark の「{chat}」にメッセージを送ります",
-  "reply_to": "あなたの身分で Lark の「{chat}」にある {sender} さんのメッセージに返信します",
-  "reply_in_chat": "あなたの身分で Lark の「{chat}」のメッセージに返信します",
+  "default_service": "Lark",
+  "send_to": "あなたの身分で {service} の「{chat}」にメッセージを送ります",
+  "reply_to": "あなたの身分で {service} の「{chat}」にある {sender} さんのメッセージに返信します",
+  "reply_in_chat": "あなたの身分で {service} の「{chat}」のメッセージに返信します",
+  "reply_to_sender": "あなたの身分で {service} で {sender} さんのメッセージに返信します",
+  "reply_message": "あなたの身分で {service} のメッセージ {message} に返信します",
   "topic_suffix": "（トピックへの返信）",
   "original": "元のメッセージ：{text}",
+  "mentions": "メンション：{mentions}",
   "outgoing": "本文：\n{text}"
 }

@@ -25,12 +25,18 @@ type TodoSupervisionRow struct {
 	Reviews          json.RawMessage `json:"reviews"`
 	// AutoReview is the latest independent review run (#2173), JSON the assistant owns; nil when none ran.
 	AutoReview json.RawMessage `json:"auto_review,omitempty"`
+	// InvestigationFindings is the assistant’s durable report and finding dispositions.
+	InvestigationFindings json.RawMessage `json:"investigation_findings,omitempty"`
 	// Waits is the done judge's finding that the latest stretch of work stopped on the owner's decision (#1277), JSON the
 	// assistant owns; nil when it does not hold.
 	Waits json.RawMessage `json:"waits,omitempty"`
+	// OwnerWork is the latest owner instruction and Persona assignment per linked Agent session (#15406), JSON the
+	// assistant owns. It is kept apart from the review state and is never exposed with the to-do.
+	OwnerWork json.RawMessage `json:"owner_work,omitempty"`
 	// PendingSince is when the task entered pending_review; nil in every other state, and for a task that was already
 	// waiting for review with no time recorded.
 	PendingSince *time.Time `json:"pending_since,omitempty"`
+	FollowedUpAt *time.Time `json:"followed_up_at,omitempty"`
 	// CardlessToldAt is when the watch handed the current pending_review round back to its supervisor because it waits
 	// on the owner with no card (supervise_cardless.go); nil when this review round was never handed back that way.
 	CardlessToldAt *time.Time `json:"cardless_told_at,omitempty"`
@@ -72,7 +78,7 @@ func AlignTodoCriteria(doneWhen []string, criteria []TodoCriterion) []TodoCriter
 
 // ListTodoSupervision returns every supervised task's ledger.
 func (d *DB) ListTodoSupervision(ctx context.Context) ([]TodoSupervisionRow, error) {
-	rows, err := d.pool.Query(ctx, `SELECT todo_id, supervisor, done_when, expect_minutes, state, round, reviews, auto_review, waits, updated_at, criteria, pending_since, supervisor_source, cardless_told_at
+	rows, err := d.pool.Query(ctx, `SELECT todo_id, supervisor, done_when, expect_minutes, state, round, reviews, auto_review, waits, owner_work, updated_at, criteria, pending_since, supervisor_source, cardless_told_at, investigation_findings, followed_up_at
 		FROM todo_supervision`)
 	if err != nil {
 		return nil, err
@@ -81,8 +87,8 @@ func (d *DB) ListTodoSupervision(ctx context.Context) ([]TodoSupervisionRow, err
 	var out []TodoSupervisionRow
 	for rows.Next() {
 		var r TodoSupervisionRow
-		var when, auto, waits, criteria []byte
-		if err := rows.Scan(&r.TodoID, &r.Supervisor, &when, &r.ExpectMinutes, &r.State, &r.Round, &r.Reviews, &auto, &waits, &r.UpdatedAt, &criteria, &r.PendingSince, &r.SupervisorSource, &r.CardlessToldAt); err != nil {
+		var when, auto, waits, ownerWork, criteria []byte
+		if err := rows.Scan(&r.TodoID, &r.Supervisor, &when, &r.ExpectMinutes, &r.State, &r.Round, &r.Reviews, &auto, &waits, &ownerWork, &r.UpdatedAt, &criteria, &r.PendingSince, &r.SupervisorSource, &r.CardlessToldAt, &r.InvestigationFindings, &r.FollowedUpAt); err != nil {
 			return nil, err
 		}
 		if len(auto) > 0 {
@@ -90,6 +96,9 @@ func (d *DB) ListTodoSupervision(ctx context.Context) ([]TodoSupervisionRow, err
 		}
 		if len(waits) > 0 {
 			r.Waits = waits
+		}
+		if len(ownerWork) > 0 && string(ownerWork) != "[]" {
+			r.OwnerWork = ownerWork
 		}
 		_ = json.Unmarshal(when, &r.DoneWhen)
 		_ = json.Unmarshal(criteria, &r.Criteria)
@@ -102,6 +111,17 @@ func (d *DB) ListTodoSupervision(ctx context.Context) ([]TodoSupervisionRow, err
 // PutTodoSupervision writes a task's ledger whole (the assistant keeps it and writes it as it changes).
 // ErrTodoNotFound when the todo is gone.
 func (d *DB) PutTodoSupervision(ctx context.Context, r TodoSupervisionRow) error {
+	return putTodoSupervision(ctx, d.pool, r)
+}
+
+// TransferTodoSupervisionTx changes only assignment columns and checks the ledger read by the caller.
+func TransferTodoSupervisionTx(ctx context.Context, tx pgx.Tx, prior TodoSupervisionRow, to string, at time.Time) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE todo_supervision SET supervisor = $2, supervisor_source = 'explicit', updated_at = $3
+		WHERE todo_id = $1 AND supervisor = $4 AND updated_at = $5`, prior.TodoID, to, at, prior.Supervisor, prior.UpdatedAt)
+	return tag.RowsAffected() != 0, err
+}
+
+func putTodoSupervision(ctx context.Context, q execer, r TodoSupervisionRow) error {
 	when, _ := json.Marshal(r.DoneWhen)
 	if r.DoneWhen == nil {
 		when = []byte("[]")
@@ -115,19 +135,24 @@ func (d *DB) PutTodoSupervision(ctx context.Context, r TodoSupervisionRow) error
 		reviews = json.RawMessage("[]")
 	}
 	var auto, waits []byte // NULL when no review ran / when no wait holds
+	ownerWork := r.OwnerWork
+	if len(ownerWork) == 0 {
+		ownerWork = json.RawMessage("[]")
+	}
 	if len(r.AutoReview) > 0 {
 		auto = r.AutoReview
 	}
 	if len(r.Waits) > 0 {
 		waits = r.Waits
 	}
-	tag, err := d.pool.Exec(ctx, `INSERT INTO todo_supervision (todo_id, supervisor, done_when, expect_minutes, state, round, reviews, auto_review, waits, updated_at, criteria, pending_since, supervisor_source, cardless_told_at)
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 WHERE EXISTS (SELECT 1 FROM todos WHERE id = $1)
+	tag, err := q.Exec(ctx, `INSERT INTO todo_supervision (todo_id, supervisor, done_when, expect_minutes, state, round, reviews, auto_review, waits, owner_work, updated_at, criteria, pending_since, supervisor_source, cardless_told_at, investigation_findings, followed_up_at)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17 WHERE EXISTS (SELECT 1 FROM todos WHERE id = $1)
 		ON CONFLICT (todo_id) DO UPDATE SET supervisor = EXCLUDED.supervisor, done_when = EXCLUDED.done_when,
 			expect_minutes = EXCLUDED.expect_minutes, state = EXCLUDED.state, round = EXCLUDED.round,
-			reviews = EXCLUDED.reviews, auto_review = EXCLUDED.auto_review, waits = EXCLUDED.waits, updated_at = EXCLUDED.updated_at, criteria = EXCLUDED.criteria,
-			pending_since = EXCLUDED.pending_since, supervisor_source = EXCLUDED.supervisor_source, cardless_told_at = EXCLUDED.cardless_told_at`,
-		r.TodoID, r.Supervisor, when, r.ExpectMinutes, r.State, r.Round, reviews, auto, waits, r.UpdatedAt, criteria, r.PendingSince, r.SupervisorSource, r.CardlessToldAt)
+			reviews = EXCLUDED.reviews, auto_review = EXCLUDED.auto_review, waits = EXCLUDED.waits, owner_work = EXCLUDED.owner_work,
+			updated_at = EXCLUDED.updated_at, criteria = EXCLUDED.criteria,
+			pending_since = EXCLUDED.pending_since, supervisor_source = EXCLUDED.supervisor_source, cardless_told_at = EXCLUDED.cardless_told_at, investigation_findings = EXCLUDED.investigation_findings, followed_up_at = EXCLUDED.followed_up_at`,
+		r.TodoID, r.Supervisor, when, r.ExpectMinutes, r.State, r.Round, reviews, auto, waits, ownerWork, r.UpdatedAt, criteria, r.PendingSince, r.SupervisorSource, r.CardlessToldAt, r.InvestigationFindings, r.FollowedUpAt)
 	if err != nil {
 		return err
 	}
@@ -141,17 +166,56 @@ func (d *DB) PutTodoSupervision(ctx context.Context, r TodoSupervisionRow) error
 // reason while it is open or its start failed, clearing StartError in the same write; false when it was ordinarily
 // done already or it is a concern (only its report closes it). ErrTodoNotFound when it is gone.
 func (d *DB) ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*TodoRow, bool, error) {
+	return reviewDoneTodo(ctx, d.pool, id, reason, accepted, at)
+}
+
+// ReviewDoneTodoTx stages the same closure in a caller's transaction.
+func ReviewDoneTodoTx(ctx context.Context, tx pgx.Tx, id, reason string, accepted bool, at time.Time) (*TodoRow, bool, error) {
+	return reviewDoneTodo(ctx, tx, id, reason, accepted, at)
+}
+
+// ReviewTodo commits a review's ledger and closure together. The final guard runs after the tentative writes;
+// a refusal rolls them both back, including activity that arrived while the database was busy.
+func (d *DB) ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *TodoSupervisionRow, guard func() error) (*TodoRow, bool, error) {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	row, closed, err := reviewDoneTodo(ctx, tx, id, reason, accepted, at)
+	if err != nil {
+		return nil, false, err
+	}
+	if ledger != nil {
+		if err := putTodoSupervision(ctx, tx, *ledger); err != nil {
+			return nil, false, err
+		}
+	}
+	if err := guard(); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return row, closed, nil
+}
+
+func reviewDoneTodo(ctx context.Context, q queryRower, id, reason string, accepted bool, at time.Time) (*TodoRow, bool, error) {
 	doneBy := DoneByCancelled
 	if accepted {
 		doneBy = DoneByReview
 	}
 	var r TodoRow
-	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, start_error = '', updated_at = $2
+	err := q.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, start_error = '', updated_at = $2
 		WHERE id = $1 AND (done_at IS NULL OR start_error <> '') AND kind <> 'concern' RETURNING `+todoColumns, id, at, doneBy, reason).
 		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if _, gerr := d.GetTodo(ctx, id); gerr != nil {
-			return nil, false, gerr
+		var exists bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM todos WHERE id = $1)`, id).Scan(&exists); err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, ErrTodoNotFound
 		}
 		return nil, false, nil
 	}

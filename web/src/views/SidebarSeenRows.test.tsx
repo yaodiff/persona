@@ -128,8 +128,8 @@ describe("Web Agents seen rows (complete list)", () => {
     ]);
 
     const unreadTitle = stateName("unread");
-    expect(sectionByTitle(unreadTitle)?.textContent).toContain("Agent a");
-    expect(sectionByTitle(unreadTitle)?.textContent).toContain("Agent b");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent a");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent b");
     expect(clearSeenBtn()).toBeNull();
     expect(noticeEl()).toBeNull();
 
@@ -139,7 +139,7 @@ describe("Web Agents seen rows (complete list)", () => {
     closeA();
     await flush();
 
-    const unreadSec = sectionByTitle(unreadTitle)!;
+    const unreadSec = sectionByTitle(stateName("done"))!;
     expect(unreadSec.textContent).toContain("Agent a");
     expect(unreadSec.textContent).toContain("Agent b");
     // Drawn as Seen: idle status mark, not unread.
@@ -163,8 +163,8 @@ describe("Web Agents seen rows (complete list)", () => {
     // Clicking Clear seen (1) moves Agent a out of Unread into Seen.
     await act(async () => { clearSeenBtn(unreadSec)!.click(); });
     await flush();
-    expect(sectionByTitle(unreadTitle)?.textContent).not.toContain("Agent a");
-    expect(sectionByTitle(unreadTitle)?.textContent).toContain("Agent b");
+    expect(sectionByTitle(stateName("done"))?.textContent).not.toContain("Agent a");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent b");
     expect(clearSeenBtn()).toBeNull();
     expect(noticeEl()).toBeNull();
   });
@@ -175,7 +175,7 @@ describe("Web Agents seen rows (complete list)", () => {
       row("done1", "idle", { work: { phase: "done", just_finished: true } }),
       row("done2", "idle", { work: { phase: "done", just_finished: true } }),
     ]);
-    const jfTitle = stateName("just_finished");
+    const jfTitle = stateName("done");
     expect(sectionByTitle(jfTitle)?.textContent).toContain("Agent done1");
 
     act(() => markSeenLocally("mac", "done1"));
@@ -211,7 +211,7 @@ describe("Web Agents seen rows (complete list)", () => {
     await flush();
     closeLater();
     await flush();
-    expect(sectionByTitle(unreadTitle)?.textContent).toContain("Agent later");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent later");
     expect(clearSeenBtn()?.textContent).toBe(t("seen-rows.clear_seen", { count: 1 }));
 
     // Clear seen drops `later` out of the Unread filter too.
@@ -238,7 +238,7 @@ describe("Web Agents seen rows (complete list)", () => {
     expect(clearSeenBtn()).toBeNull();
     act(() => setAgentListFilters(DEFAULT_DIMENSION_FILTERS));
     await flush();
-    expect(sectionByTitle(stateName("unread"))?.textContent).not.toContain("Agent a");
+    expect(sectionByTitle(stateName("done"))?.textContent).not.toContain("Agent a");
   });
 
   it("in Leave mode holds only the open row and drops it when its chat closes, with no notice or Clear seen", async () => {
@@ -249,14 +249,14 @@ describe("Web Agents seen rows (complete list)", () => {
 
     const closeA = openChat("mac", "a");
     await flush();
-    expect(sectionByTitle(stateName("unread"))?.textContent).toContain("Agent a");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent a");
     expect(clearSeenBtn()).toBeNull();
     expect(noticeEl()).toBeNull();
 
     closeA();
     await flush();
-    expect(sectionByTitle(stateName("unread"))?.textContent).not.toContain("Agent a");
-    expect(sectionByTitle(stateName("unread"))?.textContent).toContain("Agent b");
+    expect(sectionByTitle(stateName("done"))?.textContent).not.toContain("Agent a");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent b");
   });
 
   it("keeps an otherwise idle space active under By project while it holds a read row", async () => {
@@ -286,12 +286,11 @@ describe("Web Agents seen rows (complete list)", () => {
       row("stay-unread", "unread", { updated_at: "2026-01-01T00:04:00Z" }),
     ]);
 
-    const unreadTitle = stateName("unread");
     // Another device marks `away` seen: hub pushes idle without this browser ever opening it.
     act(() => upsertSession(row("away", "idle", { seen_at: "2026-01-01T00:06:00Z" })));
     await flush();
 
-    const unreadSec = sectionByTitle(unreadTitle)!;
+    const unreadSec = sectionByTitle(stateName("done"))!;
     expect(unreadSec.textContent).toContain("Agent away");
     expect(unreadSec.querySelector('a[href="/s/mac/away"] .status-mark')?.getAttribute("data-state")).toBe("idle");
     expect(clearSeenBtn(unreadSec)?.textContent).toBe(t("seen-rows.clear_seen", { count: 1 }));
@@ -314,8 +313,8 @@ describe("Web Agents seen rows (complete list)", () => {
     await flush();
     closeA();
     await flush();
-    expect(sectionByTitle(unreadTitle)?.textContent).toContain("Agent a");
-    expect(sectionByTitle(unreadTitle)?.textContent).toContain("Agent b");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent a");
+    expect(sectionByTitle(stateName("done"))?.textContent).toContain("Agent b");
 
     // Click Mark all as seen and confirm in the dialog: both Agent b (unread) and Agent a (already read & held) leave at once.
     const markAllBtn = [...agentsRoot().querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(t("lib-state-labels.mark_all_seen")))!;
@@ -324,7 +323,7 @@ describe("Web Agents seen rows (complete list)", () => {
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent?.includes("1"))!;
     await act(async () => { confirmBtn.click(); });
     await flush();
-    expect(sectionByTitle(unreadTitle)).toBeUndefined();
+    expect(sectionByTitle(stateName("done"))).toBeUndefined();
     expect(clearSeenBtn()).toBeNull();
   });
 
@@ -342,7 +341,7 @@ describe("Web Agents seen rows (complete list)", () => {
 });
 
 describe("Web Agents seen rows (paged list / BoundedAgentsBlock)", () => {
-  it("keeps a read row in By status Unread with count 0 and Clear seen (1) even after hub counts drop to 0", async () => {
+  it("keeps a read row in By status Done with count 0 and Clear seen (1) even after hub counts drop to 0", async () => {
     await loadPages();
     localStorage.setItem("persona.agentGrouping", "state");
     let serverRows: Session[] = [row("p1", "unread")];
@@ -381,8 +380,8 @@ describe("Web Agents seen rows (paged list / BoundedAgentsBlock)", () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
 
-    expect(host.querySelector("[data-paged-sessions]")).not.toBeNull();
-    const unreadGroup = () => host.querySelector<HTMLElement>('[data-session-group="unread"]');
+    expect(host.querySelector("[data-paged-sessions]")).toBeNull();
+    const unreadGroup = () => sectionByTitle(stateName("done")) ?? null;
     expect(unreadGroup()?.textContent).toContain("Agent p1");
 
     // User opens p1 and closes it; hub marks it idle.

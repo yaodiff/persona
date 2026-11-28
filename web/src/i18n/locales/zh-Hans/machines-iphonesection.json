@@ -1,11 +1,11 @@
 {
   "title": "iPhone 操控",
-  "allow": "允许助手经这台电脑操控 iPhone",
-  "allow_detail": "经这台电脑看 iPhone 的屏幕、点按、输入、截图",
-  "turn_on_failed": "打开失败：{error}",
-  "turn_off_failed": "关掉失败：{error}",
+  "allow": "允许助手通过这台电脑操控 iPhone",
+  "allow_detail": "通过这台电脑查看 iPhone 屏幕、点按、输入和截图",
+  "turn_on_failed": "开启失败：{error}",
+  "turn_off_failed": "关闭失败：{error}",
   "install": "安装 iPhone 助手程序",
-  "retry": "再试一次",
+  "retry": "重试",
   "check_again": "重新检查",
   "pair": "配对",
   "prepare": "准备",
@@ -13,5 +13,5 @@
   "more": "{name} 的更多操作",
   "forget": "忘记这台 iPhone",
   "forget_confirm": "忘记",
-  "forget_detail": "这台电脑会删掉和这台 iPhone 的配对；再配对要接数据线。"
+  "forget_detail": "这台电脑将删除与此 iPhone 的配对记录；如需重新配对，需使用数据线连接。"
 }

@@ -72,6 +72,31 @@ func scanTodoBlockerRows(rows pgx.Rows) ([]TodoBlockerRow, error) {
 
 // UpsertTodoBlocker inserts or updates a persistent blocker edge by its primary key id.
 func (d *DB) UpsertTodoBlocker(ctx context.Context, r TodoBlockerRow) (*TodoBlockerRow, error) {
+	return upsertTodoBlocker(ctx, d.pool, r)
+}
+
+func upsertTodoBlocker(ctx context.Context, q queryRower, r TodoBlockerRow) (*TodoBlockerRow, error) {
+	return writeTodoBlocker(ctx, q, r, `DO UPDATE SET
+		todo_id = EXCLUDED.todo_id,
+		kind = EXCLUDED.kind,
+		target_ref = EXCLUDED.target_ref,
+		condition_json = EXCLUDED.condition_json,
+		state = EXCLUDED.state,
+		attempts = EXCLUDED.attempts,
+		updated_at = EXCLUDED.updated_at,
+		resolved_at = EXCLUDED.resolved_at`)
+}
+
+// EnsureTodoBlocker inserts a missing blocker without reactivating a row that has already ended.
+func (d *DB) EnsureTodoBlocker(ctx context.Context, r TodoBlockerRow) (*TodoBlockerRow, error) {
+	row, err := writeTodoBlocker(ctx, d.pool, r, "DO NOTHING")
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return row, err
+}
+
+func writeTodoBlocker(ctx context.Context, q queryRower, r TodoBlockerRow, onConflict string) (*TodoBlockerRow, error) {
 	r.ID = strings.TrimSpace(r.ID)
 	r.TodoID = strings.TrimSpace(r.TodoID)
 	r.Kind = strings.TrimSpace(r.Kind)
@@ -97,20 +122,11 @@ func (d *DB) UpsertTodoBlocker(ctx context.Context, r TodoBlockerRow) (*TodoBloc
 		r.UpdatedAt = r.CreatedAt
 	}
 
-	return scanTodoBlocker(d.pool.QueryRow(ctx, `INSERT INTO todo_blockers (
+	return scanTodoBlocker(q.QueryRow(ctx, `INSERT INTO todo_blockers (
 		id, todo_id, kind, target_ref, condition_json, state, attempts, created_at, updated_at, resolved_at
 	) VALUES (
 		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-	) ON CONFLICT (id) DO UPDATE SET
-		todo_id = EXCLUDED.todo_id,
-		kind = EXCLUDED.kind,
-		target_ref = EXCLUDED.target_ref,
-		condition_json = EXCLUDED.condition_json,
-		state = EXCLUDED.state,
-		attempts = EXCLUDED.attempts,
-		updated_at = EXCLUDED.updated_at,
-		resolved_at = EXCLUDED.resolved_at
-	RETURNING `+todoBlockerCols,
+	) ON CONFLICT (id) `+onConflict+` RETURNING `+todoBlockerCols,
 		r.ID, r.TodoID, r.Kind, r.TargetRef, r.ConditionJSON, r.State, r.Attempts, r.CreatedAt, r.UpdatedAt, r.ResolvedAt,
 	))
 }
@@ -127,11 +143,53 @@ func (d *DB) ListActiveTodoBlockers(ctx context.Context) ([]TodoBlockerRow, erro
 	return scanTodoBlockerRows(rows)
 }
 
+// ListTodoReadinessBlockers reads the blockers for a projection in one query. Stage rules and
+// the evidence that an approved PR blocker was stored remain relevant after resolution.
+func (d *DB) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]TodoBlockerRow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT `+todoBlockerCols+` FROM todo_blockers
+		WHERE todo_id = ANY($1) AND (state = 'active' OR kind IN ('todo_stage', 'external_pr'))
+		ORDER BY created_at ASC, id ASC`, todoIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTodoBlockerRows(rows)
+}
+
+// ListMergeTrainPRBlockers reads the current PR-keyed rows and the legacy repository-keyed rows.
+func (d *DB) ListMergeTrainPRBlockers(ctx context.Context, prURL, repoKey string) ([]TodoBlockerRow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT `+todoBlockerCols+` FROM todo_blockers
+		WHERE kind = 'merge_train' AND LOWER(target_ref) IN (LOWER($1), LOWER($2))
+		ORDER BY created_at ASC, id ASC`, prURL, repoKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTodoBlockerRows(rows)
+}
+
+// UpdateActiveTodoBlockerCondition records a changed observation without touching the attempt count.
+func (d *DB) UpdateActiveTodoBlockerCondition(ctx context.Context, id, condition string, at time.Time) (*TodoBlockerRow, error) {
+	row, err := scanTodoBlocker(d.pool.QueryRow(ctx, `UPDATE todo_blockers
+		SET condition_json = $2, updated_at = $3 WHERE id = $1 AND state = 'active'
+		RETURNING `+todoBlockerCols, id, condition, at))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return row, err
+}
+
 // ListTodoBlockersByTodo returns all blocker edges (any state) attached to todoID.
 func (d *DB) ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]TodoBlockerRow, error) {
-	rows, err := d.pool.Query(ctx,
-		`SELECT `+todoBlockerCols+` FROM todo_blockers WHERE todo_id = $1 ORDER BY created_at ASC, id ASC`,
-		strings.TrimSpace(todoID))
+	return listTodoBlockersByTodo(ctx, d.pool, todoID, false)
+}
+
+func listTodoBlockersByTodo(ctx context.Context, q rowQuerier, todoID string, lock bool) ([]TodoBlockerRow, error) {
+	query := `SELECT ` + todoBlockerCols + ` FROM todo_blockers WHERE todo_id = $1 ORDER BY created_at ASC, id ASC`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	rows, err := q.Query(ctx, query, strings.TrimSpace(todoID))
 	if err != nil {
 		return nil, err
 	}
@@ -152,8 +210,7 @@ func (d *DB) ListActiveTodoBlockersByTarget(ctx context.Context, targetRef strin
 	return scanTodoBlockerRows(rows)
 }
 
-// ResolveTodoBlocker marks blocker id as resolved and sets resolved_at when unset.
-// Returns nil, nil when id does not exist.
+// ResolveTodoBlocker marks an active blocker as resolved. A missing or changed row returns nil.
 func (d *DB) ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*TodoBlockerRow, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()
@@ -162,7 +219,7 @@ func (d *DB) ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*
 		SET state = $2,
 		    updated_at = $3,
 		    resolved_at = COALESCE(resolved_at, $3)
-		WHERE id = $1
+		WHERE id = $1 AND state = 'active'
 		RETURNING `+todoBlockerCols,
 		strings.TrimSpace(id), TodoBlockerStateResolved, at))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -171,17 +228,20 @@ func (d *DB) ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*
 	return row, err
 }
 
-// CancelTodoBlocker marks blocker id as cancelled and sets resolved_at when unset.
-// Returns nil, nil when id does not exist.
+// CancelTodoBlocker marks an active blocker as cancelled. A missing or changed row returns nil.
 func (d *DB) CancelTodoBlocker(ctx context.Context, id string, at time.Time) (*TodoBlockerRow, error) {
+	return cancelTodoBlocker(ctx, d.pool, id, at)
+}
+
+func cancelTodoBlocker(ctx context.Context, q queryRower, id string, at time.Time) (*TodoBlockerRow, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	row, err := scanTodoBlocker(d.pool.QueryRow(ctx, `UPDATE todo_blockers
+	row, err := scanTodoBlocker(q.QueryRow(ctx, `UPDATE todo_blockers
 		SET state = $2,
 		    updated_at = $3,
 		    resolved_at = COALESCE(resolved_at, $3)
-		WHERE id = $1
+		WHERE id = $1 AND state = 'active'
 		RETURNING `+todoBlockerCols,
 		strings.TrimSpace(id), TodoBlockerStateCancelled, at))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -190,8 +250,8 @@ func (d *DB) CancelTodoBlocker(ctx context.Context, id string, at time.Time) (*T
 	return row, err
 }
 
-// IncrementTodoBlockerAttempts atomically increments the persistent attempt counter for blocker id.
-// Returns nil, nil when id does not exist.
+// IncrementTodoBlockerAttempts atomically increments the attempt counter for an active blocker.
+// A missing or changed row returns nil.
 func (d *DB) IncrementTodoBlockerAttempts(ctx context.Context, id string, at time.Time) (*TodoBlockerRow, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()
@@ -199,7 +259,7 @@ func (d *DB) IncrementTodoBlockerAttempts(ctx context.Context, id string, at tim
 	row, err := scanTodoBlocker(d.pool.QueryRow(ctx, `UPDATE todo_blockers
 		SET attempts = attempts + 1,
 		    updated_at = $2
-		WHERE id = $1
+		WHERE id = $1 AND state = 'active'
 		RETURNING `+todoBlockerCols,
 		strings.TrimSpace(id), at))
 	if errors.Is(err, pgx.ErrNoRows) {

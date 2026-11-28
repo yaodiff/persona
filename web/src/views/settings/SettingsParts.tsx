@@ -139,23 +139,6 @@ export function RowFailed({ text, retry, onRetry }: { text: React.ReactNode; ret
   );
 }
 
-/** `animated`: crossfade tone changes (#2757). `wrap`: keep long explanatory chips inside a narrow row. */
-export function Pill({ children, tone, animated, wrap, size }: { children: React.ReactNode; tone?: "accent" | "green" | "red" | "orange"; animated?: boolean; wrap?: boolean; size?: "sm" }) {
-  return (
-    <span
-      style={animated ? { transitionTimingFunction: EASE } : undefined}
-      className={cx(
-        animated && "transition-[background-color,color,box-shadow] duration-300",
-        "inline-flex items-center rounded-full text-[11px] font-medium",
-        size === "sm" ? "px-1" : "px-1.5",
-        wrap ? "min-h-5 max-w-full whitespace-normal break-words py-0.5" : "h-5 shrink-0 whitespace-nowrap",
-        tone === "accent" ? "bg-accent-tint text-accent-ink" : tone === "green" ? "bg-green-tint text-green" : tone === "red" ? "bg-red-tint text-red" : tone === "orange" ? "bg-orange-tint text-orange" : "bg-inset text-ink-2 shadow-hairline",
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-// The switch lives with the other atoms now (the chat's ultracode switch uses it too, #3428); settings pages keep importing it from here.
-export { Switch } from "../../ui/atoms";
+// The switch lives with the other atoms now (the chat's ultracode switch uses it too, #3428), and so does the pill (the idle
+// extension renderer uses it, and SettingsParts is not on the first screen); settings pages keep importing both from here.
+export { Pill, Switch } from "../../ui/atoms";

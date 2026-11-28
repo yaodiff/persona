@@ -8,7 +8,7 @@ import { initI18n, t } from "../i18n";
 import enTodos from "../i18n/locales/en/todos.json";
 import zhTodos from "../i18n/locales/zh-Hans/todos.json";
 import jaTodos from "../i18n/locales/ja/todos.json";
-import { waitsForOwner, type Todo } from "../lib/todos";
+import { waitsForOwner, type Todo, type TodoBoardProjection } from "../lib/todos";
 import { waitName } from "../lib/state-labels";
 import type { Session } from "../lib/types";
 
@@ -37,7 +37,7 @@ vi.mock("../lib/api", async (orig) => ({
   api: (path: string, init?: unknown) => api(path, init),
 }));
 
-const { getState, reset } = await import("../lib/store");
+const { getState, patchAssistant, reset } = await import("../lib/store");
 const { TodosView } = await import("./Todos");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -423,10 +423,339 @@ describe("the read-only To-dos board (#12713)", () => {
       "board_no_progress",
       "board_stale",
       "board_stale_hours",
+      "direction_uncategorized",
+      "done_direction_filter_label",
+      "direction_done_count",
+      "detail_subtasks_done_toggle",
     ]) expect(strings[key], `${lang} todos.${key}`).toBeTruthy();
+    expect(strings.direction_review_done_label_other ?? strings.direction_review_done_label, `${lang} todos.direction_review_done_label`).toBeTruthy();
     for (const key of ["board_open_count", "board_waiting_count", "board_stale_count"]) {
       expect(strings[`${key}_other`] ?? strings[key], `${lang} todos.${key}`).toBeTruthy();
       expect(t(`todos.${key}`, { count: 2, ...(key === "board_waiting_count" ? { state: waitName("owner") } : {}) })).not.toBe(`todos.${key}`);
     }
+  });
+
+  it("renders zero v2 board controls or hierarchy/direction badges when todos_v2 is off (#16939)", async () => {
+    const parent = todo("parent", "Parent goal", {
+      project: "apollo",
+      direction_id: "dir-platform",
+      effective_direction_id: "dir-platform",
+      effective_direction_name: "Platform Stream",
+      child_summary: { total: 3, open: 2, needs_you: 1, working: 1, done: 1 },
+    });
+    const child = todo("child", "Child task", {
+      project: "apollo",
+      part_of: "parent",
+      effective_direction_id: "dir-platform",
+      effective_direction_name: "Platform Stream",
+    });
+    const todoBoard: TodoBoardProjection = {
+      status_groups: [],
+      direction_groups: [
+        {
+          direction_id: "dir-platform",
+          label: "Platform Stream",
+          todo_ids: ["parent", "child"],
+          counts: { needs_you: 0, in_progress: 2, pending_review: 0, waiting: 0, done: 0, total: 2 },
+        },
+      ],
+      sidebar_tree: [],
+      counts: { needs_you: 0, in_progress: 2, pending_review: 0, waiting: 0, someday: 0, done: 0, open_total: 2 },
+    };
+    hub = [parent, child];
+    seed({
+      todos: hub,
+      todoBoard,
+      todosLoaded: true,
+      todosError: null,
+      todosSupported: true,
+      machines: [{ id: "mac", name: "Mac", online: true }],
+      sessions: { mac: [worker] },
+      taskRows: {},
+      interactions: [],
+      answered: {},
+      features: [],
+      assistant: {
+        machine_id: "mac",
+        main: "main",
+        leaders: ["dir-platform"],
+        conversations: [{ machine_id: "mac", session_id: "dir-platform", title: "Platform Direction" }],
+        todos_v2: false,
+      },
+    });
+    await act(async () => root.render(<TodosView />));
+    await flush();
+    await openBoard();
+
+    expect(board()?.querySelector("[data-testid=todo-board-grouping]")).toBeNull();
+    expect(board()?.querySelector("[data-testid=board-direction-tag]")).toBeNull();
+    expect(board()?.querySelector("[data-testid=board-parent-goal]")).toBeNull();
+    expect(board()?.querySelector("[data-testid=board-child-summary]")).toBeNull();
+    expect(row("child")?.querySelector("button")).toBeNull();
+  });
+});
+
+describe("To-dos v2 board direction, hierarchy, and grouping (#16939)", () => {
+  const renderV2Board = async ({
+    todos,
+    todoBoard = null,
+    sessions = [worker],
+    todosV2 = true,
+  }: {
+    todos: Todo[];
+    todoBoard?: TodoBoardProjection | null;
+    sessions?: Session[];
+    todosV2?: boolean;
+  }) => {
+    hub = todos;
+    seed({
+      todos,
+      todoBoard,
+      todosLoaded: true,
+      todosError: null,
+      todosSupported: true,
+      machines: [{ id: "mac", name: "Mac", online: true }],
+      sessions: { mac: sessions },
+      taskRows: {},
+      interactions: [],
+      answered: {},
+      features: [],
+      assistant: {
+        machine_id: "mac",
+        main: "main",
+        leaders: ["dir-platform", "dir-growth"],
+        conversations: [
+          { machine_id: "mac", session_id: "dir-platform", title: "Platform Direction" },
+          { machine_id: "mac", session_id: "dir-growth", title: "Growth Direction" },
+        ],
+        todos_v2: todosV2,
+      },
+    });
+    await act(async () => root.render(<TodosView />));
+    await flush();
+    await openBoard();
+  };
+
+  const boardGroupingButton = (value: "project" | "direction") =>
+    board()?.querySelector<HTMLButtonElement>(`[data-testid=todo-board-grouping] [data-board-grouping="${value}"]`);
+
+  const directionGroup = (directionId: string) =>
+    board()?.querySelector<HTMLElement>(`[data-testid=todo-board-group][data-direction="${directionId}"]`);
+
+  it("renders effective direction tags for explicit direction_id, server effective_direction_name, and board.direction_groups", async () => {
+    const explicit = todo("explicit-dir", "Explicit direction item", {
+      project: "apollo",
+      direction_id: "dir-growth",
+    });
+    const serverEffective = todo("server-eff", "Server effective direction item", {
+      project: "apollo",
+      effective_direction_id: "dir-platform",
+      effective_direction_name: "Platform Stream",
+    });
+    const boardGroupResolved = todo("board-dir", "Board direction_groups item", {
+      project: "beta",
+    });
+    const ungrouped = todo("ungrouped", "No direction item", {
+      project: "beta",
+    });
+    const todoBoard: TodoBoardProjection = {
+      status_groups: [{
+        key: "in_progress",
+        total_count: 4,
+        visible_count: 4,
+        entries: [explicit, serverEffective, boardGroupResolved, ungrouped].map(({ id }) => ({ todo_id: id })),
+      }],
+      direction_groups: [
+        {
+          direction_id: "dir-platform",
+          label: "Platform Stream",
+          todo_ids: ["board-dir"],
+          counts: { needs_you: 0, in_progress: 1, pending_review: 0, waiting: 0, done: 0, total: 1 },
+        },
+      ],
+      sidebar_tree: [],
+      counts: { needs_you: 0, in_progress: 4, pending_review: 0, waiting: 0, someday: 0, done: 0, open_total: 4 },
+    };
+
+    await renderV2Board({ todos: [explicit, serverEffective, boardGroupResolved, ungrouped], todoBoard });
+
+    const explicitTag = row("explicit-dir")?.querySelector("[data-testid=board-direction-tag]");
+    expect(explicitTag?.textContent).toBe("Growth Direction");
+    expect(explicitTag?.getAttribute("data-direction-inherited")).toBe("false");
+
+    const serverTag = row("server-eff")?.querySelector("[data-testid=board-direction-tag]");
+    expect(serverTag?.textContent).toBe("Platform Stream");
+    expect(serverTag?.getAttribute("data-direction-inherited")).toBe("true");
+
+    const boardTag = row("board-dir")?.querySelector("[data-testid=board-direction-tag]");
+    expect(boardTag?.textContent).toBe("Platform Stream");
+    expect(boardTag?.getAttribute("data-direction-inherited")).toBe("true");
+
+    expect(row("ungrouped")?.querySelector("[data-testid=board-direction-tag]")).toBeNull();
+  });
+
+  it("renders clickable parent goal breadcrumb and jumps to parent detail without triggering child row click", async () => {
+    const parent = todo("goal-parent", "Ship Q4 platform release", {
+      project: "apollo",
+      direction_id: "dir-platform",
+    });
+    const child = todo("goal-child", "Update board hierarchy UI", {
+      project: "apollo",
+      part_of: "goal-parent",
+    });
+    const orphanChild = todo("orphan-child", "Task under unloaded parent", {
+      project: "apollo",
+      part_of: "missing-parent",
+    });
+
+    await renderV2Board({ todos: [parent, child, orphanChild] });
+
+    const parentBtn = row("goal-child")?.querySelector<HTMLButtonElement>("button[data-testid=board-parent-goal]");
+    expect(parentBtn).toBeTruthy();
+    expect(parentBtn?.textContent).toContain(t("todos.goal_parent_hint", { title: "Ship Q4 platform release" }));
+    // Board row with clickable parent goal uses sibling controls rather than nesting a button inside role="button" (#17696)
+    expect(row("goal-child")?.getAttribute("role")).toBeNull();
+    expect(parentBtn?.closest('[role="button"]')).toBeNull();
+    expect(row("goal-child")?.querySelector<HTMLButtonElement>("button[data-testid=board-row-open]")).toBeTruthy();
+
+    // Inherited direction from parent also resolves cleanly via effectiveDirectionOf.
+    expect(row("goal-child")?.querySelector("[data-testid=board-direction-tag]")?.textContent).toBe("Platform Direction");
+
+    // Non-loaded parent renders as a non-interactive span fallback.
+    expect(row("orphan-child")?.querySelector("button[data-testid=board-parent-goal]")).toBeNull();
+    expect(row("orphan-child")?.querySelector("span[data-testid=board-parent-goal]")?.textContent).toContain("missing-parent");
+
+    // Clicking parent breadcrumb opens parent detail, NOT child detail.
+    await act(async () => parentBtn!.click());
+    await flush();
+    expect(host.querySelector<HTMLInputElement>("[data-testid=todo-detail] input[type=text]")?.value).toBe("Ship Q4 platform release");
+  });
+
+  it("renders server child_summary progress badges and falls back to direct children when child_summary is absent", async () => {
+    const serverParent = todo("server-parent", "Parent with server summary", {
+      project: "apollo",
+      child_summary: { total: 5, open: 3, needs_you: 1, working: 2, done: 2 },
+    });
+    const fallbackParent = todo("fallback-parent", "Parent computed from children", {
+      project: "apollo",
+    });
+    const doneChild = todo("fb-done", "Done subtask", {
+      project: "apollo",
+      part_of: "fallback-parent",
+      done_at: iso(HOUR),
+    });
+    const workingChild = todo("fb-working", "Working subtask", {
+      project: "apollo",
+      part_of: "fallback-parent",
+      agents: [link("worker-1")],
+    });
+    const blockedChild = ownerDecision(todo("fb-blocked", "Blocked subtask", {
+      project: "apollo",
+      part_of: "fallback-parent",
+    }));
+    const allDoneParent = todo("all-done-parent", "Parent with all children done stays open", {
+      project: "beta",
+      child_summary: { total: 2, open: 0, needs_you: 0, working: 0, done: 2 },
+    });
+    const leaf = todo("leaf-item", "Standalone leaf", { project: "beta" });
+
+    await renderV2Board({
+      todos: [serverParent, fallbackParent, doneChild, workingChild, blockedChild, allDoneParent, leaf],
+    });
+
+    const serverBadge = row("server-parent")?.querySelector("[data-testid=board-child-summary]");
+    expect(serverBadge?.textContent).toContain(t("todos.goal_progress", { done: 2, total: 5 }));
+    expect(serverBadge?.querySelector("[data-testid=board-child-summary-working]")?.textContent).toBe(
+      t("todos.child_summary_working", { count: 2 }),
+    );
+    expect(serverBadge?.querySelector("[data-testid=board-child-summary-blocked]")?.textContent).toBe(
+      t("todos.goal_blocked", { count: 1 }),
+    );
+
+    const fallbackBadge = row("fallback-parent")?.querySelector("[data-testid=board-child-summary]");
+    expect(fallbackBadge?.textContent).toContain(t("todos.goal_progress", { done: 1, total: 3 }));
+    expect(fallbackBadge?.querySelector("[data-testid=board-child-summary-working]")?.textContent).toBe(
+      t("todos.child_summary_working", { count: 1 }),
+    );
+    expect(fallbackBadge?.querySelector("[data-testid=board-child-summary-blocked]")?.textContent).toBe(
+      t("todos.goal_blocked", { count: 1 }),
+    );
+
+    // Parent with all children done remains visible on open board (never auto-closed).
+    const allDoneBadge = row("all-done-parent")?.querySelector("[data-testid=board-child-summary]");
+    expect(allDoneBadge?.textContent).toContain(t("todos.goal_progress", { done: 2, total: 2 }));
+    expect(allDoneBadge?.querySelector("[data-testid=board-child-summary-working]")).toBeNull();
+    expect(allDoneBadge?.querySelector("[data-testid=board-child-summary-blocked]")).toBeNull();
+
+    // Leaf has no child summary badge.
+    expect(row("leaf-item")?.querySelector("[data-testid=board-child-summary]")).toBeNull();
+  });
+
+  it("switches board grouping, sorts ungrouped last, hides redundant tags, and keeps the v2 choice across rollback", async () => {
+    const platA = ownerDecision(todo("plat-a", "Platform waiting task", {
+      project: "apollo",
+      effective_direction_id: "dir-platform",
+      effective_direction_name: "Platform Stream",
+      ...progress(iso(80 * HOUR)),
+    }));
+    const growthA = todo("growth-a", "Growth fresh task", {
+      project: "apollo",
+      direction_id: "dir-growth",
+      ...progress(iso(HOUR)),
+    });
+    const ungroupedA = todo("ungrouped-a", "Secretary ungrouped task", {
+      project: "beta",
+      ...progress(iso(2 * HOUR)),
+    });
+
+    await renderV2Board({ todos: [platA, growthA, ungroupedA] });
+
+    // Defaults to project grouping; direction tags are shown on rows with directions.
+    expect(boardGroupingButton("project")?.getAttribute("aria-checked")).toBe("true");
+    expect(boardGroupingButton("direction")?.getAttribute("aria-checked")).toBe("false");
+    expect(group("apollo")).toBeTruthy();
+    expect(group("beta")).toBeTruthy();
+    expect(row("plat-a")?.querySelector("[data-testid=board-direction-tag]")?.textContent).toBe("Platform Stream");
+    expect(row("growth-a")?.querySelector("[data-testid=board-direction-tag]")?.textContent).toBe("Growth Direction");
+
+    // Toggle to By direction.
+    await act(async () => boardGroupingButton("direction")!.click());
+    await flush();
+
+    expect(boardGroupingButton("direction")?.getAttribute("aria-checked")).toBe("true");
+    expect(boardGroupingButton("project")?.getAttribute("aria-checked")).toBe("false");
+
+    const sections = [...(board()?.querySelectorAll<HTMLElement>("[data-testid=todo-board-group]") ?? [])];
+    expect(sections.map((el) => el.getAttribute("data-direction"))).toEqual(["dir-growth", "dir-platform", ""]);
+
+    expect(directionGroup("dir-growth")?.textContent).toContain("Growth Direction");
+    expect(directionGroup("dir-platform")?.textContent).toContain("Platform Stream");
+    expect(directionGroup("dir-platform")?.getAttribute("data-waiting-count")).toBe("1");
+    expect(directionGroup("dir-platform")?.getAttribute("data-stale-count")).toBe("1");
+    expect(directionGroup("")?.querySelector("header")?.textContent).toContain(t("todos.direction_uncategorized"));
+    expect(directionGroup("")?.querySelector("header")?.textContent).not.toContain(t("lib-todo-tree.secretary"));
+
+    // Redundant direction chips matching the current direction group are omitted.
+    expect(row("plat-a")?.querySelector("[data-testid=board-direction-tag]")).toBeNull();
+    expect(row("growth-a")?.querySelector("[data-testid=board-direction-tag]")).toBeNull();
+    expect(row("ungrouped-a")?.querySelector("[data-testid=board-direction-tag]")).toBeNull();
+
+    // Turning todos_v2 off immediately hides the switcher and restores project grouping.
+    await act(async () => {
+      patchAssistant({ todos_v2: false });
+    });
+    await flush();
+    expect(board()?.querySelector("[data-testid=todo-board-grouping]")).toBeNull();
+    expect(group("apollo")).toBeTruthy();
+    expect(group("beta")).toBeTruthy();
+    expect(board()?.querySelector("[data-testid=board-direction-tag]")).toBeNull();
+
+    // Re-enabling the Lab restores the previous v2 choice.
+    await act(async () => {
+      patchAssistant({ todos_v2: true });
+    });
+    await flush();
+    expect(boardGroupingButton("direction")?.getAttribute("aria-checked")).toBe("true");
+    expect(directionGroup("dir-platform")).toBeTruthy();
   });
 });

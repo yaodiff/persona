@@ -155,7 +155,7 @@ class PersonaModelPanelTest {
         // no list names it: the model it is set up with, said briefly
         assertEquals(PillSetup("claude", "Team API", "sonnet", "high"), pill.setup)
         val main = PersonaModelPanel.pill(of(chat, main = true), PersonaModelPanel.setup(of(chat, main = true), info), info, read("claude"))
-        assertEquals(PillSetup("claude", "claude", "Opus 5.5", "high"), main.setup)
+        assertEquals(PillSetup("claude", "Claude Code", "Opus 5.5", "high"), main.setup)
     }
 
     @Test fun aSavedAliasSelectsTheFoldedRowWithoutADuplicatePick() {

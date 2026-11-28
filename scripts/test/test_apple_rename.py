@@ -125,9 +125,10 @@ class AppleRenameTests(unittest.TestCase):
             'Persona/Intents/PersonaStatusIntent.swift': ['PersonaStatusIntent'],
             'Persona/Intents/PersonaShortcuts.swift': ['PersonaShortcuts'],
             'PersonaWidgets/PersonaControls.swift': ['AskPersonaControl', 'PersonaAgentsControl', 'DictatePersonaControl',
-                                                     'CallPersonaControl'],
+                                                     'CallPersonaControl', 'MessagePersonaControl'],
             'LiveActivity/PersonaControlIntents.swift': ['OpenPersonaAssistantIntent', 'OpenPersonaAgentsIntent',
-                                                         'OpenPersonaDictationIntent', 'OpenPersonaCallIntent'],
+                                                         'OpenPersonaDictationIntent', 'OpenPersonaCallIntent',
+                                                         'OpenPersonaTypingIntent'],
             'LiveActivity/PersonaActivityAttributes.swift': ['PersonaActivityAttributes'],
         }
         for path, names in expected.items():

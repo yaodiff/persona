@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/netproxy"
+	"github.com/nwverse/persona/server/internal/update"
 )
 
 // The hub's update source (docs/operations/hub-update.md "Update source", #4522): where it reads latest.json and
@@ -17,13 +18,15 @@ import (
 // says otherwise without a new build, and update.proxy sends these requests alone through a proxy: the rest of what
 // the hub talks to never goes through it.
 
+const officialReleaseUpdateURL = "https://github.com/nwverse/persona/releases/latest/download"
+
 // Where the update source came from (updateView.UpdateFrom).
 const (
 	updateFromConfig = "hub.json"
 	updateFromBuild  = "build"
 )
 
-// updateSource is the update source as hub.json and the build say.
+// updateSource is the effective release source and where it came from.
 type updateSource struct {
 	url  string // where latest.json is, without a trailing slash; "" nowhere
 	from string // updateFromConfig or updateFromBuild; "" with no url
@@ -37,31 +40,34 @@ type updateSource struct {
 // updateSource is read again at every use: the tests give the hub its build after it was made.
 func (h *Hub) updateSource() updateSource {
 	s := updateSource{url: strings.TrimRight(strings.TrimSpace(h.build.UpdateURL), "/")}
-	if h.cfg != nil && h.cfg.Security.PrivateNetworkOnly {
+	privateOnly := h.cfg != nil && h.cfg.Security.PrivateNetworkOnly
+	if privateOnly {
 		s.url = "" // office network mode: only an update.url the organization gives (private_network.go)
 	}
 	if s.url != "" {
 		s.from = updateFromBuild
 	}
-	if h.cfg == nil {
-		return s
-	}
-	if raw := strings.TrimSpace(h.cfg.Update.URL); raw != "" {
-		u, err := parseUpdateURL(raw)
-		s.url, s.from, s.urlErr = u, updateFromConfig, err
-		if err != nil {
-			s.from = ""
+	if h.cfg != nil {
+		if raw := strings.TrimSpace(h.cfg.Update.URL); raw != "" {
+			u, err := parseUpdateURL(raw)
+			s.url, s.from, s.urlErr = u, updateFromConfig, err
+			if err != nil {
+				s.from = ""
+			}
+		}
+		if p, err := netproxy.Parse(h.cfg.Update.Proxy); err != nil {
+			s.proxyErr = fmt.Errorf("hub.json update.proxy: %w", err) // netproxy leaves out user:pass
+		} else {
+			s.proxy = p
 		}
 	}
-	if p, err := netproxy.Parse(h.cfg.Update.Proxy); err != nil {
-		s.proxyErr = fmt.Errorf("hub.json update.proxy: %w", err) // netproxy leaves out user:pass
-	} else {
-		s.proxy = p
+	if !privateOnly && s.url == "" && s.urlErr == nil && h.build.Channel == update.Release && strings.HasPrefix(h.version, "web-dev-") {
+		s.url, s.from = officialReleaseUpdateURL, updateFromBuild
 	}
 	return s
 }
 
-// updateURL is where this hub looks for releases: hub.json's update.url, else the build's; "" nowhere.
+// updateURL is where this hub looks for releases, or empty when there is no source.
 func (h *Hub) updateURL() string { return h.updateSource().url }
 
 // selfUpdates is Build.SelfUpdates with the update source hub.json may give.

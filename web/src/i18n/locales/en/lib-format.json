@@ -4,7 +4,7 @@
   "source_identity_conflict": "Identity conflict",
   "source_claude_background": "Claude background",
   "source_claude_desktop": "Claude desktop app",
-  "source_claude_terminal": "Claude in a terminal",
+  "source_claude_terminal": "Claude in a tab",
   "read_only": "{source} · View only: {reason}",
   "read_only_default_reason": "This source doesn't allow sending yet",
   "untitled_session": "Untitled session",

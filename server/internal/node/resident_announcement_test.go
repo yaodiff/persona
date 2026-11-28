@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -45,6 +46,88 @@ func TestResidentReportsUpdatePreflightFailure(t *testing.T) {
 		t.Fatalf("preflight failure suspended the resident: %v", err)
 	} else {
 		leave()
+	}
+}
+
+func TestResidentReportsUpdateDrainingAndIncludesInInfoAndRestarting(t *testing.T) {
+	if !slices.Contains(nodeproto.Announced, nodeproto.NodeUpdateDrain) {
+		t.Fatalf("nodeproto.Announced missing %q", nodeproto.NodeUpdateDrain)
+	}
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	peer, manager := rpc.New("node", a), rpc.New("manager", b)
+	drainingCh := make(chan proto.NodeUpdateDraining, 1)
+	restartingCh := make(chan proto.NodeUpdateDraining, 1)
+	manager.OnEvent = func(event string, params json.RawMessage) {
+		var payload proto.NodeUpdateDraining
+		switch event {
+		case nodeproto.EventUpdateDraining:
+			if json.Unmarshal(params, &payload) == nil {
+				drainingCh <- payload
+			}
+		case nodeproto.EventRestarting:
+			if json.Unmarshal(params, &payload) == nil {
+				restartingCh <- payload
+			}
+		}
+	}
+	manager.OnRequest = func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "state.load" {
+			return map[string]any{"restart_ready": true}, nil
+		}
+		return map[string]any{}, nil
+	}
+	go func() { _ = peer.Serve(ctx, a) }()
+	go func() { _ = manager.Serve(ctx, b) }()
+
+	reload := &ResidentReload{}
+	reload.peer(peer, func() { _ = a.Close() })
+	if got := reload.UpdateDraining(); got != nil {
+		t.Fatalf("initial UpdateDraining = %+v, want nil", got)
+	}
+	reload.ReportUpdateDraining(ctx, "tx-drain-1", "v2.0.0")
+	want := proto.NodeUpdateDraining{ID: "tx-drain-1", Target: "v2.0.0"}
+	if got := reload.UpdateDraining(); got == nil || *got != want {
+		t.Fatalf("UpdateDraining = %+v, want %+v", got, want)
+	}
+	select {
+	case got := <-drainingCh:
+		if got != want {
+			t.Fatalf("draining event = %+v, want %+v", got, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("manager did not receive node.update.draining")
+	}
+
+	// Verify Node.info reports UpdateDraining while draining, and clears it once cleared.
+	n := &Node{reload: reload, Version: "v1.0.0"}
+	info := n.info(ctx)
+	if info.UpdateDraining == nil || *info.UpdateDraining != want {
+		t.Fatalf("Node.info().UpdateDraining = %+v, want %+v", info.UpdateDraining, want)
+	}
+	if !slices.Contains(info.Capabilities, nodeproto.NodeUpdateDrain) {
+		t.Fatalf("Node.info().Capabilities missing %q: %v", nodeproto.NodeUpdateDrain, info.Capabilities)
+	}
+
+	// Announce handover carries transaction id and target on node.restarting.
+	if err := reload.Announce(ctx); err != nil {
+		t.Fatalf("Announce: %v", err)
+	}
+	select {
+	case got := <-restartingCh:
+		if got != want {
+			t.Fatalf("restarting event = %+v, want %+v", got, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("manager did not receive node.restarting")
+	}
+	reload.Resume()
+	reload.SetUpdateDraining("", "")
+	if got := n.info(ctx).UpdateDraining; got != nil {
+		t.Fatalf("UpdateDraining after clear = %+v, want nil", got)
 	}
 }
 

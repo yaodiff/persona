@@ -23,6 +23,7 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/net/proxy"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -91,8 +92,8 @@ func (m *Machine) connectorCred(ctx context.Context) (*connectorCred, int, error
 	if cached != nil {
 		return cached, gen, nil
 	}
-	var c devicewire.ConnectorCred
-	if err := m.d.opts.Hub.Call(ctx, devicewire.MethodConnectorCred, map[string]any{"machine_id": m.cfg.ID}, &c); err != nil {
+	c, err := buswire.Call(ctx, m.d.opts.Hub, devicewire.ConnectorCredMethod, devicewire.ConnectorCredRequest{MachineID: m.cfg.ID})
+	if err != nil {
 		return nil, 0, err
 	}
 	if c.Token == "" {
@@ -589,8 +590,8 @@ func (d *Devices) PairConnector(ctx context.Context, p devicewire.PairConnector)
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 16<<10)).Decode(&out)
 		resp.Body.Close()
 		version := clip(oneLine(out.Version), 80)
-		if err := d.opts.Hub.Call(ctx, devicewire.MethodConnectorPaired, devicewire.ConnectorCred{MachineID: p.MachineID, FP: fp,
-			Token: token, Version: version}, nil); err != nil {
+		if _, err := buswire.Call(ctx, d.opts.Hub, devicewire.ConnectorPairedMethod, devicewire.ConnectorCred{MachineID: p.MachineID, FP: fp,
+			Token: token, Version: version}); err != nil {
 			return "", "", err
 		}
 		if m := d.cfgMachine(p.MachineID); m != nil {

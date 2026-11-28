@@ -185,7 +185,7 @@ describe("inbox groups (#2059)", () => {
     act(() => root.render(<Inbox onToggleSidebar={() => {}} />));
     await flush();
     expect(groups("action")[0]).toBe("agents");
-    expect(head("action", "agents").textContent).toContain("Agent 在等你1");
+    expect(head("action", "agents").textContent).toContain("等待你的 Agent1");
     Object.assign(getState(), { interactions: [] });
   });
 
@@ -196,14 +196,14 @@ describe("inbox groups (#2059)", () => {
     await click(tick("action", "mail:acc1"));
     expect(tick("action", "mail:acc1")?.getAttribute("aria-checked")).toBe("true");
     expect(head("action", "mail:acc1").textContent).toContain("已选 2");
-    expect(host.querySelector("[data-pick-bar]")?.textContent).toContain("已选 2 项（含折叠的 2 项）");
+    expect(host.querySelector("[data-pick-bar]")?.textContent).toContain("已选 2 项（其中 2 项位于已折叠分组）");
     // one of the Lark group: "some"
     await click(host.querySelector('[data-item="l1"] [role="checkbox"]'));
     expect(tick("action", "lark")?.getAttribute("aria-checked")).toBe("mixed");
     // Select all: the items in sight (Lark l1, l2 and FYI f1), not the folded mail ones again
     await click(button("全选"));
     expect(rowsInSight().sort()).toEqual(["f1", "l1", "l2"]);
-    expect(host.querySelector("[data-pick-bar]")?.textContent).toContain("已选 5 项（含折叠的 2 项）");
+    expect(host.querySelector("[data-pick-bar]")?.textContent).toContain("已选 5 项（其中 2 项位于已折叠分组）");
     // Done and the history can't be picked
     expect(tick("done", "week")).toBeNull();
     await click(button("标为已处理"));
@@ -264,12 +264,12 @@ describe("Done's day counts from the hub (#2969)", () => {
     expect(historyAsks()).toHaveLength(1);
     await allRows();
     expect(head("done", "week").querySelectorAll("[data-item]").length).toBe(100);
-    await click(button("加载更早的"));
+    await click(button("加载更早消息"));
     const ask = historyAsks().at(-1)!;
     expect(ask.get("before_id")).toBeTruthy(); // where the first page ended
     await allRows();
     expect(head("done", "week").querySelectorAll("[data-item]").length).toBe(151);
-    expect(button("加载更早的")).toBeUndefined();
+    expect(button("加载更早消息")).toBeUndefined();
   });
 
   it("the list's last days are not complete on their own: Today loads what the list leaves out (#5549)", async () => {
@@ -288,7 +288,7 @@ describe("Done's day counts from the hub (#2969)", () => {
     // a row only the history has opens like a listed one
     act(() => root.render(<Inbox id="t2" onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.textContent).not.toContain("这件事已经不在收件箱里了");
+    expect(host.textContent).not.toContain("该条目已不在收件箱中");
     expect(host.textContent).toContain("chat t2");
   });
 
@@ -318,7 +318,7 @@ describe("Done's day counts from the hub (#2969)", () => {
     act(() => root.render(<Inbox id="x9" onToggleSidebar={() => {}} />));
     await flush();
     expect(calls.list.filter((c) => c.path === "/inbox/x9")).toHaveLength(1);
-    expect(host.textContent).not.toContain("这件事已经不在收件箱里了");
+    expect(host.textContent).not.toContain("该条目已不在收件箱中");
     expect(host.textContent).toContain("chat x9");
     // one the hub doesn't have either is gone, asked once
     act(() => root.render(<Inbox id="nope" onToggleSidebar={() => {}} />));
@@ -326,7 +326,7 @@ describe("Done's day counts from the hub (#2969)", () => {
     act(() => root.render(<Inbox id="nope" onToggleSidebar={() => {}} />));
     await flush();
     expect(calls.list.filter((c) => c.path === "/inbox/nope")).toHaveLength(1);
-    expect(host.textContent).toContain("这件事已经不在收件箱里了");
+    expect(host.textContent).toContain("该条目已不在收件箱中");
   });
 
   it("filtered, the counts are of what is loaded, and n+ until a group is complete", async () => {
@@ -338,9 +338,9 @@ describe("Done's day counts from the hub (#2969)", () => {
     expect(groups("done")).toEqual([]);
     expect(host.querySelector('[data-section="done"]')?.textContent).toContain("1+");
     // Today first: the list carries only the newest done items (#5549), so its days page in too, past what it holds
-    await click(button("加载更早的"));
+    await click(button("加载更早消息"));
     expect(historyAsks().at(-1)!.get("before_id")).toBe("d1");
-    await click(button("加载更早的"));
+    await click(button("加载更早消息"));
     expect(historyAsks().at(-1)!.get("before")).toBe(midnight(6).toISOString());
     expect(head("done", "week").textContent).toContain("7 天前2"); // h10 and h12, Lark's; the week is complete
     expect(head("done", "week").textContent).not.toContain("+");

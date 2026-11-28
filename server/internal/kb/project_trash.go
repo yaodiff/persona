@@ -33,6 +33,9 @@ type TrashEntry struct {
 	Unlinked []string `json:"unlinked,omitempty"`
 	// Merged are the projects merged into it, which went with it.
 	Merged []string `json:"merged,omitempty"`
+	// Children: the projects that were under it, moved up to its own parent (the top level when it had none); a
+	// restore moves those still there back under it (project_tree.go).
+	Children []TreeMove `json:"children,omitempty"`
 }
 
 func (s *Store) trashPath(id string, parts ...string) string {
@@ -116,6 +119,9 @@ func (e *Engine) DeleteProject(slug string, now time.Time) (TrashEntry, error) {
 		entry.Unlinked = append(entry.Unlinked, ref)
 		return removeStrings(list, []string{p.Slug}), true
 	})
+	if err == nil {
+		entry.Children, err = e.moveChildren(p.Slug, p.Parent, "")
+	}
 	if werr := writeJSON(st.trashPath(entry.ID, "trash.json"), entry); err == nil {
 		err = werr
 	}
@@ -221,6 +227,9 @@ func (e *Engine) RestoreProject(id string) (TrashEntry, error) {
 		return append(list, p.Slug), true
 	})
 	if err != nil {
+		return TrashEntry{}, err
+	}
+	if err := e.moveBack(entry.Children, p.Slug); err != nil {
 		return TrashEntry{}, err
 	}
 	if err := os.RemoveAll(st.trashPath(id)); err != nil {

@@ -3,7 +3,6 @@ package extmgr
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
@@ -37,9 +36,9 @@ func (h *Manager) kbAsk(ctx context.Context, method string, params, out any) err
 	return err
 }
 
-// kbAskWaiting is kbAsk; wait is how long the hub waited for the assistant to connect (here it is in the process).
-func (h *Manager) kbAskWaiting(ctx context.Context, _ time.Duration, method string, params, out any) error {
-	return h.kbAsk(ctx, method, params, out)
+// kbCaller preserves kbAsk's offline error mapping for typed calls.
+func (h *Manager) kbCaller() assistantCaller {
+	return assistantCaller(h.kbAsk)
 }
 
 // kbOffline: err is the knowledge base not being there now (not open yet: try again).

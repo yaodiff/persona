@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -45,16 +46,17 @@ type chatData struct {
 	view        func(ix proto.Interaction) assistantwire.AskView
 	route       func(ix proto.Interaction) assistantwire.AskRoute
 	sensitive   func(ix proto.Interaction) bool
+	direct      func(ix proto.Interaction) bool
 	state       func(id string) (ended, pending bool)
 	pendingIx   func(id string) (proto.Interaction, bool)
 	deadline    func(ix proto.Interaction) (time.Time, bool)
 	gone        func(ix proto.Interaction) bool
 	todoOf      func(chat, thread string) (assistantwire.ChatTodo, bool)
-	routes      func(todoID string) ([]assistantwire.ChatTarget, error)
 	decision    func(todoID, text, messageID string) string
-	openTarget  func(st FeishuStatus) (assistantwire.ChatTarget, string, string)
 	openTodo    func(t assistantwire.ChatOpenTodo) (string, error)
 	acceptReply func(messageID, text string) bool
+
+	guest *guestFake
 }
 
 // startedRun is a run the chat asked the core to start for a message (Host.StartRun).
@@ -71,9 +73,10 @@ type startedRun struct {
 
 // resolvedAnswer is an interaction the chat answered (Host.ResolveInteraction).
 type resolvedAnswer struct {
-	id     string
-	r      proto.Resolution
-	action string
+	id       string
+	r        proto.Resolution
+	action   string
+	expected *time.Time
 }
 
 func (s *Service) ch() *chatData {
@@ -172,6 +175,18 @@ func (s *Service) ResolveTarget(_ context.Context, t assistantwire.ChatTarget) (
 	return r, nil
 }
 
+func (s *Service) SessionExists(_ context.Context, machine, session string) bool {
+	if machine == "" {
+		machine = "server"
+	}
+	for _, sess := range s.ch().sessions[machine] {
+		if sess.SessionID == session {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) TargetLabel(context.Context, assistantwire.ChatTarget) string { return s.wb().target }
 
 // Allowed is the core's botAllowed.
@@ -237,6 +252,8 @@ func (s *Service) ApproveOwnerAction(context.Context, botcard.MessageEvent, stri
 	return false
 }
 
+func (s *Service) ProjectReviewOwnerInput(context.Context, string, string, string) error { return nil }
+
 func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.ChatResolved) (string, string) {
 	d := s.ch()
 	s.tmu.Lock()
@@ -247,8 +264,8 @@ func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.Chat
 
 func (s *Service) TurnPending(string, string) bool { return false }
 
-func (s *Service) StopProgressCard(_ context.Context, _ assistantwire.FeishuFeatures, t assistantwire.ChatTarget, _ string) (string, string) {
-	return "info", "expired"
+func (s *Service) FindInterruptibleRun(func(*channel.Run) bool) func(proto.Session, func(string) string) {
+	return nil
 }
 
 func (s *Service) Conversations(context.Context) ([]proto.Session, string) {
@@ -362,6 +379,13 @@ func (s *Service) AskSensitive(_ context.Context, ix proto.Interaction) bool {
 	return false
 }
 
+func (s *Service) AskDirect(_ context.Context, ix proto.Interaction) bool {
+	if f := s.ch().direct; f != nil {
+		return f(ix)
+	}
+	return false
+}
+
 // AskState is the core's record of interaction id: the test's (state), else not ended and up.
 func (s *Service) AskState(id string) (ended, pending bool) {
 	if f := s.ch().state; f != nil {
@@ -369,6 +393,8 @@ func (s *Service) AskState(id string) (ended, pending bool) {
 	}
 	return false, true
 }
+
+func (s *Service) AskStateFor(ix proto.Interaction) (ended, pending bool) { return s.AskState(ix.ID) }
 
 // AskPending is the interaction up under id: the test's (pendingIx), else none.
 func (s *Service) AskPending(id string) (proto.Interaction, bool) {
@@ -378,10 +404,14 @@ func (s *Service) AskPending(id string) (proto.Interaction, bool) {
 	return proto.Interaction{}, false
 }
 
-func (s *Service) ResolveInteraction(_ context.Context, id string, r proto.Resolution, action string) (bool, error) {
+func (s *Service) ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error) {
+	return s.ResolveInteractionAt(ctx, id, r, action, nil)
+}
+
+func (s *Service) ResolveInteractionAt(_ context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error) {
 	d := s.ch()
 	s.tmu.Lock()
-	d.resolved = append(d.resolved, resolvedAnswer{id: id, r: r, action: action})
+	d.resolved = append(d.resolved, resolvedAnswer{id: id, r: r, action: action, expected: expected})
 	answer := d.answer
 	s.tmu.Unlock()
 	if answer != nil {
@@ -393,6 +423,10 @@ func (s *Service) ResolveInteraction(_ context.Context, id string, r proto.Resol
 func (s *Service) ValidateClarifyQuestion(string) error { return nil }
 
 func (s *Service) ClarifyInteraction(context.Context, string, string, string, string, string, string) (bool, error) {
+	return true, nil
+}
+
+func (s *Service) ClarifyInteractionAt(context.Context, string, string, string, string, string, string, *time.Time) (bool, error) {
 	return true, nil
 }
 
@@ -438,13 +472,10 @@ func (s *Service) TodoOfThread(chat, thread string) (assistantwire.ChatTodo, boo
 	return assistantwire.ChatTodo{}, false
 }
 
-func (s *Service) ThreadNoReply(context.Context, botcard.MessageEvent, string, string, string) {}
+func (s *Service) ThreadNoReply(context.Context, string, string, assistantwire.ChannelTarget) {}
 
-func (s *Service) ThreadRoutes(_ context.Context, todoID string, _ assistantwire.FeishuFeatures) ([]assistantwire.ChatTarget, error) {
-	if f := s.ch().routes; f != nil {
-		return f(todoID)
-	}
-	return []assistantwire.ChatTarget{{Kind: targetMain}}, nil
+func (s *Service) ThreadRouteCandidates(context.Context, string) []assistantwire.ChatTarget {
+	return nil
 }
 
 func (s *Service) TopicDecision(_ context.Context, todoID, _, text, messageID string) string {
@@ -461,13 +492,6 @@ func (s *Service) AskTodoTopicAnswer(context.Context, string, string) (string, b
 }
 func (s *Service) SettleAskClaim(context.Context, string, bool) {}
 func (s *Service) CloseAskTodo(context.Context, string)         {}
-
-func (s *Service) OpenTarget(_ context.Context, st FeishuStatus) (assistantwire.ChatTarget, string, string) {
-	if f := s.ch().openTarget; f != nil {
-		return f(st)
-	}
-	return assistantwire.ChatTarget{Kind: targetMain}, "m1", ""
-}
 
 func (s *Service) TodoTitle(_ context.Context, words string, _ i18n.Lang, _ bool) (string, bool) {
 	return oneLine(words), true
@@ -537,4 +561,53 @@ func (s *Service) WithdrawHandoffDecision(_ context.Context, id string) {
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
 	d.withdrawn = append(d.withdrawn, id)
+}
+
+// guestFake records the group guest conversations the module started and the later questions it sent.
+type guestFake struct {
+	mu       sync.Mutex
+	starts   []guestStart
+	sends    []guestSend
+	startErr error
+	gone     bool
+}
+
+type guestStart struct {
+	key, text, launcher string
+	tools               []string
+}
+type guestSend struct{ machine, session, turn string }
+
+func (s *Service) guests() *guestFake {
+	d := s.ch()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	if d.guest == nil {
+		d.guest = &guestFake{}
+	}
+	return d.guest
+}
+
+func (s *Service) StartGroupGuest(_ context.Context, group, text, launcher string, tools []string) (string, string, error) {
+	f := s.guests()
+	f.mu.Lock()
+	f.starts = append(f.starts, guestStart{group, text, launcher, append([]string(nil), tools...)})
+	err := f.startErr
+	f.mu.Unlock()
+	if err != nil {
+		return "", "", err
+	}
+	return "m1", "s1", nil
+}
+
+func (s *Service) SendGroupGuest(_ context.Context, machine, session, turn, _ string) error {
+	f := s.guests()
+	f.mu.Lock()
+	f.sends = append(f.sends, guestSend{machine, session, turn})
+	gone := f.gone
+	f.mu.Unlock()
+	if gone {
+		return errors.New(guestGone)
+	}
+	return nil
 }

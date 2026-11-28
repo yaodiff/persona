@@ -52,6 +52,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		s.noteUpstreamRow(machine, sess, now) // consecutive upstream 5xx / pool-exhaustion turns (fleet_upstream.go)
 		s.availSeen(machine, &sess, was, now) // the owner's wait for a reply (availability.go)
 		prev := was.Status
+		s.projectReviewSession(s.runCtx(), sess, prev)
 		wasWorking := prev == proto.StatusWorking || was.WorkingBeforeUnknown
 		reconnectStop := reconnected || was.ReconnectedBeforeUnknown
 		if a2aIdle(sess) && (!was.A2AIdle || reconnected) {
@@ -79,7 +80,16 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			s.turnsBook().working(key, now)
 			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
 			ref, row := SessionRef{MachineID: machine, SessionID: sess.SessionID}, startRow{Rev: sess.Rev, At: sess.UpdatedAt}
-			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn, row) }) // after the items that came before it
+			// Every non-working -> working edge except unblocking an interactive blocked turn (StatusBlocked)
+			// or recovering from a transient Unknown blip during the same turn (wasWorking) starts a new
+			// clarification answer turn, including reaped/stopped/reopened StatusOffline sessions.
+			approvalStart := prev != proto.StatusBlocked && !wasWorking
+			s.inOrder(func() {
+				if approvalStart {
+					s.approvalAnswerTurnStarted(ref)
+				}
+				s.turnStartedObserved(context.Background(), ref, newTurn, row)
+			}) // after the items that came before it
 		case wasWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle) && reconnectStop:
 			unsure = append(unsure, sess) // reconnectedTurnEnd, once the list is kept
 		case wasWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
@@ -126,6 +136,9 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	for _, sess := range list {
 		s.refreshMainConversationAttention(sess, mainSession, mainMachine)
 	}
+	if len(list) > 0 && (len(before) == 0 || reconnected) {
+		go s.recheckMissingReplies(context.Background(), machine, list)
+	}
 	for _, ref := range inlineUpdates {
 		s.inOrder(func() { go s.registerInlineTurn(context.Background(), ref) })
 	}
@@ -156,8 +169,19 @@ func (s *Service) turnEndSeen(machine string, sess proto.Session, now time.Time)
 	s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(machine+"/"+sess.SessionID, now, background), end)
 	s.suggestTurnEnded(machine, sess) // the next message, when nothing else suggests it (suggest_next.go)
 	// A new assistant conversation is named after its first turn; a task from one may be done. After the items of the
-	// turn (a channel's answer is read from them).
-	s.inOrder(func() { go s.TurnEnded(context.WithValue(ctx, supervisionEndKey{}, end), ref) })
+	// turn (a channel's answer is read from them). Advance approval clarification turn state synchronously inside
+	// inOrder so a delayed TurnEnded goroutine (for example blocked in A2AReady) cannot race out of order against a
+	// subsequent turn-start.
+	endCtx := context.WithValue(context.WithValue(ctx, supervisionEndKey{}, end), approvalEndHandledKey{}, true)
+	s.inOrder(func() {
+		tells := s.approvalAnswerTurnEndedSync(ref)
+		go func() {
+			for _, ix := range tells {
+				s.show(ix)
+			}
+			s.TurnEnded(endCtx, ref)
+		}()
+	})
 }
 
 // reconnectedTurnEnd is sess's stop in the first list of its node's new connection, taken as the end of its turn only
@@ -286,7 +310,9 @@ func (s *Service) publishSessions(machine string) {
 // The list is decorated and told under sentMu: two publishers (FleetUp's lists, a snapshot's changed machines) would
 // otherwise each decorate, then tell in either order, and an older list could land last on the hub and stay there.
 func (s *Service) publishList(machine string) []proto.Session {
-	return s.publishListAtArchiveMark(machine)
+	list := s.publishListAtArchiveMark(machine)
+	s.syncPendingInteractionsToNode(machine)
+	return list
 }
 
 // publishListAtArchiveMark publishes with a fixed archive read marker when an operation supplies one. Otherwise it
@@ -405,8 +431,9 @@ func (s *Service) decoratedApart(machine string, mark uint64) ([]proto.Session, 
 		s.logf("load agent archives: %v", err)
 	}
 	shown, archived := a.apart()
-	// The archived rows are not listed in a fold (foldSessions): the visible ones fold as in the whole list.
-	s.foldInventory(machine, shown)
+	// The archived rows are not listed in a fold (foldSessions): the visible ones fold as in the whole list,
+	// while archived stays in the subagent negative-cache retention set.
+	s.foldInventoryWithRetained(machine, shown, archived)
 	s.foldSubset(machine, archived.rows)
 	return shown, archived
 }
@@ -634,8 +661,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].StartError = startErrorText(lang, cmp.Or(m.Name, machine), list[i])
 		}
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
+		list[i].State = logicalDeliveryState(list[i]) // never idle while its input has not gone in (logical_undelivered.go)
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
-		if !list[i].BackgroundWorking || backgroundIsWork(list[i]) {
+		if !list[i].BackgroundWorking && !stalledAfterTurn(list[i]) || backgroundIsWork(list[i]) {
 			list[i].BackgroundStalledSince = 0 // only background commands that are all there is to the work can have stalled
 		}
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])
@@ -757,7 +785,7 @@ func (s *Service) decorateTodos(mid string, list []proto.Session) {
 		if l, ok := r.links[key]; ok {
 			list[i].Todo = &proto.TodoRef{ID: l.TodoID, Title: l.Title}
 		} else if l, ok := r.completed[key]; ok {
-			list[i].SetCompletedTodo(&proto.TodoRef{ID: l.TodoID, Title: l.Title})
+			list[i].SetCompletedTodo(&proto.TodoRef{ID: l.TodoID, Title: l.Title, Cancelled: l.Cancelled})
 		}
 		list[i].Quiet = r.quiet[key]
 	}

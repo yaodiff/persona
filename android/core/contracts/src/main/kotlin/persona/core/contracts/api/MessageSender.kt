@@ -20,6 +20,11 @@ data class OutboxMessage(
     val createdAt: Long? = null,
     /** The active attempt's wire id after the manager explicitly refused an earlier attempt. */
     val opId: String? = null,
+    /**
+     * The hub's own sentence for the refusal [error] codes, in the app's language (the `error` of its refusal); null when
+     * it gave none, for every other state, and for an outbox restored from before it was stored.
+     */
+    val reason: String? = null,
 )
 
 private val NoWrittenAt = MutableStateFlow(emptyMap<String, Long>())

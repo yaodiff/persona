@@ -1,4 +1,4 @@
-import type { BriefBody, BriefFailed, BriefRow, BriefSetup, FeedItem } from "./feed";
+import type { BriefBody, BriefContribution, BriefFailed, BriefRow, BriefSetup, FeedItem } from "./feed";
 import type { Todo, TodoAsk } from "./todos";
 
 /** What a `BriefRow` field says when it is text: the value if it is a string, nothing otherwise. The rows come off the
@@ -31,6 +31,24 @@ export function askRow(todo: Pick<Todo, "id" | "title">, ask: TodoAsk, now = Dat
   return { id: todo.id, title: todo.title, waited_s: Math.max(0, (now - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, detail: ask.summary, evidence_link: ask.link, recommend: ask.recommend, asked_at: ask.asked_at };
 }
 
+function readContribution(value: unknown): BriefContribution | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const extension_id = text(raw.extension_id);
+  const contribution_id = text(raw.contribution_id);
+  const title = text(raw.title);
+  if (!extension_id || !contribution_id || !title) return undefined;
+  const facts = Array.isArray(raw.facts) ? raw.facts.filter((f): f is string => Boolean(text(f))) : [];
+  const sections = Array.isArray(raw.sections) ? raw.sections.flatMap((s: unknown) => {
+    if (!s || typeof s !== "object" || !("title" in s) || !("body" in s)) return [];
+    const title = text(s.title);
+    const body = text(s.body);
+    return title && body ? [{ title, body }] : [];
+  }) : [];
+  if (!facts.length && !sections.length) return undefined;
+  return { extension_id, contribution_id, title, facts, sections };
+}
+
 /** A `brief` item's body, every list a list (a hub that left one out, or an item that is not one, gives nothing to draw). */
 export function briefBody(it: FeedItem): BriefBody | undefined {
   const b = it.kind === "brief" ? it.body : undefined;
@@ -60,5 +78,8 @@ export function briefBody(it: FeedItem): BriefBody | undefined {
     progress,
     progress_total: num(b.progress_total, progress.length),
     setup: list<BriefSetup>(b.setup).filter((x) => x && typeof x.id === "string" && typeof x.text === "string" && x.text !== ""),
+    deferred_supervision: list<BriefBody["deferred_supervision"][number]>(b.deferred_supervision).filter((x) =>
+      x && typeof x.id === "string" && typeof x.todo_id === "string" && typeof x.title === "string" && typeof x.reason === "string"),
+    contributions: list<unknown>(b.contributions).map(readContribution).filter((c): c is BriefContribution => !!c),
   };
 }

@@ -10,7 +10,7 @@
     "kotlin": "android/core/contracts/src/main/kotlin/persona/core/contracts/generated/CountsWire.kt"
   },
   "x-guard": ["arkts", "rust"],
-  "x-guard-keys": ["agents_needs_you", "todos_needs_you"],
+  "x-guard-keys": ["agents_needs_you", "todos_needs_you", "persona_cards"],
   "$defs": {
     "CountsView": {
       "description": "One manager's counts. A view with a new epoch replaces the one kept; within an epoch a lower rev loses to a higher one.",
@@ -60,6 +60,10 @@
         "todos_needs_you": {
           "$ref": "#/$defs/CountsViewCount",
           "description": "The to-dos that need the owner, N of the To-dos list (docs/protocol/counts.md, \"todos_needs_you\")."
+        },
+        "persona_cards": {
+          "$ref": "#/$defs/CountsViewCount",
+          "description": "Pending owner cards on Persona conversations and quiet tasks' agents, one per card (docs/protocol/counts.md, \"persona_cards\")."
         }
       }
     },
@@ -78,6 +82,12 @@
           "minimum": 0,
           "x-go-pointer": true,
           "description": "counts.todos_needs_you.n."
+        },
+        "persona_cards": {
+          "type": "integer",
+          "minimum": 0,
+          "x-go-pointer": true,
+          "description": "counts.persona_cards.n."
         }
       }
     },
@@ -127,7 +137,7 @@
           "items": {
             "$ref": "#/$defs/CountsCardID"
           },
-          "description": "The row's pending cards, oldest first: a card on no session is its own one card. Absent for a session that waits in its terminal with no card."
+          "description": "The row's pending cards, oldest first: a card row lists that one card. Absent for a session that waits in its terminal with no card."
         }
       }
     },
@@ -148,7 +158,7 @@
       "type": "string",
       "x-id": "CountsRowKey",
       "pattern": "^(agent:[^/]+/.+|card:.+)$",
-      "description": "A row as the shared fixtures key it: agent:<machine>/<session> for a session (its children's and sides' cards under it), card:<interaction id> for a card on no session."
+      "description": "A row as the shared fixtures key it: agent:<machine>/<session> for a session (its children's and sides' cards under it), card:<interaction id> for a card counted on its own."
     },
     "CountsCardID": {
       "type": "string",

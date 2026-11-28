@@ -120,10 +120,21 @@ export function notices(packages: Package[]): string {
   const head = [
     "Third-party software in the Persona web client",
     "",
-    "Every npm package the client's build can include, with the license it is used under, its source and the license",
+    "The client's npm packages and bundled fonts, with the license each is used under, its source and the license",
     "text it is published with. Authors' email addresses are left out of the texts.",
   ].join("\n");
-  return [head, ...entries].join("\n\n") + "\n";
+  const fontNotices = [
+    ["Inter", "inter", "https://github.com/rsms/inter"],
+    ["JetBrains Mono", "jetbrains-mono", "https://github.com/JetBrains/JetBrainsMono"],
+  ].map(([name, slug, source]) => [
+    "=".repeat(80),
+    `${name} (Fontsource 5.3.0 Latin variable subset)`,
+    "License: OFL-1.1",
+    `Source: ${source}`,
+    "",
+    readFileSync(join(WEB, "src/ui/font-assets", `${slug}-OFL.txt`), "utf8").trimEnd(),
+  ].join("\n"));
+  return [head, ...entries, ...fontNotices].join("\n\n") + "\n";
 }
 
 export const thirdPartyLicenses: Plugin = {

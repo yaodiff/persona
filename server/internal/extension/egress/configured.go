@@ -40,7 +40,11 @@ func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn
 	if upstream == nil {
 		upstream = fromEnvironment
 	}
-	if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
+	up, err := upstream(&url.URL{Scheme: "https", Host: target})
+	if err != nil {
+		return nil, err
+	}
+	if up != nil {
 		return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.connectVia(ctx, up, target) })
 	}
 	return p.dialResolved(ctx, host, port, ok)
@@ -63,10 +67,15 @@ func (p *Proxy) resolveAll(ctx context.Context, host string) ([]net.IP, error) {
 }
 
 // Unreachable says whether ip is one no extension is let reach by an address its settings name or its owner allowed:
-// loopback, link-local, unspecified, multicast or a metadata service. Private LAN addresses are reachable.
+// loopback, link-local, unspecified/0.0.0.0/8, multicast, limited broadcast or a metadata service. Private LAN addresses are reachable.
 func Unreachable(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() ||
-		slices.ContainsFunc(metadataIPs, func(m string) bool { return net.ParseIP(m).Equal(ip) })
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() || ip.Equal(net.IPv4bcast) {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
+		return true
+	}
+	return slices.ContainsFunc(metadataIPs, func(m string) bool { return net.ParseIP(m).Equal(ip) })
 }
 
 // forSettings says whether an address from an extension's settings (or one its owner allowed) may be dialled at port:
@@ -75,25 +84,33 @@ func (p *Proxy) forSettings(ip net.IP, port string) bool {
 	if Unreachable(ip) {
 		return false
 	}
-	_, hubPort, _ := net.SplitHostPort(p.HubAddr)
-	if port != hubPort && !p.ownPort(port) {
+	if !p.hubPort(port) && !p.ownPort(port) {
 		return true
 	}
-	local := p.LocalAddrs
-	if local == nil {
-		local = machineAddrs
+	var addrs []net.IP
+	if p.LocalAddrs != nil {
+		addrs = p.LocalAddrs()
+	} else {
+		var err error
+		addrs, err = machineAddrs()
+		if err != nil {
+			return false
+		}
 	}
-	return !slices.ContainsFunc(local(), ip.Equal)
+	return !slices.ContainsFunc(addrs, ip.Equal)
 }
 
 // machineAddrs are this machine's own addresses.
-func machineAddrs() []net.IP {
-	addrs, _ := net.InterfaceAddrs()
+func machineAddrs() ([]net.IP, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
 	var out []net.IP
 	for _, a := range addrs {
 		if n, ok := a.(*net.IPNet); ok {
 			out = append(out, n.IP)
 		}
 	}
-	return out
+	return out, nil
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A to-do's pushes to the owner are keyed by the to-do and their reason (push_todo_dedup.go): one to-do rang four
@@ -178,8 +179,8 @@ func TestTodoNeedsUserPushCarriesTodoIDAndWithdraws(t *testing.T) {
 		h.push.withdrawals.mu.Lock()
 		q := h.push.withdrawals.queue["phone"]
 		h.push.withdrawals.mu.Unlock()
-		if q != nil && len(q.ids) > 0 {
-			t.Fatalf("older app queued withdrawal ids: %v", q.ids)
+		if q != nil && len(q.cards) > 0 {
+			t.Fatalf("older app queued withdrawal ids: %v", q.cards)
 		}
 		h.push.flushWithdraw("phone")
 		h.push.sends.Wait()
@@ -206,7 +207,7 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 		p.withdraw(todoCard)
 		p.withdrawals.mu.Lock()
 		defer p.withdrawals.mu.Unlock()
-		if q := p.withdrawals.queue["phone"]; q == nil || len(q.ids) != 1 || q.ids[0] != todoCard {
+		if q := p.withdrawals.queue["phone"]; q == nil || len(q.cards) != 1 || q.cards[0].ID != todoCard {
 			t.Fatalf("phone queue after 2h = %+v, want [%s]", q, todoCard)
 		}
 		for _, q := range p.withdrawals.queue {
@@ -236,7 +237,7 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 		// Supersede round 1: withdrawal is queued for phone.
 		reportResolved(t, h, todoCard, "")
 		h.push.withdrawals.mu.Lock()
-		queuedBefore := len(h.push.withdrawals.queue["phone"].ids)
+		queuedBefore := len(h.push.withdrawals.queue["phone"].cards)
 		h.push.withdrawals.mu.Unlock()
 		if queuedBefore != 1 {
 			t.Fatalf("expected 1 queued withdrawal before round 2, got %d", queuedBefore)
@@ -247,7 +248,7 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 		}
 		f.wait(t, 2)
 		h.push.withdrawals.mu.Lock()
-		queuedAfter := len(h.push.withdrawals.queue["phone"].ids)
+		queuedAfter := len(h.push.withdrawals.queue["phone"].cards)
 		if q := h.push.withdrawals.queue["phone"]; q != nil && q.timer != nil {
 			q.timer.Stop()
 		}
@@ -278,4 +279,118 @@ func TestRelatedTodoKeysStillNameTheirTodo(t *testing.T) {
 			t.Errorf("relatedTodoID(%q) = %q, want none", key, got)
 		}
 	}
+}
+
+// Structured concern:<id>:<state> keys deduplicate within 12h even for P0 pushes, release on state change or
+// EventFleetResolved, and apply identically when NotifyInput carries a structured todo: or concern: key.
+func TestConcernStateDedupAcrossP0(t *testing.T) {
+	h, f := gradingHub(t)
+	attempts := gradingAttempts(h)
+
+	concernPush := func(id, state string) assistantwire.Notification {
+		return gradingNotification(assistantwire.LevelP0, "concern:"+id+":"+state, "Concern "+id+" "+state)
+	}
+
+	// Same concern and state pushed twice within 12h (even P0): rings once, second is held as ln_dedup_12h.
+	out1, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "blocked"))
+	if err != nil || heldOf(out1) != "" || *attempts != 1 {
+		t.Fatalf("first concern P0: out=%+v err=%v attempts=%d", out1, err, *attempts)
+	}
+	out2, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "blocked"))
+	if err != nil || out2 == nil || out2.held != interceptReasonDedup || *attempts != 1 {
+		t.Fatalf("repeat concern P0: out=%+v err=%v attempts=%d, want held %s", out2, err, *attempts, interceptReasonDedup)
+	}
+
+	// Different concern ID is independent and rings.
+	outOther, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c2", "blocked"))
+	if err != nil || heldOf(outOther) != "" || *attempts != 2 {
+		t.Fatalf("other concern P0: out=%+v err=%v attempts=%d", outOther, err, *attempts)
+	}
+
+	// State change on c1 rings and releases the previous state so transitioning back rings again.
+	outReady, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "ready"))
+	if err != nil || heldOf(outReady) != "" || *attempts != 3 {
+		t.Fatalf("state-changed concern P0: out=%+v err=%v attempts=%d", outReady, err, *attempts)
+	}
+	outReadyDup, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "ready"))
+	if err != nil || outReadyDup == nil || outReadyDup.held != interceptReasonDedup || *attempts != 3 {
+		t.Fatalf("repeat new-state concern P0: out=%+v err=%v attempts=%d", outReadyDup, err, *attempts)
+	}
+	outBackToBlocked, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "blocked"))
+	if err != nil || heldOf(outBackToBlocked) != "" || *attempts != 4 {
+		t.Fatalf("transition back to prior state: out=%+v err=%v attempts=%d", outBackToBlocked, err, *attempts)
+	}
+
+	// EventFleetResolved (both todo-ask:<id> and concern:<id>) releases the concern dedup lock.
+	reportResolved(t, h, assistantwire.TodoAskCardID("c1"), "")
+	outAfterTodoResolve, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "blocked"))
+	if err != nil || heldOf(outAfterTodoResolve) != "" || *attempts != 5 {
+		t.Fatalf("after todo-ask resolve: out=%+v err=%v attempts=%d", outAfterTodoResolve, err, *attempts)
+	}
+	reportResolved(t, h, "concern:c1", "")
+	outAfterConcernResolve, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "blocked"))
+	if err != nil || heldOf(outAfterConcernResolve) != "" || *attempts != 6 {
+		t.Fatalf("after concern resolve: out=%+v err=%v attempts=%d", outAfterConcernResolve, err, *attempts)
+	}
+
+	// NotifyInput with structured concern: and todo: keys also claims dedup across P0 cards and releases on card resolve.
+	addCard := func(id string) proto.Interaction {
+		ix := proto.Interaction{ID: id, MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, Summary: "approve", Manager: assistantwire.AssistantID}
+		h.reported.mu.Lock()
+		if h.reported.interactions == nil {
+			h.reported.interactions = map[string]proto.Interaction{}
+		}
+		h.reported.interactions[ix.ID] = ix
+		h.reported.mu.Unlock()
+		return ix
+	}
+	ix1 := addCard("ix_concern_1")
+	ix2 := addCard("ix_concern_2")
+	outIx1, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{
+		ID: "ntf_ix_c1", Kind: assistantwire.NotifyInput, Interaction: &ix1, Level: assistantwire.LevelP0, RelatedKey: "concern:c3:waiting",
+	})
+	if err != nil || outIx1 != nil || *attempts != 7 {
+		t.Fatalf("first concern NotifyInput: out=%+v err=%v attempts=%d", outIx1, err, *attempts)
+	}
+	outIx2, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{
+		ID: "ntf_ix_c2", Kind: assistantwire.NotifyInput, Interaction: &ix2, Level: assistantwire.LevelP0, RelatedKey: "concern:c3:waiting",
+	})
+	if err != nil || outIx2 == nil || outIx2.held != interceptReasonDedup || *attempts != 7 {
+		t.Fatalf("duplicate concern NotifyInput: out=%+v err=%v attempts=%d, want held %s", outIx2, err, *attempts, interceptReasonDedup)
+	}
+	reportResolved(t, h, ix1.ID, "")
+	outIx2After, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{
+		ID: "ntf_ix_c2_after", Kind: assistantwire.NotifyInput, Interaction: &ix2, Level: assistantwire.LevelP0, RelatedKey: "concern:c3:waiting",
+	})
+	if err != nil || outIx2After != nil || *attempts != 8 {
+		t.Fatalf("concern NotifyInput after card resolve: out=%+v err=%v attempts=%d", outIx2After, err, *attempts)
+	}
+
+	ixT1 := addCard("ix_todo_1")
+	ixT2 := addCard("ix_todo_2")
+	todoKey := assistantwire.TodoPushKey("t9", assistantwire.TodoPushNeedsUser)
+	if out, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{
+		ID: "ntf_ix_t1", Kind: assistantwire.NotifyInput, Interaction: &ixT1, Level: assistantwire.LevelP0, RelatedKey: todoKey,
+	}); err != nil || out != nil || *attempts != 9 {
+		t.Fatalf("first todo NotifyInput: out=%+v err=%v attempts=%d", out, err, *attempts)
+	}
+	if out, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{
+		ID: "ntf_ix_t2", Kind: assistantwire.NotifyInput, Interaction: &ixT2, Level: assistantwire.LevelP0, RelatedKey: todoKey,
+	}); err != nil || out == nil || out.held != interceptReasonDedup || *attempts != 9 {
+		t.Fatalf("duplicate todo NotifyInput: out=%+v err=%v attempts=%d", out, err, *attempts)
+	}
+
+	// After the 12h dedup window expires, the same concern state rings again once.
+	moveGradingClock(h, h.push.now().Add(gradingDedupWindow))
+	if out, err := h.deliverPushFrom(assistantwire.AssistantID, concernPush("c1", "blocked")); err != nil || heldOf(out) != "" || *attempts != 10 {
+		t.Fatalf("after 12h window: out=%+v err=%v attempts=%d", out, err, *attempts)
+	}
+
+	// Malformed concern keys are not treated as structured dedup keys.
+	for _, bad := range []string{"concern:", "concern:c1", "concern:c1:", "concern::blocked", "concern:c1@round"} {
+		if _, _, _, ok := structuredPushKeyParts(bad); ok {
+			t.Errorf("structuredPushKeyParts(%q) = true, want false", bad)
+		}
+	}
+	f.calls(t, 10)
 }

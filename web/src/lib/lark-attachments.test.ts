@@ -44,7 +44,7 @@ describe("挑选附件", () => {
     await expect(stageLarkAttachment(file("空.txt", "text/plain", ""))).rejects.toThrow("空文件");
     await expect(stageLarkAttachment(sized(file("大.zip", "application/zip"), FILE_LIMIT + 1))).rejects.toThrow("100 MiB");
     await expect(stageLarkAttachment(sized(file("刚好.zip", "application/zip"), FILE_LIMIT))).resolves.toMatchObject({ kind: "file" });
-    await expect(stageLarkAttachment(file("大图.png", "image/png"), jpeg("x".repeat(IMAGE_LIMIT + 1)))).rejects.toThrow("太大了");
+    await expect(stageLarkAttachment(file("大图.png", "image/png"), jpeg("x".repeat(IMAGE_LIMIT + 1)))).rejects.toThrow("体积过大");
   });
 
   it("每次最多 4 个，多出的报个数", () => {

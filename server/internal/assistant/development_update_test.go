@@ -22,6 +22,65 @@ import (
 	"github.com/nwverse/persona/server/internal/update/updatetest"
 )
 
+func TestPublishedManagerFollowsVerifiedPackageAfterLocalRedeploy(t *testing.T) {
+	t.Setenv("PERSONA_HOME", t.TempDir())
+	target := devicewire.PublishedBuild(strings.Repeat("b", 40), "v2-example", 202611270123)
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	const program = "persona-manager"
+	version := fmt.Sprintf("%s\nchannel release, build %d\n", target.Version, target.Build)
+	bin := updatetest.ProgramSource(t, program, runtime.GOOS, runtime.GOARCH,
+		fmt.Sprintf("package main\nimport \"fmt\"\nfunc main(){fmt.Print(%q)}\n", version))
+	body, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(body))
+	name := update.PackageName(program, platform)
+	file := update.File{Name: name, Size: int64(len(body)), SHA256: digest, BinarySHA256: digest}
+	manifest := update.Manifest{Version: target.Version, Build: target.Build, Commit: target.Commit,
+		Programs: map[string]map[string]update.File{program: {platform: file}},
+		Files:    map[string]update.File{platform: {Name: update.PackageName("personad", platform)}}}
+	var tampered atomic.Bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fixture" {
+			http.Error(w, "missing binding", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case target.Packages + "/manifest.json":
+			_ = json.NewEncoder(w).Encode(manifest)
+		case target.Packages + "/" + name:
+			if tampered.Load() {
+				_, _ = w.Write(bytes.Repeat([]byte("a"), len(body)))
+			} else {
+				_, _ = w.Write(body)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	d := devices.New(devices.Options{PackageHub: func() *bus.Client {
+		return &bus.Client{Hub: srv.URL, HTTPClient: srv.Client(), Token: "fixture"}
+	}})
+	d.Configure(devicewire.Config{HubVersion: target.Version, PublishedTarget: &target})
+	dir := t.TempDir()
+	idle := func(context.Context) (bool, string) { return true, "" }
+	if image, err := prepareDevelopmentManager(t.Context(), dir, target, d, idle); image != nil || err != nil {
+		t.Fatalf("auto-update opted out: %v, %v", image, err)
+	}
+	localRedeploy := func(bool) bool { return true }
+	tampered.Store(true)
+	if image, err := prepareDevelopmentManager(t.Context(), dir, target, d, idle, localRedeploy); image != nil || err == nil {
+		t.Fatalf("tampered package: %v, %v", image, err)
+	}
+	tampered.Store(false)
+	image, err := prepareDevelopmentManager(t.Context(), dir, target, d, idle, localRedeploy)
+	if err != nil || image == nil || image.Target != target || image.SHA256 != digest {
+		t.Fatalf("verified package after local Redeploy: %v, %v", image, err)
+	}
+}
+
 func TestDevelopmentManagerChecksPolicyActivityAndConfirmedTarget(t *testing.T) {
 	target := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-202611230913", 202611230913)
 	platform := runtime.GOOS + "-" + runtime.GOARCH

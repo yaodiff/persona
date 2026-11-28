@@ -246,7 +246,7 @@ func TestTodoImageCreateReadOnlyCreatesNothing(t *testing.T) {
 // Repository-enabled creation uses the same image contract and the same atomic write as ordinary creation. A bad
 // association cannot leave a to-do whose pictures need later reconciliation; a good one survives a manager restart.
 func TestTodoRepositoryImagesCreateAtomically(t *testing.T) {
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

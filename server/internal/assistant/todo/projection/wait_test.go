@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/jsonsubset"
@@ -32,6 +33,82 @@ func holdsToWait(t *testing.T, raw []byte) string {
 		t.Fatal(err)
 	}
 	return jsonsubset.ValidateAt(root, root["$defs"].(map[string]any)["TodoWait"].(map[string]any), v, "$", 0)
+}
+
+func TestProjectionStructuredWaitKinds(t *testing.T) {
+	at := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	until := at.Add(time.Hour)
+	for _, tc := range []struct {
+		on      assistantwire.WaitKind
+		target  assistantwire.TaskWaitTarget
+		kind    assistantwire.TodoWaitKind
+		label   string
+		handoff string
+		url     string
+		wake    time.Time
+	}{
+		{on: assistantwire.WaitDependency, target: assistantwire.TaskWaitTarget{Kind: assistantwire.WaitTargetTodo, Ref: "todo_translation", Summary: "Translated copy"},
+			kind: assistantwire.TodoWaitKindTodoHandoff, label: "Translated copy", handoff: "todo_translation"},
+		{on: assistantwire.WaitDate, target: assistantwire.TaskWaitTarget{Kind: assistantwire.WaitTargetTime, Ref: "Release day"},
+			kind: assistantwire.TodoWaitKindDate, label: "Release day", wake: until},
+		{on: assistantwire.WaitExternal, target: assistantwire.TaskWaitTarget{Kind: assistantwire.WaitTargetIssue, Ref: "https://github.com/example/app/issues/6", Summary: "Provider response"},
+			kind: assistantwire.TodoWaitKindExternalEvent, label: "Provider response", url: "https://github.com/example/app/issues/6"},
+		{on: assistantwire.WaitUser, target: assistantwire.TaskWaitTarget{Ref: "Trip preference"},
+			kind: assistantwire.TodoWaitKindPersonReply, label: "Trip preference"},
+	} {
+		t.Run(string(tc.on), func(t *testing.T) {
+			f := Facts{Phase: assistantwire.TaskPhaseWaiting, RuntimeAt: at,
+				WaitState: &assistantwire.TaskWaitState{WaitingOn: tc.on, Target: tc.target, Reason: "A decision is pending", Until: until}}
+			if tc.on == assistantwire.WaitDependency {
+				f.Delivery = &Delivery{State: deliveryLive} // A deployed PR does not resolve a separate dependency.
+			}
+			for _, enabled := range []bool{false, true} {
+				f.TodosV2 = enabled
+				views, waits := ViewsAndWaits([]Facts{f}, at)
+				v, w := views[0], waits[0]
+				if v.Phase != assistantwire.TodoPhaseWaiting || v.Section != assistantwire.TodoListSectionWaiting ||
+					v.Line == nil || v.Line.Key != assistantwire.TodoLineKeyParked || len(v.Asks) != 0 {
+					t.Fatalf("todos_v2=%t has unexpected view: %+v", enabled, v)
+				}
+				if w == nil || w.Kind != tc.kind || w.WaitingOn != tc.label || w.HandoffTodoID.String() != tc.handoff ||
+					w.URL != tc.url || w.Reason != f.WaitState.Reason || !w.Since.Equal(at) || !w.Until.Equal(until) || !w.WakeAt.Equal(tc.wake) {
+					t.Fatalf("todos_v2=%t has unexpected wait: %+v", enabled, w)
+				}
+				raw, err := json.Marshal(w)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if problem := holdsToWait(t, raw); problem != "" {
+					t.Fatalf("structured wait violates wire schema: %s", problem)
+				}
+			}
+			f.DoneAt = &at
+			if got := View(f, at); got.Phase != assistantwire.TodoPhaseDone || Wait(f, at) != nil {
+				t.Fatalf("closed task was affected by its stale runtime wait: %+v", got)
+			}
+		})
+	}
+}
+
+func TestProjectionKeepsExplicitPRWaitWithLandedMode(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	f := Facts{
+		Phase: assistantwire.TaskPhaseWaiting, CompletionModeNow: assistantwire.CompletionModeLanded,
+		WaitState: &assistantwire.TaskWaitState{WaitingOn: assistantwire.WaitExternal,
+			Target: assistantwire.TaskWaitTarget{Kind: assistantwire.WaitTargetPR, Ref: "https://github.com/example/app/pull/12"}},
+		Delivery: &Delivery{State: deliveryMerged},
+	}
+	if w := Wait(f, now); w == nil {
+		t.Fatal("an explicit external wait was discarded")
+	}
+	f.ObservedWait = true
+	if w := Wait(f, now); w != nil {
+		t.Fatalf("a stale provider deploy wait held a merged landed task: %+v", w)
+	}
+	f.CompletionModeNow = assistantwire.CompletionModeVerified
+	if w := Wait(f, now); w == nil {
+		t.Fatal("deployment verification still holds the task")
+	}
 }
 
 func TestProjectionFollowsTheWaitCases(t *testing.T) {
@@ -124,5 +201,35 @@ func TestProjectionWaitMatchesWaitingPhaseAcrossAllViewCases(t *testing.T) {
 				t.Fatalf("phase is %q but Wait is non-nil: %+v", v.Phase, w)
 			}
 		})
+	}
+}
+
+func TestBuildPRWaitHandlesForgeReviewRequiredAndChecksFailure(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	f := Facts{
+		ID:        "todo_forge_pr",
+		Title:     "Real forge PR facts",
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now.Add(-time.Minute),
+		PRURL:     "https://github.com/org/repo/pull/99",
+		PRStatus: &PRStatus{
+			URL:       "https://github.com/org/repo/pull/99",
+			State:     "open",
+			Draft:     false,
+			Review:    "required",
+			Checks:    "failure",
+			CheckedAt: now.Add(-time.Minute),
+		},
+	}
+	w := Wait(f, now)
+	if w == nil || w.Kind != assistantwire.TodoWaitKindPrMerge {
+		t.Fatalf("Wait() = %+v, want pr_merge", w)
+	}
+	want := []assistantwire.TodoWaitPRBlocker{
+		assistantwire.TodoWaitPRBlockerReviewRequired,
+		assistantwire.TodoWaitPRBlockerChecksFailing,
+	}
+	if !reflect.DeepEqual(w.PrBlockers, want) {
+		t.Fatalf("PrBlockers = %+v, want %+v", w.PrBlockers, want)
 	}
 }

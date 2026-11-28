@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -236,6 +237,7 @@ func conversationSwitchTestDrive(t *testing.T, s *Service, id string, outcomes m
 		}
 		return true
 	})
+	conversationSwitchTestSettle(t, s)
 	return report
 }
 
@@ -575,6 +577,59 @@ func TestConversationSwitchesRefuseIndependentChanges(t *testing.T) {
 		active, ok := c.Active()
 		if err != nil || !ok || c.Epoch != 3 || active.Launcher != "other" || active.Model != "independent-model" {
 			t.Fatalf("restore overwrote the independent switch: %+v %v", c, err)
+		}
+	})
+
+	t.Run("concurrent close_pending sweep does not block new switch", func(t *testing.T) {
+		r := newConversationSwitchTestRig(t)
+		var closeAttempts atomic.Int64
+		r.f.answerNode("session.close", func(string, json.RawMessage) (any, error) {
+			closeAttempts.Add(1)
+			return nil, errors.New("node temporarily offline")
+		})
+		code, raw := conversationSwitchTestCall(t, r.s, http.MethodPost, "/api/v1/assistant/conversation-switches", "", `{"conversation_ids":["fresh-chat"],"launcher":"fallback","model":"new-model"}`)
+		started := conversationSwitchTestDecode(t, code, raw)
+		conversationSwitchTestDrive(t, r.s, started.BatchID, map[string]string{"fresh-chat": "switched"})
+
+		c, err := r.d.LogicalConversation(context.Background(), "server", "fresh-chat")
+		if err != nil || c == nil || c.Switch != nil || len(c.Segments) < 1 || !c.Segments[0].ClosePending {
+			t.Fatalf("expected retired segment with close_pending=true: %+v %v", c, err)
+		}
+
+		// Drive logicalSweep concurrently without settling so close_pending sweeps
+		// repeatedly run advanceLogicalConversation -> drainLogicalInput while
+		// POST .../switch calls BeginConversationSwitch (FOR UPDATE NOWAIT).
+		r.mu.Lock()
+		r.allowNonBatchPrepare = true
+		r.mu.Unlock()
+		defer func() {
+			r.mu.Lock()
+			r.allowNonBatchPrepare = false
+			r.mu.Unlock()
+		}()
+		sweepCtx, stopSweep := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sweepCtx.Err() == nil {
+				r.s.logicalSweep(sweepCtx)
+			}
+		}()
+		defer func() {
+			stopSweep()
+			wg.Wait()
+			conversationSwitchTestSettle(t, r.s)
+		}()
+
+		beforeAttempts := closeAttempts.Load()
+		waitFor(t, "close_pending sweeps to run concurrently", func() bool {
+			return closeAttempts.Load() > beforeAttempts+3
+		})
+
+		code, raw = conversationSwitchTestCall(t, r.s, http.MethodPost, "/api/v1/assistant/conversations/fresh-chat/switch", "", `{"source_machine_id":"server","operation_id":"independent-after-close-pending","expected_epoch":2,"machine_id":"server","launcher":"other","model":"independent-model"}`)
+		if code != http.StatusOK {
+			t.Fatalf("switch during concurrent close_pending sweep: %d %s", code, raw)
 		}
 	})
 }

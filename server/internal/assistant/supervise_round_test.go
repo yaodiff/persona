@@ -347,7 +347,7 @@ func TestBackgroundSwitchOnAfterARoundAsksForEveryTool(t *testing.T) {
 // its turn held as any supervision message's.
 func TestBackgroundQueuedWakeAfterManagerRestart(t *testing.T) {
 	// The queue now rechecks the task ledger after restart, so persist both in a real database.
-	database, err := db.Open(context.Background(), newDatabase(t), db.AllSets)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.AllSets), db.AllSets)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -93,7 +93,7 @@ describe("the 常驻 rows' disclosure", () => {
     const lead = direction("lead-a")!;
     expect(lead.querySelector('a[href="/persona/lead-a"]')!.textContent).toContain("Product");
     // its tasks waiting on you in words, what runs under it as the arc alone (#6626)
-    expect(lead.querySelector('a[href="/persona/lead-a"]')!.textContent).toContain("等你 1");
+    expect(lead.querySelector('a[href="/persona/lead-a"]')!.textContent).toContain("待处理 1");
     expect(lead.querySelector('a[href="/persona/lead-a"]')!.textContent).not.toContain("在做");
     expect(lead.querySelector('a[href="/persona/lead-a"] [data-shape="arc"][data-state="working"]')).not.toBeNull();
     expect(host.textContent).not.toContain("书记官");

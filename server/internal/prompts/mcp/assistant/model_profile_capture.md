@@ -1,4 +1,4 @@
-Capture current model fields into a profile with phone approval; does not apply them.{{template "shared/mcp_language" .}}
+With phone approval, save current model fields into a profile.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -6,7 +6,7 @@ Capture current model fields into a profile with phone approval; does not apply 
   "properties": {
     "id": {
       "type": "string",
-      "description": "Existing profile id from model_profiles_list"
+      "description": "Saved profile ID"
     }
   },
   "additionalProperties": false,

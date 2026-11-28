@@ -1,15 +1,15 @@
 {
   "title": "命令记录",
-  "loading": "正在读取命令记录…",
+  "loading": "正在加载命令记录…",
   "claimed": "自述命令",
   "recorded": "实际记录",
   "exit": "退出码 {code}",
   "is_error": "is_error：{value}",
-  "no_exit": "没有记录数值退出结果",
+  "no_exit": "未记录数值退出码",
   "background": "后台运行",
   "running": "后台仍在运行",
-  "not_found": "这段收尾的工作记录里没有匹配的命令",
+  "not_found": "本次收尾的工作记录中未找到匹配的命令。",
   "unavailable": "记录不可用",
-  "no_result": "没有工具结果记录",
-  "truncated": "记录被截断，证据不可用"
+  "no_result": "未记录工具执行结果",
+  "truncated": "证据不可用：记录已被截断"
 }

@@ -20,6 +20,14 @@
 #
 # Never reboots a simulator that is already booted: it may be another agent's. A booted one that isn't slim to the
 # profile is used as it is, with a warning; --reslim reboots it slim (only for your own simulator).
+#
+# At most SIM_MAX_BOOTED (default 3) simulators are Booted or Booting on this Mac. A boot that would exceed it waits up
+# to SIM_SLOT_WAIT seconds (default 1200) for a slot, then exits 75 listing the booted ones: shut down one you own
+# (xcrun simctl shutdown <udid>). Using an already booted simulator is never blocked. Boots take a machine-wide lock
+# (SIM_BOOT_LOCK_DIR, default $TMPDIR/persona-sim-boot.lock), so two agents cannot both pass the check.
+# A new name first adopts a shut-down "Persona …" simulator of the same device type and runtime (renamed) instead of
+# creating another one; SIM_REUSE=0 turns that off. --create-only and --start-only (CI, which owns the deadline) skip
+# the limit, the lock and the adoption. Shut it down when you are done; delete it when the task ends.
 # stdout is only the udid (last line); everything else goes to stderr. The line before it on stderr is the verdict:
 #   sim-boot: slim|stock|stock-no-simslim|in-use-not-slim|failed→stock <profile> <udid>
 # Exit 0 after boot readiness (creation only with --create-only; boot initiation only with --start-only).
@@ -32,6 +40,12 @@ ROOT=$PWD
 PROFILE="${SIM_PROFILE:-default}"
 DEVICE_TYPE="${SIM_DEVICE_TYPE:-iPhone 17 Pro}"
 RUNTIME="${SIM_RUNTIME:-}"
+MAX_BOOTED="${SIM_MAX_BOOTED:-3}"
+SLOT_WAIT="${SIM_SLOT_WAIT:-1200}"
+REUSE="${SIM_REUSE:-1}"
+LOCKDIR="${SIM_BOOT_LOCK_DIR:-${TMPDIR:-/tmp}/persona-sim-boot.lock}"
+case "$MAX_BOOTED$SLOT_WAIT" in *[!0-9]*|"") echo "sim-boot: SIM_MAX_BOOTED and SIM_SLOT_WAIT must be whole numbers" >&2; exit 2 ;; esac
+[ "$MAX_BOOTED" -ge 1 ] || { echo "sim-boot: SIM_MAX_BOOTED must be at least 1" >&2; exit 2; }
 RESLIM=0
 CREATE_ONLY=0
 START_ONLY=0
@@ -111,6 +125,73 @@ for h in hits: print(*h[:3])
 ' "$1" "$START_ONLY"
 }
 
+# Machine-wide boot lock (a directory: mkdir is atomic). Held until this script exits; a dead holder's lock is taken over.
+HAVE_LOCK=0
+acquire_lock() {
+  [ "$HAVE_LOCK" = 0 ] || return 0
+  mkdir -p "$(dirname "$LOCKDIR")"
+  local deadline holder
+  deadline=$(( $(date +%s) + SLOT_WAIT ))
+  until mkdir "$LOCKDIR" 2>/dev/null; do
+    holder=$(cat "$LOCKDIR/pid" 2>/dev/null || true)
+    if { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } ||
+       { [ -z "$holder" ] && [ -n "$(find "$LOCKDIR" -maxdepth 0 -mmin +2 2>/dev/null)" ]; }; then
+      log "taking over the boot lock of a finished sim-boot.sh (${holder:-no pid})"
+      rm -rf "$LOCKDIR"; continue
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      log "waited ${SLOT_WAIT}s for another sim-boot.sh (pid ${holder:-?}) to finish booting; nothing was booted"; exit 75
+    fi
+    sleep 1
+  done
+  echo $$ > "$LOCKDIR/pid"
+  HAVE_LOCK=1
+  trap 'rm -rf "$LOCKDIR"' EXIT
+}
+
+# First line: how many simulators are Booted or Booting; then one "  name (udid) state" line each.
+booted_report() {
+  timed 120 xcrun simctl list devices -j | python3 -c '
+import json, sys
+rows = [(d["name"], d["udid"], d["state"]) for r in json.load(sys.stdin)["devices"].values() for d in r
+        if d["state"] in ("Booted", "Booting") and d.get("isAvailable", True)]
+print(len(rows))
+for n, u, s in sorted(rows): print("  %s (%s) %s" % (n, u, s))'
+}
+
+# Called before a boot or a create+boot of a simulator that is not running yet: takes the lock, then waits for a slot.
+slot_gate() {
+  acquire_lock
+  local deadline report n
+  deadline=$(( $(date +%s) + SLOT_WAIT ))
+  while :; do
+    if ! report=$(booted_report); then
+      log "warning: cannot count booted simulators (simctl list failed); not enforcing the limit of $MAX_BOOTED"; return 0
+    fi
+    n=${report%%$'\n'*}
+    [ "$n" -lt "$MAX_BOOTED" ] && return 0
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      log "$n simulators are already booted (limit $MAX_BOOTED, SIM_MAX_BOOTED); waited ${SLOT_WAIT}s, nothing was booted. Shut down one you own:"
+      log "  xcrun simctl shutdown <udid>"
+      printf '%s\n' "${report#*$'\n'}" >&2
+      exit 75
+    fi
+    log "$n simulators are booted (limit $MAX_BOOTED); waiting for a slot"
+    sleep $(( SLOT_WAIT < 5 ? 1 : 5 ))
+  done
+}
+
+# udid of a shut-down "Persona …" simulator with this device type and runtime (adopted instead of creating one)
+adopt_candidate() {
+  timed 120 xcrun simctl list devices -j | python3 -c '
+import json, sys
+t, r = sys.argv[1], sys.argv[2]
+hits = sorted((d["name"], d["udid"]) for d in json.load(sys.stdin)["devices"].get(r, [])
+              if d["state"] == "Shutdown" and d.get("isAvailable", True)
+              and d.get("deviceTypeIdentifier") == t and d["name"].startswith("Persona "))
+if hits: print(hits[0][1])' "$1" "$2" 2>/dev/null || true
+}
+
 create() {
   local spec
   spec=$(timed 120 xcrun simctl list -j devicetypes runtimes | python3 -c '
@@ -128,6 +209,15 @@ if not rts: sys.exit("sim-boot: no installed runtime runs %r" % want)
 key = lambda r: tuple(int(x) for x in r["version"].split("."))
 print(t, max(rts, key=key)["identifier"])
 ' "$DEVICE_TYPE" "$RUNTIME") || exit 2
+  if [ "$REUSE" != 0 ] && [ "$CREATE_ONLY" = 0 ]; then
+    local old
+    old=$(adopt_candidate "${spec% *}" "${spec#* }")
+    if [ -n "$old" ]; then
+      log "reusing the shut-down simulator $old as \"$TARGET\" instead of creating another one"
+      if timed 60 xcrun simctl rename "$old" "$TARGET" >/dev/null; then return 0; fi
+      log "could not rename $old; creating a new simulator"
+    fi
+  fi
   log "creating \"$TARGET\" (${spec% *}, ${spec#* })"
   timed 300 xcrun simctl create "$TARGET" $spec >/dev/null || { log "simctl create failed"; exit 1; }
 }
@@ -138,9 +228,14 @@ if [ "$CREATE_ONLY" = 1 ] && [ -n "$INFO" ]; then
 fi
 if [ -z "$INFO" ]; then
   if [[ "$TARGET" =~ ^[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$ ]]; then log "no simulator $TARGET"; exit 2; fi
+  # a new device is booted below, so it needs a slot (CI's --create-only boots nothing and owns its deadline)
+  [ "$CREATE_ONLY" = 1 ] || slot_gate
   create
   INFO=$(lookup "$TARGET") || exit 2
   [ -n "$INFO" ] || { log "created \"$TARGET\" but cannot find it"; exit 1; }
+elif [ "$CREATE_ONLY" = 0 ] && [ "$START_ONLY" = 0 ]; then
+  # booted or booting simulators are never blocked; a shut-down one needs a slot to boot
+  case "$INFO" in *" Shutdown "*) slot_gate ;; esac
 fi
 read -r UDID STATE PLATFORM <<<"$INFO"
 

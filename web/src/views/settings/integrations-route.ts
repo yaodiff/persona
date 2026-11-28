@@ -1,249 +1,229 @@
-// Pure bidirectional route codec between unified Settings › Integrations (`integrations_v2`) and
-// legacy `connectors` / `channels` / `extensions` / `sources` routes (query and path forms, preserving `@manager` and `state`).
-import { splitSettingsOwner, type LegacyIntegrationTab } from "../../lib/deep-links";
+// Settings integration views and their URL compatibility across the Labs switch.
+import { isLegacyIntegrationTab, parseSettingsPath, splitSettingsOwner, type LegacyIntegrationTab } from "../../lib/deep-links";
 import { decodeURIComponentSafe } from "../../lib/uri";
+import { SUB } from "./href";
 
-export { isLegacyIntegrationTab, parseSettingsPath, type LegacyIntegrationTab } from "../../lib/deep-links";
+export { isLegacyIntegrationTab, parseSettingsPath } from "../../lib/deep-links";
 
 export type IntegrationFilter = "all" | "channels" | "data" | "tools";
+export type IntegrationScope = { kind: "current" } | { kind: "owned"; manager: string };
 
-export type IntegrationsRoute =
-  | { kind: "list" }
-  | { kind: "builtin"; id: string; manager?: string }
-  | { kind: "extension"; id: string; manager?: string }
-  | { kind: "channel"; id: string; manager?: string }
-  | { kind: "connector"; id: string; manager?: string }
-  | { kind: "page"; id: string; ui: string; manager?: string }
-  | { kind: "sources"; state?: string; manager?: string }
-  | { kind: "catalog" }
-  | { kind: "item"; market: string; id: string; manager?: string }
-  | { kind: "markets" }
-  | { kind: "sent" };
+export type IntegrationView =
+  (
+    | { kind: "list" | "catalog" | "markets" | "sent" | "data-flow" | "unavailable" }
+    | { kind: "builtin" | "extension" | "channel" | "connector"; id: string }
+    | { kind: "page"; id: string; ui: string }
+    | { kind: "source"; state: string }
+    | { kind: "item"; market: string; id: string }
+  ) & { prefill?: string };
 
-const KNOWN_BUILTIN_IDS = new Set(["mail", "feishu-bot", "lark", "imessage", "github", "larkcli"]);
+export interface IntegrationsRoute {
+  scope: IntegrationScope;
+  view: IntegrationView;
+  filter: IntegrationFilter;
+}
+
+type IntegrationTab = "integrations" | LegacyIntegrationTab;
+type ViewAddress = { view: IntegrationView; owner?: string };
+
+const BUILTIN_IDS = new Set(["mail", "feishu-bot", "lark", "imessage", "github", "larkcli"]);
 const BUILTIN_CHANNEL_IDS = new Set(["apps", "voice", "feishu-mention", "feishu"]);
 
+export function isIntegrationTab(tab: string | null): tab is IntegrationTab {
+  return tab === "integrations" || isLegacyIntegrationTab(tab);
+}
+
+export function integrationScope(manager?: string | null): IntegrationScope {
+  return manager ? { kind: "owned", manager } : { kind: "current" };
+}
+
+export function integrationManager(scope: IntegrationScope): string | undefined {
+  return scope.kind === "owned" ? scope.manager : undefined;
+}
+
 export function normalizeIntegrationFilter(value: string | null | undefined): IntegrationFilter {
-  if (value === "channels" || value === "data" || value === "tools") return value;
+  return value === "channels" || value === "data" || value === "tools" ? value : "all";
+}
+
+function sourceView(state?: string | null): IntegrationView {
+  return state ? { kind: "source", state } : { kind: "data-flow" };
+}
+
+function objectView(kind: "builtin" | "extension" | "channel" | "connector", sub: string): ViewAddress {
+  const { id, manager } = splitSettingsOwner(sub);
+  return { view: id ? { kind, id } : { kind: "list" }, owner: manager };
+}
+
+function extensionView(sub: string): ViewAddress {
+  if (sub === "-market") return { view: { kind: "catalog" } };
+  if (sub === "-markets") return { view: { kind: "markets" } };
+  const item = /^-market\/([^/]+)\/([^/@]+)(?:@([^/]+))?$/.exec(sub);
+  if (item) return { view: { kind: "item", market: item[1]!, id: item[2]! }, owner: item[3] };
+  const page = /^([^/@-][^/@]*)(?:@([^/]+))?\/ui\/([^/]+)$/.exec(sub);
+  if (page) return { view: { kind: "page", id: page[1]!, ui: page[3]! }, owner: page[2] };
+  if (sub.startsWith("-") || sub.includes("/")) return { view: { kind: "list" } };
+  return objectView("extension", sub);
+}
+
+function unifiedView(sub: string): ViewAddress {
+  if (sub === "-sent") return { view: { kind: "sent" } };
+  const source = /^-sources(?:@([^/]+))?(?:\/(.*))?$/s.exec(sub);
+  if (source) {
+    const raw = source[2];
+    const state = raw && !/^\s*[\[{]/.test(raw) ? decodeURIComponentSafe(raw) : raw;
+    return { view: sourceView(state), owner: source[1] };
+  }
+
+  const object = /^(builtin|extension|ext|channel|connector):(.*)$/.exec(sub);
+  if (object) {
+    const [, prefix, id] = object;
+    switch (prefix) {
+      case "ext":
+      case "extension": return id?.includes("/") ? extensionView(id) : objectView("extension", id ?? "");
+      case "builtin":
+      case "channel":
+      case "connector": return id && !id.includes("/") ? objectView(prefix, id) : { view: { kind: "list" } };
+    }
+  }
+
+  return BUILTIN_IDS.has(splitSettingsOwner(sub).id) ? objectView("builtin", sub) : extensionView(sub);
+}
+
+function legacyView(tab: LegacyIntegrationTab, sub: string): ViewAddress {
+  switch (tab) {
+    case "sources": {
+      const source = /^@([^/]+)(?:\/(.*))?$/s.exec(sub);
+      return source ? { view: sourceView(source[2]), owner: source[1] } : { view: sourceView(sub) };
+    }
+    case "connectors": {
+      if (sub === "-sent") return { view: { kind: "sent" } };
+      const { id } = splitSettingsOwner(sub);
+      return objectView(id === "mail" || id === "lark" || id === "feishu-bot" ? "builtin" : "connector", sub);
+    }
+    case "channels": {
+      const { id, manager } = splitSettingsOwner(sub);
+      return id === "feishu" ? { view: { kind: "builtin", id: "feishu-bot" }, owner: manager } : objectView("channel", sub);
+    }
+    case "extensions":
+      return extensionView(sub);
+  }
+}
+
+function defaultFilter(tab: IntegrationTab, view: IntegrationView): IntegrationFilter {
+  if (view.kind !== "list") return "all";
+  if (tab === "channels") return "channels";
+  if (tab === "connectors") return "data";
   return "all";
 }
 
-function withManager(id: string, manager?: string): string {
-  return manager ? `${id}@${manager}` : id;
+export function decodeIntegrationsRoute(
+  tab: IntegrationTab,
+  sub: string | null,
+  query = new URLSearchParams(),
+  pathOwner?: string,
+): IntegrationsRoute {
+  if (tab === "extensions" && (sub === "-channels" || sub?.startsWith("-channels/"))) {
+    tab = "channels";
+    sub = sub.slice("-channels/".length) || null;
+  }
+  const parsed = tab === "integrations" ? unifiedView(sub ?? "") : legacyView(tab, sub ?? "");
+  // A legacy page can carry its original view when two unified views share a legacy destination.
+  // Accept that hint only if both representations address the same legacy page.
+  const hint = tab !== "integrations" && query.has("integration") ? unifiedView(query.get("integration")!) : null;
+  const hinted = hint
+    ? legacyIntegrationTarget({ scope: integrationScope(), view: hint.view, filter: "all" })
+    : null;
+  const useHint = hinted?.tab === tab && unifiedSub(legacyView(hinted.tab, hinted.sub ?? "").view) === unifiedSub(parsed.view);
+  const view = useHint ? hint!.view : parsed.view;
+  const filter = query.has("filter") ? normalizeIntegrationFilter(query.get("filter")) : defaultFilter(tab, view);
+  const owners = new Set([...query.getAll("manager"), pathOwner, parsed.owner, useHint ? hint!.owner : undefined].filter(Boolean));
+  if (owners.size > 1) return { scope: integrationScope(), view: { kind: "unavailable" }, filter };
+
+  const [owner] = owners;
+  const values = query.getAll("set");
+  return {
+    scope: integrationScope(owner),
+    view: values.length === 1 ? { ...view, prefill: values[0]! } : view,
+    filter,
+  };
 }
 
-/** Parses `?tab=integrations&integration=<sub>` into a structured route. */
-export function parseIntegrationsSub(sub: string | null | undefined): IntegrationsRoute {
-  if (!sub) return { kind: "list" };
-  if (sub.startsWith("extension:")) sub = "ext:" + sub.slice("extension:".length);
-  if (sub === "-sent") return { kind: "sent" };
-  if (sub === "-market") return { kind: "catalog" };
-  if (sub === "-markets") return { kind: "markets" };
-  if (sub === "-sources") return { kind: "sources" };
-  if (sub.startsWith("-sources@") || sub.startsWith("-sources/")) {
-    const rest = sub.slice("-sources".length);
-    const slash = rest.indexOf("/");
-    const head = slash >= 0 ? rest.slice(0, slash) : rest;
-    const manager = head.startsWith("@") ? head.slice(1) : "";
-    const rawState = slash >= 0 ? rest.slice(slash + 1) : "";
-    const state = rawState ? decodeURIComponentSafe(rawState) : "";
-    return {
-      kind: "sources",
-      ...(state ? { state } : {}),
-      ...(manager ? { manager } : {}),
-    };
-  }
-
-  const item = /^-market\/([^/]+)\/([^/@]+)(?:@([^/]+))?$/.exec(sub);
-  if (item) {
-    return { kind: "item", market: item[1]!, id: item[2]!, ...(item[3] ? { manager: item[3] } : {}) };
-  }
-
-  const page = /^(?:ext:)?([^/@:-][^/@]*)(?:@([^/]+))?\/ui\/([^/]+)$/.exec(sub);
-  if (page) {
-    return { kind: "page", id: page[1]!, ui: page[3]!, ...(page[2] ? { manager: page[2] } : {}) };
-  }
-
-  if (sub.startsWith("builtin:")) {
-    const rest = sub.slice("builtin:".length);
-    if (!rest || rest.includes("/")) return { kind: "list" };
-    const { id, manager } = splitSettingsOwner(rest);
-    return id ? { kind: "builtin", id, ...(manager ? { manager } : {}) } : { kind: "list" };
-  }
-  if (sub.startsWith("ext:")) {
-    const rest = sub.slice("ext:".length);
-    if (!rest || rest.includes("/")) return { kind: "list" };
-    const { id, manager } = splitSettingsOwner(rest);
-    return id ? { kind: "extension", id, ...(manager ? { manager } : {}) } : { kind: "list" };
-  }
-  if (sub.startsWith("channel:")) {
-    const rest = sub.slice("channel:".length);
-    if (!rest || rest.includes("/")) return { kind: "list" };
-    const { id, manager } = splitSettingsOwner(rest);
-    return id ? { kind: "channel", id, ...(manager ? { manager } : {}) } : { kind: "list" };
-  }
-  if (sub.startsWith("connector:")) {
-    const rest = sub.slice("connector:".length);
-    if (!rest || rest.includes("/")) return { kind: "list" };
-    const { id, manager } = splitSettingsOwner(rest);
-    return id ? { kind: "connector", id, ...(manager ? { manager } : {}) } : { kind: "list" };
-  }
-
-  if (sub.startsWith("-") || sub.includes("/")) return { kind: "list" };
-  const { id, manager } = splitSettingsOwner(sub);
-  if (!id) return { kind: "list" };
-  if (KNOWN_BUILTIN_IDS.has(id)) {
-    return { kind: "builtin", id, ...(manager ? { manager } : {}) };
-  }
-  return { kind: "extension", id, ...(manager ? { manager } : {}) };
+/** Decode every supported bookmark before any decision about the assistant's Labs mode. */
+export function readIntegrationsAddress(search: string, path = "/settings"): { tab: IntegrationTab; route: IntegrationsRoute } | null {
+  const query = new URLSearchParams(search);
+  // Keep a path's owner separate so a conflicting query or item owner cannot overwrite it.
+  const pathRoute = parseSettingsPath(path);
+  const rawTab = pathRoute?.tab ?? query.get("tab");
+  const tab = rawTab === "plugins" ? "extensions" : rawTab === "sent" ? "connectors" : rawTab;
+  if (!isIntegrationTab(tab)) return null;
+  const sub = rawTab === "sent" ? "-sent"
+    : pathRoute?.sub ?? query.get(SUB[tab]!) ?? (tab === "extensions" ? query.get("plugin") : null);
+  return { tab, route: decodeIntegrationsRoute(tab, sub, query, pathRoute?.manager) };
 }
 
-/** Serializes a structured route back to the `integration` query parameter value. */
-export function formatIntegrationsSub(route: IntegrationsRoute): string | null {
-  switch (route.kind) {
+const withOwner = (id: string, owner?: string) => owner ? `${id}@${owner}` : id;
+
+function unifiedSub(view: IntegrationView, owner?: string): string | null {
+  switch (view.kind) {
     case "list":
-      return null;
-    case "sent":
-      return "-sent";
-    case "catalog":
-      return "-market";
-    case "markets":
-      return "-markets";
-    case "item":
-      return `-market/${route.market}/${withManager(route.id, route.manager)}`;
-    case "page":
-      return `ext:${withManager(route.id, route.manager)}/ui/${route.ui}`;
-    case "sources": {
-      const base = withManager("-sources", route.manager);
-      return route.state ? `${base}/${encodeURIComponent(route.state)}` : base;
-    }
+    case "unavailable": return null;
+    case "sent": return "-sent";
+    case "catalog": return "-market";
+    case "markets": return "-markets";
+    case "item": return `-market/${view.market}/${withOwner(view.id, owner)}`;
+    case "page": return `ext:${withOwner(view.id, owner)}/ui/${view.ui}`;
+    case "data-flow": return withOwner("-sources", owner);
+    case "source": return `${withOwner("-sources", owner)}/${encodeURIComponent(view.state)}`;
+    case "extension": return `ext:${withOwner(view.id, owner)}`;
     case "builtin":
-      return `builtin:${withManager(route.id, route.manager)}`;
-    case "extension":
-      return `ext:${withManager(route.id, route.manager)}`;
     case "channel":
-      return `channel:${withManager(route.id, route.manager)}`;
-    case "connector":
-      return `connector:${withManager(route.id, route.manager)}`;
+    case "connector": return `${view.kind}:${withOwner(view.id, owner)}`;
   }
 }
 
-/** Whether a route shows an integration detail view eligible for two-column split-pane layout on desktop.
- *  Global Data Flow (`kind: "sources"` without `state`) stays full-width single-scroll so `SourcesGraph` has room;
- *  an individual source detail (`kind: "sources"` with `state`, such as a standalone push source) uses split-pane. */
-export function isIntegrationDetailRoute(route: IntegrationsRoute): boolean {
-  return (
-    route.kind === "builtin" ||
-    route.kind === "extension" ||
-    route.kind === "channel" ||
-    route.kind === "connector" ||
-    (route.kind === "sources" && Boolean(route.state))
-  );
-}
-
-/** Maps a legacy `connectors` / `channels` / `extensions` / `sources` tab+sub into the unified `integrations` sub + optional filter. */
-export function legacyToIntegrations(
-  tab: LegacyIntegrationTab,
-  sub: string | null | undefined,
-  manager?: string | null,
-): { sub: string | null; filter?: IntegrationFilter } {
-  if (tab === "sources") {
-    let resolvedManager = manager?.trim() || undefined;
-    let resolvedState = sub?.trim() || undefined;
-    if (resolvedState?.startsWith("@")) {
-      const slash = resolvedState.indexOf("/");
-      const head = slash >= 0 ? resolvedState.slice(1, slash) : resolvedState.slice(1);
-      if (head && !resolvedManager) resolvedManager = head;
-      resolvedState = slash >= 0 ? resolvedState.slice(slash + 1) || undefined : undefined;
-    }
-    return {
-      sub: formatIntegrationsSub({
-        kind: "sources",
-        ...(resolvedState ? { state: resolvedState } : {}),
-        ...(resolvedManager ? { manager: resolvedManager } : {}),
-      }),
-    };
-  }
-
-  if (tab === "connectors") {
-    if (!sub) return { sub: null, filter: "data" };
-    if (sub === "-sent") return { sub: "-sent" };
-    const { id, manager: ownedManager } = splitSettingsOwner(sub);
-    if (id === "mail" || id === "feishu-bot" || id === "lark") {
-      return { sub: formatIntegrationsSub({ kind: "builtin", id, manager: ownedManager }) };
-    }
-    return { sub: formatIntegrationsSub({ kind: "connector", id, manager: ownedManager }) };
-  }
-
-  if (tab === "channels") {
-    if (!sub) return { sub: null, filter: "channels" };
-    const { id, manager: ownedManager } = splitSettingsOwner(sub);
-    if (id === "feishu") {
-      return { sub: formatIntegrationsSub({ kind: "builtin", id: "feishu-bot", manager: ownedManager }) };
-    }
-    return { sub: formatIntegrationsSub({ kind: "channel", id, manager: ownedManager }) };
-  }
-
-  // tab === "extensions"
-  if (!sub) return { sub: null };
-  if (sub === "-channels") return { sub: null, filter: "channels" };
-  if (sub.startsWith("-channels/")) {
-    return legacyToIntegrations("channels", sub.slice("-channels/".length));
-  }
-  if (sub === "-market" || sub === "-markets") return { sub };
-  const marketItem = /^-market\/([^/]+)\/([^/@]+)(?:@([^/]+))?$/.exec(sub);
-  if (marketItem) return { sub };
-  const page = /^([^/@-][^/@]*)(?:@([^/]+))?\/ui\/([^/]+)$/.exec(sub);
-  if (page) {
-    return { sub: formatIntegrationsSub({ kind: "page", id: page[1]!, ui: page[3]!, ...(page[2] ? { manager: page[2] } : {}) }) };
-  }
-  if (sub.startsWith("-") || sub.includes("/")) return { sub: null };
-  const { id, manager: ownedManager } = splitSettingsOwner(sub);
-  return { sub: formatIntegrationsSub({ kind: "extension", id, manager: ownedManager }) };
-}
-
-/** Maps a unified `integrations` sub + optional filter back to the appropriate legacy tab + sub when `integrations_v2` is off. */
-export function integrationsToLegacy(
-  sub: string | null | undefined,
-  filter?: string | null,
-): { tab: LegacyIntegrationTab; sub: string | null; manager?: string } {
-  const route = parseIntegrationsSub(sub);
-  switch (route.kind) {
-    case "list": {
-      const normalized = normalizeIntegrationFilter(filter);
-      if (normalized === "channels") return { tab: "channels", sub: null };
-      if (normalized === "data") return { tab: "connectors", sub: null };
-      return { tab: "extensions", sub: null };
-    }
-    case "sent":
-      return { tab: "connectors", sub: "-sent" };
-    case "sources":
-      return {
-        tab: "sources",
-        sub: route.state ?? null,
-        ...(route.manager ? { manager: route.manager } : {}),
-      };
+/** The tab and item the previous Settings implementation understands. */
+export function legacyIntegrationTarget({ scope, view, filter }: IntegrationsRoute): { tab: LegacyIntegrationTab; sub: string | null } {
+  const owner = integrationManager(scope);
+  switch (view.kind) {
+    case "list":
+    case "unavailable": return { tab: filter === "channels" ? "channels" : filter === "data" ? "connectors" : "extensions", sub: null };
+    case "sent": return { tab: "connectors", sub: "-sent" };
+    case "data-flow": return { tab: "sources", sub: null };
+    case "source": return { tab: "sources", sub: view.state };
     case "catalog":
-      return { tab: "extensions", sub: "-market" };
     case "markets":
-      return { tab: "extensions", sub: "-markets" };
-    case "item":
-      return { tab: "extensions", sub: `-market/${route.market}/${withManager(route.id, route.manager)}` };
-    case "page":
-      return { tab: "extensions", sub: `${withManager(route.id, route.manager)}/ui/${route.ui}` };
-    case "extension":
-      return { tab: "extensions", sub: withManager(route.id, route.manager) };
-    case "channel":
-      return { tab: "channels", sub: withManager(route.id, route.manager) };
-    case "connector":
-      return { tab: "connectors", sub: withManager(route.id, route.manager) };
-    case "builtin":
-      if (!route.manager && (route.id === "mail" || route.id === "lark")) {
-        return { tab: "connectors", sub: null };
-      }
-      if (BUILTIN_CHANNEL_IDS.has(route.id)) {
-        return { tab: "channels", sub: withManager(route.id, route.manager) };
-      }
-      return { tab: "connectors", sub: withManager(route.id, route.manager) };
+    case "item": return { tab: "extensions", sub: unifiedSub(view, owner) };
+    case "page": return { tab: "extensions", sub: `${withOwner(view.id, owner)}/ui/${view.ui}` };
+    case "extension": return { tab: "extensions", sub: withOwner(view.id, owner) };
+    case "channel": return { tab: "channels", sub: withOwner(view.id, owner) };
+    case "connector": return { tab: "connectors", sub: withOwner(view.id, owner) };
+    case "builtin": return { tab: BUILTIN_CHANNEL_IDS.has(view.id) ? "channels" : "connectors", sub: withOwner(view.id, owner) };
   }
+}
+
+export function integrationQuery(route: IntegrationsRoute, unified: boolean): URLSearchParams {
+  const { scope, view, filter } = route;
+  const owner = integrationManager(scope);
+  const { tab, sub }: { tab: IntegrationTab; sub: string | null } = unified
+    ? { tab: "integrations", sub: unifiedSub(view, owner) } : legacyIntegrationTarget(route);
+  const query = new URLSearchParams({ tab });
+  if (owner) query.set("manager", owner);
+  if (sub) query.set(SUB[tab]!, sub);
+  if (!unified && isLegacyIntegrationTab(tab) && legacyView(tab, sub ?? "").view.kind !== view.kind) {
+    const hint = unifiedSub(view);
+    if (hint) query.set("integration", hint);
+  }
+  if (filter !== defaultFilter(tab, view)) query.set("filter", filter);
+  if (view.prefill !== undefined) query.set("set", view.prefill);
+  return query;
+}
+
+/** Shareable objects also carry the owner syntax understood by a Web client from before the `manager` parameter. */
+export function integrationHref(route: IntegrationsRoute, unified = true): string {
+  return `/settings?${integrationQuery(route, unified)}`;
+}
+
+export function isIntegrationDetailRoute(view: IntegrationView): boolean {
+  return view.kind === "builtin" || view.kind === "extension" || view.kind === "channel" ||
+    view.kind === "connector" || view.kind === "source";
 }

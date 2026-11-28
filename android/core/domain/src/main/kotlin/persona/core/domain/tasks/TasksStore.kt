@@ -5,6 +5,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
@@ -94,6 +96,9 @@ interface TodoCache {
 private val todayRecheck = Duration.ofMinutes(10)
 private const val maximumFeedPages = 64
 
+/** Default settle window for coalescing bursts of hub `TodosEvent` notifications into one reload. */
+private const val defaultTodoEventDebounceMillis = 250L
+
 class TasksStore(
     private val api: TasksApi,
     connection: HubConnection,
@@ -102,6 +107,8 @@ class TasksStore(
     private val clock: Clock = Clock.systemDefaultZone(),
     /** The phone's own delete for Undo on a calendar quick result; null: the cards offer no Undo. */
     private val quickResults: PhoneQuickResults? = null,
+    /** Short settle window for coalescing `TodosEvent` bursts; direct `reloadTodos()` still runs immediately. */
+    private val todoEventDebounceMillis: Long = defaultTodoEventDebounceMillis,
 ) : TodoDecisionsSource {
     /** Created calendar event id → its Undo state, for as long as this store lives (iOS `TasksStore.undone`). */
     private val _quickResultUndos = MutableStateFlow<Map<Long, QuickResultUndo>>(emptyMap())
@@ -120,6 +127,11 @@ class TasksStore(
     private val finishedTasks = mutableMapOf<String, Pair<TodoAsk, Todo>>()
     private val writing = Mutex()
     private val refreshingTodos = Mutex()
+    private val reloadLock = Any()
+    private var reloadWorkerActive = false
+    private var reloadDirty = false
+    private var reloadImmediate = false
+    private var reloadSettleWake: CompletableDeferred<Unit>? = null
     private val agentLookup = TaskAgentLookup(api, scope)
     val agentSessions = agentLookup.sessions
     val agentLookupFailures = agentLookup.failures
@@ -223,7 +235,7 @@ class TasksStore(
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             connection.events.collect { e ->
                 when (e) {
-                    is TodosEvent -> reloadTodos()
+                    is TodosEvent -> requestTodosReload(immediate = false)
                     is persona.core.contracts.SessionsListEvent -> agentLookup.refresh()
                     is AssistantFeedEvent -> { api.noteFeedOwner(e.item, e.manager); received(listOf(e.item)) }
                     is TaskPlanEvent -> _plans.update { it + (e.plan.id to e.plan) }
@@ -284,47 +296,120 @@ class TasksStore(
         }
     }
 
-    fun reloadTodos() {
+    fun reloadTodos() = requestTodosReload(immediate = true)
+
+    /**
+     * Single-flight to-do refresh with dirty coalescing:
+     * - Leading edge runs immediately so single updates and direct mutations add zero latency.
+     * - While a refresh is in flight, any number of concurrent `TodosEvent`s or reload calls
+     *   collapse into a single `dirty` flag instead of launching queued coroutines.
+     * - Trailing `TodosEvent`-only follow-ups settle briefly ([todoEventDebounceMillis]) to
+     *   coalesce burst tails; a direct `reloadTodos()` wakes the settle window immediately.
+     */
+    private fun requestTodosReload(immediate: Boolean) {
+        val launchWorker: Boolean
+        val wake: CompletableDeferred<Unit>?
+        synchronized(reloadLock) {
+            reloadDirty = true
+            if (immediate) reloadImmediate = true
+            wake = if (immediate) reloadSettleWake else null
+            if (reloadWorkerActive) {
+                launchWorker = false
+            } else {
+                reloadWorkerActive = true
+                launchWorker = true
+            }
+        }
+        wake?.complete(Unit)
+        if (!launchWorker) return
         scope.launch {
-            refreshingTodos.withLock {
-                try {
-                    val completionsBeforeRead = synchronized(todosLock) { finishedTasks.toMap() }
-                    val list = api.todos()
-                    _todosSupported.value = true
-                    todosLoaded = true
-                    synchronized(todosLock) {
-                        val shown = list.map { todo ->
-                            val completion = finishedTasks[todo.id]?.takeIf { it != completionsBeforeRead[todo.id] }
-                            when {
-                                completion != null && (todo.ask == null || todo.ask == completion.first) -> completion.second
-                                todo.ask?.askedAt?.let { (todo.id to it) in acceptedAsks } == true -> todo.copy(ask = null)
-                                else -> todo
-                            }
+            try {
+                var firstPass = true
+                while (true) {
+                    val waitBeforeFetch: Long
+                    val settleWake: CompletableDeferred<Unit>?
+                    synchronized(reloadLock) {
+                        if (!reloadDirty) {
+                            reloadWorkerActive = false
+                            reloadSettleWake = null
+                            return@launch
                         }
-                        finishedTasks.keys.retainAll(shown.map { it.id }.toSet())
-                        answered = shown
-                        // The list first, then the flag, in this block: a card must not see "the list is in" while it
-                        // still holds the previous one and call a just-dispatched task gone (#5110).
-                        _todos.value = shown
+                        if (firstPass || reloadImmediate || todoEventDebounceMillis <= 0L) {
+                            reloadDirty = false
+                            reloadImmediate = false
+                            reloadSettleWake = null
+                            waitBeforeFetch = 0L
+                            settleWake = null
+                        } else {
+                            val deferred = CompletableDeferred<Unit>()
+                            reloadSettleWake = deferred
+                            waitBeforeFetch = todoEventDebounceMillis
+                            settleWake = deferred
+                        }
+                    }
+                    firstPass = false
+                    if (waitBeforeFetch > 0L && settleWake != null) {
+                        withTimeoutOrNull(waitBeforeFetch) { settleWake.await() }
+                        synchronized(reloadLock) {
+                            reloadSettleWake = null
+                            if (!reloadDirty) {
+                                reloadWorkerActive = false
+                                return@launch
+                            }
+                            reloadDirty = false
+                            reloadImmediate = false
+                        }
+                    }
+                    executeTodosReload()
+                }
+            } finally {
+                synchronized(reloadLock) {
+                    reloadWorkerActive = false
+                    reloadSettleWake = null
+                }
+            }
+        }
+    }
+
+    private suspend fun executeTodosReload() {
+        refreshingTodos.withLock {
+            try {
+                val completionsBeforeRead = synchronized(todosLock) { finishedTasks.toMap() }
+                val list = api.todos()
+                _todosSupported.value = true
+                todosLoaded = true
+                synchronized(todosLock) {
+                    val shown = list.map { todo ->
+                        val completion = finishedTasks[todo.id]?.takeIf { it != completionsBeforeRead[todo.id] }
+                        when {
+                            completion != null && (todo.ask == null || todo.ask == completion.first) -> completion.second
+                            todo.ask?.askedAt?.let { (todo.id to it) in acceptedAsks } == true -> todo.copy(ask = null)
+                            else -> todo
+                        }
+                    }
+                    finishedTasks.keys.retainAll(shown.map { it.id }.toSet())
+                    answered = shown
+                    // The list first, then the flag, in this block: a card must not see "the list is in" while it
+                    // still holds the previous one and call a just-dispatched task gone (#5110).
+                    _todos.value = shown
+                    todosReady.value = true
+                }
+                dropStaleRoutes()
+                remember()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                val status = error::class.java.methods.firstOrNull { it.name == "getStatus" }?.invoke(error) as? Int
+                if (status == 404 || error.message?.contains("404") == true) {
+                    _todosSupported.value = false
+                    synchronized(todosLock) {
+                        answered = emptyList()
+                        _todos.value = emptyList()
                         todosReady.value = true
                     }
-                    dropStaleRoutes()
                     remember()
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    val status = error::class.java.methods.firstOrNull { it.name == "getStatus" }?.invoke(error) as? Int
-                    if (status == 404 || error.message?.contains("404") == true) {
-                        _todosSupported.value = false
-                        synchronized(todosLock) {
-                            answered = emptyList()
-                            _todos.value = emptyList()
-                            todosReady.value = true
-                        }
-                        remember()
-                    }
-                    // Failed reads retain the last confirmed binding; a reconnect or open retries the read.
                 }
+                // Failed reads retain the last confirmed binding; a reconnect or open retries the read.
             }
         }
     }

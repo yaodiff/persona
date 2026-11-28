@@ -119,19 +119,20 @@ export function DiffLines({ diff, truncated, comment }: { diff: string; truncate
           {truncated && <p className="sticky left-0 px-3 pt-2 font-sans text-[11.5px] text-ink-3">{t("session-files-difflines.truncated")}</p>}
         </div>
       </div>
-      {comment && key && pick.range && <DiffBox comment={comment} lines={lines} rows={pick.range} onDone={pick.clear} draftKey={key} />}
+      {comment && key && pick.range && <DiffBox comment={comment} lines={lines} rows={pick.range} anchor={pick.anchor} onDone={pick.clear} draftKey={key} />}
     </>
   );
 }
 
-/** The box for the rows picked: their line numbers and the diff's name in its title, the code in the card it makes. */
-function DiffBox({ comment, lines, rows, draftKey, onDone }: { comment: DiffComment; lines: readonly DiffLine[]; rows: { from: number; to: number }; draftKey: string; onDone: () => void }) {
+/** The floating bar for the rows picked: their line numbers and the diff's name, the code in the comment it makes. */
+function DiffBox({ comment, lines, rows, anchor, draftKey, onDone }: { comment: DiffComment; lines: readonly DiffLine[]; rows: { from: number; to: number }; anchor: ReturnType<typeof useLinePick>["anchor"]; draftKey: string; onDone: () => void }) {
   const got = diffPick(lines, rows.from, rows.to);
   if (!got) return null;
   const file = comment.path;
   return (
     <LineBox
       where={`${file}:${rangeLabel(got.from, got.to)} · ${diffName(comment.diff)}`}
+      anchor={anchor}
       onCancel={onDone}
       onAdd={(body) => {
         const quote = codeQuote({ file, path: comment.path, from: got.from, to: got.to, lines: got.lines, old: got.old, diff: comment.diff, lang: "diff", mid: comment.mid, sid: comment.sid, cwd: comment.cwd });

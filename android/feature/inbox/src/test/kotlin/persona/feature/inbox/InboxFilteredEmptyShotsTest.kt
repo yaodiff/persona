@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +31,13 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.InboxEntry
+import persona.core.contracts.LarkFeatures
+import persona.core.contracts.generated.InboxStoredSources
 import persona.core.designsystem.AppStyle
+import persona.core.designsystem.LocalHubFeatures
+import persona.core.designsystem.LocalLarkFeatures
+import persona.core.designsystem.LocalMailAccess
+import persona.core.designsystem.MailAccess
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
@@ -60,9 +67,10 @@ class InboxFilteredEmptyShotsTest {
         preview = "The lobby closes early.", tier = "fyi", updatedAt = "2026-11-04T08:00:00Z",
     ), sourceLabel = "Mail", source = "mail")
 
-    private class OneInbox(records: List<InboxRecord>, prefs: InboxPreferences = InboxPreferences()) : InboxRepository {
+    private class OneInbox(records: List<InboxRecord>, prefs: InboxPreferences = InboxPreferences(),
+        storedSources: InboxStoredSources? = null) : InboxRepository {
         override val entries = MutableStateFlow(emptyList<InboxEntry>())
-        override val snapshot = MutableStateFlow(InboxSnapshot(records = records))
+        override val snapshot = MutableStateFlow(InboxSnapshot(records = records, storedSources = storedSources))
         override val connectionState = flowOf(ConnectionState.Online)
         override val preferences = flowOf(prefs)
         override suspend fun refresh() = Unit
@@ -142,6 +150,72 @@ class InboxFilteredEmptyShotsTest {
             for (y in 0 until bitmap.height step 7) for (x in 0 until bitmap.width step 7) if (bitmap.getPixel(x, y) != background) other++
             assertTrue("filtered-empty-${s.key} drew nothing", other > 100)
             File(dir, "filtered-empty-${s.key}-${if (d) "dark" else "light"}.png").outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+        }
+    }
+
+    private data class EmptySourceCase(val features: Set<String>, val lark: LarkFeatures, val mail: MailAccess,
+        val stored: InboxStoredSources?, val expected: String)
+
+    @Test fun emptyTextFollowsCapabilityAndStoredSources() {
+        val cases = listOf(
+            EmptySourceCase(setOf("modules", "lark", "module.lark", "module.mail"), LarkFeatures.All, MailAccess.Live,
+                InboxStoredSources(lark = false, mail = false), "Once the hub has Lark"),
+            EmptySourceCase(setOf("modules"), LarkFeatures.None, MailAccess.StoredOnly,
+                InboxStoredSources(lark = true, mail = false), "new Lark messages that need you show up here."),
+            EmptySourceCase(setOf("modules"), LarkFeatures.None, MailAccess.StoredOnly,
+                InboxStoredSources(lark = false, mail = true), "mail that needs you shows up here."),
+            EmptySourceCase(setOf("modules"), LarkFeatures.None, MailAccess.StoredOnly,
+                InboxStoredSources(lark = false, mail = false), "New items that need you will show up here."),
+            EmptySourceCase(setOf("modules"), LarkFeatures.None, MailAccess.StoredOnly, null, "Once the hub has Lark"),
+        )
+        var current by mutableStateOf(cases.first())
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                CompositionLocalProvider(LocalHubFeatures provides current.features, LocalLarkFeatures provides current.lark,
+                    LocalMailAccess provides current.mail) {
+                    InboxScreen(OneInbox(emptyList(), storedSources = current.stored), navigator)
+                }
+            }
+        }
+        for (case in cases) {
+            current = case
+            rule.waitForIdle()
+            rule.onNodeWithText(case.expected, substring = true).assertExists()
+        }
+    }
+
+    @Test fun drawsAnEmptyInboxWithoutOfferedSources() = captureNoSources("default")
+
+    @Config(fontScale = 2f)
+    @Test fun drawsAnEmptyInboxWithoutOfferedSourcesAtLargeText() = captureNoSources("200pct")
+
+    private fun captureNoSources(suffix: String) {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                CompositionLocalProvider(
+                    LocalHubFeatures provides setOf("modules"),
+                    LocalLarkFeatures provides LarkFeatures.None,
+                    LocalMailAccess provides MailAccess.StoredOnly,
+                ) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                        InboxScreen(OneInbox(emptyList(), storedSources = InboxStoredSources(lark = false, mail = false)), navigator)
+                    }
+                }
+            }
+        }
+        val dir = File(System.getProperty("persona.shots") ?: "build/inbox-source-availability-shots").also { it.mkdirs() }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s
+            dark = d
+            rule.waitForIdle()
+            rule.onNodeWithText("New items that need you will show up here.").assertExists()
+            gone("Once the hub has Lark")
+            val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+            File(dir, "empty-no-sources-$suffix-${s.key}-${if (d) "dark" else "light"}.png").outputStream().use {
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
             }
         }

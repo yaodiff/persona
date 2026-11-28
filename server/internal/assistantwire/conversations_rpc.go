@@ -1,6 +1,10 @@
 package assistantwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // Extension-facing reads of the assistant's conversations (#1288, docs/extensions/extensions.md "Assistant
 // conversations"): the hub checks the extension's assistant.read grant and forwards these as they are; the manager,
@@ -10,6 +14,11 @@ const (
 	MethodAssistantConversations = "assistant.conversations"
 	// MethodAssistantMessages pages one conversation's words, the user's and the assistant's.
 	MethodAssistantMessages = "assistant.messages"
+)
+
+var (
+	AssistantConversationsMethod = buswire.Method[AssistantConversationsParams, AssistantConversationsResult]{Name: MethodAssistantConversations}
+	AssistantMessagesMethod      = buswire.Method[AssistantMessagesParams, AssistantMessagesResult]{Name: MethodAssistantMessages}
 )
 
 // AssistantConversationsParams is assistant.conversations' params.

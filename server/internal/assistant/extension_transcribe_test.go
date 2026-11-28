@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -49,7 +50,10 @@ func extTr(t *testing.T, s *Service, ext, method string, params, out any) error 
 		t.Fatalf("%s: not answered", method)
 	}
 	if err == nil && out != nil {
-		b, _ := json.Marshal(res)
+		b, err := rpc.Marshal(res)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := json.Unmarshal(b, out); err != nil {
 			t.Fatal(err)
 		}
@@ -77,26 +81,25 @@ func TestExtensionTranscribesItsAudio(t *testing.T) {
 		f.replay = jobScript{usage: 24, windows: []fakeWindow{
 			{0, 3, false, []fakeLine{{0.5, 1.5, "Crack two eggs."}}},
 			{3, 6, true, nil}, // the sessions did not agree: a gap
-			{6, 8, false, []fakeLine{{6.2, 7, "Serve warm."}}},
+			{6, 8, false, []fakeLine{{6.2, 7, "x < y & z > w"}}},
 		}}
 	})
 	job := startJob(t, s, "example-video", assistantwire.TranscriptionStartParams{Language: "zh-CN", Label: "clip n-1\nsecond line"})
 	for _, sec := range []float64{3, 3, 2} {
+		var ack json.RawMessage
 		if err := extTr(t, s, "example-video", assistantwire.MethodTranscriptionAudio,
-			assistantwire.TranscriptionAudioParams{Job: job, Data: pcmB64(sec)}, nil); err != nil {
-			t.Fatalf("audio: %v", err)
+			assistantwire.TranscriptionAudioParams{Job: job, Data: pcmB64(sec)}, &ack); err != nil || string(ack) != "{}" {
+			t.Fatalf("audio: %s, %v", ack, err)
 		}
 	}
-	var out assistantwire.TranscriptionFinishResult
+	var out json.RawMessage
 	if err := extTr(t, s, "example-video", assistantwire.MethodTranscriptionFinish, assistantwire.TranscriptionJobParams{Job: job}, &out); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
-	want := []assistantwire.TranscriptionSegment{{From: 0.5, To: 1.5, Text: "Crack two eggs."}, {From: 6.2, To: 7, Text: "Serve warm."}}
-	if len(out.Segments) != 2 || out.Segments[0] != want[0] || out.Segments[1] != want[1] {
-		t.Fatalf("segments %+v", out.Segments)
-	}
-	if len(out.Gaps) != 1 || out.Gaps[0] != (assistantwire.TranscriptionGap{From: 3, To: 6}) || out.Seconds != 8 {
-		t.Fatalf("gaps %+v, seconds %v", out.Gaps, out.Seconds)
+	const want = `{"segments":[{"from":0.5,"to":1.5,"text":"Crack two eggs."},{"from":6.2,"to":7,"text":"x < y & z > w"}],` +
+		`"gaps":[{"from":3,"to":6}],"seconds":8}`
+	if string(out) != want {
+		t.Fatalf("finish: %s, want %s", out, want)
 	}
 	jobs := tr.jobsOf(extwire.TranscriptionReplay)
 	if len(jobs) != 1 {
@@ -152,8 +155,9 @@ func TestExtensionTranscriptionLimits(t *testing.T) {
 		}
 	}
 	// Cancel gives the place back.
-	if err := extTr(t, s, "ext-a", assistantwire.MethodTranscriptionCancel, assistantwire.TranscriptionJobParams{Job: a}, nil); err != nil {
-		t.Fatal(err)
+	var ack json.RawMessage
+	if err := extTr(t, s, "ext-a", assistantwire.MethodTranscriptionCancel, assistantwire.TranscriptionJobParams{Job: a}, &ack); err != nil || string(ack) != "{}" {
+		t.Fatalf("cancel: %s, %v", ack, err)
 	}
 	c := startJob(t, s, "ext-c", assistantwire.TranscriptionStartParams{})
 
@@ -169,6 +173,38 @@ func TestExtensionTranscriptionLimits(t *testing.T) {
 	}
 	if err := extTr(t, s, "ext-c", assistantwire.MethodTranscriptionFinish, assistantwire.TranscriptionJobParams{Job: c}, nil); codeOf(err) != "invalid_params" {
 		t.Fatalf("finish after too_long: %v", err)
+	}
+}
+
+func TestExtensionTranscriptionRequestValidation(t *testing.T) {
+	var s Service
+	for _, tc := range []struct {
+		name, params, message string
+	}{
+		{"malformed envelope", `{"method":`, `: no extension`},
+		{"missing extension", `{"method":"transcription.start"}`, `transcription.start: no extension`},
+		{"invalid extension type", `{"extension":12,"method":"transcription.start"}`, `transcription.start: no extension`},
+		{"unknown method", `{"extension":"example","method":"transcription.extension"}`, `transcription.extension: no such method`},
+		{"unknown envelope field", `{"extension":"example","method":"transcription.audio","future":true,"params":{"data":"!"}}`,
+			`transcription.audio: data is not base64`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, handled, err := s.transcriptionRequest(context.Background(), assistantwire.MethodTranscriptionExtension, json.RawMessage(tc.params))
+			var re *rpc.Error
+			if !handled || out != nil || !errors.As(err, &re) || re.Code != bus.CodeInvalidParams || re.Message != tc.message {
+				t.Fatalf("handled %t, reply %v, error %v, want %q", handled, out, err, tc.message)
+			}
+		})
+	}
+	for _, method := range []string{assistantwire.MethodTranscriptionStart, assistantwire.MethodTranscriptionAudio,
+		assistantwire.MethodTranscriptionFinish, assistantwire.MethodTranscriptionCancel} {
+		t.Run(method, func(t *testing.T) {
+			err := extTr(t, &s, "example", method, json.RawMessage(`{"unsupported":true}`), nil)
+			var re *rpc.Error
+			if !errors.As(err, &re) || re.Code != bus.CodeInvalidParams || re.Message != method+`: json: unknown field "unsupported"` {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
 	}
 }
 

@@ -16,7 +16,7 @@ import (
 const viewRowsMax = 200
 
 // viewRoom is what a view takes besides its rows, at most: the epoch, rev, as_of and build the caller fills in, the
-// totals, the count's n and more, and the punctuation around them. The rows get the rest of
+// totals, each count's n and more, and the punctuation around them. The rows get the rest of
 // assistantwire.CountsViewMaxBytes.
 const viewRoom = 1 << 10
 
@@ -29,6 +29,10 @@ const viewRoom = 1 << 10
 // when the view would pass assistantwire.CountsViewMaxBytes: the counted rows keys leaves out are more. The caller
 // fills in the view's epoch, rev, as_of and build. A tally of another surface, or one with places f does not hold,
 // is a defect.
+//
+// counts.persona_cards is fleetcount.PersonaCards over the same snapshot and the quiet agents supplied for Persona.
+// Each counted card has a card:<id> row, and more covers any cards beyond the row cap or the bytes left after the
+// Agents count. Excluded cards have no row. A manager that works out this count always supplies its n and total.
 //
 // todos are the to-do list's counts, as GET /api/v1/todos answers them for the whole list (the to-do projection's
 // Counts()), or none while the manager has not counted its to-dos: counts.todos_needs_you is their needs_you, with
@@ -44,14 +48,20 @@ func (f *Fleet) View(needsYou fleetcount.Tally, todos opt.Option[assistantwire.T
 	if !needsYou.On(fleetcount.SurfaceBadge()) {
 		defect.Raise("fleetcountadapt.Fleet.View", "a tally of another surface than the Agents list's")
 	}
-	r := &f.counts
-	r.f, r.rows, r.cards, r.last, r.total = f, r.rows[:0], r.cards[:0], -1, 0
-	needsYou.Accept(r)
-	count := r.count()
-	r.f = nil
-	n := count.N
-	counts := assistantwire.CountsViewCounts{AgentsNeedsYou: count}
-	totals := &assistantwire.CountsViewTotals{AgentsNeedsYou: &n}
+	persona := fleetcount.PersonaCards(f.Agents(), fleetcount.NewAgents(f.quiet), f.Cards())
+	room := assistantwire.CountsViewMaxBytes - viewRoom
+	// Keep both counts and their totals in one allocation. The view outlives the round's scratch arrays.
+	part := &struct {
+		agents, persona   assistantwire.CountsViewCount
+		agentsN, personaN int
+		totals            assistantwire.CountsViewTotals
+	}{}
+	part.agents = f.counts.write(f, needsYou, &room)
+	part.persona = f.counts.write(f, persona, &room)
+	part.agentsN, part.personaN = part.agents.N, part.persona.N
+	counts := assistantwire.CountsViewCounts{AgentsNeedsYou: &part.agents, PersonaCards: &part.persona}
+	totals := &part.totals
+	totals.AgentsNeedsYou, totals.PersonaCards = &part.agentsN, &part.personaN
 	todos.Match(func(c assistantwire.TodoCounts) { writeTodos(&counts, totals, c) }, todosUncounted)
 	return assistantwire.CountsView{
 		Counts: counts,
@@ -85,7 +95,7 @@ type countsRows struct {
 	total int
 }
 
-// countsRow is one row: its agent's place in f.seats (-1 for a card on no session), its cards, why the count leaves
+// countsRow is one row: its agent's place in f.seats (-1 for an individual card), its cards, why the count leaves
 // it out ("" when it counts) and whether the view lists it.
 type countsRow struct {
 	seat     int32
@@ -95,6 +105,14 @@ type countsRow struct {
 }
 
 type span struct{ from, to int }
+
+func (r *countsRows) write(f *Fleet, tally fleetcount.Tally, room *int) assistantwire.CountsViewCount {
+	r.f, r.rows, r.cards, r.last, r.total = f, r.rows[:0], r.cards[:0], -1, 0
+	tally.Accept(r)
+	count := r.count(room)
+	r.f = nil
+	return count
+}
 
 func (r *countsRows) VisitAgent(agent slot.Slot, why fleetcount.Why, _ instant.Instant) {
 	r.row(r.seat(agent), -1, why)
@@ -150,18 +168,16 @@ func (r *countsRows) row(seat, card int32, why fleetcount.Why) {
 }
 
 // count writes the gathered rows out: the counted ones as keys, the others as held, and the counted rows keys leaves
-// out as more. The counted rows are listed first, since they are the number; each list stops at the first row past
-// viewRowsMax or past the room the rows have. All the keys are written into one string, so a view makes a handful
-// of arrays whatever its rows.
-func (r *countsRows) count() *assistantwire.CountsViewCount {
-	room := assistantwire.CountsViewMaxBytes - viewRoom
-	counted, listed, cards, keyBytes := r.choose(true, &room)
-	_, held, _, heldKeys := r.choose(false, &room) // a held row lists no cards
+// out as more. The counted rows are listed first; each list stops at the first row past viewRowsMax or past the
+// room the rows have. All the keys are written into one string.
+func (r *countsRows) count(room *int) assistantwire.CountsViewCount {
+	counted, listed, cards, keyBytes := r.choose(true, room)
+	_, held, _, heldKeys := r.choose(false, room) // a held row lists no cards
 	if counted != r.total {
 		defect.Raise("fleetcountadapt.Fleet.View", "a tally whose total is not its counted rows")
 	}
 	keyBytes += heldKeys
-	out := &assistantwire.CountsViewCount{N: r.total, More: r.total - listed}
+	out := assistantwire.CountsViewCount{N: r.total, More: r.total - listed}
 	if listed == 0 && held == 0 {
 		return out
 	}
@@ -274,8 +290,7 @@ func (r *countsRows) escaped(row *countsRow) int {
 	return escapes(s.MachineID) + escapes(s.SessionID)
 }
 
-// writeKey writes a row's key, as the shared fixtures key rows: agent:<machine>/<session>, or card:<id> for a card on
-// no session.
+// writeKey writes an agent's row as agent:<machine>/<session>, or an individual card's row as card:<id>.
 func (r *countsRows) writeKey(b *strings.Builder, row *countsRow) {
 	if row.seat < 0 {
 		b.WriteString("card:")

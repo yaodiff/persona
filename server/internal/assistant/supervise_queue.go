@@ -228,7 +228,14 @@ func (s *Service) recheckDigestTarget(ctx context.Context, cfg Settings, g super
 // Recheck structured queue entries at the last delivery boundary. Unknown task state keeps the original queue.
 // Legacy text-only entries retain their behavior; their task facts cannot safely be reconstructed from prose.
 func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayMsg) (relayMsg, bool, bool) {
-	return s.recheckQueuedDigestAt(ctx, to, msg, false, nil)
+	next, stale, keep, _ := s.recheckQueuedDigestAtDetailed(ctx, to, msg, false, nil)
+	return next, stale, keep
+}
+
+// recheckQueuedDigestDetailed is recheckQueuedDigest, additionally reporting triedMismatch when a tried/doubted
+// supervision relay cannot be rewritten because its rendered text or target set diverged from the original send.
+func (s *Service) recheckQueuedDigestDetailed(ctx context.Context, to string, msg relayMsg) (relayMsg, bool, bool, bool) {
+	return s.recheckQueuedDigestAtDetailed(ctx, to, msg, false, nil)
 }
 
 // recheckQueuedDigestAt is recheckQueuedDigest, optionally for a queued message behind the head. The timeout sweep
@@ -236,27 +243,38 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 // change runs after the original signal's validity recheck, so an escalation cannot revive a resolved worker signal.
 func (s *Service) recheckQueuedDigestAt(ctx context.Context, to string, msg relayMsg, anywhere bool,
 	change func(superviseSignal) (superviseSignal, bool)) (relayMsg, bool, bool) {
+	next, stale, keep, _ := s.recheckQueuedDigestAtDetailed(ctx, to, msg, anywhere, change)
+	return next, stale, keep
+}
+
+func (s *Service) recheckQueuedDigestAtDetailed(ctx context.Context, to string, msg relayMsg, anywhere bool,
+	change func(superviseSignal) (superviseSignal, bool)) (relayMsg, bool, bool, bool) {
 	var signals []superviseSignal
 	if msg.Signals == "" {
-		return msg, false, false
+		return msg, false, false, false
 	}
 	if err := json.Unmarshal([]byte(msg.Signals), &signals); err != nil || len(signals) == 0 {
-		return msg, false, true
+		return msg, false, true, false
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return msg, false, true
+		return msg, false, true, false
 	}
 	now := time.Now()
 	tried := !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()
 	var deferred []superviseSignal
 	if !tried {
+		before := len(signals)
+		signals = slices.DeleteFunc(signals, func(g superviseSignal) bool { return s.routineSignalSuppressed(g, now) })
+		if dropped := before - len(signals); dropped > 0 {
+			s.logf("supervise: %d queued routine signal(s) suppressed by task state or recent owner input", dropped)
+		}
 		signals, deferred = s.partitionFinalWakeSignals(ctx, signals, now, "drain")
 	}
 	// A tried message cannot change its text or identity; do not let wake partitioning strand it at the queue head.
 	var retry []superviseSignal
 	ctx, signals, retry = s.allStoppedBatch(ctx, signals)
 	if len(retry) > 0 {
-		return msg, false, true
+		return msg, false, true, false
 	}
 	here, web := s.settings(ctx), s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
@@ -268,37 +286,51 @@ func (s *Service) recheckQueuedDigestAt(ctx context.Context, to string, msg rela
 	for _, g := range signals {
 		if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil && g.Kind == sigNeedsYou {
 			if _, known := s.taskNeedsRecheck(ctx, t); !known {
-				return msg, false, true
+				return msg, false, true, false
 			}
 		}
 		if g.Kind == sigTodoReady {
 			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
 				if _, _, err := s.checkTodoAfterReady(ctx, t); err != nil {
-					return msg, false, true
+					return msg, false, true, false
 				}
 			}
 		}
 		if g.Kind == sigPRMerged {
 			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
 				if _, _, err := s.checkUnparkedPRMerged(ctx, t, g.PRURL); err != nil {
-					return msg, false, true
+					return msg, false, true, false
 				}
 			}
 		}
 		if g.Kind == sigParentCloseout {
 			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
 				if _, _, _, err := s.checkParentCloseoutReady(ctx, t); err != nil {
-					return msg, false, true
+					return msg, false, true, false
 				}
 			}
 		}
-		if e, ok := s.digestEntryRecheck(ctx, g, web, tried); ok {
+		var e prompts.SuperviseEntry
+		var ok bool
+		if g.todoV2Wake() {
+			var retry bool
+			e, ok, retry = s.todoV2WakeDigestEntry(ctx, g, web)
+			if retry {
+				return msg, false, true, false
+			}
+		} else {
+			if g.Kind == sigCardlessWait && s.cardlessDigestShouldRetry(g) {
+				return msg, false, true, false
+			}
+			e, ok = s.digestEntryRecheck(ctx, g, web, tried)
+		}
+		if ok {
 			if g.Kind == sigAsk {
 				g.Cards = e.Asks
 			}
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
-				return msg, false, true
+				return msg, false, true, false
 			}
 			if change != nil {
 				if changed, replace := change(g); replace {
@@ -310,14 +342,14 @@ func (s *Service) recheckQueuedDigestAt(ctx context.Context, to string, msg rela
 			}
 			target := s.recheckDigestTarget(ctx, here, g)
 			if target == "" {
-				return msg, false, true
+				return msg, false, true, false
 			}
 			groups[target] = append(groups[target], g)
 			entries[target] = append(entries[target], e)
 		}
 	}
 	if len(groups) == 0 && len(deferred) == 0 {
-		return msg, true, false
+		return msg, true, false, false
 	}
 	next := msg
 	next.OnceID = relayMsgID(to, msg)
@@ -346,16 +378,16 @@ func (s *Service) recheckQueuedDigestAt(ctx context.Context, to string, msg rela
 		index = slices.Index(q, msg)
 		if index < 0 || b.draining[to] || b.replacing[to] {
 			b.mu.Unlock()
-			return msg, false, true
+			return msg, false, true, false
 		}
 	} else if len(q) == 0 || q[0] != msg {
 		b.mu.Unlock()
-		return msg, false, true
+		return msg, false, true, false
 	}
 	// Do not change the identity or destination of a send that may already have landed.
 	if tried && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
 		b.mu.Unlock()
-		return msg, false, true
+		return msg, false, true, true
 	}
 	state := b.st
 	state.Queue = maps.Clone(b.st.Queue)
@@ -388,13 +420,13 @@ func (s *Service) recheckQueuedDigestAt(ctx context.Context, to string, msg rela
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, relayKey, state); err != nil {
 			b.mu.Unlock()
-			return msg, false, true
+			return msg, false, true, false
 		}
 	}
 	b.st = state
 	b.mu.Unlock()
 	s.restoreDrainedWakeSignals(ctx, deferred, web, now)
-	return next, len(groups[to]) == 0, false
+	return next, len(groups[to]) == 0, false, false
 }
 
 // restoreDrainedWakeSignals runs only after the durable queue rewrite and outbox restoration have committed together.

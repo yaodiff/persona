@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="designsystem_agent_stopped">このエージェントは停止しています。会話とターミナルは残りますが、メッセージは受け付けません。</string>
+    <string name="designsystem_agent_stopped">このセッションは終了しました。会話とターミナルは引き続き表示できます。再開するとメッセージを送れます。</string>
 </resources>

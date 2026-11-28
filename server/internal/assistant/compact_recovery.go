@@ -184,14 +184,33 @@ func (s *Service) compactRecoverySource(ctx context.Context, p ContextParams) co
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
+	seenDecisions := map[string]bool{}
 	for _, r := range decisions {
 		if r.SupersededBy != "" || r.Source != db.DecisionManual && r.Source != db.DecisionThread && r.Source != db.DecisionCard {
 			continue
 		}
+		seenDecisions[normalizeMemoryLine(r.Choice)] = true
 		out.Decisions = append(out.Decisions, prompts.RecoveryEntry{
 			Source: fmt.Sprintf("todo/%s/decision/%s source=%s %s/%s/%s at=%s", r.TodoID, r.ID, r.Source, r.SourceMachine, r.SourceSession, r.SourceMessage, r.CreatedAt.Format(time.RFC3339)),
 			Text:   r.Choice,
 		})
+	}
+	if main || leader {
+		projectSlug := ""
+		if leader {
+			projectSlug, _ = s.leaderBoundProject(ctx, p.SessionID)
+		}
+		for _, entry := range s.scopedLedgerUserDecisions(ctx, p.MachineID, p.SessionID, main, projectSlug, leaderDecisionsMax) {
+			if norm := normalizeMemoryLine(entry.Text); norm != "" && !seenDecisions[norm] {
+				seenDecisions[norm] = true
+				out.Decisions = append(out.Decisions, entry)
+			}
+		}
+	}
+	if leader {
+		if _, projectEntries := s.leaderProjectMemoryEntries(ctx, p.MachineID, p.SessionID); len(projectEntries) > 0 {
+			out.State = append(out.State, projectEntries...)
+		}
 	}
 	if e, err := s.kbGet(ctx); err == nil && e != nil {
 		for _, slug := range slugs {

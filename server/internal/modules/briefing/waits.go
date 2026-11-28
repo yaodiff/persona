@@ -98,15 +98,10 @@ func OwnerWait(kind string) bool {
 	return kind == "needs_user" || kind == "question" || kind == "permission" || kind == "private"
 }
 
-// Fold puts the owner's rows first, then the oldest; MaxRows bounds only the others. Owner describes the direction,
-// not its rows: the same non-owner-wait bound applies to main and every leader.
-func (w Waits) Fold(rows []modapi.WaitRow) (keep []int, more int) {
-	order := make([]int, len(rows))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortStableFunc(order, func(i, j int) int {
-		a, b := rows[i], rows[j]
+// FoldDirection keeps every owner wait, then up to MaxRows other waits. Each group is oldest first.
+func (w Waits) FoldDirection(d *modapi.BriefDirection) {
+	rows := append([]modapi.BriefWait{}, d.Waits...)
+	slices.SortStableFunc(rows, func(a, b modapi.BriefWait) int {
 		if ao, bo := OwnerWait(a.Kind), OwnerWait(b.Kind); ao != bo {
 			if ao {
 				return -1
@@ -116,17 +111,14 @@ func (w Waits) Fold(rows []modapi.WaitRow) (keep []int, more int) {
 		if c := a.Since.Compare(b.Since); c != 0 {
 			return c
 		}
-		return strings.Compare(a.Key, b.Key)
+		return strings.Compare(a.TodoID+a.InteractionID, b.TodoID+b.InteractionID)
 	})
-	keep = make([]int, 0, len(rows))
-	others := 0
-	for _, i := range order {
-		if OwnerWait(rows[i].Kind) || others < w.MaxRows {
-			keep = append(keep, i)
-		}
-		if !OwnerWait(rows[i].Kind) {
-			others++
+	keep := len(rows)
+	for i, row := range rows {
+		if !OwnerWait(row.Kind) {
+			keep = min(len(rows), i+w.MaxRows)
+			break
 		}
 	}
-	return keep, max(0, others-w.MaxRows)
+	d.Waits, d.More = rows[:keep], len(rows)-keep
 }

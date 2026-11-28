@@ -230,6 +230,10 @@ function errorCode(body: string, path: string, method: string, status: number): 
   try {
     const parsed = JSON.parse(body) as Record<string, Object>;
     const code = parsed['code'];
+    // Older hubs reject dest=attachment before reading any file bytes. Preserve that exact refusal for a temp upload.
+    if ((code === undefined || code === 'bad_request') && status === 400 && method === 'POST' && /^\/api\/v1\/machines\/[^/]+\/files\?/.test(path) &&
+      /[?&]dest=attachment(?:&|$)/.test(path) && (parsed['error'] === 'unknown dest' || parsed['detail'] === 'unknown dest'))
+      return 'unknown_upload_destination';
     // The Hub exposes both a general HTTP code and a precise receipt error. A missing
     // operation can be checked safely only on its authenticated operation-status route.
     if (method === 'GET' && status === 404 && code === 'not_found' && parsed['error'] === 'no such operation' &&
@@ -448,12 +452,14 @@ export class HubTransport {
     } finally { this.requests.delete(session); try { session.close(); } catch (_) {} }
   }
 
-  async request(path: string, method: string = 'GET', body: string = '', opId: string = ''): Promise<string> {
-    if (utf8(body).length > MAX_HTTP_BYTES) throw new HttpFailure(0, 'request_too_large');
-    const limit = method.toUpperCase() === 'GET' && path.split('?')[0] === '/api/v1/sessions' ? MAX_HUB_EVENT_BYTES : MAX_HTTP_BYTES;
-    const response = await this.requestData(path, method, body || undefined, 'application/json', limit, opId);
+  async request(path: string, method: string = 'GET', body: string = '', opId: string = '', messageRequestBytes: number = MAX_HTTP_BYTES): Promise<string> {
+    const verb = method.toUpperCase();
+    const requestLimit = isAgentMessagePost(verb, path) ? messageRequestBytes : MAX_HTTP_BYTES;
+    if (utf8(body).length > requestLimit) throw new HttpFailure(0, 'request_too_large');
+    const responseLimit = verb === 'GET' && path.split('?')[0] === '/api/v1/sessions' ? MAX_HUB_EVENT_BYTES : MAX_HTTP_BYTES;
+    const response = await this.requestData(path, method, body || undefined, 'application/json', responseLimit, opId);
     try { return utf8String(new Uint8Array(response.data), true); }
-    catch (_) { throw new HttpFailure(0, 'response_invalid', !['GET', 'HEAD'].includes(method.toUpperCase())); }
+    catch (_) { throw new HttpFailure(0, 'response_invalid', !['GET', 'HEAD'].includes(verb)); }
   }
   /** Only the transfer protocol defines 202 as a task snapshot; it is still not completion. */
   async requestAccepted(path: string, method: string, body: string): Promise<string> {
@@ -463,8 +469,8 @@ export class HubTransport {
     try { return utf8String(new Uint8Array(response.data), true); }
     catch (_) { throw new HttpFailure(0, 'response_invalid', true); }
   }
-  async requestBytes(path: string, method: string = 'GET', body?: ArrayBuffer, contentType: string = 'application/octet-stream', opId: string = ''): Promise<BytesResponse> {
-    if (body && body.byteLength > MAX_BINARY_BYTES) throw new HttpFailure(0, 'request_too_large');
+  async requestBytes(path: string, method: string = 'GET', body?: ArrayBuffer, contentType: string = 'application/octet-stream', opId: string = '', requestLimit: number = MAX_BINARY_BYTES): Promise<BytesResponse> {
+    if (body && body.byteLength > requestLimit) throw new HttpFailure(0, 'request_too_large');
     return this.requestData(path, method, body, contentType, MAX_BINARY_BYTES, opId);
   }
   async putMeetingGap(path:string,data:ArrayBuffer):Promise<string>{

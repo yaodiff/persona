@@ -1,12 +1,12 @@
 {
   "recalled": "消息已撤回",
   "recalled_kept": "{text} · 已撤回",
-  "not_logged_in": "hub 连接的飞书网关没有登录飞书，请到 hub 所在的机器上重新登录。",
-  "upgrade_read": "要用消息显示设置，先更新 hub 和飞书网关。",
-  "read_failed": "没读到设置。连上以后再试。",
-  "conflict": "设置或账号刚变过。重新加载一下再改。",
-  "forbidden": "这个连接没有权限改设置。",
-  "upgrade_write": "要改这些设置，先更新飞书网关。",
-  "write_unknown": "不确定保存上没有。重新加载设置看看。",
+  "not_logged_in": "hub 连接的飞书网关尚未登录飞书，请前往 hub 所在机器重新登录。",
+  "upgrade_read": "请先更新 hub 和飞书网关，以使用消息显示设置。",
+  "read_failed": "无法读取设置，请在恢复连接后重试。",
+  "conflict": "设置或账号已发生变更，请重新加载后再修改。",
+  "forbidden": "当前连接无权修改设置。",
+  "upgrade_write": "请先更新飞书网关，再修改这些设置。",
+  "write_unknown": "暂无法确认更改是否已保存，请重新加载设置以确认。",
   "encrypted": "加密消息"
 }

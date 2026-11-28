@@ -2,6 +2,8 @@ package voice
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,17 +35,44 @@ type Plugin struct {
 	toolless sync.Map
 	calls    atomic.Int64 // the calls taken since it started: a call's id in the log (calllog.go)
 	speaks   atomic.Int64 // the texts read aloud since it started: a read-aloud's id in the log (speak.go)
+	// stop ends with the extension (Run's ctx): archives still being tried give up then (archive.go); archN counts
+	// the archives being written (archMu), which Run waits for a little before it returns; nonce names this run in
+	// the archives' file names; open are the calls under way, ended when the extension stops so they are archived.
+	stop   context.Context
+	archMu sync.Mutex
+	archN  int
+	nonce  string
+	open   sync.Map // *conversation
 }
 
 func New(cfg Config, hubURL, hubToken string, logger *log.Logger) *Plugin {
 	c := cfg
-	pl := &Plugin{cfg: c, cat: &catalog{cfg: &c, now: time.Now}, hub: newHubClient(hubURL, hubToken), logger: logger}
+	pl := &Plugin{cfg: c, cat: &catalog{cfg: &c, now: time.Now}, hub: newHubClient(hubURL, hubToken), logger: logger,
+		stop: context.Background(), nonce: randomNonce()}
 	pl.link = newHubLink(pl.hub, pl.logf)
 	pl.cat.logf = pl.logf
 	return pl
 }
 
 func (pl *Plugin) logf(format string, args ...any) { pl.logger.Printf(format, args...) }
+
+// endOpenCalls ends the calls still under way as the extension stops, so what they kept is archived (archive.go):
+// the server does not wait for its WebSockets.
+func (pl *Plugin) endOpenCalls() {
+	pl.open.Range(func(k, _ any) bool {
+		c := k.(*conversation)
+		c.ending("the extension stopped")
+		c.shutdown()
+		return true
+	})
+}
+
+// randomNonce is four hex digits for this run of the extension.
+func randomNonce() string {
+	var b [2]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
 
 // refusesTools: provider id's service refused the function tools (toolless).
 func (pl *Plugin) refusesTools(id string) bool {
@@ -133,6 +162,7 @@ func Run(ctx context.Context) error {
 		hubURL = "http://127.0.0.1:18660"
 	}
 	pl := New(cfg, hubURL, identity.Getenv("PERSONA_HUB_TOKEN"), logger)
+	pl.stop = ctx
 	_ = os.Remove(socket)
 	ln, err := osproc.Listen("unix", socket)
 	if err != nil {
@@ -155,6 +185,12 @@ func Run(ctx context.Context) error {
 	for _, w := range cfg.Warnings {
 		logger.Printf("config: %s", w)
 	}
+	if tts := cfg.TTS(); tts.Configured() {
+		logger.Printf("tts: enabled (model %s, key set: %t)", tts.Model(), tts.Key() != "")
+	}
+	if cfg.ArchiveMachine != "" {
+		logger.Printf("archive: every call's lines go to %s:%s when it ends", cfg.ArchiveMachine, firstNonEmpty(cfg.ArchiveDir, DefaultArchiveDir))
+	}
 	logger.Printf("listening on %s", socket)
 	srv := &http.Server{Handler: pl.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -163,7 +199,10 @@ func Run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err = srv.Serve(ln)
+	pl.endOpenCalls()
+	pl.waitArchives(archiveFinalWait)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil

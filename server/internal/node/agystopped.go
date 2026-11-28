@@ -118,5 +118,6 @@ func (n *Node) markAgyStopped(list []proto.Session, live map[string]string) {
 		}
 		caps.StopCause = proto.StopUser
 		s.Status, s.Capabilities = proto.StatusOffline, &caps
+		s.Background = nil
 	}
 }

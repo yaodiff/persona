@@ -1,14 +1,12 @@
 package assistant
 
 import (
+	"slices"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
-
-// Link roles are decided twice, without any network call on the report path: prose that explicitly frames a PR as
-// related work or background marks it reference at import; the acceptance gate additionally uses forge ownership
-// evidence (supervise_review_delivery.go). Anything not provably a reference stays delivery, preserving the old gate.
 
 var (
 	// referenceLineRe matches a line opened by a related-work marker or an explicit "background:" marker; every link
@@ -22,8 +20,8 @@ var (
 	citationBlockRe   = lazyre.New(`(?s)<oai-mem-citation>.*?</oai-mem-citation>`)
 )
 
-// referenceReportLinks returns the raw URLs in an Agent report that prose or citation metadata frames as references
-// rather than delivery artifacts. It only reads the report text; callers still run the forge-ownership check.
+// referenceReportLinks recognizes historical reference wording for unbound tasks using legacy single-PR extraction.
+// Links outside that fallback get their roles from stored bindings and structured closeout artifacts.
 func referenceReportLinks(text string, raws []string) map[string]bool {
 	out := map[string]bool{}
 	if strings.TrimSpace(text) == "" || len(raws) == 0 {
@@ -57,6 +55,123 @@ func referenceReportLinks(text string, raws []string) map[string]bool {
 		}
 	}
 	return out
+}
+
+// legacyReportPR accepts one distinct candidate. A lone prose reference can still be shown in the legacy stage
+// without gaining a delivery role. Runtime citations are metadata and cannot select a PR.
+func legacyReportPR(text string) (pr string, seen, reference bool) {
+	text = citationBlockRe.ReplaceAllString(text, "")
+	raws := prLink.FindAllString(text, -1)
+	references := referenceReportLinks(text, raws)
+	first, firstKey, prKey := "", "", ""
+	multiple := false
+	for _, raw := range raws {
+		key := reportLinkKey(raw)
+		if first == "" {
+			first, firstKey = raw, key
+		}
+		multiple = multiple || key != firstKey
+		if references[raw] {
+			continue
+		}
+		if pr == "" {
+			pr, prKey = raw, key
+		} else if key != prKey {
+			return "", true, false
+		}
+	}
+	if pr == "" && first != "" && !multiple {
+		return first, true, true
+	}
+	return pr, first != "", false
+}
+
+// reportBindingsBlockLegacy allows the legacy fallback with reference-only repositories. A target repository
+// awaiting its first delivery or an existing reference to the candidate requires an explicit report.
+func reportBindingsBlockLegacy(rows []repository.TaskRepository, pr string) bool {
+	key := reportLinkKey(pr)
+	for _, row := range rows {
+		if len(row.Links) == 0 {
+			return true // a repository with no links is a delivery target
+		}
+		for _, link := range row.Links {
+			if link.Role != repository.LinkRoleReference || key != "" && reportLinkKey(link.CanonicalURL) == key {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reportBindingsBlockAcceptedLegacy checks bindings at stage write time, after ownership verification has saved
+// pr itself as a delivery link: another delivery link, an unlinked target repository, or a reference for pr still blocks.
+func reportBindingsBlockAcceptedLegacy(rows []repository.TaskRepository, pr string) bool {
+	key := reportLinkKey(pr)
+	if key == "" {
+		return reportBindingsBlockLegacy(rows, pr)
+	}
+	for _, row := range rows {
+		if len(row.Links) == 0 {
+			return true
+		}
+		for _, link := range row.Links {
+			linkKey := reportLinkKey(link.CanonicalURL)
+			if link.Role == repository.LinkRoleReference {
+				if linkKey == key {
+					return true
+				}
+				continue
+			}
+			if linkKey != key {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reportLinkRoles preserves stored roles and treats new incidental links as references. Keep an unlinked target
+// empty until its first explicit delivery so the presence of reference links cannot turn it into a reference repo.
+func reportLinkRoles(raws, deliveries []string, rows []repository.TaskRepository) (links []string, roles map[string]string) {
+	keep := map[string]bool{}
+	var unlinkedTargets []string
+	for _, row := range rows {
+		if target := row.SourceSnapshot.Identity.CanonicalURL; len(row.Links) == 0 && target != "" {
+			unlinkedTargets = append(unlinkedTargets, strings.TrimRight(target, "/")+"/")
+		}
+		for _, link := range row.Links {
+			keep[reportLinkKey(link.CanonicalURL)] = true
+		}
+	}
+	for _, raw := range deliveries {
+		keep[reportLinkKey(raw)] = true
+	}
+	roles = map[string]string{}
+	for _, raw := range raws {
+		key := reportLinkKey(raw)
+		if !keep[key] {
+			if slices.ContainsFunc(unlinkedTargets, func(target string) bool { return strings.HasPrefix(key, target) }) {
+				continue
+			}
+			roles[raw] = repository.LinkRoleReference
+		}
+		links = append(links, raw)
+	}
+	return links, roles
+}
+
+func reportLinkKey(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		raw = raw[:i]
+	}
+	raw = strings.TrimRight(raw, "/")
+	if _, link, err := repository.ParseTaskLink(raw); err == nil {
+		return link.CanonicalURL
+	}
+	return raw
 }
 
 // containsURL reports whether text contains raw as a complete URL, not as a prefix of a longer address. A match whose

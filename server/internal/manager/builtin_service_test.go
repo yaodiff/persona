@@ -390,13 +390,28 @@ func TestBuiltinNewBinaryWaitsForIdle(t *testing.T) {
 	}
 }
 
-// (a) Busy for longer than idleMost: it starts again anyway, and says so.
-func TestBuiltinNewBinaryIdleBound(t *testing.T) {
+// Work continues even after the former forced-restart deadline.
+func TestBuiltinNewBinaryKeepsWaitingWhileBusy(t *testing.T) {
 	_, write, restarts := newBinaryEnv(t, nil)
 	idleMost = 50 * time.Millisecond
-	out, _, err := runBuiltin(t, func(context.Context) (bool, string) { return false, "answering 1 request(s) of the hub's" },
-		func(int) { write(goodBinary+"# new\n", 0o755) }, nil)
-	if err != nil || restarts.Load() != 1 || !strings.Contains(out, "still not idle after 50ms (answering 1 request(s) of the hub's): starting again on the new binary anyway") {
+	checked := make(chan struct{}, 1)
+	var idle atomic.Bool
+	out, _, err := runBuiltin(t, func(context.Context) (bool, string) {
+		select {
+		case checked <- struct{}{}:
+		default:
+		}
+		return idle.Load(), "answering a Hub request"
+	}, func(int) {
+		write(goodBinary+"# new\n", 0o755)
+		<-checked
+		<-time.After(2 * idleMost)
+		if restarts.Load() != 0 {
+			t.Error("restarted before the manager was idle")
+		}
+		idle.Store(true)
+	}, nil)
+	if err != nil || restarts.Load() != 1 || !strings.Contains(out, "answering a Hub request") {
 		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out)
 	}
 }
@@ -521,16 +536,24 @@ func TestBuiltinNewBinaryHangs(t *testing.T) {
 	}
 }
 
-// (a) An Idle that does not answer (its database stuck) counts as busy; idleMost still holds.
+// An Idle that does not answer counts as busy until it recovers.
 func TestBuiltinIdleThatHangs(t *testing.T) {
 	_, write, restarts := newBinaryEnv(t, nil)
 	idleMost = 100 * time.Millisecond
 	stuck := make(chan struct{})
-	defer close(stuck)
-	out, _, err := runBuiltin(t, func(context.Context) (bool, string) { <-stuck; return true, "" },
-		func(int) { write(goodBinary+"# new\n", 0o755) }, nil)
-	if err != nil || restarts.Load() != 1 || !strings.Contains(out, "does not answer") || !strings.Contains(out, "anyway") {
-		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out)
+	var out syncBuffer
+	_, err := runBuiltinTo(t, &out, func(context.Context) (bool, string) { <-stuck; return true, "" },
+		func(int) {
+			write(goodBinary+"# new\n", 0o755)
+			waitFor(t, "an unresponsive idle check", func() bool { return strings.Contains(out.String(), "does not answer") })
+			<-time.After(2 * idleMost)
+			if restarts.Load() != 0 {
+				t.Error("restarted while the idle check was unresponsive")
+			}
+			close(stuck)
+		}, nil)
+	if err != nil || restarts.Load() != 1 || !strings.Contains(out.String(), "does not answer") {
+		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out.String())
 	}
 }
 

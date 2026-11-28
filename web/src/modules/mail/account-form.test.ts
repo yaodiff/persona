@@ -4,11 +4,11 @@ import { EMPTY_MAIL_FORM, mailAccountLine, mailCodeGuide, mailErrors, mailProvid
 
 describe("mail account form", () => {
   it("needs an address and a password; Gmail is for the phone", () => {
-    expect(mailErrors({ ...EMPTY_MAIL_FORM })).toEqual({ email: "填邮箱地址", password: "填密码或授权码" });
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, email: "me@", password: "x" }).email).toBe("邮箱地址的格式不对");
+    expect(mailErrors({ ...EMPTY_MAIL_FORM })).toEqual({ email: "请输入邮箱地址", password: "请输入密码或授权码" });
+    expect(mailErrors({ ...EMPTY_MAIL_FORM, email: "me@", password: "x" }).email).toBe("邮箱地址格式不正确");
     expect(mailErrors({ ...EMPTY_MAIL_FORM, email: "me@example.com", password: "x" })).toEqual({});
     expect(mailErrors({ ...EMPTY_MAIL_FORM, kind: "gmail" }).kind).toContain("手机");
-    expect(mailErrors({ ...EMPTY_MAIL_FORM, kind: "outlook" }).kind).toBe("Outlook 要用 Microsoft 账号登录，只能在手机上添加");
+    expect(mailErrors({ ...EMPTY_MAIL_FORM, kind: "outlook" }).kind).toBe("Outlook 需要通过 Microsoft 账号登录，目前仅支持在手机端添加。");
     expect(MAIL_KINDS.map((k) => k.k)).toEqual(["gmail", "outlook", "feishu", "imap"]);
     expect(mailErrors({ ...EMPTY_MAIL_FORM, kind: "feishu", email: "me@example.com" }).password).toContain("飞书");
     expect(mailErrors({ ...EMPTY_MAIL_FORM, email: "me@example.com", password: "x", imapHost: "imap.example.com", imapPort: "abc" }).imapPort).toBeTruthy();
@@ -67,7 +67,7 @@ describe("mail account form", () => {
   // #2442: a hub without google.client_id cannot sign in with Google, so Gmail is added here with an app password.
   it("adds Gmail with an app password on a hub without Google sign-in", () => {
     const gmail = { ...EMPTY_MAIL_FORM, kind: "gmail" as const };
-    expect(mailErrors(gmail, true)).toEqual({ email: "填邮箱地址", password: "填 Gmail 的应用专用密码" });
+    expect(mailErrors(gmail, true)).toEqual({ email: "请输入邮箱地址", password: "请输入 Gmail 的应用专用密码" });
     expect(mailErrors({ ...gmail, email: "me@mail.test", password: "abcd efgh ijkl mnop" }, true)).toEqual({});
     expect(mailRequest({ ...gmail, email: " me@mail.test ", password: "abcd efgh ijkl mnop" }, true)).toEqual({
       name: "me@mail.test",
@@ -103,7 +103,7 @@ describe("mail account form", () => {
 describe("Outlook client ID", () => {
   it("checks the shape the hub does", () => {
     expect(clientIDError("")).toContain("应用程序(客户端) ID");
-    expect(clientIDError("not-an-id")).toContain("不像 client ID");
+    expect(clientIDError("not-an-id")).toContain("客户端 ID 格式不正确");
     expect(clientIDError(" 00000000-0000-0000-0000-000000000000 ")).toBe("");
   });
 });

@@ -72,8 +72,8 @@ const FOLDED_ROWS = 3;
 const MAX_PHOTO_THUMBS = 3;
 /** Thumbnail request size in px (crisp on 2x-3x displays for a 28 px tile). */
 const PHOTO_THUMB_SIZE = 96;
-/** How long a reorder keeps its order on screen after the hub said yes, waiting for the push that shows it. */
-const HOLD_MS = 1500;
+/** How long a queue change keeps its optimistic view on screen after the hub said yes, waiting for the push that shows it. */
+const HOLD_MS = 4000;
 /** How long a keyboard reorder's handle takes the focus back when its row is drawn again (the agent re-queues them). */
 const REFOCUS_MS = 5000;
 
@@ -153,6 +153,7 @@ function QueuePanelBody({
   const listId = useId();
   const explainId = useId();
   const region = useRef<HTMLDivElement>(null);
+  const composerEl = useRef<HTMLElement | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const rowEls = useRef(new Map<string, HTMLElement>());
   const handles = useRef(new Map<string, HTMLButtonElement>());
@@ -187,7 +188,7 @@ function QueuePanelBody({
       return { ...(confirmed[i] ?? { raw, id: `${nth}:${raw}` }), i, own: i < own };
     });
   }, [queued, own, confirmed]);
-  const queueKey = queued.join("\u0000");
+  const queueKey = `${own}\u0000${queued.join("\u0000")}`;
   const holdOrder = held && held.queue === queueKey ? held.order : null;
   const locked = busy !== null || withdraw !== null || holdOrder !== null || drag !== null;
 
@@ -198,12 +199,17 @@ function QueuePanelBody({
   const relayedRows = useMemo(() => rows.slice(own).map((row) => ({ row, source: relayedFrom(row.raw) })), [rows, own]);
   const noWakeCount = relayedRows.filter(({ source }) => source?.noWake).length;
   const mixedRelays = noWakeCount > 0 && noWakeCount < relayedRows.length;
-  const shown = [...order.map((i) => ownRows[i]), ...optimistic.map((p): Row => ({ ...p, i: -1, own: true }))];
+  const visibleOptimistic = withdraw?.del ? optimistic.filter((p) => p.id !== withdraw.id) : optimistic;
+  const shown = [...order.map((i) => ownRows[i]), ...visibleOptimistic.map((p): Row => ({ ...p, i: -1, own: true }))];
   const folds = shown.length > FOLD_OVER;
   const visible = folds && !expanded ? shown.slice(0, FOLDED_ROWS) : shown;
   const current = useRef(ownRows);
-  useLayoutEffect(() => { current.current = ownRows; }, [ownRows]);
-  const newest = optimistic.at(-1)?.id;
+  useLayoutEffect(() => {
+    current.current = ownRows;
+    const box = region.current?.closest("[data-composer-top]")?.parentElement;
+    if (box) composerEl.current = box;
+  }, [ownRows]);
+  const newest = visibleOptimistic.at(-1)?.id;
   useLayoutEffect(() => {
     if (!newest || compact) return;
     if (folds) setExpanded(true);
@@ -279,7 +285,15 @@ function QueuePanelBody({
     if (!mounted.current) return;
     const at = document.activeElement;
     if (!hasFinePointer() || !(always || !at || at === document.body || region.current?.contains(at))) return;
-    region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    const box = region.current?.closest("[data-composer-top]")?.parentElement ?? composerEl.current;
+    box?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+  };
+  const holdFor = (mine: { order: number[]; queue: string }) => {
+    if (holdTimer.current !== null) clearTimeout(holdTimer.current);
+    holdTimer.current = setTimeout(() => {
+      holdTimer.current = null;
+      if (mounted.current) setHeld((h) => (h === mine ? null : h));
+    }, HOLD_MS);
   };
   const editQueue = (keep: number[], isMountedRun: () => boolean): Promise<QueueEditOutcome> => {
     const targetMid = session.machine_id;
@@ -317,6 +331,7 @@ function QueuePanelBody({
       setWithdraw({ id: row.id, del });
       return;
     }
+    if (!local && inFlight.current !== null) return;
     // Snapshot the target session, draft key, row, and handlers when the action starts so pull-back
     // restoration still writes back to the originating draft after queue-clear unmount and never writes to a newer session.
     const targetSession = session;
@@ -326,12 +341,19 @@ function QueuePanelBody({
     const targetIndex = row.i;
     const targetRaw = row.raw;
     const targetImages = row.images;
+    const keep = !local ? keepAllBut(own, targetIndex) : null;
+    const mine = keep ? { order: keep, queue: queueKey } : null;
+    if (del && mine) setHeld(mine);
     void run(row.id, async (ctx) => {
       let r: QueueEditResult | undefined;
-      if (!local) {
-        const edited = await editQueue(keepAllBut(own, targetIndex), ctx.isMountedRun);
+      if (!local && keep) {
+        const edited = await editQueue(keep, ctx.isMountedRun);
         if (!edited.sent) return false;
         r = edited.result;
+        if (!del && mine && ctx.isMountedRun()) {
+          setHeld(mine);
+          holdFor(mine);
+        }
       }
       const raw = local
         ? targetRaw
@@ -348,7 +370,13 @@ function QueuePanelBody({
         else await restoreQueued(targetDraftKey, targetSession, parsed, images);
       }
       return ctx.isMountedRun();
-    }).then((ok) => ok && toBox(!del));
+    }).then((ok) => {
+      if (mounted.current && mine && del) {
+        if (ok) holdFor(mine);
+        else setHeld((h) => (h === mine ? null : h));
+      }
+      if (ok) toBox(!del);
+    });
   };
   useEffect(() => {
     if (!withdraw || optimistic.length > 0) return;
@@ -368,24 +396,26 @@ function QueuePanelBody({
       if (!ok || keep.every((i, at) => ownRows[i].raw === ownRows[at].raw)) {
         setHeld((h) => (h === mine ? null : h));
       } else {
-        if (holdTimer.current !== null) clearTimeout(holdTimer.current);
-        holdTimer.current = setTimeout(() => {
-          holdTimer.current = null;
-          if (mounted.current) setHeld((h) => (h === mine ? null : h));
-        }, HOLD_MS);
+        holdFor(mine);
       }
     });
   };
   // at one press, with no dialog: it loses nothing (the messages go now rather than at the next step), and Stop, which
   // cuts the whole turn, and Delete beside it act at one press too (DESIGN_SYSTEM.md 4.4)
   const sendNow = (row: Row) => {
+    if (inFlight.current !== null) return;
     const targetMid = session.machine_id;
     const targetSid = session.session_id;
     const targetSendNow = onSendNow;
     const targetAgent = agent;
+    const mine = { order: runtimeSource ? identity.slice(1) : [], queue: queueKey };
     void run(row.id, async (ctx) => {
       if (targetSendNow) await targetSendNow();
       else await api(`${sessionPath(targetMid, targetSid)}/queue/send-now`, { method: "POST", json: {} });
+      if (ctx.isMountedRun()) {
+        setHeld(mine);
+        holdFor(mine);
+      }
       ctx.notifyIfSameSession(t("chat-queuepanel.sent_now", { agent: targetAgent }), "ok");
       return ctx.isMountedRun();
     }).then((ok) => ok && toBox(false));
@@ -445,7 +475,8 @@ function QueuePanelBody({
   };
 
   const total = queued.length + optimistic.length;
-  if (!total) return null;
+  const shownTotal = shown.length + relayedRows.length;
+  if (!total || !shownTotal) return null;
   const hidden = shown.length - visible.length;
   const rowFor = (row: Row, pos: number) => (
     <QueueRow
@@ -576,7 +607,7 @@ function QueuePanelBody({
             className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-[8px] px-1.5 text-left text-[11.5px] font-medium text-ink-3 transition-colors hover:bg-hover"
           >
             <Icon name="inbox" size={13} />
-            <span className="min-w-0 flex-1 truncate">{t("chat-queuepanel.summary", { count: total })}</span>
+            <span className="min-w-0 flex-1 truncate">{t("chat-queuepanel.summary", { count: shownTotal })}</span>
             {optimistic.length > 0 ? (
               <QueueSendStatus
                 mid={session.machine_id}

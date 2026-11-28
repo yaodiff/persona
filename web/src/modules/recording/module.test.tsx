@@ -23,14 +23,19 @@ import { recording } from "./module";
 
 const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const dayID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const pausedID = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const unknownPausedID = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const detail = (kind: string, entry: string) => {
   const day = kind === "recordings" && entry === dayID;
+  const paused = kind === "recordings" && entry === pausedID;
+  const unknownPaused = kind === "recordings" && entry === unknownPausedID;
   return {
     detail: {
       kind, id: entry, path: `${kind}/${entry}`,
-      meta: kind === "recordings" ? { title: day ? "Tuesday" : "Design review", started_at: "2026-11-10T06:00:00Z", complete: true, kind: day ? "day" : "meeting", ...(day ? { day: "2026-11-10" } : {}) } : {},
-      segments: kind === "recordings" ? [{ start: 0, end: 4, text: day ? "Morning transcript." : "Keep the export cap." }] : undefined,
-      minutes: kind === "recordings" && !day ? {
+      meta: kind === "recordings" ? { title: day ? "Tuesday" : paused ? "Kept recording, minutes pending" : "Design review", started_at: "2026-11-10T06:00:00Z", complete: true, kind: day ? "day" : "meeting", ...(day ? { day: "2026-11-10" } : {}) } : {},
+      paused: paused ? "module_off" : unknownPaused ? "future_reason" : undefined,
+      segments: kind === "recordings" ? [{ start: 0, end: 4, text: day ? "Morning transcript." : paused ? "Its minutes were never written." : "Keep the export cap." }] : undefined,
+      minutes: kind === "recordings" && !day && !paused && !unknownPaused ? {
         version: 1, revision: 1, generated_at: "2026-11-10T07:00:00Z", title: "Design review", when: "",
         markdown: "## Saved minutes\n\nShip the smaller bundle.",
       } : undefined,
@@ -200,6 +205,28 @@ describe("the recording module", () => {
     expect(buttons).not.toContain("立即生成");
     expect(buttons).not.toContain("重新生成");
     expect(buttons).not.toContain("更新");
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+  });
+
+  it("switched off, shows the calm paused strip for paused='module_off' and ignores unknown paused values", async () => {
+    setModuleSwitchedOff("recording", true);
+    registerModule(counted());
+    await open("recordings", pausedID);
+    const strip = host.querySelector('[role="note"][data-recording-paused="module_off"]');
+    expect(strip).not.toBeNull();
+    expect(text()).toContain("Its minutes were never written.");
+    const buttons = [...host.querySelectorAll("button")].map((b) => b.textContent?.trim());
+    expect(buttons).not.toContain("改名");
+    expect(buttons).not.toContain("重新生成");
+    expect(buttons).not.toContain("重试");
+    expect(buttons).not.toContain("Retry");
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+
+    await open("recordings", unknownPausedID);
+    expect(host.querySelector("[data-recording-paused]")).toBeNull();
+    expect(text()).toContain("Keep the export cap.");
     expect(chunk).not.toHaveBeenCalled();
     expect(catalog).not.toHaveBeenCalled();
   });

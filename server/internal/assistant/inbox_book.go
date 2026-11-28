@@ -1,12 +1,14 @@
 package assistant
 
 import (
+	"cmp"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -328,4 +330,34 @@ func (b *inboxBook) readSource(id, name string) {
 	if b.batch != nil {
 		b.batch.read[id] = name
 	}
+}
+
+// inboxChatTitle returns the best known display title for a Lark chat feed from Inbox items, or "".
+func (s *Service) inboxChatTitle(feed string) string {
+	if feed == "" {
+		return ""
+	}
+	ib := &s.inbox
+	ib.mu.Lock()
+	defer ib.mu.Unlock()
+	for _, it := range ib.items {
+		if it == nil {
+			continue
+		}
+		if it.Lark != nil && it.Lark.FeedID == feed {
+			if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+				return title
+			}
+		}
+		if it.Connector != nil {
+			for _, tag := range it.Connector.Tags {
+				if tag.Key == connector.TagChat && tag.Value == feed {
+					if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+						return title
+					}
+				}
+			}
+		}
+	}
+	return ""
 }

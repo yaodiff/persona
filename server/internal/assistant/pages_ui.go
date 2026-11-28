@@ -47,6 +47,9 @@ type pageStore interface {
 	RenameAssistantPage(context.Context, string, string, string, time.Time) (*db.AssistantPageRow, bool, error)
 	RemoveAssistantPage(context.Context, string, string, time.Time) (*db.AssistantPageRow, bool, error)
 	RestoreAssistantPage(context.Context, string, time.Time) (*db.AssistantPageRow, bool, error)
+	AssistantPageVersionSummaries(context.Context, string) ([]db.AssistantPageVersionRow, error)
+	AssistantPageVersion(context.Context, string, int64) (*db.AssistantPageVersionRow, error)
+	RestoreAssistantPageVersion(context.Context, string, int64, int64, string, time.Time) (*db.AssistantPageRow, error)
 	DeleteAssistantPage(context.Context, string) (bool, error)
 	BeginAssistantPageAction(context.Context, db.AssistantPageActionRow) (*db.AssistantPageActionRow, bool, error)
 	AssistantPageAction(context.Context, string) (*db.AssistantPageActionRow, error)
@@ -203,11 +206,12 @@ func pagePlace(id, title, icon, color string) extmgr.UIPlace {
 
 // pageState is what a drawn page keeps in View.state, which the apps send back with every request: the detail page
 // it draws (p, "" the page itself), the page's version it was drawn from (v: a confirmed action on another one is
-// confirmed again) and the owner's form (form: rename).
+// confirmed again) and the owner's form. Rev identifies the snapshot displayed in version history.
 type pageState struct {
 	P    string `json:"p"`
 	V    int64  `json:"v"`
 	Form string `json:"form,omitempty"`
+	Rev  int64  `json:"rev,omitempty"`
 }
 
 func readPageState(raw string) pageState {
@@ -354,6 +358,9 @@ func (r *pageRequest) page(ctx context.Context, id string) (extension.ActionResu
 			return extension.ActionResult{}, err
 		}
 		return extension.ActionResult{View: &v}, nil
+	}
+	if r.state.Form == "history" || r.state.Form == "version" || action == "persona.history" {
+		return r.historyAction(ctx, p, action, arg)
 	}
 	switch action {
 	case "", "persona.open":
@@ -765,7 +772,7 @@ func pageFooterWith(p *db.AssistantPageRow, watch *wire.PageWatch, last *db.Assi
 	if p.Pinned {
 		pin = wire.Component{Type: wire.ComponentButton, Key: "persona.pin", Title: pageWord(l, "unpin"), Action: &wire.Action{ID: "persona.unpin"}}
 	}
-	items = append(items, pin,
+	items = append(items, pageHistoryButton(p, l), pin,
 		wire.Component{Type: wire.ComponentButton, Key: "persona.rename", Title: pageWord(l, "rename"),
 			Action: &wire.Action{ID: "persona.rename", Push: &wire.Push{UI: p.ID, State: pageState{V: p.Version, Form: "rename"}.encode(), Title: pageWord(l, "rename")}}},
 		wire.Component{Type: wire.ComponentButton, Key: "persona.remove", Title: pageWord(l, "remove"), Role: wire.ButtonRoleDestructive,

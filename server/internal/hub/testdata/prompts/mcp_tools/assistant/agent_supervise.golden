@@ -1,6 +1,6 @@
 {
   "name": "agent_supervise",
-  "description": "主对话或方向主管可收编没有进行中任务的 Agent。省略 role 即为 worker；leader 需要 done_when，不能使用工作信任电脑。它可用 task_plan 分派直属 worker，用 task_review 验收；worker 不能继续派活。已有任务用 task_scope 调整验收条件或预计用时，用 agent_transfer 转交其他对话的任务。",
+  "description": "主对话或方向主管可收编无进行中任务的 Agent。leader 需 done_when 和非工作信任电脑。改范围用 task_scope，移交用 agent_transfer。",
   "input_schema": {
     "type": "object",
     "required": [
@@ -18,12 +18,31 @@
       },
       "title": {
         "type": "string",
-        "description": "Chinese task title, under 20 characters; empty: Agent title"
+        "description": "Chinese title under 20 chars. Defaults to Agent title."
       },
       "role": {
         "type": "string",
         "enum": [
           "leader"
+        ]
+      },
+      "work_mode": {
+        "type": "string",
+        "enum": [
+          "execute",
+          "research",
+          "coordinate"
+        ],
+        "description": "Default execute."
+      },
+      "completion_mode": {
+        "type": "string",
+        "enum": [
+          "inherit",
+          "draft",
+          "ready",
+          "landed",
+          "verified"
         ]
       },
       "done_when": {

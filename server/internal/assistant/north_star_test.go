@@ -22,7 +22,11 @@ import (
 // northStarDB is an isolated database with the main conversation "main-chat" and the leader conversation "dot-chat".
 func northStarDB(t *testing.T) (*Service, *db.DB, string) {
 	t.Helper()
-	dsn := newDatabase(t)
+	return northStarDBOn(t, newMigratedDatabase(t, db.ManagerSet))
+}
+
+func northStarDBOn(t *testing.T, dsn string) (*Service, *db.DB, string) {
+	t.Helper()
 	database, err := db.Open(context.Background(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
@@ -401,7 +405,7 @@ func TestNorthStarCommandReadsReadOnly(t *testing.T) {
 	s, _, dsn := northStarDB(t)
 	setSettings(t, s, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
 	loc := shanghai(t)
-	hubURL := newDatabase(t)
+	hubURL := newMigratedDatabase(t, db.HubSet)
 	hubDB, err := db.Open(ctx, hubURL, db.HubSet)
 	mustDo(t, err)
 	t.Cleanup(hubDB.Close)

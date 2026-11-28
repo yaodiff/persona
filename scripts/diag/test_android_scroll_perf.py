@@ -15,7 +15,7 @@ SAMPLE = 'Total frames rendered: 10\nJanky frames: 2\n90th percentile: 19ms\n'
 
 
 class AndroidScrollPerfTest(unittest.TestCase):
-    def run_scroll(self, output, *, failed_command=None, sample=SAMPLE):
+    def run_scroll(self, output, *, failed_command=None, command_exception=None, sample=SAMPLE):
         def adb(command, **kwargs):
             args = command[4:]
             stdout = ''
@@ -23,7 +23,10 @@ class AndroidScrollPerfTest(unittest.TestCase):
                 stdout = 'Physical size: 1080x2400'
             elif args[-1] == 'framestats':
                 stdout = sample
-            if failed_command and args[:len(failed_command)] == failed_command:
+            failed = failed_command is not None and args[:len(failed_command)] == failed_command
+            if command_exception is not None and (failed or failed_command is None):
+                raise command_exception
+            if failed:
                 if kwargs.get('check'):
                     raise subprocess.CalledProcessError(1, command)
                 return subprocess.CompletedProcess(command, 1, '')
@@ -41,6 +44,31 @@ class AndroidScrollPerfTest(unittest.TestCase):
             row = json.loads(output.read_text())['glass/agents']
             self.assertEqual((row['frames_total'], row['janky_percent_total']), (10, 20.0))
             self.assertEqual(row['gfx_p90_ms_per_run']['p90'], 19)
+
+    def test_report_output_symlink_keeps_pointing_to_the_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / 'report.json'
+            output = Path(directory) / 'out.json'
+            output.symlink_to(report.name)
+            self.run_scroll(output)
+            self.assertTrue(output.is_symlink())
+            self.assertEqual(json.loads(report.read_bytes())['glass/agents']['frames_total'], 10)
+            self.assertCountEqual(output.parent.iterdir(), [output, report])
+
+    def test_interrupted_report_write_preserves_existing_report(self):
+        def interrupted(_report, stream, **_kwargs):
+            stream.write('{"partial":')
+            raise OSError("synthetic write failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'out.json'
+            original = b'{"completed":true}\n'
+            output.write_bytes(original)
+            with patch.object(json, 'dump', side_effect=interrupted):
+                with self.assertRaisesRegex(OSError, 'synthetic write failure'):
+                    self.run_scroll(output)
+            self.assertEqual(output.read_bytes(), original)
+            self.assertEqual(list(output.parent.iterdir()), [output])
 
     def test_unusable_optional_detail_preserves_the_aggregate_report(self):
         for detail in ('', 'Flags,IntendedVsync\n0,1000000\n'):
@@ -74,14 +102,19 @@ class AndroidScrollPerfTest(unittest.TestCase):
             ({'failed_command': ['dumpsys', 'gfxinfo', 'test.app', 'reset']}, 'adb shell dumpsys failed'),
             ({'failed_command': ['input', 'swipe']}, 'adb shell input failed'),
             ({'failed_command': ['dumpsys', 'gfxinfo', 'test.app', 'framestats']}, 'adb shell dumpsys failed'),
+            ({'failed_command': ['dumpsys', 'gfxinfo', 'test.app', 'framestats'],
+              'command_exception': subprocess.TimeoutExpired(['adb', '-s', 'fixture'], 60)},
+             'adb shell dumpsys timed out after 60s'),
+            ({'command_exception': FileNotFoundError('adb')}, 'adb not found on PATH'),
             ({'sample': 'Total frames rendered: 0\nJanky frames: 0'}, 'gfxinfo did not report a usable frame sample'),
             ({'sample': 'Total frames rendered: 10'}, 'gfxinfo did not report a usable frame sample'),
         ):
             with self.subTest(args=args), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / 'out.json'
                 output.write_text('existing report\n')
-                with self.assertRaisesRegex(SystemExit, error):
+                with self.assertRaisesRegex(SystemExit, error) as failure:
                     self.run_scroll(output, **args)
+                self.assertNotIn('fixture', str(failure.exception))
                 self.assertEqual(output.read_text(), 'existing report\n')
 
 

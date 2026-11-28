@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/url"
+	"path"
 	"runtime"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -57,29 +59,55 @@ type MarketEntry struct {
 	// L10n is the package's translations again ({"<language>": <l10n/<language>.json>}, l10n.go), so the catalog can
 	// show them before anything is downloaded. Kept as written (read with Translations); hubs before it ignore the key.
 	L10n json.RawMessage `json:"l10n,omitempty"`
-	// Parsed is Manifest, read.
-	Parsed *Manifest `json:"-"`
+	// Releases are alternative versions of the same extension. The top-level fields also represent a release.
+	Releases []MarketRelease `json:"releases,omitempty"`
+	// Parsed is the active manifest, or display metadata for an entry blocked by the hub build.
+	Parsed              *Manifest `json:"-"`
+	engineProblem       error
+	newerVersion        string
+	newerVersionProblem error
 	// Only ParseCatalog can create this proof; public fields remain checked
 	// against the snapshot before the registry accepts official provenance.
 	verifiedKey   string
 	verifiedEntry [sha256.Size]byte
 }
 
-// MarketPackage is a package of an entry.
-type MarketPackage struct {
-	// Platforms are the GOOS-GOARCH it runs on; none: any (a package for every platform, or one that runs no code).
-	Platforms []string `json:"platforms,omitempty"`
-	// URL: relative to the index, an https URL, or (a GitHub market) release:<tag>/<asset>.
-	URL    string `json:"url"`
-	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size,omitempty"`
+// MarketRelease pairs a version's manifest with its packages and optional catalog translations.
+type MarketRelease struct {
+	Manifest json.RawMessage `json:"manifest"`
+	Packages []MarketPackage `json:"packages"`
+	L10n     json.RawMessage `json:"l10n,omitempty"`
 }
 
-// ParseIndex reads and checks an index. Entries that do not check out are dropped with a warning each (one broken
-// plugin does not hide a market); an index that is not one is an error.
+// MarketPackage is the catalog's package reference.
+type MarketPackage = extwire.MarketPackage
+
+// ParseIndex reads an index with the strict manifest validation of build zero.
 func ParseIndex(data []byte) (*MarketIndex, []string, error) {
+	return ParseIndexForBuild(data, 0)
+}
+
+// ParseIndexForBuild reads an index and resolves its entries for the given hub build.
+func ParseIndexForBuild(data []byte, build int64) (*MarketIndex, []string, error) {
 	if len(data) > IndexMost {
 		return nil, nil, i18n.Err("extension-market_read.too_large", i18n.Args{"bytes": IndexMost})
+	}
+	if err := strictJSON(data); err != nil {
+		if !json.Valid(data) {
+			return nil, nil, notCatalog(data)
+		}
+		return nil, nil, i18n.Err("extension-market_security.catalog")
+	}
+	return parseIndex(data, build)
+}
+
+// parseIndex takes a payload already checked by strictJSON.
+func parseIndex(data []byte, build int64) (*MarketIndex, []string, error) {
+	if len(data) > IndexMost {
+		return nil, nil, i18n.Err("extension-market_read.too_large", i18n.Args{"bytes": IndexMost})
+	}
+	if err := catalogFields(data, catalogIndexType); err != nil {
+		return nil, nil, err
 	}
 	var ix MarketIndex
 	if err := json.Unmarshal(data, &ix); err != nil {
@@ -109,32 +137,32 @@ func ParseIndex(data []byte) (*MarketIndex, []string, error) {
 	if len(ix.Extensions) > IndexExtensionsMost {
 		return nil, nil, i18n.Err("extension-market_read.catalog_over_limit", i18n.Args{"most": IndexExtensionsMost})
 	}
-	// Identity declarations are never silently dropped or resolved first-entry-wins.
-	declaredTargets := map[string]bool{}
-	for _, e := range ix.Extensions {
-		if e.Replaces == "" {
-			continue
-		}
-		m, err := Parse(e.Manifest)
-		if err != nil || declaredTargets[m.ID] || !ValidID(e.Replaces) || e.Replaces == m.ID {
-			return nil, nil, ErrIdentity
-		}
-		declaredTargets[m.ID] = true
-	}
 	// Warnings are kept with the market in the default language and shown in the reader's (i18n.MarketText).
 	var warnings []string
+	declaredTargets := map[string]bool{}
 	seen := map[string]bool{}
 	kept := ix.Extensions[:0]
 	for i, e := range ix.Extensions {
-		m, err := e.check()
+		base, err := readMarketCandidate(MarketRelease{Manifest: e.Manifest, Packages: e.Packages, L10n: e.L10n}, build)
+		if e.Replaces != "" {
+			// Identity declarations are never silently dropped or resolved first-entry-wins.
+			if err != nil || declaredTargets[base.parsed.ID] || !ValidID(e.Replaces) || e.Replaces == base.parsed.ID {
+				return nil, nil, ErrIdentity
+			}
+			declaredTargets[base.parsed.ID] = true
+		}
+		var releaseWarnings []string
+		if err == nil {
+			releaseWarnings, err = e.resolve(base, build)
+		}
 		switch {
 		case err != nil:
 			warnings = append(warnings, i18n.T(i18n.Default, "extension-market_read.entry_skipped", i18n.Args{"n": i + 1, "err": err.Error()}))
-		case seen[m.ID]:
-			warnings = append(warnings, i18n.T(i18n.Default, "extension-market_read.entry_duplicate", i18n.Args{"id": m.ID}))
+		case seen[e.Parsed.ID]:
+			warnings = append(warnings, i18n.T(i18n.Default, "extension-market_read.entry_duplicate", i18n.Args{"id": e.Parsed.ID}))
 		default:
-			seen[m.ID] = true
-			e.Parsed = m
+			seen[e.Parsed.ID] = true
+			warnings = append(warnings, releaseWarnings...)
 			if e.Icon != "" && !ValidIconPath(e.Icon) {
 				e.Icon, e.IconURL = "", ""
 			}
@@ -145,7 +173,7 @@ func ParseIndex(data []byte) (*MarketIndex, []string, error) {
 				e.Downloads = nil
 			}
 			if _, err := ParseEntryTranslations(e.L10n); err != nil { // the entry stays, in its manifest's words
-				warnings = append(warnings, i18n.T(i18n.En, "extension-status.entry_translation_skipped", i18n.Args{"id": m.ID, "err": err.Error()}))
+				warnings = append(warnings, i18n.T(i18n.En, "extension-status.entry_translation_skipped", i18n.Args{"id": e.Parsed.ID, "err": err.Error()}))
 				e.L10n = nil
 			}
 			kept = append(kept, e)
@@ -199,50 +227,43 @@ func (e *MarketEntry) Translations() Translations {
 	return ts
 }
 
-func (e *MarketEntry) check() (*Manifest, error) {
-	if len(e.Manifest) == 0 {
-		return nil, i18n.Err("extension-market_read.entry_no_manifest")
+func checkMarketPackages(id string, packages []MarketPackage) error {
+	if len(packages) == 0 || len(packages) > marketPackageMost {
+		return i18n.Err("extension-market_read.entry_package_count", i18n.Args{"id": id, "most": marketPackageMost})
 	}
-	m, err := Parse(e.Manifest)
-	if err != nil {
-		return nil, err
-	}
-	if e.Replaces != "" && (!ValidID(e.Replaces) || e.Replaces == m.ID) {
-		return nil, ErrIdentity
-	}
-	// An entry without tags of its own shows the manifest's (an index written from the source manifest as it is).
-	if len(e.Tags) == 0 {
-		e.Tags = m.Tags
-	}
-	if len(e.Tags) > marketTagMost {
-		return nil, i18n.Err("extension-market_read.entry_too_many_tags")
-	}
-	for _, t := range e.Tags {
-		if t == "" || len([]rune(t)) > 24 {
-			return nil, i18n.Err("extension-market_read.entry_bad_tag")
-		}
-	}
-	if len(e.Packages) == 0 || len(e.Packages) > marketPackageMost {
-		return nil, i18n.Err("extension-market_read.entry_package_count", i18n.Args{"id": m.ID, "most": marketPackageMost})
-	}
-	for _, p := range e.Packages {
+	for _, p := range packages {
 		if b, err := hex.DecodeString(p.SHA256); err != nil || len(b) != sha256.Size {
-			return nil, i18n.Err("extension-market_read.entry_package_sha256", i18n.Args{"id": m.ID})
+			return i18n.Err("extension-market_read.entry_package_sha256", i18n.Args{"id": id})
 		}
 		if strings.HasPrefix(p.URL, "oci:") {
 			if _, err := parseOCI(p.URL); err != nil || p.Size <= 0 || p.Size > PackageMost {
-				return nil, i18n.Err("extension-market_security.package")
+				return i18n.Err("extension-market_security.package")
 			}
 			continue
 		}
 		if p.Size < 0 || p.Size > PackageMost {
-			return nil, i18n.Err("extension-market_security.package")
+			return i18n.Err("extension-market_security.package")
 		}
-		if p.URL == "" || strings.HasPrefix(p.URL, "http://") || strings.Contains(p.URL, "://") && !strings.HasPrefix(p.URL, "https://") {
-			return nil, i18n.Err("extension-market_read.entry_package_url", i18n.Args{"id": m.ID})
+		if !validMarketPackageURL(p.URL) {
+			return i18n.Err("extension-market_read.entry_package_url", i18n.Args{"id": id})
 		}
 	}
-	return m, nil
+	return nil
+}
+
+func validMarketPackageURL(ref string) bool {
+	switch {
+	case strings.HasPrefix(ref, "https://"):
+		u, err := url.Parse(ref)
+		return err == nil && u.Hostname() != "" && u.User == nil
+	case strings.HasPrefix(ref, "release:"):
+		tag, asset, _ := strings.Cut(strings.TrimPrefix(ref, "release:"), "/")
+		return tag != "" && asset != ""
+	case ref == "" || strings.Contains(ref, "://"):
+		return false
+	default:
+		return path.Clean("/" + ref)[1:] == ref
+	}
 }
 
 func ValidIconURL(s string) bool {
@@ -261,11 +282,18 @@ func isHTTPS(s string) bool {
 // Platform is this hub's GOOS-GOARCH.
 func Platform() string { return runtime.GOOS + "-" + runtime.GOARCH }
 
-// PackageFor is the entry's package for platform, or nil.
+// PackageFor is the active entry's package for platform, or nil when unavailable or blocked by the hub build.
 func (e *MarketEntry) PackageFor(platform string) *MarketPackage {
-	for i, p := range e.Packages {
+	if e.engineProblem != nil {
+		return nil
+	}
+	return packageFor(e.Packages, platform)
+}
+
+func packageFor(packages []MarketPackage, platform string) *MarketPackage {
+	for i, p := range packages {
 		if len(p.Platforms) == 0 || slices.Contains(p.Platforms, platform) {
-			return &e.Packages[i]
+			return &packages[i]
 		}
 	}
 	return nil

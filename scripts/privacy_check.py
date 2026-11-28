@@ -377,6 +377,9 @@ def regular_governance_files(head=None):
             if b"\t" in record and record.split(b" ", 1)[0] in (b"100644", b"100755")}
 
 
+PUBLIC_ADMIN_OWNER = re.compile(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)")
+
+
 def public_admin_lines():
     """Exact published references by path; missing/unreadable evidence grants no exception."""
     try:
@@ -384,11 +387,14 @@ def public_admin_lines():
                               capture_output=True, check=True, text=True, timeout=10).stdout.strip()
         regular = regular_governance_files(base)
         published = git_file_data(list(regular), base + ":")
-        owner = re.fullmatch(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)",
-                             published.get(".github/CODEOWNERS", b"").decode("utf-8").strip())
-        if not owner:
+        # The reference line sits among .github/CODEOWNERS's generated owner block, so only a whole line is
+        # one; an unmatched line (two owners, trailing text) and two different owners both grant nothing.
+        logins = {owner.group(1)
+                  for line in published.get(".github/CODEOWNERS", b"").decode("utf-8").splitlines()
+                  for owner in (PUBLIC_ADMIN_OWNER.fullmatch(line),) if owner}
+        if len(logins) != 1:
             return {}
-        login = owner.group(1)
+        login = logins.pop()
         return {path: {line: login for template in templates
                        for line in (template.format(login=login),)
                        if line in published.get(path, b"").decode("utf-8").splitlines()}

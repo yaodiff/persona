@@ -32,7 +32,11 @@ import (
 
 const codexDesktopTimeout = 60 * time.Second
 
-const codexDesktopUnavailableKey = "codex-desktop.control_unavailable"
+const (
+	codexDesktopUnavailableKey  = "codex-desktop.control_unavailable"
+	codexDesktopRecoverableKey  = "codex-desktop.recoverable_resume_or_continue"
+	codexDesktopContinueOnlyKey = "codex-desktop.recoverable_continue_only"
+)
 
 // This refusal is safe to retry: no turn or settings request reached the App. Keep transport diagnostics out of
 // the user-facing message, including the stale socket's path after an App update removes the bus.
@@ -663,6 +667,73 @@ func codexThreadOrigin(src codexSource) codexOrigin {
 	return readCodexOrigin(src.path)
 }
 
+// codexAppOrigin reports whether src is a user-facing Codex App thread (not exec, subagent, or guardian review).
+func codexAppOrigin(src codexSource) bool {
+	o := codexThreadOrigin(src)
+	return o.desktop && !o.exec && !o.sub && o.parent == "" && !o.guardian
+}
+
+// A shared app-server can stamp the node's initialize name on an App-created chat (#10438).
+func (o codexOrigin) sharedAppStamp() bool {
+	return o.originator == "persona" && o.source == "vscode" && !o.sub
+}
+
+// Use the usual desktop safeguards for a desktop origin or an ambiguous stamp
+// corroborated by the same home's sidebar.
+func (o codexOrigin) desktopThread(src codexSource, pass *codexListPass) bool {
+	return o.desktop || o.sharedAppStamp() && pass.appState(src.home).listed(src.thread)
+}
+
+// codexAppRunningNow reports whether the Codex desktop App is currently running for home (either via its live IPC bus
+// or as a desktop App / bundled stdio app-server process), and whether process inspection completed cleanly.
+func (n *Node) codexAppRunningNow(home string) (running, complete bool) {
+	if home != "" && codexDesktopAvailable(home) {
+		return true, true
+	}
+	if n.codices == nil {
+		return false, true
+	}
+	n.codices.mu.Lock()
+	scan, checked := n.codices.scan, n.codices.checked
+	n.codices.mu.Unlock()
+	var procs []codexProcess
+	listed := true
+	switch {
+	case checked != nil:
+		procs, listed = checked()
+	case scan != nil:
+		procs = scan()
+	default:
+		return false, true
+	}
+	target := canonicalCodexHome(home, n.home)
+	for _, p := range procs {
+		if !p.desktop {
+			continue
+		}
+		pHome := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
+		if target == "" || pHome == "" || pHome == target {
+			return true, listed
+		}
+	}
+	return false, listed
+}
+
+// codexTurnRunning reports whether src's rollout currently shows an unfinished turn.
+func (n *Node) codexTurnRunning(src codexSource, m quickMeta) bool {
+	if m.turnOpen && !m.turnClosed {
+		return true
+	}
+	if src.path == "" {
+		return false
+	}
+	st, err := os.Stat(src.path)
+	if err != nil || time.Since(st.ModTime()) >= codexDesktopRecent {
+		return false
+	}
+	return n.codexDesktopTurn(src.path) == proto.StatusWorking
+}
+
 // codexDesktopChat identifies an App chat independently of whether the App still exposes its control bus.
 // An unavailable bus must not turn an App chat into a CLI session or invite a second writer.
 func codexDesktopChat(src codexSource) bool { return codexDesktopChatIn(src, nil) }
@@ -674,7 +745,8 @@ func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
 		return ok && !t.origin().sub
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && !o.sub && !o.exec && (o.persona || o.userChat || pass.appState(src.home).listed(src.thread))
+	return !o.exec && !o.sub && o.parent == "" &&
+		(o.persona || o.userChat || (o.desktop || o.sharedAppStamp()) && pass.appState(src.home).listed(src.thread))
 }
 
 // loadedOwner is the App window that owns the thread, the App asked to open it when none does: it loads a thread it is

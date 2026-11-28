@@ -398,6 +398,45 @@ func TestAgyCompanionBypassStartReachesCompanion(t *testing.T) {
 	}
 }
 
+func TestAgyRuntimeSessionSendForwardsModelOverride(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := agyCompanionHello()
+	hello["caps"].(map[string]any)["model"] = true
+	companion := dialRuntime(t, n, hello)
+	const sessionID = "agy-11111111-2222-4333-8444-555555555555"
+	if err := companion.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{
+		"session_id": sessionID, "status": "idle", "model": "gemini-4-carbon-high",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "Antigravity session listed", func() bool { _, ok := listed(t, n)[sessionID]; return ok })
+
+	for _, model := range []string{"", "gemini-4-neon-high"} {
+		params := map[string]any{"session_id": sessionID, "text": "Continue"}
+		if model != "" {
+			params["model"] = model
+		}
+		if _, err := nodeCall(t, n, "session.send", params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sends := companion.got("session.send")
+	if len(sends) != 2 {
+		t.Fatalf("companion sends = %d, want 2", len(sends))
+	}
+	for i, want := range []string{"", "gemini-4-neon-high"} {
+		var sent struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(sends[i], &sent); err != nil {
+			t.Fatal(err)
+		}
+		if sent.Model != want {
+			t.Errorf("companion send %d model = %q, want %q", i+1, sent.Model, want)
+		}
+	}
+}
+
 func TestAgyRuntimeSessionSendForwardsMode(t *testing.T) {
 	n, f, home := herdrNode(t)
 	n.logger = log.New(io.Discard, "", 0)
@@ -411,14 +450,21 @@ func TestAgyRuntimeSessionSendForwardsMode(t *testing.T) {
 	hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
 	hello["launchers"] = []map[string]any{{"name": agyAgent, "agent": agyAgent}}
 	companion := dialRuntime(t, n, hello)
+	nextID := 0
+	sessionIDs := []string{"agy-deferred-send", "agy-deferred-unset"}
 	companion.mu.Lock()
 	companion.answer = func(method string, _ json.RawMessage) (any, error) {
 		if method == "session.start" {
-			return map[string]any{"session": proto.Session{SessionID: "agy-deferred-send", Cwd: home, Status: proto.StatusIdle, Starting: true}}, nil
+			id := sessionIDs[nextID]
+			nextID++
+			return map[string]any{"session": proto.Session{SessionID: id, Cwd: home, Status: proto.StatusIdle, Starting: true}}, nil
 		}
 		return map[string]any{"ok": true}, nil
 	}
 	companion.mu.Unlock()
+
+	// 1. Explicit-mode deferred start: explicit session.send permission_mode takes precedence, while a
+	// follow-up send without permission_mode replays the persisted start mode.
 	if _, err := nodeCall(t, n, "session.start", map[string]any{
 		"cwd": home, "launcher": agyAgent, "host": proto.HostAgy,
 		"permission_mode": proto.ModeBypass, "defer_mcp": true, "prompt": "Start work",
@@ -426,7 +472,7 @@ func TestAgyRuntimeSessionSendForwardsMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := nodeCall(t, n, "session.send", map[string]any{
-		"session_id": "agy-deferred-send", "text": "Start work", "permission_mode": proto.ModeBypass,
+		"session_id": "agy-deferred-send", "text": "Start work", "permission_mode": "plan",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -435,16 +481,47 @@ func TestAgyRuntimeSessionSendForwardsMode(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	// 2. Unset-mode deferred start: explicit session.send permission_mode is forwarded on that send only,
+	// and a follow-up send without permission_mode omits mode.
+	if _, err := nodeCall(t, n, "session.start", map[string]any{
+		"cwd": home, "launcher": agyAgent, "host": proto.HostAgy,
+		"defer_mcp": true, "prompt": "Start unset",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": "agy-deferred-unset", "text": "Start unset", "permission_mode": proto.ModeBypass,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": "agy-deferred-unset", "text": "Follow up unset",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	sends := companion.got("session.send")
-	if len(sends) != 2 {
-		t.Fatalf("companion sends = %d, want 2: %s", len(sends), sends)
+	if len(sends) != 4 {
+		t.Fatalf("companion sends = %d, want 4: %s", len(sends), sends)
 	}
-	var first, second map[string]any
-	if json.Unmarshal(sends[0], &first) != nil || first["mode"] != proto.ModeBypass {
-		t.Fatalf("first send = %s, want mode=%s", sends[0], proto.ModeBypass)
+	var got [4]map[string]any
+	for i := range sends {
+		if err := json.Unmarshal(sends[i], &got[i]); err != nil {
+			t.Fatalf("send[%d] = %s: %v", i, sends[i], err)
+		}
 	}
-	if json.Unmarshal(sends[1], &second) != nil || second["mode"] != nil {
-		t.Fatalf("second send = %s, want omitted mode", sends[1])
+	if got[0]["mode"] != "plan" {
+		t.Fatalf("explicit override send = %s, want mode=plan", sends[0])
+	}
+	if got[1]["mode"] != proto.ModeBypass {
+		t.Fatalf("persisted follow-up send = %s, want mode=%s", sends[1], proto.ModeBypass)
+	}
+	if got[2]["mode"] != proto.ModeBypass {
+		t.Fatalf("unset explicit send = %s, want mode=%s", sends[2], proto.ModeBypass)
+	}
+	if _, has := got[3]["mode"]; has {
+		t.Fatalf("unset follow-up send = %s, want omitted mode", sends[3])
 	}
 }
 

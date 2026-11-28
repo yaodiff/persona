@@ -49,6 +49,8 @@ import persona.core.contracts.api.UsageDays
 import persona.core.contracts.api.UsageHistoryApi
 import persona.core.contracts.api.UsageHours
 import persona.core.contracts.api.UsageMachineShare
+import persona.core.contracts.api.UsageProjectDetail
+import persona.core.contracts.api.UsageProjects
 import persona.core.contracts.api.UsageTokens
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.AppStyleStore
@@ -98,6 +100,8 @@ class UsageCalendarUiTest {
             failure?.let { throw it }
             return this.hours
         }
+        override suspend fun usageProjects(): UsageProjects? = null
+        override suspend fun usageProjectDetail(key: String): UsageProjectDetail = error("not used")
     }
 
     @Test fun aDayCanBeSelectedAndTheCardOpensDetails() {

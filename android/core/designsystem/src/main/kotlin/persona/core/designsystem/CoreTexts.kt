@@ -245,12 +245,21 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.EngineFound -> R.string.designsystem_core_engine_found
     CoreText.Key.EngineFoundVersion -> R.string.designsystem_core_engine_found_version
     CoreText.Key.EngineMissing -> R.string.designsystem_core_engine_missing
+    CoreText.Key.EngineStopped -> R.string.designsystem_core_engine_stopped
+    CoreText.Key.EngineStoppedVersion -> R.string.designsystem_core_engine_stopped_version
+    CoreText.Key.EngineIncompatibleVersion -> R.string.designsystem_core_engine_incompatible_version
     CoreText.Key.EngineFooter -> R.string.designsystem_core_engine_footer
     CoreText.Key.EngineFooterOffline -> R.string.designsystem_core_engine_footer_offline
     CoreText.Key.EngineFooterNone -> R.string.designsystem_core_engine_footer_none
     CoreText.Key.EngineFooterNoneOffline -> R.string.designsystem_core_engine_footer_none_offline
     CoreText.Key.EngineSwitched -> R.string.designsystem_core_engine_switched
     CoreText.Key.EngineSavedOffline -> R.string.designsystem_core_engine_saved_offline
+    CoreText.Key.EngineSetNotice -> R.string.designsystem_core_engine_set_notice
+    CoreText.Key.EngineFooterSet -> R.string.designsystem_core_engine_footer_set
+    CoreText.Key.EngineFooterSetOffline -> R.string.designsystem_core_engine_footer_set_offline
+    CoreText.Key.EngineFooterSetOne -> R.string.designsystem_core_engine_footer_set_one
+    CoreText.Key.EngineFooterSetOneOffline -> R.string.designsystem_core_engine_footer_set_one_offline
+    CoreText.Key.EngineDefaultChanged -> R.string.designsystem_core_engine_default_changed
     CoreText.Key.ToolRun -> R.string.designsystem_core_tool_run
     CoreText.Key.ToolRead -> R.string.designsystem_core_tool_read
     CoreText.Key.ToolEdit -> R.string.designsystem_core_tool_edit

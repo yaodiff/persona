@@ -32,7 +32,7 @@ describe("the plan card's brief (#3822)", () => {
     act(() => root.render(<PlanBrief brief={brief} title="Fix the sign-in crash" />));
     const buttons = () => [...host.querySelectorAll<HTMLButtonElement>("button")];
     expect(buttons()).toHaveLength(1);
-    expect(host.querySelector("[data-brief-summary]")?.textContent).toBe("1 条验收标准 · 约 30 分钟 · 1 条不能做");
+    expect(host.querySelector("[data-brief-summary]")?.textContent).toBe("1 条验收标准 · 约 30 分钟 · 1 条禁止事项");
     expect(host.textContent).not.toContain("The fix is merged");
     act(() => buttons()[0].click());
     expect(buttons()).toHaveLength(1);

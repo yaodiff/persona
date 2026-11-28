@@ -16,19 +16,22 @@ type commandWrapper struct {
 }
 
 var commandWrappers = map[string]commandWrapper{
-	"env":     {flags: "- -i --ignore-environment -0 --null -v --debug", values: "-u --unset -C --chdir --argv0", assignments: true},
-	"sudo":    {flags: "-A -b -E -H -K -k -n -P -S --askpass --background --preserve-env --set-home --reset-timestamp --non-interactive --stdin", values: "-u --user -g --group -h --host -p --prompt -C --close-from -D --chdir -R --chroot -T --command-timeout -r --role -t --type --other-user", assignments: true},
-	"nice":    {values: "-n --adjustment"},
-	"timeout": {flags: "--preserve-status --foreground -v --verbose", values: "-s --signal -k --kill-after", positional: 1},
-	"nohup":   {},
-	"command": {flags: "-p"},
-	"builtin": {},
-	"exec":    {flags: "-c -l", values: "-a"},
-	"xargs":   {flags: "-0 --null -r --no-run-if-empty -t --verbose -p --interactive -x --exit", values: "-I --replace -d --delimiter -E --eof -L --max-lines -n --max-args -P --max-procs -s --max-chars --process-slot-var"},
-	"stdbuf":  {values: "-i --input -o --output -e --error"},
-	"time":    {flags: "-p --portability -v --verbose -a --append -q --quiet", values: "-f --format -o --output"},
-	"setsid":  {flags: "-c --ctty -f --fork -w --wait"},
-	"busybox": {},
+	"env":       {flags: "- -i --ignore-environment -0 --null -v --debug", values: "-u --unset -C --chdir --argv0", assignments: true},
+	"sudo":      {flags: "-A -b -E -H -K -k -n -P -S --askpass --background --preserve-env --set-home --reset-timestamp --non-interactive --stdin", values: "-u --user -g --group -h --host -p --prompt -C --close-from -D --chdir -R --chroot -T --command-timeout -r --role -t --type --other-user", assignments: true},
+	"nice":      {values: "-n --adjustment"},
+	"timeout":   {flags: "--preserve-status --foreground -v --verbose", values: "-s --signal -k --kill-after", positional: 1},
+	"nohup":     {},
+	"command":   {flags: "-p"},
+	"builtin":   {},
+	"exec":      {flags: "-c -l", values: "-a"},
+	"xargs":     {flags: "-0 --null -r --no-run-if-empty -t --verbose -p --interactive -x --exit", values: "-I --replace -d --delimiter -E --eof -L --max-lines -n --max-args -P --max-procs -s --max-chars --process-slot-var"},
+	"stdbuf":    {values: "-i --input -o --output -e --error"},
+	"time":      {flags: "-p --portability -v --verbose -a --append -q --quiet", values: "-f --format -o --output"},
+	"setsid":    {flags: "-c --ctty -f --fork -w --wait"},
+	"busybox":   {},
+	"-":         {},
+	"noglob":    {},
+	"nocorrect": {},
 }
 
 func wrapperOption(spec commandWrapper, word string) (takes, known bool) {
@@ -161,22 +164,67 @@ func shellScriptIndex(words []string) int {
 // shell/eval code is parsed again. Thus sh -c 'echo "$HOME"' remains ordinary.
 func executionWord(word *syntax.Word) (value string, dynamic bool) {
 	var out strings.Builder
-	syntax.Walk(word, func(node syntax.Node) bool {
-		switch p := node.(type) {
-		case *syntax.Lit:
-			out.WriteString(strings.ReplaceAll(p.Value, "\\", ""))
-		case *syntax.SglQuoted:
-			out.WriteString(p.Value)
-			return false
-		case nil, *syntax.Word, *syntax.DblQuoted:
-		default:
-			dynamic = true
-			out.WriteByte('$')
-			return false
+	var walkParts func(parts []syntax.WordPart, inDblQuotes bool)
+	walkParts = func(parts []syntax.WordPart, inDblQuotes bool) {
+		for _, part := range parts {
+			switch p := part.(type) {
+			case *syntax.Lit:
+				if writeUnescapedLit(&out, p.Value, inDblQuotes) {
+					dynamic = true
+					out.WriteByte('$')
+				}
+			case *syntax.SglQuoted:
+				if p.Dollar || inDblQuotes {
+					dynamic = true
+					out.WriteByte('$')
+					continue
+				}
+				out.WriteString(p.Value)
+			case *syntax.DblQuoted:
+				if p.Dollar || inDblQuotes {
+					dynamic = true
+					out.WriteByte('$')
+					continue
+				}
+				walkParts(p.Parts, true)
+			default:
+				dynamic = true
+				out.WriteByte('$')
+			}
 		}
-		return true
-	})
+	}
+	if word != nil {
+		walkParts(word.Parts, false)
+	}
 	return out.String(), dynamic
+}
+
+// writeUnescapedLit decodes POSIX shell backslash escapes in a syntax.Lit,
+// matching shellcmd.Split: outside double quotes, every backslash escapes the
+// next byte (and \<newline> disappears); inside double quotes, backslash
+// escapes only ", \, $, `, and <newline>. A trailing bare backslash at the end
+// of a Lit (such as EOF `lark-c\li\` or an unclosed `"foo\`) is dropped and
+// reported so callers fail closed as dynamic.
+func writeUnescapedLit(out *strings.Builder, s string, inDblQuotes bool) (trailingEscape bool) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' {
+			if i+1 >= len(s) {
+				return true
+			}
+			next := s[i+1]
+			if next == '\n' {
+				i++
+				continue
+			}
+			if !inDblQuotes || next == '"' || next == '\\' || next == '$' || next == '`' {
+				out.WriteByte(next)
+				i++
+				continue
+			}
+		}
+		out.WriteByte(s[i])
+	}
+	return false
 }
 
 // dynamicCommandName reports expansions in an executable position. The test

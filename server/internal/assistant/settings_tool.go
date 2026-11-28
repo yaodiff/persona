@@ -12,6 +12,8 @@ import (
 	"time"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -115,6 +117,10 @@ var moduleSettingKeys = map[string]bool{"assistant.briefing_waits": true}
 func (s *Service) allOwnSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
+		{Setting: Setting{Key: outboundIdentityKey, Title: "Outward-message identity", Actions: getSet,
+			About: "default Lark message sender; bot preserves existing behavior; changing it never broadens a standing message grant",
+			Value: `"bot" or "user"; only supported identity-aware transports use this setting`},
+			get: s.outboundIdentity, set: s.setOutboundIdentity},
 		s.hiddenDirSetting(),
 		s.blockedHerdrSessionsSetting(),
 		{Setting: Setting{Key: modulesKey, Title: "Built-in modules", Actions: getSet,
@@ -122,8 +128,8 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: `{"disabled": ["<module id>", …]}; null or an empty list restores every compiled-in module`},
 			get: s.getModuleSwitch, set: s.setModuleSwitch},
 		{Setting: Setting{Key: standingAuthorizationsKey, Title: "Standing authorizations", Actions: getSet,
-			About: "user-confirmed actions for one computer and absolute directory tree; only the main conversation may set them, and every change requires the user’s own permission approval",
-			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible}]}; get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
+			About: "user-confirmed computer/directory actions or exact outward-message scopes; only the main conversation may set them, and every change requires the user’s own permission approval",
+			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible, messages?}]}; messages: {channel: larkcli, target: exact oc_ chat or empty for all chats, scenario: inbox_reply or assistant_message, identity: bot or user}; message grants require actions [send], reversible true, empty conditions/computer/directory. Get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
 			get: s.getStandingAuthorizations, set: s.setStandingAuthorizations},
 		{Setting: Setting{Key: "assistant.notes", Title: "关于我", Actions: getSet,
 			About: "what Persona knows about the user (设置 › 助手 › 关于我), Markdown appended to the assistant's instructions; new conversations read it",
@@ -137,6 +143,12 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainTasksQuiet(ctx)), nil },
 			set: s.setMainTasksQuiet},
+		{Setting: Setting{Key: "assistant.approval_mirror_main", Title: "Show approvals in the main chat", Actions: getSet,
+			About: "on (the default): a non-private approval for a change in another Assistant conversation also appears in the main conversation; " +
+				"read-only requests stay in their original conversation, and answering either copy of a routed request resolves the same request. Off applies to new cards. Agent, private and health conversations are unchanged",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.approvalMirrorMain(ctx)), nil },
+			set: s.setApprovalMirrorMain},
 		{Setting: Setting{Key: "assistant.start_requested_tasks", Title: "我在对话里说过的，直接开始", Actions: getSet,
 			About: "on (the default): task_plan tasks marked user_requested (the user asked for that very task in this turn) start at once " +
 				"instead of waiting for 开始 on the plan card; off: only read-only tasks and remembered kinds start without asking",
@@ -144,7 +156,8 @@ func (s *Service) allOwnSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.startRequestedTasks(ctx)), nil },
 			set: s.setStartRequestedTasks},
 		{Setting: Setting{Key: "assistant.idle_auto_compact", Title: "Compact idle conversations", Actions: getSet,
-			About: "on (the default): compact an idle conversation when the idle time and context size thresholds are both reached",
+			About: "on (the default): compact an idle conversation when the idle time and context size thresholds are both reached. " +
+				"Antigravity assistant chats (the main chat and leader chats among them) follow it and the two settings below too",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompact(ctx)), nil },
 			set: s.setIdleAutoCompact},
@@ -160,6 +173,25 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "a whole number from 10000 to 10000000"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
 			set: s.setIdleAutoCompactTokens},
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact", Title: "Compact idle Antigravity sessions", Actions: getSet,
+			About: "on (the default): proactively compact Persona-managed Antigravity sessions once both their idle time and context size thresholds are reached. " +
+				"Task agents use assistant.agy_idle_auto_compact_minutes and _tokens. Antigravity assistant chats (including the main chat and leader chats) " +
+				"use assistant.idle_auto_compact, assistant.idle_auto_compact_minutes and _tokens, like other main chats. Off stops both",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompact(ctx)), nil },
+			set: s.setAgyIdleAutoCompact},
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_minutes", Title: "Antigravity task agent idle time before compaction", Actions: getSet,
+			About: "An Antigravity task agent must be idle for at least this long before automatic compaction. The default is 10 minutes. " +
+				"Antigravity assistant chats use assistant.idle_auto_compact_minutes instead",
+			Value: "a whole number from 1 to 1440"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactMinutes(ctx)), nil },
+			set: s.setAgyIdleAutoCompactMinutes},
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_tokens", Title: "Antigravity task agent context size before compaction", Actions: getSet,
+			About: "An Antigravity task agent needs at least this much context before automatic compaction. The default is 200,000 tokens. " +
+				"Antigravity assistant chats use assistant.idle_auto_compact_tokens instead",
+			Value: "a whole number from 10000 to 10000000"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactTokens(ctx)), nil },
+			set: s.setAgyIdleAutoCompactTokens},
 		{Setting: Setting{Key: "assistant.idle_release_minutes", Title: "Main chat stays loaded when idle", Actions: getSet,
 			About: "how long the main chat's process stays loaded after its last activity before it is let go (it resumes on the " +
 				"next message); 20 minutes by default. Just before, it is compacted when its context is large (assistant.idle_auto_compact_tokens " +
@@ -180,19 +212,38 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "prefer-existing or prefer-new"},
 			get: func(ctx context.Context) (string, error) { return s.taskWorkspacePreference(ctx), nil },
 			set: s.setTaskWorkspacePreference},
-		{Setting: Setting{Key: "assistant.recording_days", Title: "录音在知识库里保留", Actions: getSet,
-			About: "how many days the phone's and watch's recording transcripts stay in the knowledge base (kind recordings); older " +
-				"transcripts are deleted from it, and the phone deletes its local recordings too (audio and text). " +
-				"Meeting minutes follow assistant.minutes_days instead. 14 by default",
-			Value: "a whole number of days, 1–365"},
-			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
-			set: s.setRecordingDays},
-		{Setting: Setting{Key: "assistant.minutes_days", Title: "Keep meeting minutes", Actions: getSet,
-			About: "how many days a meeting recording's minutes stay in the knowledge base. Past assistant.recording_days its " +
-				"transcript, summary and live log are deleted and only the minutes (and the recording's metadata) stay, still " +
-				"searchable and readable with kb_get, until this many days after the meeting; then the rest goes too. Never " +
-				"fewer than assistant.recording_days for finite windows. 0 (or forever) keeps minutes until the user deletes them, " +
+		{Setting: Setting{Key: "assistant.recording_audio_days", Title: "Keep recording audio", Actions: getSet,
+			About: "how many days recording audio is kept: the phone and watch delete their local recordings (audio and their " +
+				"copy of the text) older than this; the hub keeps no meeting audio past its minutes. 14 by default. " +
+				"The text in the knowledge base follows assistant.recording_text_days",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.recordingAudioDays(ctx)), nil
+			},
+			set: s.setRecordingAudioDays},
+		{Setting: Setting{Key: "assistant.recording_text_days", Title: "Keep recording text", Actions: getSet,
+			About: "how many days a recording's text stays in the knowledge base (kind recordings): its transcript, summary and " +
+				"live log, whether a phone, a watch or an extension wrote it (meeting notes, imported transcripts). Past it the " +
+				"text is deleted; minutes follow assistant.minutes_days. 0 (or forever) keeps it until the user deletes it, " +
 				"which is the default",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.recordingTextDays(ctx)), nil
+			},
+			set: s.setRecordingTextDays},
+		{Setting: Setting{Key: "assistant.recording_days", Title: "Keep recording audio (old name)", Actions: getSet,
+			About: "old name of assistant.recording_audio_days, kept for compatibility: reads and sets the same value",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.recordingAudioDays(ctx)), nil
+			},
+			set: s.setRecordingAudioDays},
+		{Setting: Setting{Key: "assistant.minutes_days", Title: "Keep meeting minutes", Actions: getSet,
+			About: "how many days a meeting recording's minutes stay in the knowledge base. Past a finite " +
+				"assistant.recording_text_days its transcript, summary and live log are deleted and only the minutes (and the " +
+				"recording's metadata) stay, still searchable and readable with kb_get, until this many days after the meeting; " +
+				"then the rest goes too. Never fewer than assistant.recording_text_days (forever while the text is kept " +
+				"forever). 0 (or forever) keeps minutes until the user deletes them, which is the default",
 			Value: "0 or forever, or a whole number of days, 1–3650"},
 			get: func(ctx context.Context) (string, error) {
 				return minutesDaysLabel(s.lang(ctx), s.minutesDays(ctx)), nil
@@ -220,12 +271,13 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(s.settings(ctx).foldRoutineRelayReplies()), nil
 			},
 			set: s.setFoldRoutineRelayReplies},
-		{Setting: Setting{Key: "assistant.main_compact_window", Title: "Main chat compaction window", Actions: getSet,
-			About: "400000 (the default): the main conversation is compacted at about this many tokens (and sent /compact when " +
-				"idle at 75% of it) instead of its model's whole window, when it runs on a launcher Persona manages that declares " +
-				"a larger one; fewer tokens re-read every turn and rewritten after a long pause, while early details stay in the " +
-				"task ledger and the old conversation. 0: the launcher's window, as for every other conversation and Agent. " +
-				"Applies from the main conversation's next message while it is idle",
+		{Setting: Setting{Key: "assistant.main_compact_window", Title: "Compaction window for the main chat and leader conversations", Actions: getSet,
+			About: "400000 (the default): the main conversation and each leader conversation (a direction's lead, " +
+				"assistant.leaders) are compacted at about this many tokens (and sent /compact when idle at 75% of it) instead " +
+				"of their model's whole window, when they run on a launcher Persona manages that declares a larger one; fewer " +
+				"tokens re-read every turn and rewritten after a long pause, while early details stay in the task ledger and the " +
+				"old conversation. 0: the launcher's window, as for every other conversation and Agent. Applies from each one's " +
+				"next message while it is idle",
 			Value: "0, or a whole number of tokens, 100000–10000000"},
 			get: func(ctx context.Context) (string, error) {
 				return fmt.Sprint(mainCompactWindowOf(s.settings(ctx))), nil
@@ -362,12 +414,30 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
 			set: s.setInboxSignals},
+		{Setting: Setting{Key: "assistant.auto_supervision_mode", Title: "Automatic supervision messages", Actions: getSet,
+			About: "all (the default): the assistant sends every follow-up message about supervised tasks on its own (they wake the " +
+				"main conversation, a leader or the background supervisor, and each costs a model turn). outcomes: only the one-shot " +
+				"ones a supervisor has to act on, when a task finishes for review, stops unfinished, fails, its Agent reports done, " +
+				"blocked or a question, or a decision or the user's attention is needed; the routine checks while a task runs " +
+				"(stalled, no progress, estimates, review nudges, schedule checks, the parked summary, PR and Inbox side signals) " +
+				"are dropped, and those still waiting are withdrawn once. off: it sends none, queues none and schedules none, and " +
+				"what was waiting is withdrawn once. Not affected: the task ledger and states, the user's own questions and " +
+				"task_review, approval and permission cards, and the safety checks. A wider mode takes only what happens " +
+				"afterwards. Applies at once",
+			Value: "all, outcomes or off"},
+			get: func(ctx context.Context) (string, error) { return s.supervisionMode(ctx), nil },
+			set: s.setAutoSupervisionMode},
+		{Setting: Setting{Key: supervisionTriageSettingKey, Title: i18n.T(i18n.Default, "assistant-settings_tool.title_supervision_triage"), Actions: getSet,
+			About: "off (the default) sends eligible routine reminders through ordinary delivery. on asks the Sorting model " +
+				"whether each eligible reminder should wake the supervisor or wait for the morning and evening briefings. " +
+				"Applies to new decisions as soon as the owner approves the change",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.supervisionTriageOn(ctx)), nil },
+			set: s.setSupervisionTriage},
 		{Setting: Setting{Key: "assistant.auto_supervision_messages", Title: "Automatic supervision messages", Actions: getSet,
-			About: "on (the default): the assistant sends its follow-up messages about supervised tasks on its own (they wake the main " +
-				"conversation, a leader or the background supervisor, and each costs a model turn). off: it sends none, queues none and " +
-				"schedules none, and what was waiting is withdrawn once. Not affected: the task ledger and states, the user's own " +
-				"questions and task_review, approval and permission cards, and the safety checks. Turning it back on takes only what " +
-				"happens afterwards. Applies at once",
+			About: "older on/off form of assistant.auto_supervision_mode: reads true unless the mode is off; true sets the mode " +
+				"to all, false to off (withdrawing what was waiting once). Prefer assistant.auto_supervision_mode (all / outcomes / " +
+				"off). Applies at once",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.autoSupervisionOn(ctx)), nil },
 			set: s.setAutoSupervisionMessages},
@@ -420,13 +490,14 @@ func (s *Service) allOwnSettings() []ownSetting {
 			set: s.setBackgroundSupervisorKeepsContext},
 		{Setting: Setting{Key: "assistant.chat_reply_relay", Title: "Tell chats where it wrote as me about new replies", Actions: getSet,
 			About: "off (the default): nothing is passed on. on: after a conversation wrote into a Lark chat as the user, other " +
-				"people's new messages in that chat are told to that conversation (once, at most every 10 minutes per chat), for all " +
-				"chats, not one by one. Turning it off drops those still waiting in a conversation's queue",
+				"people's new messages in that chat are told to that conversation (once, at most every 10 minutes per chat), until " +
+				"the owner personally speaks in that chat or mutes the chat via assistant.chat_reply_relay_muted_chats. Turning it off drops those still waiting in a conversation's queue",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) {
 				return fmt.Sprint(chatReplyRelayOn(s.settings(ctx))), nil
 			},
 			set: s.setChatReplyRelay},
+		s.chatReplyMutedChatsSetting(),
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -479,7 +550,7 @@ func (s *Service) allOwnSettings() []ownSetting {
 			set: s.setModelTiers},
 		{Setting: Setting{Key: admissionSettingsKey, Title: "Execution Agent admission gate", Actions: getSet,
 			About: "the lines an execution Agent's start is checked against on every computer: enabled, load_per_core, min_memory_bytes, " +
-				"max_claude_procs (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
+				"max_claude_procs, max_swap_percent (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
 				"direction_cap_by_direction keys are a supervisor conversation id or a direction's displayed name and win over " +
 				"direction_cap_by_project, which wins over direction_cap and the code default. launcher_groups (none by default) caps " +
 				"running tasks across launchers that share one budget, on every computer: each {name, launchers (exact launcher names), " +
@@ -521,6 +592,20 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(s.settings(ctx).todosV2FoldChildrenOn()), nil
 			},
 			set: s.setTodosV2FoldChildren},
+		{Setting: Setting{Key: todosV2QuietHoursSettingKey, Title: "Quiet hours for routine notifications (todos_v2)", Actions: getSet,
+			About: "optional 24-hour local-time quiet window (HH:MM-HH:MM, e.g. 22:00-08:00 or 13:00-15:00) under todos_v2=true during which routine non-card, non-P0, non-notify_user pushes downgrade to LevelP2; empty string disables quiet hours (default); P0, cards, approvals, and notify_user are never muted; no effect when todos_v2 is off",
+			Value: `"" (off) or "HH:MM-HH:MM"`},
+			get: func(ctx context.Context) (string, error) {
+				return s.settings(ctx).todosV2QuietHours(), nil
+			},
+			set: s.setTodosV2QuietHours},
+		{Setting: Setting{Key: todosV2DigestWindowMinutesSettingKey, Title: "Routine notification digest window in minutes (todos_v2)", Actions: getSet,
+			About: "optional burst-coalescing window in minutes under todos_v2=true: 0 (off, default), 30, 60, or 120; follow-up routine non-card, non-P0, non-notify_user pushes for the same session/direction within the window downgrade to LevelP2; P0, cards, approvals, and notify_user are never muted; no effect when todos_v2 is off",
+			Value: "0, 30, 60 or 120"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).todosV2DigestWindowMinutes()), nil
+			},
+			set: s.setTodosV2DigestWindowMinutes},
 		s.trustSetting(),
 		s.urgentRulesSetting(), // urgent_call_rules.go
 	}
@@ -701,9 +786,10 @@ func (s *Service) ownSettingActionExact(ctx context.Context, call ToolCall, o ow
 	if toolName == "" {
 		toolName = "persona_settings"
 	}
-	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
+	card := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: toolName, Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
+		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}
+	op := approvalops.Operation{
 		Replacement: call.MachineID + "\x00" + call.SessionID + "\x00setting\x00" + o.Key,
 		Denied:      "The user declined the change: nothing changed.",
 		Unanswered:  prompts.RenderSettingUnanswered(),
@@ -726,7 +812,23 @@ func (s *Service) ownSettingActionExact(ctx context.Context, call ToolCall, o ow
 			}
 			return fresh.apply(ctx)
 		},
-	})
+	}
+	if call.MachineID == "" && call.SessionID == "" {
+		// Settings-page approvals have no conversation to receive questions.
+		answer, err := s.ask(ctx, card)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case answer.UserAllowed():
+			return op.Apply(ctx, answer)
+		case answer.UserDenied():
+			return op.Denied, nil
+		default:
+			return op.Unanswered, nil
+		}
+	}
+	outcome, err := s.waitPreparedCard(ctx, card, op)
 	return outcome.Text, err
 }
 
@@ -762,7 +864,7 @@ func (s *Service) applyAutomaticReversibleSetting(ctx context.Context, call Tool
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", SessionTitle: "Persona", CreatedAt: now, ToolInput: audit,
 		Private: s.justMeNow(call.MachineID, call.SessionID), Summary: proposal}
-	if err := writer.InsertResolvedInteraction(ctx, ix, resolution); err != nil {
+	if err := writer.InsertResolvedInteraction(db.WithEndedBy(ctx, db.EndedByAssistant), ix, resolution); err != nil {
 		return "", fmt.Errorf("%w: write the reversible-setting history record: %v", approvalops.ErrNotApplied, err)
 	}
 	_, saveErr := s.updateSettingsChecked(ctx, func(v *Settings) error {
@@ -799,14 +901,16 @@ func orNone(s string) string {
 // what the assistant reads).
 var settingTitles = map[string]string{modulesKey: "title_modules", standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
+	"assistant.agy_idle_auto_compact": "title_agy_idle_auto_compact", "assistant.agy_idle_auto_compact_minutes": "title_agy_idle_auto_compact_minutes", "assistant.agy_idle_auto_compact_tokens": "title_agy_idle_auto_compact_tokens",
 	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher", "assistant.limit_fallbacks": "title_limit_fallbacks",
 	"assistant.machine_fallbacks": "title_machine_fallbacks", "assistant.machine_fallback_minutes": "title_machine_fallback_minutes",
-	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
-	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", modelProfileBindingsKey: "title_model_bindings", "model_profiles.tiers": "title_model_tiers",
+	"assistant.recording_days": "title_recording_days", "assistant.recording_audio_days": "title_recording_audio_days", "assistant.recording_text_days": "title_recording_text_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
+	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay", chatReplyMutedChatsKey: "title_chat_reply_relay_muted_chats",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "assistant.auto_supervision_mode": "title_auto_supervision_mode", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", modelProfileBindingsKey: "title_model_bindings", "model_profiles.tiers": "title_model_tiers",
+	supervisionTriageSettingKey:               "title_supervision_triage",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
@@ -821,10 +925,12 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 const dashboardsSettingKey = "assistant.dashboards"
 
 const (
-	todosV2AutoSeenSettingKey         = "assistant.todos_v2_auto_seen"
-	todosV2PendingReviewSLASettingKey = "assistant.todos_v2_pending_review_sla_hours"
-	todosV2CanWaitSLASettingKey       = "assistant.todos_v2_can_wait_sla_hours"
-	todosV2FoldChildrenSettingKey     = "assistant.todos_v2_fold_children"
+	todosV2AutoSeenSettingKey            = "assistant.todos_v2_auto_seen"
+	todosV2PendingReviewSLASettingKey    = "assistant.todos_v2_pending_review_sla_hours"
+	todosV2CanWaitSLASettingKey          = "assistant.todos_v2_can_wait_sla_hours"
+	todosV2FoldChildrenSettingKey        = "assistant.todos_v2_fold_children"
+	todosV2QuietHoursSettingKey          = "assistant.todos_v2_quiet_hours"
+	todosV2DigestWindowMinutesSettingKey = "assistant.todos_v2_digest_window_minutes"
 )
 
 // clipped is a value as the card shows it, in l.
@@ -843,7 +949,7 @@ func (s *Service) setIdleAutoCompact(ctx context.Context, raw json.RawMessage) (
 	return s.setBoolSetting(ctx, raw, s.idleAutoCompact, i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged"), func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_idle_auto_compact", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.IdleAutoCompact },
-		"Idle compaction setting saved (%v); applies from the next unattended message.")
+		"Idle compaction setting saved (%v).")
 }
 
 func (s *Service) setIdleAutoCompactMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
@@ -890,6 +996,63 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		}
 		s.settingsChanged(ctx)
 		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setAgyIdleAutoCompact(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value *bool
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return nil, i18n.Err("assistant-settings_tool.bad_agy_idle_auto_compact")
+	}
+	return s.setBoolSetting(ctx, raw, s.agyIdleAutoCompact, i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_unchanged"), func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_agy_idle_auto_compact", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AgyIdleAutoCompact },
+		"Antigravity idle compaction setting saved (%v).")
+}
+
+func (s *Service) setAgyIdleAutoCompactMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || !assistantwire.AgyIdleMinutesValid(value) {
+		return nil, i18n.Err("assistant-settings_tool.bad_agy_idle_auto_compact_minutes")
+	}
+	before := s.agyIdleAutoCompactMinutes(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_agy_idle_auto_compact_minutes", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.AgyIdleAutoCompactMinutes = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setAgyIdleAutoCompactTokens(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || !assistantwire.AgyIdleTokensValid(value) {
+		return nil, i18n.Err("assistant-settings_tool.bad_agy_idle_auto_compact_tokens")
+	}
+	before := s.agyIdleAutoCompactTokens(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_agy_idle_auto_compact_tokens", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.AgyIdleAutoCompactTokens = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_saved"), nil
 	}}, nil
 }
 
@@ -1029,6 +1192,13 @@ func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ow
 		"assistant.main_tasks_quiet is %v for tasks opened from now on (existing ones keep theirs).")
 }
 
+func (s *Service) setApprovalMirrorMain(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.approvalMirrorMain, "assistant.approval_mirror_main is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_approval_mirror_main", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.ApprovalMirrorMain },
+		"assistant.approval_mirror_main is %v for new cards.")
+}
+
 func (s *Service) setStartRequestedTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.startRequestedTasks, "「我在对话里说过的，直接开始」没有变化", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_start_requested_tasks", i18n.Args{"before": before, "after": after})
@@ -1089,28 +1259,58 @@ func (s *Service) setKBTopics(ctx context.Context, v json.RawMessage) (*ownChang
 		"assistant.kb_topics is %v from the knowledge base's next round on.")
 }
 
-func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var days int
-	if err := json.Unmarshal(v, &days); err != nil || days < minRecordingDays || days > maxRecordingDays {
-		return nil, errors.New("value must be a whole number of days, 1–365")
+// parseRetentionDays reads a retention value of persona_settings: 0 or "forever", or 1–3650 days.
+func parseRetentionDays(v json.RawMessage) (int, bool) {
+	var word string
+	if json.Unmarshal(v, &word) == nil && strings.EqualFold(strings.TrimSpace(word), "forever") {
+		return 0, true
 	}
-	before := s.recordingDays(ctx)
+	var days int
+	if strings.TrimSpace(string(v)) == "null" || json.Unmarshal(v, &days) != nil || !recordingDaysValid(&days, false) {
+		return 0, false
+	}
+	return days, true
+}
+
+// setRecordingAudioDays changes recording_audio_days (also the old recording_days): the phone's window.
+func (s *Service) setRecordingAudioDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setRecordingRetention(ctx, v, s.recordingAudioDays(ctx), "assistant.recording_audio_days",
+		"change_recording_audio_days", func(v *Settings, days *int) { v.RecordingAudioDays = days },
+		"the phone deletes its own recordings older than that")
+}
+
+// setRecordingTextDays changes recording_text_days: how long the knowledge base keeps a recording's text.
+func (s *Service) setRecordingTextDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setRecordingRetention(ctx, v, s.recordingTextDays(ctx), "assistant.recording_text_days",
+		"change_recording_text_days", func(v *Settings, days *int) { v.RecordingTextDays = days },
+		"recording text older than that leaves the knowledge base")
+}
+
+func (s *Service) setRecordingRetention(ctx context.Context, v json.RawMessage, before int, key, card string,
+	save func(*Settings, *int), effect string) (*ownChange, error) {
+	days, ok := parseRetentionDays(v)
+	if !ok {
+		return nil, i18n.Err("assistant-profile.bad_recording_days")
+	}
 	if days == before {
-		return &ownChange{summary: "「录音在知识库里保留」没有变化"}, nil
+		return &ownChange{summary: key + " is unchanged"}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
 	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_recording_days", i18n.Args{"before": before, "after": days})
+		return i18n.T(l, "assistant-settings_tool."+card, i18n.Args{"before": minutesDaysLabel(l, before), "after": minutesDaysLabel(l, days)})
 	},
 		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.RecordingDays = &days; return nil }); err != nil {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { save(v, &days); return nil }); err != nil {
 				return "", err
 			}
 			s.settingsChanged(ctx)
 			s.kbWake() // a shorter retention prunes now
-			return fmt.Sprintf("assistant.recording_days is %d: recordings older than that leave the knowledge base.", days), nil
+			if days == 0 {
+				return key + " is forever: nothing is deleted for its age.", nil
+			}
+			return fmt.Sprintf("%s is %d days: %s.", key, days, effect), nil
 		}}, nil
 }
 
@@ -1122,8 +1322,8 @@ func minutesDaysLabel(l i18n.Lang, days int) string {
 	return i18n.T(l, "assistant-settings_tool.minutes_days_value", i18n.Args{"days": days})
 }
 
-// setMinutesDays compares the saved setting, not its recording_days floor. A finite value below that floor is saved
-// for when recording_days becomes shorter. Unset and 0 both mean forever; the card names the effective before/after.
+// setMinutesDays compares the saved setting, not its recording_text_days floor. A finite value below that floor is
+// saved for when recording_text_days becomes shorter. Unset and 0 both mean forever; the card names the effective before/after.
 func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var days int
 	var word string
@@ -1132,7 +1332,7 @@ func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownCh
 		return nil, i18n.Err("assistant-profile.bad_minutes_days")
 	}
 	cur := s.settings(ctx)
-	saved, recording := minutesDaysSetting(cur), recordingDaysOf(cur)
+	saved, recording := minutesDaysSetting(cur), recordingTextDaysOf(cur)
 	before, after := kb.MinutesDaysFor(saved, recording), kb.MinutesDaysFor(days, recording)
 	args := func(l i18n.Lang) i18n.Args {
 		return i18n.Args{"before": minutesDaysLabel(l, before), "after": minutesDaysLabel(l, after),
@@ -1327,11 +1527,55 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
 }
 
+func (s *Service) setSupervisionTriage(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.supervisionTriageOn, supervisionTriageSettingKey+" is unchanged",
+		func(l i18n.Lang, before, after string) string {
+			return i18n.T(l, "assistant-settings_tool.change_supervision_triage", i18n.Args{"before": before, "after": after})
+		}, func(v *Settings) **bool { return &v.SupervisionTriage }, supervisionTriageSettingKey+" is %v.")
+}
+
+// setAutoSupervisionMessages is the older on/off form: true is the mode all, false off. A value already in effect is a
+// no-op, so true leaves outcomes as it is.
 func (s *Service) setAutoSupervisionMessages(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.autoSupervisionOn, "assistant.auto_supervision_messages is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_auto_supervision_messages", i18n.Args{"before": before, "after": after})
-	}, func(v *Settings) **bool { return &v.AutoSupervisionMessages },
-		"assistant.auto_supervision_messages is %v now (settingsChanged applies the switch at once; turning it off withdraws what waited, turning it on replays nothing).")
+	}, func(v *Settings) **bool {
+		v.AutoSupervisionMode = "" // the saved switch decides again (supervisionModeOf): true is all, false off
+		return &v.AutoSupervisionMessages
+	}, "assistant.auto_supervision_messages is %v now (settingsChanged applies the switch at once; turning it off withdraws what waited, turning it on replays nothing).")
+}
+
+// setAutoSupervisionMode changes which automatic supervision messages are sent (supervise_switch.go). The older switch
+// is kept in step (mode != off) for older readers and downgrades.
+func (s *Service) setAutoSupervisionMode(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var mode string
+	if err := json.Unmarshal(v, &mode); err != nil || !slices.Contains(supervisionModes, mode) {
+		return nil, errors.New("value must be all, outcomes or off")
+	}
+	before := s.supervisionMode(ctx)
+	if mode == before {
+		return &ownChange{summary: "assistant.auto_supervision_mode is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	name := func(l i18n.Lang, m string) string {
+		return i18n.T(l, "assistant-settings_tool.auto_supervision_mode_"+m)
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_auto_supervision_mode", i18n.Args{"before": name(l, before), "after": name(l, mode)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			on := mode != supervisionModeOff
+			if _, err := s.updateSettings(ctx, func(v *Settings) error {
+				v.AutoSupervisionMode, v.AutoSupervisionMessages = mode, &on
+				return nil
+			}); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.auto_supervision_mode is %s now (applied at once; what the new mode drops is withdrawn, nothing withdrawn is replayed).", mode), nil
+		}}, nil
 }
 
 func (s *Service) setInboxTodoForward(ctx context.Context, v json.RawMessage) (*ownChange, error) {
@@ -1378,7 +1622,7 @@ func (s *Service) setChatReplyRelay(ctx context.Context, v json.RawMessage) (*ow
 	ch.apply = func(ctx context.Context) (string, error) {
 		out, err := apply(ctx)
 		if err == nil && !chatReplyRelayOn(s.settings(ctx)) {
-			s.dropQueuedChatReplies(ctx)
+			s.dropQueuedChatReplies(ctx, "", time.Time{})
 		}
 		return out, err
 	}
@@ -1496,6 +1740,73 @@ func (s *Service) setTodosV2FoldChildren(ctx context.Context, v json.RawMessage)
 			s.settingsChanged(ctx)
 			s.todosChanged(ctx)
 			return fmt.Sprintf("%s is %v (applies when todos_v2 is enabled).", todosV2FoldChildrenSettingKey, on), nil
+		},
+	}, nil
+}
+
+func (s *Service) setTodosV2QuietHours(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var rawPtr *string
+	if err := json.Unmarshal(v, &rawPtr); err != nil || rawPtr == nil {
+		return nil, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)")
+	}
+	next := strings.TrimSpace(*rawPtr)
+	if next != "" {
+		if _, ok := parseTodosV2QuietHours(next); !ok {
+			return nil, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)")
+		}
+	}
+	before := s.settings(ctx).todosV2QuietHours()
+	if next == before {
+		return &ownChange{summary: todosV2QuietHoursSettingKey + " is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	display := func(val string) string {
+		if val == "" {
+			return "off"
+		}
+		return val
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return fmt.Sprintf("Change %s: %s → %s", todosV2QuietHoursSettingKey, display(before), display(next))
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.TodosV2QuietHours = next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.todosChanged(ctx)
+			return fmt.Sprintf("%s is %s (applies when todos_v2 is enabled).", todosV2QuietHoursSettingKey, display(next)), nil
+		},
+	}, nil
+}
+
+func (s *Service) setTodosV2DigestWindowMinutes(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var mins *int
+	if err := json.Unmarshal(v, &mins); err != nil || mins == nil || !slices.Contains(todosV2DigestWindowOptions, *mins) {
+		return nil, errors.New("todos_v2_digest_window_minutes must be 0, 30, 60 or 120")
+	}
+	next := *mins
+	before := s.settings(ctx).todosV2DigestWindowMinutes()
+	if next == before {
+		return &ownChange{summary: todosV2DigestWindowMinutesSettingKey + " is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return fmt.Sprintf("Change %s: %d → %d", todosV2DigestWindowMinutesSettingKey, before, next)
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.TodosV2DigestWindowMinutes = &next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.todosChanged(ctx)
+			return fmt.Sprintf("%s is %d (applies when todos_v2 is enabled).", todosV2DigestWindowMinutesSettingKey, next), nil
 		},
 	}, nil
 }

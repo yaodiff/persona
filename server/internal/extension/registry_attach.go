@@ -31,6 +31,10 @@ func (r *Registry) Attach(ctx context.Context, id, source, actor string) (*Exten
 	if err != nil {
 		return nil, err
 	}
+	if old.Record.BuiltinPredecessor || errors.Is(old.problemErr, ErrIdentity) {
+		// A matching remote manifest cannot establish that its program is the signed package.
+		return nil, ErrIdentity
+	}
 	id = old.Record.ID
 	if rt := old.Full.Runtime; rt == nil || rt.IsDeno() {
 		return nil, i18n.Err("extension-status.attach_no_program", i18n.Args{"id": id})
@@ -121,10 +125,11 @@ func (r *Registry) attachable(id string) (*Extension, error) {
 
 // switchRemote saves row, old's record with only Remote changed, and puts it in effect. Called inside an operation.
 func (r *Registry) switchRemote(ctx context.Context, old *Extension, row Record) (*Extension, error) {
-	row.UpdatedAt = r.now()
-	if err := r.write(ctx, row); err != nil {
+	revision, err := r.write(ctx, row)
+	if err != nil {
 		return nil, err
 	}
+	row.UpdatedAt = revision
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	next := r.fromRow(row)

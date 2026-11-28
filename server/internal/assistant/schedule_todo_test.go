@@ -200,8 +200,7 @@ func TestScheduledTodoPersistedStreakOutlivesHistoryAndRestart(t *testing.T) {
 			t.Fatal("fixture did not evict the first assessment")
 		}
 	}
-	other, _ := newQuietServiceOn(t, store)
-	other.superviseTimes.gather = time.Hour
+	other, _ := newQuietServiceTimed(t, store, heldSuperviseTimings())
 	other.todoAskAfter = time.Nanosecond
 	putTodo(other, todo)
 	_, result := assessTodoRun(t, other, task.ID, nil)
@@ -377,8 +376,7 @@ func TestScheduledTodoPartialWriteReplayAfterRestart(t *testing.T) {
 		t.Fatalf("history lost the committed assessment before restart: %+v %+v", runs, current.TodoProgress)
 	}
 	store.failWrites("")
-	other, _ := newQuietServiceOn(t, store)
-	other.superviseTimes.gather = time.Hour
+	other, _ := newQuietServiceTimed(t, store, heldSuperviseTimings())
 	putTodo(other, todo)
 	current, _ = taskByID(other, task.ID)
 	other.finishScheduledTodo(t.Context(), current, run)

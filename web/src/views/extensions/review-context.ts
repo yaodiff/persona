@@ -35,4 +35,3 @@ const fallback: ReviewApi = {
 
 export const ReviewContext = createContext<ReviewApi>(fallback);
 export const useReview = () => useContext(ReviewContext);
-

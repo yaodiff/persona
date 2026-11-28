@@ -16,18 +16,19 @@ nonisolated enum MeetingTranscriptionWords {
     /// The line under Record (`RecordingsSection.startPrivacy`): what leaves the phone in the meeting about to start.
     /// `mode`: the mode it starts in (nil: the hub names none, as before phase 5); `service`: the extension the owner chose
     /// to transcribe, by name (nil: the built-in one, which the text doesn't name); `talk`: Talk would send its spans to
-    /// the voice service (phase 4); `days`: how long the text is kept.
-    static func startPrivacy(_ mode: MeetingTranscriptionMode?, service: String?, talk: Bool, days: Int) -> String {
+    /// the voice service (phase 4); `textDays`: how long Knowledge keeps the text (0 is forever).
+    static func startPrivacy(_ mode: MeetingTranscriptionMode?, service: String?, talk: Bool, textDays: Int) -> String {
+        let kept = RecordingRetentionText.kept(textDays)
         if mode == .hub {
             if let service {
-                return String(localized: "This meeting's audio, Talk included, goes through your hub to \(service). The hub deletes the audio once the minutes are written; the text is kept for \(days) days.")
+                return String(localized: "This meeting's audio, Talk included, goes through your hub to \(service). The hub deletes the audio once the minutes are written; the text in Knowledge is \(kept).")
             }
-            return String(localized: "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with. The hub deletes the audio once the minutes are written; the text is kept for \(days) days.")
+            return String(localized: "This meeting's audio, Talk included, goes through your hub to the speech service it is set up with. The hub deletes the audio once the minutes are written; the text in Knowledge is \(kept).")
         }
         if talk {
-            return String(localized: "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service. Its text syncs to Knowledge and is kept for \(days) days.")
+            return String(localized: "Audio stays on this iPhone, except while Talk is on: what is said then goes to the voice service. Its text syncs to Knowledge and is \(kept).")
         }
-        return String(localized: "Audio stays on this device. Its text syncs to Knowledge and is kept for \(days) days.")
+        return String(localized: "Audio stays on this device. Its text syncs to Knowledge and is \(kept).")
     }
 
     /// The meeting page's privacy line beside Talk (`MeetingPageBar`): privacy mode's Wording, or hub mode's in a meeting the
@@ -197,8 +198,8 @@ nonisolated enum MeetingTranscriptionWords {
     }
 
     /// The recording page's footer for a meeting whose audio went to the hub: it no longer says the audio stayed here.
-    static func detailFooter(days: Int) -> String {
-        String(localized: "This meeting's audio also went through your hub to its speech service; the hub deletes it once the minutes are written. After the retention period (\(days) days) the recording is cleared from this device and Knowledge.")
+    static func detailFooter(audioDays: Int, textDays: Int) -> String {
+        String(localized: "This meeting's audio also went through your hub to its speech service; the hub deletes that audio once the minutes are written. Audio on this device is \(RecordingRetentionText.kept(audioDays)). Its text in Knowledge is \(RecordingRetentionText.kept(textDays)).")
     }
 
     /// Whether the recording page's footer says the audio went through the hub (pure, for the tests): `detail.meta`'s
@@ -473,14 +474,15 @@ struct RecordingRetentionFooter: View {
     var id: UUID
     var attendance: RecordingAttendance?
     var meta: MeetingTranscriptionView?
-    var days: Int
+    var audioDays: Int
+    var textDays: Int
     /// The text when the audio stayed here.
     var device: String
     @State private var store = MeetingTranscription.shared
 
     var body: some View {
         let hub = MeetingTranscriptionWords.audioWentToHub(meta: meta, decided: store.meeting(id).decided, attendance: attendance)
-        Text(hub ? MeetingTranscriptionWords.detailFooter(days: days) : device)
+        Text(hub ? MeetingTranscriptionWords.detailFooter(audioDays: audioDays, textDays: textDays) : device)
     }
 }
 

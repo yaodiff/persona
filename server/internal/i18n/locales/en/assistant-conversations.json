@@ -8,6 +8,7 @@
   "relay_delivery_failed": "Message could not be delivered",
   "supervision_delivery_failed": "This conversation cannot receive task follow-up instructions. Open the task for its latest status and reports. Supported launchers on this computer: {launchers}.",
   "supervision_delivery_refused": "This conversation refused a task follow-up message, and it will not be sent again. Open the task to see its latest status and reports.",
+  "supervision_delivery_unconfirmed": "A task follow-up message could not be confirmed in this conversation after repeated checks, so Persona cleared the stuck queue entry to let newer updates through. Open your tasks to check for any missed updates.",
   "supervision_reviewer_required": "Choose a Claude Code or Codex supervisor before starting this task.",
   "started_on": "Running on {run}.",
   "pick_save_failed": "The model pick could not be saved for future turns: {error}",

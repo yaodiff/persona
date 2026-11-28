@@ -4,13 +4,15 @@ import { api, ApiError, enc, errorText } from "../../lib/api";
 import { formatSpan, type KBDetail, type MinutesAction, type MinutesPoint } from "../../lib/kb";
 import { citedPhoto, minutesKeptUntil, recordingClock, transcriptTarget, type RecordingView } from "./recording-view";
 import { minutesOverview, type OverviewCite } from "./minutes-overview";
+import { decisionAnchor, minutesDebates } from "./minutes-debates";
 import { minutesWait } from "./minutes-wait";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Button, copyText, cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Card, SectionTitle, TonePill } from "../../views/knowledge/KBParts";
-import { MinutesOverviewCard } from "./MinutesOverview";
+import { MinutesDebatesSection, MinutesOverviewCard } from "./MinutesOverview";
 import { PhotoCite, type MeetingPhotos } from "./RecordingPhotos";
+import { decodeSpeakers, type DetailSpeakers } from "./speakers";
 
 export type RecordingAuth = { token: string; tokenOwner: string; headers: Record<string, string> };
 
@@ -22,23 +24,34 @@ type Props = {
   refresh: () => Promise<boolean>;
   onSaved: () => void;
   onJump: (id: string) => void;
+  highlighted?: string;
   /** The meeting's photos (#3862 phase 3): an item citing one shows it in place of its transcript time. */
   photos?: MeetingPhotos;
+  /** Reconciled / optimistic speaker roster (#17675), falling back to `detail.speakers` when omitted. */
+  speakers?: DetailSpeakers | null;
 };
 
 /** Minutes are retained during regeneration; suggested actions become to-dos only on explicit confirmation. A trimmed
  *  recording (its transcript expired, #3780) keeps its minutes and their to-dos, but they can't be made again. An item
  *  may cite a meeting photo instead of a transcript line (`"photo": n`): its thumbnail goes to it under **Photos**.
- *  Minutes with a usable overview (#6563) read as one summary card (MinutesOverview.tsx); the others as before. */
-export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved, onJump, photos }: Props) {
+ *  Minutes with a usable overview (#6563) read as one summary card (MinutesOverview.tsx); the others as before.
+ *  Minutes with disagreements (#16728) show them via MinutesDebatesSection in both layouts. */
+export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved, onJump, highlighted, photos, speakers: speakersProp }: Props) {
   const heading = useId();
   const minutes = detail.minutes;
   const state = detail.meta?.minutes_state;
+  const decodedSpeakers = useMemo(() => decodeSpeakers(detail.speakers), [detail.speakers]);
+  const speakers = speakersProp !== undefined ? speakersProp : decodedSpeakers;
   const { busy, needsRefresh, run } = useMinutesRequests({ id: detail.id, version: minutes?.version, pending: state === "pending", auth, current, refresh, onSaved });
   const minutesDays = useMinutesDays(rec.trimmedAt, auth, current);
   const keptUntil = rec.trimmedAt ? minutesKeptUntil(rec.startedAt, minutesDays) : undefined;
   // The summary card (#6563) when the minutes carry an overview with a bullet left after cleaning; else as before.
   const overview = useMemo(() => minutesOverview(minutes?.overview), [minutes?.overview]);
+  // Disagreements (#16728), cleaned on their own so a malformed block never costs the rest of the minutes.
+  const debates = useMemo(
+    () => minutesDebates(minutes?.debates, Array.isArray(minutes?.decisions) ? minutes.decisions.length : 0),
+    [minutes?.debates, minutes?.decisions],
+  );
   // While the hub checks the whole recording before writing them, the line says so, with how far it is (#13461).
   const wait = minutesWait(detail.meta?.transcription, state, !!minutes);
   const waitText = wait?.line === "checking"
@@ -57,10 +70,10 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   // A summary-card line's source the same way; one whose time did not read shows none.
   const overviewCite = (item: OverviewCite) => item.photo ? <PhotoCite n={item.photo} at={item.at} rec={rec} photos={photos} onJump={onJump} /> : item.at === undefined ? null : time(item.at);
   const actions = (level: 3 | 4) => <ActionItems level={level} title={t("recording.minutes_actions")} actions={minutes?.actions} disabled={disabled} time={(_at, action) => cite(action)} onAdd={(ids) => void run(ids)} />;
-  const points = (title: string, items?: MinutesPoint[]) => items?.length ? (
+  const points = (title: string, items?: MinutesPoint[], itemId?: (index: number) => string) => items?.length ? (
     <div className="px-4 py-3.5">
-      <h3 className="mb-2 text-[13px] font-semibold text-ink">{title}</h3>
-      <PointList items={items} time={time} cite={cite} />
+      <h4 className="mb-2 text-[13px] font-semibold text-ink">{title}</h4>
+      <PointList items={items} time={time} cite={cite} itemId={itemId} highlighted={highlighted} />
     </div>
   ) : null;
 
@@ -87,9 +100,14 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
       {minutes && overview && <MinutesOverviewCard
         minutes={minutes}
         overview={overview}
+        debates={debates}
+        speakers={speakers}
         cite={overviewCite}
+        time={time}
         actions={actions(4)}
         open={minutes.open?.length ? <PointList items={minutes.open} time={time} cite={cite} /> : null}
+        highlighted={highlighted}
+        onJump={onJump}
       />}
       {minutes && !overview && <Card>
         <div className="px-4 py-3.5">
@@ -102,8 +120,16 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
           {minutes.partial && <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">{t("recording.minutes_partial")}</p>}
         </div>
         {points(t("recording.minutes_points"), minutes.points)}
-        {points(t("recording.minutes_decisions"), minutes.decisions)}
-        {actions(3)}
+        {points(t("recording.minutes_decisions"), minutes.decisions, decisionAnchor)}
+        {actions(4)}
+        <MinutesDebatesSection
+          debates={debates}
+          decisions={minutes.decisions}
+          speakers={speakers}
+          time={time}
+          onDecisionJump={(idx) => onJump(decisionAnchor(idx))}
+          className="px-4 py-3.5"
+        />
         {points(t("recording.minutes_open"), minutes.open)}
       </Card>}
     </section>
@@ -256,19 +282,34 @@ export function TranscriptTime({ rec, at, onJump }: { rec: RecordingView; at: nu
 }
 
 /** Points with who said them and their time, or (cite) the photo one cites (#3862 phase 3). */
-export function PointList({ items, time, cite }: {
+export function PointList({ items, time, cite, itemId, highlighted }: {
   items: MinutesPoint[];
   time: (at: number) => React.ReactNode;
   cite?: (item: MinutesPoint) => React.ReactNode;
+  itemId?: (index: number) => string;
+  highlighted?: string;
 }) {
   return (
     <ul className="space-y-2">
-      {items.map((item, i) => (
-        <li key={i} className={cx("flex flex-wrap gap-x-3 gap-y-1 text-[13px] leading-relaxed", citedPhoto(item) ? "items-center" : "items-baseline")}>
-          <p className="min-w-0 flex-1 break-words text-ink">{[item.who, item.text].filter(Boolean).join(" · ")}</p>
-          {cite ? cite(item) : time(item.at)}
-        </li>
-      ))}
+      {items.map((item, i) => {
+        const id = itemId?.(i);
+        return (
+          <li
+            key={i}
+            id={id}
+            tabIndex={id ? -1 : undefined}
+            className={cx(
+              "flex flex-wrap gap-x-3 gap-y-1 text-[13px] leading-relaxed",
+              citedPhoto(item) ? "items-center" : "items-baseline",
+              id && "rounded-control outline-none transition-colors",
+              id && highlighted === id && "bg-accent-tint",
+            )}
+          >
+            <p className="min-w-0 flex-1 break-words text-ink">{[item.who, item.text].filter(Boolean).join(" · ")}</p>
+            {cite ? cite(item) : time(item.at)}
+          </li>
+        );
+      })}
     </ul>
   );
 }

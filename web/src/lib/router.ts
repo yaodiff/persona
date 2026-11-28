@@ -21,7 +21,7 @@ export type Route =
   | { name: "persona-new" }
   // `view` is the page's `?view=chat|term`; without it the page shows what it showed last (lib/session-view.ts)
   // `at`: the message to land on (?at=<item id>, the hub's links to one message, docs/protocol/deep-links.md)
-  // `standalone`: explicit full-page open for a subagent ("Open as page", prevents redirecting back to parent panel)
+  // `standalone`: explicit full-page open for a subagent or a blocked terminal, even when the chat normally redirects
   | { name: "session"; mid: string; sid: string; view?: SessionView; work?: true; at?: string; standalone?: true }
   // one herdr tab (a slot) of a workspace; `sid` picks its pane (lib/herdr-tree.ts resolveTab)
   | { name: "tab"; mid: string; space: string; slot: string; sid?: string; view?: SessionView; work?: true; at?: string }
@@ -67,7 +67,7 @@ export type Route =
   | { name: "compare"; id: string }
   // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"); view=board: the read-only
   // progress board (#12713). Either view keeps the open to-do beside it.
-  | { name: "todos"; id?: string; direction?: string; manager?: string; view?: "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
+  | { name: "todos"; id?: string; direction?: string; manager?: string; view?: "list" | "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
   // the source subscription pages (#2041), their first state in ?state=
   | { name: "subscriptions" }
@@ -170,8 +170,9 @@ export function parse(path: string, search = ""): Route {
     const direction = q.get("direction");
     if (!id && direction) return { name: "todos", direction, ...(manager && { manager }) };
     const r: Route = { name: "todos", id, ...(id && manager && { manager }) };
-    if (q.get("view") === "board") return { ...r, view: "board" };
-    if (q.get("view") === "calendar") {
+    const view = q.get("view");
+    if (view === "board" || view === "list") return { ...r, view };
+    if (view === "calendar") {
       const mode = q.get("mode");
       const date = q.get("date");
       return {
@@ -270,10 +271,8 @@ export function routePath(r: Route): string {
       return `/compare/${encodeURIComponent(r.id)}`;
     case "todos": {
       const q = new URLSearchParams();
-      if (r.view === "board") {
-        q.set("view", "board");
-      } else if (r.view === "calendar") {
-        q.set("view", "calendar");
+      if (r.view) q.set("view", r.view);
+      if (r.view === "calendar") {
         if (r.mode) q.set("mode", r.mode);
         if (r.date) q.set("date", r.date);
       }

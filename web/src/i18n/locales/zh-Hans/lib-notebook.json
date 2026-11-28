@@ -1,6 +1,6 @@
 {
-  "lines_hidden_other": "… 还有 {count} 行没有显示",
+  "lines_hidden_other": "… 另有 {count} 行未显示",
   "invalid_json": "不是有效的笔记本文件（JSON 解析失败：{reason}）",
   "invalid": "不是有效的笔记本文件",
-  "no_cells": "不是有效的笔记本文件（没有 cells）"
+  "no_cells": "不是有效的笔记本文件（缺少 cells）"
 }

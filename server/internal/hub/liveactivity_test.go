@@ -1045,10 +1045,15 @@ func TestFleetLookForDevice(t *testing.T) {
 func TestFleetForDevice(t *testing.T) {
 	stats := FleetStats{TPM: 12000, Tokens: 42000000, Requests: 220,
 		Loads: []FleetLoad{{ID: "a", Name: "A", Percent: 30}, {ID: "b", Name: "B", Percent: 70}}}
-	st := FleetState{Phase: "working", Working: 1, Assistant: true}
+	st := FleetState{Phase: "working", Working: 1, Assistant: true, Items: []FleetItem{{
+		ID: "m/s", Kind: proto.IxPermission, Interaction: "ix", InteractionCreatedAt: "2026-11-25T01:02:03.123456789Z",
+	}}}
 	a := forDevice(st, defaultPrefs(), stats)
 	if a.Stats != nil || a.Assistant || a.Left != SlotStatus || a.Right != SlotStatus {
 		t.Fatalf("preset a: %+v", a)
+	}
+	if len(a.Items) != 1 || a.Items[0].Interaction != "" || a.Items[0].InteractionCreatedAt != "" {
+		t.Fatalf("details-off item retains an actionable occurrence: %+v", a.Items)
 	}
 	b := forDevice(st, NotifyPrefs{Island: IslandPrefs{Preset: "b"}, LockDetails: true}, stats)
 	if b.Stats == nil || b.Stats.TPM != 12000 || b.Stats.Tokens != 0 || !b.Details {

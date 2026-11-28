@@ -8,9 +8,9 @@
   "usage": "{requests} 次 · {tokens} token",
   "reset_done": "已重置",
   "resets_at": "{time} 重置",
-  "footer_key": "网关上的 Key 名：{key}",
-  "footer_machine": "由 {machine} 读取，Key 不离开那台电脑",
-  "footer_when": "{when}读的，一分钟内再打开用这次的",
+  "footer_key": "网关 Key 名称：{key}",
+  "footer_machine": "由 {machine} 读取，Key 始终保留在该电脑本地",
+  "footer_when": "{when}读取，1 分钟内再次打开将沿用此结果",
   "footer_separator": "；",
   "footer_end": "。"
 }

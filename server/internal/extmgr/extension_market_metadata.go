@@ -15,10 +15,7 @@ func (h *Manager) decorateMarketMetadata(ctx context.Context, v *ExtensionView, 
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	s := ms.byID[market]
-	if s == nil || s.index == nil || s.rec.Signature.Bad() {
-		return
-	}
-	if extension.IsOfficialMarket(s.rec.Spec) && (s.rec.Signature.State != extension.SigSigned || s.rec.Signature.KeyID != keyIDOf(extension.Official.SigningKey)) {
+	if s == nil || s.index == nil || !marketVerified(s.rec) {
 		return
 	}
 	for _, e := range s.index.Extensions {

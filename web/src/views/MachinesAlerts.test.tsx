@@ -116,12 +116,12 @@ describe("alert chips on the Machines page", () => {
     const memory = card("Travel Laptop")!.querySelector("[data-alert=memory]")!;
     expect(memory.tagName).toBe("BUTTON");
     expect(memory.getAttribute("aria-label")).toBe("严重：内存占用 · 95%");
-    expect(card("Garage NAS")!.querySelector("[data-alert]")?.textContent).toBe("离线 · 排查");
+    expect(card("Garage NAS")!.querySelector("[data-alert]")?.textContent).toBe("离线 · 排查建议");
     // the offline card keeps its one red notice
     expect(card("Garage NAS")!.querySelectorAll(".bg-red-tint")).toHaveLength(1);
     // what load counts, once, under the cards (#12519)
     expect(host.querySelectorAll("[data-testid=load-definition]")).toHaveLength(1);
-    expect(host.querySelector("[data-testid=load-definition]")?.textContent).toMatch(/^负载 = /);
+    expect(host.querySelector("[data-testid=load-definition]")?.textContent).toMatch(/^负载指/);
   });
 
   it("takes the disk chip to recovery on the affected computer without starting a cleanup", async () => {
@@ -203,7 +203,7 @@ describe("the Capabilities view", () => {
     expect(laptop).toContain("Claude Code");
     expect(laptop).toContain("Codex");
     expect(laptop).toContain("Git 2.47");
-    expect($("[data-row=nas]")?.textContent).toContain("连上后才能看到");
+    expect($("[data-row=nas]")?.textContent).toContain("连接后显示");
     // only the online computers are asked, once each
     expect(requests.filter((r) => r.includes("/diagnosis?sections=tools")).sort()).toEqual(["GET /api/v1/machines/box/diagnosis?sections=tools", "GET /api/v1/machines/laptop/diagnosis?sections=tools", "GET /api/v1/machines/ok/diagnosis?sections=tools"]);
     expect(localStorage.getItem("persona.machines.view")).toBe("capabilities");

@@ -1,6 +1,10 @@
 package proto
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
+)
 
 type Machine struct {
 	ID string `json:"id"`
@@ -86,6 +90,10 @@ type Machine struct {
 	// FileTransfer: whether files may be sent to this computer to keep and between it and others (#3065,
 	// docs/protocol/file-transfer.md). Always set by a manager that knows the feature; nil (from an older one) is off.
 	FileTransfer *MachineFileTransfer `json:"file_transfer,omitempty"`
+	// OrcaChatStarts: "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's
+	// default"), on or off, set only while Orca is in the computer's engine set, where it applies; absent otherwise and
+	// from an older manager (the apps then offer no switch). Changed with PUT …/orca-chat-starts.
+	OrcaChatStarts OrcaChatStarts `json:"orca_chat_starts,omitempty"`
 	// ClaudePlugin: the Persona plugin for Claude Code on it, as its node last said (docs/operations/link.md "Claude
 	// Code plugin"); nil from an older node or one that has not checked.
 	ClaudePlugin *ClaudePlugin `json:"claude_plugin,omitempty"`
@@ -99,6 +107,27 @@ type Machine struct {
 	// Paths: every way the center has to this computer (docs/archive/operations/plan-hub-center.md 5), when there is more than one or it
 	// is a member hub's; the machine detail and the admin page show them.
 	Paths []MachinePath `json:"paths,omitempty"`
+}
+
+// OrcaChatStarts is Machine.OrcaChatStarts, a closed set: the switch "Start new Agents as Orca chats" on a computer
+// where it applies. The zero value is absent: Orca is not in the computer's engine set, or the manager is older. A
+// client reads a value it does not know as absent (no switch), so a later state is never shown as on or off.
+type OrcaChatStarts string
+
+const (
+	OrcaChatStartsOn  OrcaChatStarts = "on"
+	OrcaChatStartsOff OrcaChatStarts = "off"
+)
+
+// Valid: one of the set (absent is not).
+func (s OrcaChatStarts) Valid() bool { return s == OrcaChatStartsOn || s == OrcaChatStartsOff }
+
+// OrcaChatStartsOf is the switch's state where it applies.
+func OrcaChatStartsOf(on bool) OrcaChatStarts {
+	if on {
+		return OrcaChatStartsOn
+	}
+	return OrcaChatStartsOff
 }
 
 // MachineRoute is how the center reaches a machine now (docs/archive/operations/plan-hub-center.md 5): via one of its own ways (local |
@@ -185,26 +214,30 @@ type NodeInfo struct {
 	// Protocol, ProtocolMin and Capabilities are the node protocol handshake (internal/nodeproto, docs/protocol/protocol.md
 	// "Node handshake"): the node protocol it speaks, the oldest manager protocol it answers, and what it can do.
 	// Nodes from before the handshake leave all three out (protocol 0); managers from before it ignore them.
-	Protocol           int      `json:"protocol,omitempty"`
-	ProtocolMin        int      `json:"protocol_min,omitempty"`
-	Capabilities       []string `json:"capabilities,omitempty"`
-	NodeUpdate         bool     `json:"node_update,omitempty"`
-	NodeUpdateReason   string   `json:"node_update_reason,omitempty"`
-	ModelConfiguration bool     `json:"model_configuration,omitempty"`
-	Hostname           string   `json:"hostname"`
-	OS                 string   `json:"os"`
-	Arch               string   `json:"arch"`
-	Home               string   `json:"home"`
-	DataDir            string   `json:"data_dir,omitempty"`
-	HerdrVersion       string   `json:"herdr_version"`
-	ClaudeVersion      string   `json:"claude_version"`
-	Version            string   `json:"version"`
-	System             *System  `json:"system,omitempty"`
+	Protocol           int                 `json:"protocol,omitempty"`
+	ProtocolMin        int                 `json:"protocol_min,omitempty"`
+	Capabilities       []string            `json:"capabilities,omitempty"`
+	NodeUpdate         bool                `json:"node_update,omitempty"`
+	NodeUpdateReason   string              `json:"node_update_reason,omitempty"`
+	UpdateDraining     *NodeUpdateDraining `json:"update_draining,omitempty"`
+	ModelConfiguration bool                `json:"model_configuration,omitempty"`
+	Hostname           string              `json:"hostname"`
+	OS                 string              `json:"os"`
+	Arch               string              `json:"arch"`
+	Home               string              `json:"home"`
+	DataDir            string              `json:"data_dir,omitempty"`
+	HerdrVersion       string              `json:"herdr_version"`
+	ClaudeVersion      string              `json:"claude_version"`
+	Version            string              `json:"version"`
+	System             *System             `json:"system,omitempty"`
 	// Program is the program the node runs as (nodeproto.ProgramPersonad / ProgramPersonaNode) and Executable the file
 	// it runs from: an update brings the same kind of program, to that file. Older nodes leave both out (personad, at the
 	// machine's remote_bin).
 	Program    string `json:"program,omitempty"`
 	Executable string `json:"executable,omitempty"`
+	// Edition is the edition the node was built as (nodeproto.Edition): left out by a full build and by every node
+	// from before editions, "core" by a core-only one. An update brings a build of the same edition, never the other.
+	Edition nodeproto.Edition `json:"edition,omitempty"`
 	// Engine is the engine the node drives now; Engines, what it found (proto.Machine.Engines). Older nodes leave
 	// both out.
 	Engine  string   `json:"engine,omitempty"`

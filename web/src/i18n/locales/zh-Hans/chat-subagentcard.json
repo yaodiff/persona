@@ -1,8 +1,8 @@
 {
-  "subagent": "子智能体",
-  "untitled_task": "子智能体任务",
-  "expand_details": "展开子智能体详情",
-  "collapse_details": "收起子智能体详情",
+  "subagent": "子 Agent",
+  "untitled_task": "子 Agent 任务",
+  "expand_details": "展开子 Agent 详情",
+  "collapse_details": "收起子 Agent 详情",
   "show_full_result": "展开完整结果",
   "hide_full_result": "收起结果",
   "harness_workflow": "Workflow",
@@ -18,5 +18,5 @@
   "open_in_background": "在后台任务面板中打开 {name}",
   "workflow_progress_line": "{phase} · {done}/{total} Agent",
   "workflow_progress_count": "{done}/{total} Agent",
-  "view_full": "查看完整"
+  "view_full": "查看完整内容"
 }

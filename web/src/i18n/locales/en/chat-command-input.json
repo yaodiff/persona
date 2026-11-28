@@ -1,0 +1,12 @@
+{
+  "kicker": "Command input",
+  "title": "Waiting for your input",
+  "command": "Command",
+  "field": "Your input",
+  "placeholder": "Type what the command asks for",
+  "show": "Show what you type",
+  "hide": "Hide what you type",
+  "not_now": "Not now",
+  "send": "Send",
+  "note": "Goes straight to the command on your computer, not to the Agent. Persona doesn't keep it."
+}

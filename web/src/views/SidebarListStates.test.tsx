@@ -181,7 +181,7 @@ describe("By to-do whose to-dos cannot be read (audit item 27)", () => {
     vi.stubGlobal("fetch", hub({ todos: failed }));
     online(["sessions_list", "sessions_agents_only", "sessions_todo"]);
     await render();
-    expect(host.querySelector("[data-paged-sessions]")).not.toBeNull();
+    expect(host.querySelector("[data-paged-sessions]")).toBeNull();
     expect(checked()).toBe("按状态");
     expect(alerts().some((a) => a?.includes(t("sidebar.todos_read_failed", { error: "" }).replace(/[:：]\s*$/, "")))).toBe(true);
   });

@@ -88,7 +88,7 @@ import Testing
         let gone = try transcribed(lib)
         let kept = try transcribed(lib)
         hub.on("DELETE", kbPath(gone.id), json: #"{"deleted": true}"#)
-        let sync = RecordingSync(library: lib, api: { hub.client }, now: { self.now }, recordingDaysChanged: { _ in }, recording: { .off })
+        let sync = RecordingSync(library: lib, api: { hub.client }, now: { self.now }, audioDaysChanged: { _ in }, recording: { .off })
         try sync.delete(gone.id)
         await sync.syncNow()
         #expect(hub.sent("DELETE", kbPath(gone.id)).count == 1)
@@ -106,7 +106,7 @@ import Testing
     @Test func theCoreRoutesAnswersSettleOrKeepTheDelete() async throws {
         let (lib, hub, root) = files()
         defer { try? FileManager.default.removeItem(at: root) }
-        let sync = RecordingSync(library: lib, api: { hub.client }, now: { self.now }, recordingDaysChanged: { _ in }, recording: { .off })
+        let sync = RecordingSync(library: lib, api: { hub.client }, now: { self.now }, audioDaysChanged: { _ in }, recording: { .off })
         let already = try transcribed(lib)
         hub.on("DELETE", kbPath(already.id), json: #"{"deleted": false}"#)
         try sync.delete(already.id)
@@ -123,7 +123,7 @@ import Testing
         // No route at all (a hub from before the Core delete): a 404 confirms nothing.
         let (lib2, hub2, root2) = files()
         defer { try? FileManager.default.removeItem(at: root2) }
-        let sync2 = RecordingSync(library: lib2, api: { hub2.client }, now: { self.now }, recordingDaysChanged: { _ in }, recording: { .off })
+        let sync2 = RecordingSync(library: lib2, api: { hub2.client }, now: { self.now }, audioDaysChanged: { _ in }, recording: { .off })
         let unknown = try transcribed(lib2)
         try sync2.delete(unknown.id)
         await sync2.syncNow()
@@ -132,7 +132,7 @@ import Testing
         // Already gone (410) is a confirmation on either route.
         let (lib3, hub3, root3) = files()
         defer { try? FileManager.default.removeItem(at: root3) }
-        let sync3 = RecordingSync(library: lib3, api: { hub3.client }, now: { self.now }, recordingDaysChanged: { _ in }, recording: { .off })
+        let sync3 = RecordingSync(library: lib3, api: { hub3.client }, now: { self.now }, audioDaysChanged: { _ in }, recording: { .off })
         let goneThere = try transcribed(lib3)
         hub3.on("DELETE", kbPath(goneThere.id)) { _ in throw APIError(status: 410, message: "deleted", fields: ["code": "recording_deleted"]) }
         try sync3.delete(goneThere.id)
@@ -148,7 +148,7 @@ import Testing
         let path = "/api/v1/recordings/\(entry.id.uuidString.lowercased())"
         hub.on("GET", "/api/v1/recordings", json: #"{"days": 14, "recordings": [], "deleted": []}"#)
         hub.on("DELETE", path, json: #"{"deleted": true}"#)
-        let sync = RecordingSync(library: lib, api: { hub.client }, now: { self.now }, recordingDaysChanged: { _ in }, recording: { .on })
+        let sync = RecordingSync(library: lib, api: { hub.client }, now: { self.now }, audioDaysChanged: { _ in }, recording: { .on })
         try sync.delete(entry.id)
         await sync.syncNow()
         #expect(hub.sent("GET", "/api/v1/recordings").count == 1)

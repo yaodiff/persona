@@ -8,7 +8,7 @@ const example = (name: string) => JSON.parse(readFileSync(new URL(`../../../sche
 
 describe("UI 8: reading a view", () => {
   it("is the version the web sends", () => {
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
   });
 
   it("keeps the columns layout and every section field of the examples", () => {

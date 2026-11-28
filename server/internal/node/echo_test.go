@@ -213,6 +213,20 @@ func TestEchoTiesCompactToItsNotice(t *testing.T) {
 	l.match("s", echoInTranscript, items)
 	sameTags(t, l.tag("s", echoInTranscript, items), map[string]string{"c1#0": "C"})
 
+	l.expect(echoRecord{SessionID: "s", ClientMsgID: "C2", Text: "/compact focus on auth tests", SentAt: t0})
+	withArgs := echoItems(t, userLine("c2", t0.Add(2*time.Second), "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args>focus on auth tests</command-args>"))
+	if len(withArgs) != 1 || withArgs[0].Kind != proto.KindNotice {
+		t.Fatalf("want a notice for /compact with args, got %+v", withArgs)
+	}
+	l.match("s", echoInTranscript, withArgs)
+	sameTags(t, l.tag("s", echoInTranscript, withArgs), map[string]string{"c2#0": "C2"})
+
+	var other echoLog
+	other.expect(echoRecord{SessionID: "s", ClientMsgID: "C3", Text: "/compact-other", SentAt: t0})
+	if found := other.match("s", echoInTranscript, withArgs); len(found) != 0 {
+		t.Fatalf("unrelated /compact-other must not tie to CompactNotice: %+v", found)
+	}
+
 	l.expect(echoRecord{SessionID: "s", ClientMsgID: "gone", Text: "/clear", SentAt: t0.Add(-echoWithin - time.Minute)})
 	if from, ok := l.waitingFrom("s", echoInTranscript); ok {
 		t.Fatalf("an expired send is still looked for from %d", from)

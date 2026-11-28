@@ -6,6 +6,7 @@ export { disconnectExpected, linkSwitchRunning } from "./machine-connection-stat
 const PHASES = {
   waiting_idle: { label: t("lib-machine-deploy.waiting_idle"), message: t("lib-machine-deploy.waiting_idle_message") },
   transferring: { label: t("lib-machine-deploy.transferring"), message: t("lib-machine-deploy.transferring_message") },
+  draining: { label: t("lib-machine-deploy.draining"), message: t("lib-machine-deploy.draining_message") },
   restarting: { label: t("lib-machine-deploy.restarting"), message: t("lib-machine-deploy.restarting_message") },
   confirming: { label: t("lib-machine-deploy.confirming"), message: t("lib-machine-deploy.confirming_message") },
 } satisfies Record<NonNullable<Machine["deploy_phase"]>, { label: string; message: string }>;

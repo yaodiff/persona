@@ -304,25 +304,28 @@ func withProviderModels(res proto.LauncherModels, l storedLauncher) proto.Launch
 	return res
 }
 
-// presetModels adds to a Claude Code /model list the models of the managed provider behind launcher name (its own
-// `models`), then those of the plugin preset behind it (managed: its preset or gateway; ~/.zshrc: the gateway the
-// node read from it).
+// presetModels adds a managed launcher's configured models. Claude Code also gets the models of the preset behind
+// the launcher (managed: its preset or gateway; ~/.zshrc: the gateway the node read from it).
 func (s *Service) presetModels(ctx context.Context, machine, name string, res proto.LauncherModels) proto.LauncherModels {
-	if proto.IsExternalLauncher(name) || res.Agent != "" && res.Agent != "claude" {
+	if proto.IsExternalLauncher(name) {
+		return res
+	}
+	l, managed := s.managedNamed(ctx, name)
+	if managed {
+		if l.Kind == "api" {
+			return res
+		}
+		res = withProviderModels(res, l)
+	}
+	if res.Agent != "" && res.Agent != "claude" {
 		return res
 	}
 	presets := s.launcherPresets(ctx)
-	for _, l := range s.storedLaunchers(ctx) {
-		if l.Name == name {
-			if l.Kind == "api" {
-				return res
-			}
-			res = withProviderModels(res, l)
-			if pr, ok := presetFor(presets, l.Preset, l.BaseURL); ok {
-				return withPresetModels(res, pr)
-			}
-			return res
+	if managed {
+		if pr, ok := presetFor(presets, l.Preset, l.BaseURL); ok {
+			return withPresetModels(res, pr)
 		}
+		return res
 	}
 	if len(presets) == 0 {
 		return res

@@ -134,7 +134,7 @@ export function foldGoalTasks(triaged: TriageResult): GoalFoldResult {
     return { triaged, goals, surfacedParent };
   }
 
-  const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
+  const sections = { ...triaged.sections, ...Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) };
   for (const sec of TRIAGE_SECTIONS) {
     for (const g of triaged.sections[sec]) {
       const keptMembers = g.members.filter(
@@ -173,9 +173,9 @@ export function foldGoalTasks(triaged: TriageResult): GoalFoldResult {
     });
   }
 
-  const todoCounts = Object.fromEntries(
+  const todoCounts = { ...triaged.todoCounts, ...Object.fromEntries(
     TRIAGE_SECTIONS.map((sec) => [sec, sections[sec].reduce((n, g) => n + g.members.length, 0)]),
-  ) as Record<TriageSection, number>;
+  ) };
 
   return {
     triaged: {
@@ -186,4 +186,88 @@ export function foldGoalTasks(triaged: TriageResult): GoalFoldResult {
     goals,
     surfacedParent,
   };
+}
+
+export interface SectionHierarchyChild {
+  todo: Todo;
+  section: TriageSection;
+  done: boolean;
+  blocker: boolean;
+  /** Direct parent title when this item is a deeper descendant whose direct parent is not the root entry. */
+  parentGoalTitle?: string;
+}
+
+export interface SectionHierarchyEntry {
+  todo: Todo;
+  /** Parent goal title when this root row has a `part_of` parent outside the current section. */
+  parentGoalTitle?: string;
+  done: number;
+  total: number;
+  blockedCount: number;
+  children: SectionHierarchyChild[];
+}
+
+/**
+ * Organizes a flat list of to-dos within a Direction or Project section into a section-local
+ * parent/child hierarchy under `todos_v2 === true` (#16939):
+ * - Any child whose ancestor goal is also in `sectionTodos` nests under that section-local root.
+ * - Relative section order is preserved for both roots and nested children.
+ * - Any top-level item in the section whose `part_of` parent lives outside this section keeps
+ *   `parentGoalTitle` (resolved from `allTodosById`) so parent context is never lost.
+ * - Cycles and self-references stay unfolded at top level so no item disappears.
+ */
+export function nestSectionHierarchy(
+  sectionTodos: readonly Todo[],
+  allTodosById?: ReadonlyMap<string, Todo>,
+  sectionOf?: ReadonlyMap<string, TriageSection>,
+): SectionHierarchyEntry[] {
+  if (sectionTodos.length === 0) return [];
+  const sectionById = new Map<string, Todo>();
+  for (const td of sectionTodos) {
+    if (!sectionById.has(td.id)) sectionById.set(td.id, td);
+  }
+
+  const roots: Todo[] = [];
+  const childrenByRoot = new Map<string, SectionHierarchyChild[]>();
+
+  for (const td of sectionTodos) {
+    const rootId = resolveRootGoalId(td.id, sectionById);
+    if (!rootId) {
+      roots.push(td);
+      continue;
+    }
+    const sec: TriageSection = sectionOf?.get(td.id) ?? (td.done_at ? "done" : "other");
+    const directParentId = td.part_of?.trim();
+    const directParentTitle =
+      directParentId && directParentId !== rootId
+        ? (allTodosById?.get(directParentId)?.title ?? sectionById.get(directParentId)?.title)
+        : undefined;
+    const entry: SectionHierarchyChild = {
+      todo: td,
+      section: sec,
+      done: isChildDone(td, sec),
+      blocker: isChildBlocker(td, sec),
+      ...(directParentTitle ? { parentGoalTitle: directParentTitle } : {}),
+    };
+    const list = childrenByRoot.get(rootId);
+    if (list) list.push(entry);
+    else childrenByRoot.set(rootId, [entry]);
+  }
+
+  return roots.map((root) => {
+    const children = childrenByRoot.get(root.id) ?? [];
+    const done = children.reduce((n, c) => n + (c.done ? 1 : 0), 0);
+    const blockedCount = children.reduce((n, c) => n + (c.blocker ? 1 : 0), 0);
+    const parentId = root.part_of?.trim();
+    const parentGoalTitle =
+      parentId && parentId !== root.id ? allTodosById?.get(parentId)?.title : undefined;
+    return {
+      todo: root,
+      ...(parentGoalTitle ? { parentGoalTitle } : {}),
+      done,
+      total: children.length,
+      blockedCount,
+      children,
+    };
+  });
 }

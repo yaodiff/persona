@@ -1,25 +1,83 @@
 // Popover-only pure helpers for subscription usage cards and the reset timeline (#13173, #13870, #13964).
 // Kept in a separate module so UsagePopover's lazy chunk owns them instead of the cold first screen.
 import { t as tr } from "../i18n";
-import { canonicalUsageProvider, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { canAliasUsageAccount, canonicalUsageProvider, isHistoricalCodexReading, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
-/** The plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
-export function planNote(a: UsageAccount): string {
-  const plan = (a.plan ?? "").trim();
-  return plan && !a.name.toLowerCase().includes(plan.toLowerCase()) ? plan : "";
+const PLAN_ACRONYMS = new Set(["api", "ai", "vip", "gpt", "llm", "mcp", "sso", "cli", "ide"]);
+
+/** Normalize a subscription plan label for display (e.g. "max" -> "Max", "api" -> "API", "claude_max_20x" -> "Claude Max 20x")
+ *  while preserving intentional mixed-case tokens such as "Pro+" or "xAI". */
+export function formatPlanLabel(raw: string | undefined): string {
+  const cleaned = (raw ?? "").trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  if (!cleaned) return "";
+  return cleaned
+    .split(" ")
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (PLAN_ACRONYMS.has(lower)) return lower.toUpperCase();
+      if (/^\d+x$/i.test(word)) return lower;
+      const hasUpper = word !== lower;
+      const isAllUpper = word === word.toUpperCase() && hasUpper;
+      if (hasUpper && !isAllUpper) return word;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+/** Browser-only presentation of a sampled account. */
+export type PopoverAccount = UsageAccount & { alias?: string };
+
+/** The normalized plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
+export function planNote(a: PopoverAccount): string {
+  const plan = formatPlanLabel(a.plan);
+  if (!plan || a.alias) return plan;
+  const raw = (a.plan ?? "").trim().toLowerCase();
+  const nameLower = a.name.toLowerCase();
+  return !nameLower.includes(plan.toLowerCase()) && (!raw || !nameLower.includes(raw)) ? plan : "";
 }
 
 /** The longest stretch the reset timeline shows: windows resetting later are drawn to its end. */
 export const TIMELINE_CAP_MS = 7 * 24 * 3600_000;
 
-/** The windows of one account, in the order a card lists them: the plan's own 5h, then 7d, then the other plan windows
- *  by length, and last the per-model allowances (by length too). */
+const windowSpanRank = (w: UsageWindow) => {
+  const m = windowMinutes(w);
+  return m === 300 ? 0 : m === 10080 ? 1 : 2 + m;
+};
+
+/** The windows of one account, grouped so related windows stay together: ungrouped plan windows first (5h, then 7d,
+ *  then other lengths ascending), then explicit extension `group` blocks (preserving extension group and window order),
+ *  then per-model allowances aggregated by normalized model name (5h, 7d, then other lengths within each model). */
 export function sortedWindows(a: Pick<UsageAccount, "windows">): UsageWindow[] {
-  const rank = (w: UsageWindow) => {
-    const m = windowMinutes(w);
-    return (w.model ? 2e6 : 0) + (m === 300 ? 0 : m === 10080 ? 1 : 2 + m);
-  };
-  return [...a.windows].sort((x, y) => rank(x) - rank(y));
+  const plain: UsageWindow[] = [];
+  const byGroup = new Map<string, UsageWindow[]>();
+  const byModel = new Map<string, UsageWindow[]>();
+  for (const w of a.windows) {
+    const group = w.group?.trim();
+    if (group) {
+      const k = group.toLowerCase();
+      const list = byGroup.get(k);
+      if (list) list.push(w);
+      else byGroup.set(k, [w]);
+      continue;
+    }
+    const model = w.model?.trim();
+    if (model) {
+      const k = model.toLowerCase();
+      const list = byModel.get(k);
+      if (list) list.push(w);
+      else byModel.set(k, [w]);
+      continue;
+    }
+    plain.push(w);
+  }
+  plain.sort((x, y) => windowSpanRank(x) - windowSpanRank(y));
+  const out: UsageWindow[] = [...plain];
+  for (const groupWins of byGroup.values()) out.push(...groupWins);
+  for (const modelWins of byModel.values()) {
+    modelWins.sort((x, y) => windowSpanRank(x) - windowSpanRank(y));
+    out.push(...modelWins);
+  }
+  return out;
 }
 
 /** When an account's plan 7d window resets, in ms; Infinity without one (or without a reset time): those sort last. */
@@ -42,21 +100,32 @@ export function sortForCard(accounts: UsageAccount[]): UsageAccount[] {
 export interface ProviderGroup {
   provider: string;
   /** Sorted by `sortForCard`. */
-  accounts: UsageAccount[];
+  accounts: PopoverAccount[];
+  historicalReadings: UsageAccount[];
   /** The newest `sampled_at` of the group, "" when none reads as a time. */
   sampledAt: string;
 }
 
 /** The accounts grouped by provider (account type), groups in the order the hub first listed them. */
-export function groupByProvider(accounts: UsageAccount[]): ProviderGroup[] {
+export function groupByProvider(accounts: UsageAccount[], aliases?: ReadonlyMap<string, string>): ProviderGroup[] {
   const by = new Map<string, UsageAccount[]>();
   for (const a of accounts) {
     const provider = canonicalUsageProvider(a.provider);
     by.set(provider, [...(by.get(provider) ?? []), a]);
   }
   return [...by].map(([provider, list]) => {
-    const newest = list.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
-    return { provider, accounts: sortForCard(list), sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
+    const historicalReadings: UsageAccount[] = [];
+    const counted: UsageAccount[] = [];
+    for (const a of list) {
+      if (isHistoricalCodexReading(a)) historicalReadings.push(a);
+      else counted.push(a);
+    }
+    const newest = counted.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
+    const sorted = sortForCard(counted).map((a) => {
+      const alias = canAliasUsageAccount(a) ? aliases?.get(a.id) : undefined;
+      return alias ? { ...a, alias } : a;
+    });
+    return { provider, accounts: sorted, historicalReadings, sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
   });
 }
 

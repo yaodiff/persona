@@ -23,8 +23,8 @@ nonisolated enum PhoneRecordingAllowance: Hashable, Sendable, Codable {
 
     /// The application context key (iPhone → watch). A string: `allowedWire` or `offWire`.
     static let contextKey = "recordingModule"
-    /// Where the watch keeps the word: its own defaults (the views' `@AppStorage`) and its App Group's (the Record
-    /// complication). Absent until a phone says it.
+    /// Where the watch keeps the word: its own defaults (its views read them and redraw when the word changes) and its
+    /// App Group's (the Record complication). Absent until a phone says it.
     static let storeKey = "recording.phoneModule"
     static let allowedWire = "allowed"
     static let offWire = "off"

@@ -7,12 +7,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // sinceManager answers since as a manager does (assistant/inbox_delta.go), from canned lists: cursor "c<n>" is the
 // n-th; a cursor it holds gets the delta to now, any other the whole list.
 type sinceManager struct {
 	lists   [][]string // the items' ids (each item {"id":id,"title":id}) of each list it had, newest last
+	stored  *assistantwire.InboxStoredSources
 	fail    bool
 	noSince bool // an older manager: the whole list, no cursor
 	asked   []string
@@ -28,6 +31,9 @@ func (m *sinceManager) answer(w http.ResponseWriter, r *http.Request) {
 	now := m.lists[len(m.lists)-1]
 	item := func(id string) json.RawMessage { return json.RawMessage(`{"id":"` + id + `","title":"` + id + `"}`) }
 	out := map[string]any{"as_of": "t", "triage": map[string]any{}}
+	if m.stored != nil {
+		out["stored_sources"] = m.stored
+	}
 	items := []json.RawMessage{}
 	if m.noSince {
 		for _, id := range now {
@@ -67,9 +73,10 @@ func (m *sinceManager) answer(w http.ResponseWriter, r *http.Request) {
 }
 
 type sinceAnswer struct {
-	Cursor string `json:"cursor"`
-	Delta  bool   `json:"delta"`
-	Items  []struct {
+	Cursor        string          `json:"cursor"`
+	Delta         bool            `json:"delta"`
+	StoredSources json.RawMessage `json:"stored_sources"`
+	Items         []struct {
 		ID      string `json:"id"`
 		Manager string `json:"manager"`
 	} `json:"items"`
@@ -155,6 +162,23 @@ func TestMergedInboxSince(t *testing.T) {
 	b.fail, b.noSince = false, true
 	if _, ok := askSince(t, managers, order, re.Cursor); ok {
 		t.Fatal("a manager without cursors was answered with one")
+	}
+}
+
+func TestMergedInboxSinceCarriesStoredSources(t *testing.T) {
+	a := &sinceManager{lists: [][]string{{"1"}}, stored: &assistantwire.InboxStoredSources{Lark: true}}
+	b := &sinceManager{lists: [][]string{{"x"}}, stored: &assistantwire.InboxStoredSources{Mail: true}}
+	managers := map[string]*sinceManager{"assistant": a, "m-b": b}
+	whole, ok := askSince(t, managers, []string{"assistant", "m-b"}, "")
+	var stored assistantwire.InboxStoredSources
+	if !ok || json.Unmarshal(whole.StoredSources, &stored) != nil || !stored.Lark || !stored.Mail {
+		t.Fatalf("whole response: %v stored_sources %s, want Lark and mail", ok, whole.StoredSources)
+	}
+
+	b.stored = nil
+	mixed, ok := askSince(t, managers, []string{"assistant", "m-b"}, whole.Cursor)
+	if !ok || string(mixed.StoredSources) != "null" {
+		t.Fatalf("mixed-version response: %v stored_sources %s, want null", ok, mixed.StoredSources)
 	}
 }
 

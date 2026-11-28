@@ -11,14 +11,17 @@ import { BASE } from "../../lib/base";
 import { type KBDetail, type KBDetailResponse, type KBEntry, type KBList } from "../../lib/kb";
 import { pointDay, pointSources, pointWarns, POINT_KINDS, pointKindLabel } from "../../lib/kb-points";
 import { buildProjectMap, buildTopicMap, layout, pointsUnder, walk, type Box, type Layout, type MapNode, type Placed, type SummaryItem, type TopicData } from "../../lib/kb-map";
+import { buildTreeMap, canMove, nodeId, type Verdict } from "../../lib/kb-tree";
 import { navigate } from "../../lib/router";
 import { onHubEvent } from "../../lib/store";
-import { Button, cx, IconButton, Loading } from "../../ui/atoms";
+import { Button, cx, IconButton, Loading, Menu } from "../../ui/atoms";
+import { type MenuAt } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { settingsHref } from "../settings/nav";
 import { ErrorBox } from "./KBList";
 import { Card, SectionTitle, TonePill } from "./KBParts";
+import { moveProject, nodeMenu, ProjectHome, TreeRootPanel, useTreeData } from "./ProjectTree";
 
 const TONE = { accent: "var(--accent)", green: "var(--green)", orange: "var(--orange)" } as const;
 const tint = (c: string, p: number) => `color-mix(in srgb, ${c} ${p}%, var(--surface))`;
@@ -92,6 +95,12 @@ function measure(n: MapNode): Box {
       const s = clip(n.title, 12.5, 600, 220);
       return { w: 30 + tw(s, 12.5, 600) + (n.meta ? tw(n.meta, 11) + 12 : 0) + 14, h: 28, lines: [s] };
     }
+    case "pnode": {
+      const s = clip(n.title, 12.5, 600, 220);
+      const w1 = 28 + tw(s, 12.5, 600) + (n.flag ? tw(n.flag.text, 11, 600) + 30 : 0) + (n.meta ? tw(n.meta, 11) + 12 : 0) + 12;
+      const w2 = n.where ? 28 + tw(clip(n.where, 11, 400, 260), 11) + 12 : 0;
+      return { w: Math.max(w1, w2), h: n.where ? 44 : 30, lines: [s] };
+    }
     case "link": {
       const s = clip(n.title, 12.5, 400, 240);
       return { w: 32 + tw(s, 12.5) + 12, h: 28, lines: [s] };
@@ -104,7 +113,7 @@ function measure(n: MapNode): Box {
 }
 
 // ── data ────────────────────────────────────────────────
-type View = "topics" | "projects";
+type View = "topics" | "projects" | "tree";
 type Load = { root: MapNode; failed: number; empty: boolean; off: boolean } | { error: string } | null;
 
 /** Every entry of a kind with its detail (a failed detail still gives the entry; `failed` counts them). */
@@ -120,11 +129,12 @@ async function entries(kind: string, signal: AbortSignal): Promise<{ list: KBEnt
 /** A view's map: read from scratch when the view or `reload` changes (Loading, then the map or the error), and quietly on
  *  `refresh()`: what is drawn stays while it reads, and a drawn map stays when that read fails. */
 function useMapData(view: View, reload: number): [Load, () => void] {
-  const [state, setState] = useState<Record<View, Load>>({ topics: null, projects: null });
+  const [state, setState] = useState<Record<View, Load>>({ topics: null, projects: null, tree: null });
   const [refreshes, setRefreshes] = useState(0);
   const started = useRef("");
   useEffect(() => {
     const ac = new AbortController();
+    if (view === "tree") return; // the project tree reads its own list (ProjectTree.tsx useTreeData)
     const quiet = started.current === `${view}:${reload}`;
     started.current = `${view}:${reload}`;
     if (!quiet) setState((s) => ({ ...s, [view]: null }));
@@ -309,12 +319,25 @@ function usePinchZoom(host: RefObject<HTMLDivElement | null>, zoom: number, setZ
 }
 
 // ── page ────────────────────────────────────────────────
-const VIEWS: View[] = ["topics", "projects"];
+const VIEWS: View[] = ["topics", "projects", "tree"];
+/** A segment of the header's tab bars (the views, By hierarchy | By tag). */
+const TAB = "h-7 whitespace-nowrap rounded-[7px] text-[12.5px]";
+const VIEW_LABEL: Record<View, string> = { topics: "knowledge-knowledgemap.view_topics", projects: "knowledge-knowledgemap.view_projects", tree: "knowledge-knowledgemap.view_tree" };
+const SUBTITLE: Record<View, string> = { topics: "knowledge-knowledgemap.subtitle_topics", projects: "knowledge-knowledgemap.subtitle_projects", tree: "knowledge-knowledgemap.subtitle_tree" };
 
 export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const [view, setView] = useState<View>("topics");
   const [reload, setReload] = useState(0);
-  const [load, refresh] = useMapData(view, reload);
+  const [mapLoad, refresh] = useMapData(view, reload);
+  // The project tree: its own list, drawn by hierarchy or by tag; what the user opened or closed survives a redraw.
+  const tree = useTreeData(view === "tree", reload);
+  const [mode, setMode] = useState<"tree" | "tag">("tree");
+  const closed = useRef(new Map<string, boolean>());
+  const treeRoot = useMemo(() => (view === "tree" && tree.list ? buildTreeMap(tree.list, tree.parents, mode, closed.current) : null), [view, tree.list, tree.parents, mode]);
+  const load: Load = view === "tree" ? (tree.error && !tree.list ? { error: tree.error } : treeRoot ? { root: treeRoot, failed: 0, empty: !tree.list?.length, off: false } : null) : mapLoad;
+  const [menu, setMenu] = useState<{ node: MapNode; at: MenuAt } | null>(null);
+  const [milestoneAsk, setMilestoneAsk] = useState(0);
+  const [sheet, setSheet] = useState(false);
   // A map that could not be read while the hub was away, or only in part (some entries' details failed), is read again
   // once it is back (its hello), quietly: what is drawn stays until the new read lands. A map read whole is not, since
   // reading it again means every entry's detail.
@@ -367,14 +390,15 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
   const pick = (v: View) => {
     if (v === view) return;
     setSel("");
+    setSheet(false);
     setZoom(1);
     setView(v);
   };
-  const select = useCallback((n: MapNode) => setSel(n.id), []);
   const toggle = useCallback((n: MapNode) => {
     const { L, shift } = shown.current, p = L?.placed.find((x) => x.node === n);
     kept.current = p ? { id: n.id, x: p.x + shift.x, y: p.y + shift.y } : null;
     n.collapsed = !n.collapsed;
+    if (view === "tree") closed.current.set(n.id, n.collapsed);
     bump((x) => x + 1);
   }, []);
   // Opened from the side panel: its branch opens, and the map brings it to the middle once it is laid out.
@@ -409,20 +433,53 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
     zoomAt(zoom * step, x, y);
   };
   const selected = (sel && byId.get(sel)) || root;
+  const openProject = (id: string) => {
+    const n = byId.get(nodeId(id)) ?? [...byId.values()].find((x) => x.project?.id === id);
+    if (n) reveal(n);
+  };
+  // Dragging and the node menu: only by hierarchy (in the tag view a project is drawn once per tag).
+  const treeLive = useRef(tree);
+  treeLive.current = tree;
+  const canDrop = useCallback((a: MapNode, b: MapNode) => (a.project ? canMove(treeLive.current.parents, a.project.id, b.kind === "root" ? null : b.project?.id ?? "") : { ok: false }), []);
+  const drop = useCallback((a: MapNode, b: MapNode) => void moveProject(treeLive.current, a.project!.id, b.kind === "root" ? null : b.project!.id), []);
+  const drag = useMemo<DragApi>(() => ({ canDrop, onDrop: drop }), [canDrop, drop]);
+  const dragEnabled = view === "tree" && mode === "tree" && tree.list ? drag : undefined;
+  const onMenu = view === "tree" && tree.list ? (n: MapNode, at: MenuAt) => { if (n.project) setMenu({ node: n, at }); } : undefined;
+  const choose = (n: MapNode) => {
+    setSel(n.id);
+    if (view === "tree" && n.project) setSheet(true);
+  };
+  const panel = (n: MapNode) => view === "tree"
+    ? n.project
+      ? <ProjectHome node={n} data={tree} onOpen={openProject} milestoneAsk={milestoneAsk} onMenu={(el) => setMenu({ node: n, at: { anchor: el } })} />
+      : <TreeRootPanel data={tree} />
+    : <Panel node={n} root={load && "root" in load ? load.root : n} parents={parents} failed={load && "root" in load ? load.failed : 0} onOpen={reveal} />;
 
+  // By hierarchy | By tag: in the header, and on a narrow screen over the map's corner, where the header has no room.
+  const arrange = (className: string) => (
+    <div role="tablist" aria-label={t("knowledge-knowledgemap.arrange")} className={cx("shrink-0 rounded-control bg-inset p-0.5 shadow-[inset_0_0_0_1px_var(--line)]", className)}>
+      {(["tree", "tag"] as const).map((m) => (
+        <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => { setMode(m); setSel(""); }}
+          className={cx(TAB, "px-2.5", mode === m ? "bg-surface font-semibold text-ink shadow-btn" : "text-ink-2 hover:text-ink")}>
+          {t(m === "tree" ? "knowledge-knowledgemap.by_hierarchy" : "knowledge-knowledgemap.by_tag")}
+        </button>
+      ))}
+    </div>
+  );
   return (
     <div className="flex h-full min-w-0 flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("knowledge-knowledgemap.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <IconButton icon="chevronLeft" label={t("knowledge-knowledgemap.back")} onClick={() => navigate({ name: "kb", kind: "topics" })} />
         <h1 className="truncate text-[14px] font-semibold text-ink">{t("knowledge-knowledgemap.title")}</h1>
-        <span className="hidden min-w-0 truncate text-[12px] text-ink-3 md:inline">{t(view === "topics" ? "knowledge-knowledgemap.subtitle_topics" : "knowledge-knowledgemap.subtitle_projects")}</span>
+        <span className="hidden min-w-0 truncate text-[12px] text-ink-3 md:inline">{t(SUBTITLE[view])}</span>
         <div className="flex-1" />
+        {view === "tree" && arrange("hidden md:inline-flex")}
         <div role="tablist" aria-label={t("knowledge-knowledgemap.views")} className="inline-flex shrink-0 rounded-control bg-inset p-0.5 shadow-[inset_0_0_0_1px_var(--line)]">
           {VIEWS.map((v) => (
             <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => pick(v)}
-              className={cx("h-7 whitespace-nowrap rounded-[7px] px-3 text-[12.5px]", view === v ? "bg-surface font-semibold text-ink shadow-btn" : "text-ink-2 hover:text-ink")}>
-              {t(v === "topics" ? "knowledge-knowledgemap.view_topics" : "knowledge-knowledgemap.view_projects")}
+              className={cx(TAB, "px-3", view === v ? "bg-surface font-semibold text-ink shadow-btn" : "text-ink-2 hover:text-ink")}>
+              {t(VIEW_LABEL[v])}
             </button>
           ))}
         </div>
@@ -438,8 +495,9 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
           <div className="relative min-w-0 flex-1">
             <div ref={host} onKeyDown={zoomKey} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
               style={{ backgroundImage: "radial-gradient(var(--line-strong) 1px, transparent 1px)", backgroundSize: "22px 22px", touchAction: "pan-x pan-y", overflowAnchor: "none" }}>
-              {L && <MapCanvas key={view} L={L} shift={shift} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={select} onToggle={toggle} />}
+              {L && <MapCanvas key={view === "tree" ? `tree:${mode}` : view} L={L} shift={shift} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={choose} onToggle={toggle} drag={dragEnabled} onMenu={onMenu} />}
             </div>
+            {view === "tree" && arrange("absolute top-3 left-3 z-10 inline-flex bg-surface md:hidden")}
             <div className="absolute bottom-3 left-3 z-10 inline-flex items-center gap-0.5 rounded-control bg-surface p-1 text-[12px] shadow-overlay">
               <IconButton icon="minus" label={t("knowledge-knowledgemap.zoom_out")} size={26} iconSize={12} onClick={() => zoomAt(zoom / STEP)} />
               <span className="min-w-10 text-center tabular-nums text-ink-3" aria-live="polite" aria-label={t("knowledge-knowledgemap.zoom_level", { percent: Math.round(zoom * 100) })}>{Math.round(zoom * 100)}%</span>
@@ -448,9 +506,20 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
             </div>
           </div>
           <aside aria-label={t("knowledge-knowledgemap.details")} className="hidden w-[380px] shrink-0 overflow-y-auto border-l border-line bg-surface lg:block">
-            {selected && <Panel node={selected} root={load.root} parents={parents} failed={load.failed} onOpen={reveal} />}
+            {selected && panel(selected)}
           </aside>
+          {view === "tree" && sheet && selected?.project && (
+            // phone and narrow windows: the same panel as a sheet from the bottom
+            <div className="fixed inset-x-0 bottom-0 z-30 max-h-[62vh] overflow-y-auto rounded-t-[16px] bg-surface shadow-overlay lg:hidden" data-tree-sheet="">
+              <div className="sticky top-0 z-[1] flex justify-end bg-surface px-3 pt-2"><IconButton icon="x" label={t("knowledge-knowledgemap.close")} size={28} onClick={() => setSheet(false)} /></div>
+              {panel(selected)}
+            </div>
+          )}
         </div>
+      )}
+      {menu && menu.node.project && (
+        <Menu items={nodeMenu(tree, menu.node.project, () => { setSel(menu.node.id); setMilestoneAsk((x) => x + 1); setSheet(true); })}
+          anchor={menu.at.anchor ?? null} point={menu.at.point} header={menu.node.title} headerAsWritten width={260} onClose={() => setMenu(null)} />
       )}
     </div>
   );
@@ -462,9 +531,9 @@ function Empty({ view, off }: { view: View; off: boolean }) {
       <span className="mb-3 flex size-10 items-center justify-center rounded-[11px] bg-field text-ink-3">
         <Icon name={view === "topics" ? "light" : "layers"} size={18} />
       </span>
-      <p className="text-[13.5px] font-medium text-ink">{t(view === "projects" ? "knowledge-knowledgemap.empty_projects" : off ? "knowledge-knowledgemap.empty_off" : "knowledge-knowledgemap.empty_topics")}</p>
+      <p className="text-[13.5px] font-medium text-ink">{t(view !== "topics" ? "knowledge-knowledgemap.empty_projects" : off ? "knowledge-knowledgemap.empty_off" : "knowledge-knowledgemap.empty_topics")}</p>
       <p className="mt-1 max-w-[380px] text-[12.5px] leading-relaxed text-ink-3">
-        {t(view === "projects" ? "knowledge-knowledgemap.empty_projects_body" : off ? "knowledge-knowledgemap.empty_off_body" : "knowledge-knowledgemap.empty_topics_body")}
+        {t(view !== "topics" ? "knowledge-knowledgemap.empty_projects_body" : off ? "knowledge-knowledgemap.empty_off_body" : "knowledge-knowledgemap.empty_topics_body")}
       </p>
       {view === "topics" && off && (
         <div className="mt-4">
@@ -487,7 +556,92 @@ function spoken(n: MapNode): string {
   return n.meta ? `${n.title} · ${n.meta}` : n.title;
 }
 
-function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle }: { L: Layout; shift: Shift; title: string; sel: string; zoom: number; onFit: (z: number) => void; onSelect: (n: MapNode) => void; onToggle: (n: MapNode) => void }) {
+/** Dragging a project node onto another (the project tree by hierarchy): whether a node takes the dragged one, and the drop. */
+type DragApi = { canDrop: (a: MapNode, b: MapNode) => Verdict; onDrop: (a: MapNode, b: MapNode) => void };
+/** How far a press moves before it is a drag, and how long a finger holds for the node menu. */
+const DRAG_PX = 6, HOLD_MS = 450;
+
+function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle, drag, onMenu }: {
+  L: Layout; shift: Shift; title: string; sel: string; zoom: number; onFit: (z: number) => void; onSelect: (n: MapNode) => void; onToggle: (n: MapNode) => void;
+  drag?: DragApi;
+  /** a project node's menu (right click, Shift+F10, a long press) */
+  onMenu?: (n: MapNode, at: MenuAt) => void;
+}) {
+  // A mouse or pen press that moves past DRAG_PX drags the project: the others say whether they take it (the ones that
+  // can't are dimmed with the reason), the one under the pointer lights up, and letting go there moves it. Esc or
+  // letting go elsewhere cancels. A finger held still opens the node menu (Move to… is the touch way to move).
+  const [dragging, setDragging] = useState<{ src: MapNode; x: number; y: number; over: MapNode | null } | null>(null);
+  const press = useRef<{ n: MapNode; x: number; y: number; id: number; timer?: number; moved: boolean } | null>(null);
+  const suppress = useRef(false);
+  const live = useRef(dragging);
+  live.current = dragging;
+  const toMap = (e: { clientX: number; clientY: number }) => {
+    const r = box.current!.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / zoom + shift.x, y: (e.clientY - r.top) / zoom + shift.y };
+  };
+  const hit = (x: number, y: number, src: MapNode) => {
+    const p = L.placed.find((q) => q.node !== src && x >= q.x && x <= q.x + q.box.w && y >= q.y - q.box.h / 2 && y <= q.y + q.box.h / 2);
+    if (p) return p.node;
+    return Math.hypot(x - L.cx, y - L.cy) < 62 ? L.placed.find((q) => q.node.kind === "root")?.node ?? null : null;
+  };
+  const verdicts = useMemo(() => {
+    const m = new Map<MapNode, Verdict>();
+    if (dragging && drag) {
+      for (const p of L.placed) if (p.node !== dragging.src) m.set(p.node, drag.canDrop(dragging.src, p.node));
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging?.src, L, drag]);
+  const down = (n: MapNode) => (e: React.PointerEvent) => {
+    if (!n.project || e.button !== 0 || (!drag && !onMenu)) return;
+    if (e.pointerType !== "touch" && drag) e.preventDefault(); // no text selection (and no scroll with it) while dragging
+    const st = { n, x: e.clientX, y: e.clientY, id: e.pointerId, moved: false, timer: undefined as number | undefined };
+    if (e.pointerType === "touch" && onMenu) {
+      const point = { x: e.clientX, y: e.clientY };
+      st.timer = window.setTimeout(() => { suppress.current = true; press.current = null; onMenu(n, { point }); }, HOLD_MS);
+    }
+    press.current = st;
+  };
+  useEffect(() => {
+    if (!drag && !onMenu) return;
+    const move = (e: PointerEvent) => {
+      const st = press.current;
+      if (!st || e.pointerId !== st.id || Math.hypot(e.clientX - st.x, e.clientY - st.y) <= DRAG_PX) return;
+      if (st.timer) { clearTimeout(st.timer); st.timer = undefined; }
+      if (e.pointerType === "touch" || !drag) { press.current = null; return; } // a finger pans the map
+      st.moved = true;
+      const m = toMap(e);
+      setDragging({ src: st.n, x: m.x, y: m.y, over: hit(m.x, m.y, st.n) });
+    };
+    const up = (e: PointerEvent) => {
+      const st = press.current;
+      press.current = null;
+      if (!st) return;
+      if (st.timer) clearTimeout(st.timer);
+      if (!st.moved || e.type === "pointercancel") { setDragging(null); return; }
+      suppress.current = true;
+      const d = live.current;
+      setDragging(null);
+      if (d?.over && drag?.canDrop(d.src, d.over).ok) drag.onDrop(d.src, d.over);
+    };
+    const esc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape" || (!press.current && !live.current)) return;
+      if (press.current?.timer) clearTimeout(press.current.timer);
+      suppress.current = true;
+      press.current = null;
+      setDragging(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("keydown", esc);
+    };
+  });
   // First paint: shrink to fit (not below 65%), then center on the root. `target` is the zoom asked for: centering waits
   // until it is drawn, or a second run of this effect (React's dev StrictMode) would center at the old zoom.
   const fitted = useRef<"no" | "zoomed" | "done">("no");
@@ -509,7 +663,7 @@ function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle }: { 
     host.scrollTo({ left: left + L.cx * zoom - host.clientWidth / 2, top: top + L.cy * zoom - host.clientHeight / 2 });
   });
   // The edges and nodes, kept while only the zoom changes: a zoom resizes the drawing, nothing in it.
-  const drawing = useMemo(() => draw(moved(L, shift), sel, onSelect, onToggle), [L, shift, sel, onSelect, onToggle]);
+  const drawing = useMemo(() => draw(moved(L, shift), sel, onSelect, onToggle, { at: new Map(L.placed.map((p) => [p.node, p])), dragging, verdicts, drag, down, onMenu, suppress }), [L, shift, sel, onSelect, onToggle, dragging, verdicts, drag, onMenu]);
   return (
     // Half a screen of room on every side, so a pinch can keep any point under the fingers even when the map is smaller than the view.
     // Overflow visible: while a closed branch's neighbours slide in, they are not cut at the map's new, smaller edge.
@@ -517,17 +671,42 @@ function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle }: { 
       <svg ref={box} data-map="" role="group" aria-label={t("knowledge-knowledgemap.map_label", { name: title })}
         width={L.width * zoom} height={L.height * zoom} viewBox={`${shift.x} ${shift.y} ${L.width} ${L.height}`} overflow="visible" className="block">
         {drawing}
+        {dragging && (
+          <g style={{ pointerEvents: "none" }} transform={`translate(${dragging.x - shift.x + 12},${dragging.y - shift.y - 14})`} data-drag-ghost="">
+            <rect width={tw(dragging.src.title, 12.5, 600) + 24} height={28} rx={14} fill="var(--surface)" stroke="var(--accent)" strokeWidth={1.5} style={{ filter: "drop-shadow(0 4px 10px rgb(0 0 0 / 30%))" }} />
+            <text x={12} y={18.5} fontSize={12.5} fontWeight={600} fill="var(--ink)">{dragging.src.title}</text>
+          </g>
+        )}
+        {dragging && (
+          <text x={L.cx} y={L.cy + 82} textAnchor="middle" fontSize={11.5} fontWeight={600} fill="var(--accent)" paintOrder="stroke" stroke="var(--canvas)" strokeWidth={3} style={{ pointerEvents: "none" }}>
+            {t("knowledge-knowledgemap.drop_top")}
+          </text>
+        )}
       </svg>
     </div>
   );
 }
 
-function draw(L: Layout, sel: string, onSelect: (n: MapNode) => void, onToggle: (n: MapNode) => void): ReactNode {
-  const at = new Map<MapNode, Placed>(L.placed.map((p) => [p.node, p]));
+/** The draw's project-tree interaction state; none for the topics and projects maps. */
+type DrawInteractions = {
+  at: Map<MapNode, Placed>;
+  dragging: { src: MapNode; x: number; y: number; over: MapNode | null } | null;
+  verdicts: Map<MapNode, Verdict>;
+  drag?: DragApi;
+  down: (n: MapNode) => (e: React.PointerEvent) => void;
+  onMenu?: (n: MapNode, at: MenuAt) => void;
+  suppress: RefObject<boolean>;
+};
+
+function draw(L: Layout, sel: string, onSelect: (n: MapNode) => void, onToggle: (n: MapNode) => void, interactions: DrawInteractions): ReactNode {
+  const { at, dragging, verdicts, drag, down, onMenu, suppress } = interactions;
   const key = (n: MapNode) => (e: KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onSelect(n);
+    } else if (onMenu && n.project && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) {
+      e.preventDefault();
+      onMenu(n, { anchor: e.currentTarget as unknown as HTMLElement });
     } else if (n.kids.length && ((e.key === "ArrowRight" && n.collapsed) || (e.key === "ArrowLeft" && !n.collapsed))) {
       e.preventDefault();
       onToggle(n);
@@ -546,12 +725,22 @@ function draw(L: Layout, sel: string, onSelect: (n: MapNode) => void, onToggle: 
       edges.push(<path key={n.id} d={path} fill={TONE[n.tone]} fillOpacity={d === 1 ? 0.85 : d === 2 ? 0.5 : 0.35}
         style={{ d: `path("${path}")`, transition: `d .32s ${EASE}` } as CSSProperties} />);
     }
+    const v = dragging ? verdicts.get(n) : undefined, isSrc = dragging?.src === n, over = dragging?.over === n && v?.ok;
+    const L2 = p.side === "L" && p.depth > 0;
     nodes.push(
       <g key={n.id} role="button" tabIndex={0} aria-label={spoken(n)} aria-pressed={n.id === sel} aria-expanded={n.kids.length && p.depth > 0 ? !n.collapsed : undefined}
+        data-node={n.project?.id ?? (n.kind === "root" ? "root" : undefined)} data-drop={v ? (v.ok ? "ok" : "no") : undefined}
         className="outline-none [&:focus-visible>g]:[filter:drop-shadow(0_0_0.5px_var(--accent))_drop-shadow(0_0_2px_var(--accent))]"
-        style={{ ...MOVE, transform: `translate(${p.x}px,${p.y - p.box.h / 2}px)`, cursor: "pointer" }}
-        onClick={() => onSelect(n)} onDoubleClick={() => n.kids.length && onToggle(n)} onKeyDown={key(n)}>
-        <NodeShape n={n} p={p} selected={n.id === sel} />
+        style={{ ...MOVE, transform: `translate(${p.x}px,${p.y - p.box.h / 2}px)`, cursor: drag && n.project ? "grab" : "pointer" }}
+        onPointerDown={down(n)}
+        onContextMenu={onMenu && n.project ? (e) => { e.preventDefault(); onMenu(n, { point: { x: e.clientX, y: e.clientY } }); } : undefined}
+        onClick={() => { if (suppress.current) { suppress.current = false; return; } onSelect(n); }} onDoubleClick={() => n.kids.length && onToggle(n)} onKeyDown={key(n)}>
+        {over && <rect x={-5} y={-5} width={p.box.w + 10} height={p.box.h + 10} rx={p.box.h / 2 + 5} fill="none" stroke="var(--accent)" strokeWidth={2.5} />}
+        <g style={{ opacity: isSrc ? 0.35 : v && !v.ok ? 0.3 : 1, transition: "opacity .15s" }}><NodeShape n={n} p={p} selected={n.id === sel} /></g>
+        {v && (!v.ok ? v.why : v.warn) && (over || !v.ok) && (
+          <text x={L2 ? -8 : p.box.w + 26} y={p.box.h / 2 + 4} textAnchor={L2 ? "end" : "start"} fontSize={11} fontWeight={600}
+            fill={v.ok ? "var(--attention)" : "var(--ink-3)"} paintOrder="stroke" stroke="var(--canvas)" strokeWidth={3}>{v.ok ? v.warn : v.why}</text>
+        )}
       </g>,
     );
     if (n.kids.length && p.depth > 0) {
@@ -585,7 +774,7 @@ function NodeShape({ n, p, selected }: { n: MapNode; p: Placed; selected: boolea
         <g>
           <circle cx={w / 2} cy={h / 2} r={62} fill="none" stroke="var(--ink)" strokeOpacity={0.1} strokeWidth={8} />
           <circle cx={w / 2} cy={h / 2} r={54} fill="var(--ink)" />
-          <g transform={`translate(${w / 2 - 11},${h / 2 - 36})`} color="var(--surface)"><Icon name={n.view === "topics" ? "light" : "layers"} size={22} stroke={2} /></g>
+          <g transform={`translate(${w / 2 - 11},${h / 2 - 36})`} color="var(--surface)"><Icon name={n.view === "topics" ? "light" : n.view === "tree" ? "branch" : "layers"} size={22} stroke={2} /></g>
           <text x={w / 2} y={h / 2 + 7} textAnchor="middle" fontSize={17} fontWeight={650} fill="var(--surface)">{clip(n.title, 17, 650, 96)}</text>
           <text x={w / 2} y={h / 2 + 25} textAnchor="middle" fontSize={11} fill="var(--surface)" fillOpacity={0.7}>{n.meta}</text>
           {selected && <circle cx={w / 2} cy={h / 2} r={58} fill="none" stroke="var(--accent)" strokeWidth={2.2} />}
@@ -596,7 +785,7 @@ function NodeShape({ n, p, selected }: { n: MapNode; p: Placed; selected: boolea
         <g>
           <rect width={w} height={h} rx={22} fill={c} />
           <circle cx={22} cy={h / 2} r={14} fill="var(--surface)" fillOpacity={0.22} />
-          <g transform={`translate(13,${h / 2 - 9})`} color="var(--surface)"><Icon name={n.isTopic ? "light" : n.tone === "green" ? "check" : n.tone === "orange" ? "pause" : "folder"} size={18} stroke={2.2} /></g>
+          <g transform={`translate(13,${h / 2 - 9})`} color="var(--surface)"><Icon name={n.view === "tree" ? "tag" : n.isTopic ? "light" : n.tone === "green" ? "check" : n.tone === "orange" ? "pause" : "folder"} size={18} stroke={2.2} /></g>
           <text x={44} y={h / 2 + 5.5} fontSize={15} fontWeight={650} fill="var(--surface)">{p.box.lines[0]}</text>
           <text x={w - 16} y={h / 2 + 4.5} textAnchor="end" fontSize={12} fontWeight={600} fill="var(--surface)" fillOpacity={0.85}>{n.meta}</text>
           {ring}
@@ -651,6 +840,28 @@ function NodeShape({ n, p, selected }: { n: MapNode; p: Placed; selected: boolea
           <rect x={8} y={6} width={tag} height={16} rx={8} fill={warn ? "var(--orange-tint)" : tint(c, 14)} />
           <text x={8 + tag / 2} y={17.6} textAnchor="middle" fontSize={11} fontWeight={600} fill={warn ? "var(--orange)" : "var(--ink-2)"}>{label}</text>
           {p.box.lines.map((l, i) => <text key={i} x={8 + tag + 8} y={18.5 + i * 17} fontSize={12} fill="var(--ink)">{l}</text>)}
+          {ring}
+        </g>
+      );
+    }
+    case "pnode": {
+      const f = n.flag, fc = f?.state === "accepted" ? "var(--green)" : f?.state === "not_accepted" ? "var(--orange)" : "var(--accent)";
+      const mh = n.where ? 30 : h, tx = 28 + tw(p.box.lines[0], 12.5, 600) + 8;
+      const done = n.status === "done";
+      return (
+        <g>
+          <rect width={w} height={h} rx={14} fill={tint(c, n.depth === 1 ? 20 : 12)} />
+          <g transform={`translate(9,${mh / 2 - 7})`} color={c}><Icon name="folder" size={14} stroke={2} /></g>
+          <text x={28} y={mh / 2 + 4.3} fontSize={12.5} fontWeight={600} fill={done ? "var(--ink-3)" : "var(--ink)"}>{p.box.lines[0]}</text>
+          {f && (
+            <g transform={`translate(${tx},${mh / 2 - 9})`} data-flag={f.state}>
+              <rect width={tw(f.text, 11, 600) + 26} height={18} rx={9} fill={tint(fc, 20)} />
+              <g transform="translate(6,3)" color={fc}><Icon name="flag" size={12} stroke={2.2} /></g>
+              <text x={21} y={12.6} fontSize={11} fontWeight={600} fill={fc}>{f.text}</text>
+            </g>
+          )}
+          {n.meta && <text x={w - 12} y={mh / 2 + 4} textAnchor="end" fontSize={11} fill="var(--ink-3)">{n.meta}</text>}
+          {n.where && <text x={28} y={36} fontSize={11} fill="var(--ink-3)">{clip(n.where, 11, 400, 260)}</text>}
           {ring}
         </g>
       );

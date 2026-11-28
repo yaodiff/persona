@@ -1,7 +1,7 @@
 {
-  "setup_missing": "飞书网关的版本还没有个人 Agent，升级飞书网关后再试",
-  "setup_disabled": "提供个人 Agent 的扩展没有开启它：按扩展的说明开启后重启",
-  "setup_no_accounts": "还没有连接个人 Agent 账号：在飞书网关的设置里添加 Cue 或 Grok Bot",
+  "setup_missing": "当前版本的飞书网关尚不支持个人 Agent，请更新飞书网关后重试。",
+  "setup_disabled": "提供个人 Agent 的扩展尚未启用此功能，请按扩展说明开启后重启。",
+  "setup_no_accounts": "尚未连接个人 Agent 账号，请在飞书网关设置中添加 Cue 或 Grok Bot。",
   "other": "其他",
   "bot": "机器人",
   "group_date": "日期",
@@ -20,12 +20,16 @@
   "date_older": "更早",
   "pinned": "已置顶",
   "remove": "从列表移除",
-  "removed_toast": "已移除「{title}」，有新消息时会自动回到列表",
+  "removed_toast": "已移除「{title}」，收到新消息时会自动重新显示。",
   "restored_toast": "已恢复「{title}」",
   "undo": "撤销",
   "hide_failed": "移除失败：{error}",
   "unhide_failed": "恢复失败：{error}",
   "prefs_save_failed": "列表设置保存失败：{error}",
   "removed_count": "已移除（{count}）",
-  "removed_footer": "移除的对话仍保留在飞书网关里，有新消息时会自动回到列表。"
+  "removed_footer": "移除的对话仍会保留在飞书网关中，收到新消息时会自动重新出现在列表中。",
+  "quota_left": "剩 {percent}% 额度",
+  "quota_exhausted": "额度已用完",
+  "quota_stale": "非最新",
+  "quota_resets": "{time} 重置"
 }

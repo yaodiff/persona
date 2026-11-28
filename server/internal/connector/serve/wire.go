@@ -185,8 +185,9 @@ type (
 		Tools []proto.Tool `json:"tools,omitempty"`
 	}
 	CallParams struct {
-		Name string          `json:"name"`
-		Args json.RawMessage `json:"args,omitempty"`
+		Name             string          `json:"name"`
+		Args             json.RawMessage `json:"args,omitempty"`
+		ApprovalProtocol string          `json:"approval_protocol,omitempty"`
 		CallFrom
 	}
 	CallResult struct {
@@ -203,8 +204,9 @@ type (
 	}
 	// DescribeResult is what the card says about a write (connector.Actions.Describe).
 	DescribeResult struct {
-		Action  connector.Action `json:"action"`
-		Summary string           `json:"summary"`
+		Action      connector.Action            `json:"action"`
+		Summary     string                      `json:"summary"`
+		AutoConfirm *connector.AutoConfirmGrant `json:"auto_confirm,omitempty"`
 	}
 	ThreadParams struct {
 		Thread string `json:"thread"`
@@ -227,9 +229,11 @@ type (
 	// DoParams is a write the gate let through: the very args the card was made from, and the hub's id for this one
 	// run, the same if the hub ever sends it again (the program runs it at most once).
 	DoParams struct {
-		Name      string          `json:"name"`
-		Args      json.RawMessage `json:"args,omitempty"`
-		RequestID string          `json:"request_id"`
+		Name          string          `json:"name"`
+		Args          json.RawMessage `json:"args,omitempty"`
+		RequestID     string          `json:"request_id"`
+		ApprovalMode  string          `json:"approval_mode,omitempty"`
+		ApprovalToken string          `json:"approval_token,omitempty"`
 		CallFrom
 	}
 	// RecallParams is a message to take back (connector.Recaller): what the ledger row of the send says, none of what the

@@ -1,7 +1,10 @@
 import { createContext, useContext, useId, useLayoutEffect, useRef, useState } from "react";
 import { LEGACY_CONTEXT_OR_FILE_RE } from "../lib/compatibility";
-import { t } from "../i18n";
-import { loadApprovedProjectDocument, TeamProjectDocumentError, type TeamProjectDocument } from "../lib/teamProjectDocument";
+import { formatDate, t } from "../i18n";
+import {
+  listProjectDocumentApprovals, listProjectDocuments, loadApprovedProjectDocument,
+  TeamProjectDocumentError, type ApprovedProjectRevision, type ProjectDocumentPage, type TeamProjectDocument,
+} from "../lib/teamProjectDocument";
 import { Button } from "../ui/atoms";
 
 export type ProjectDocumentSnapshot = Readonly<TeamProjectDocument>;
@@ -77,7 +80,9 @@ function ProjectDocumentLookup({ busy, onAttach }: { busy: boolean; onAttach: (d
   const [documentId, setDocumentId] = useState("");
   const [token, setToken] = useState("");
   const [preview, setPreview] = useState<ProjectDocumentSnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [catalog, setCatalog] = useState<ProjectDocumentPage | null>(null);
+  const [history, setHistory] = useState<{ document: string; page: ProjectDocumentPage } | null>(null);
+  const [loading, setLoading] = useState<"catalog" | "history" | "preview" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const active = useRef<AbortController | null>(null);
   const reviewed = useRef<ProjectDocumentSnapshot | null>(null);
@@ -92,33 +97,64 @@ function ProjectDocumentLookup({ busy, onAttach }: { busy: boolean; onAttach: (d
   const invalidate = () => {
     abort();
     reviewed.current = null;
-    setLoading(false);
+    setLoading(null);
+    setCatalog(null);
+    setHistory(null);
     setPreview(null);
     setError(null);
   };
-  const load = async () => {
-    if (busy || active.current || reviewed.current || !project.trim() || !documentId.trim() || !token.trim()) return;
+  const request = async (kind: NonNullable<typeof loading>, run: (controller: AbortController) => Promise<void>) => {
+    if (busy || active.current || reviewed.current || !project.trim() || !token.trim()) return;
     const controller = new AbortController();
     active.current = controller;
-    setLoading(true);
-    setPreview(null);
+    setLoading(kind);
     setError(null);
     try {
-      const { project: loadedProject, document, revision, content, sha256, author, approved_by } =
-        await loadApprovedProjectDocument(project.trim(), documentId.trim(), token.trim(), controller.signal);
-      if (active.current !== controller) return;
-      setToken("");
-      reviewed.current = Object.freeze({ project: loadedProject, document, revision, content, sha256, author, approved_by });
-      setPreview(reviewed.current);
+      await run(controller);
     } catch (failure) {
-      if (active.current === controller) setError(failure instanceof TeamProjectDocumentError ? loadErrors[failure.code] : loadErrors.unavailable);
+      if (active.current !== controller) return;
+      const code = failure instanceof TeamProjectDocumentError ? failure.code : "unavailable";
+      if (code === "access") {
+        setCatalog(null);
+        setHistory(null);
+      }
+      setError(kind === "catalog" && code === "missing" ? "newagent.project_document_catalog_unavailable" : loadErrors[code]);
     } finally {
       if (active.current === controller) {
         active.current = null;
-        setLoading(false);
+        setLoading(null);
       }
     }
   };
+
+  const browse = (document?: string, previous?: ProjectDocumentPage) => request(document ? "history" : "catalog", async (controller) => {
+    const page = document
+      ? await listProjectDocumentApprovals(project.trim(), document, token.trim(), controller.signal, previous?.next)
+      : await listProjectDocuments(project.trim(), token.trim(), controller.signal, previous?.next);
+    if (active.current !== controller) return;
+    const combined = previous ? { ...page, items: [...previous.items, ...page.items] } : page;
+    if (document) setHistory({ document, page: combined });
+    else {
+      setCatalog(combined);
+      setHistory(null);
+    }
+  });
+
+  const load = (selected?: ApprovedProjectRevision) => request("preview", async (controller) => {
+    const projectId = project.trim();
+    const memberToken = token.trim();
+    const { project: loadedProject, document, revision, content, sha256, author, approved_by } = selected
+      ? await loadApprovedProjectDocument(projectId, selected.document, memberToken, controller.signal, selected)
+      : await loadApprovedProjectDocument(projectId, documentId.trim(), memberToken, controller.signal);
+    if (active.current !== controller) return;
+    setToken("");
+    setDocumentId(document);
+    setCatalog(null);
+    setHistory(null);
+    reviewed.current = Object.freeze({ project: loadedProject, document, revision, content, sha256, author, approved_by });
+    setPreview(reviewed.current);
+  });
+  const canRead = !busy && !!project.trim() && !!token.trim() && !loading;
   const inputClass = "h-11 min-w-0 w-full rounded-control bg-inset px-3 text-meta text-ink shadow-hairline outline-none focus:shadow-[0_0_0_1px_var(--line-strong)]";
   return (
     <fieldset disabled={busy} aria-label={t("newagent.project_document_use")} className="flex min-w-0 flex-col gap-2 rounded-control bg-surface p-3 shadow-hairline">
@@ -137,11 +173,25 @@ function ProjectDocumentLookup({ busy, onAttach }: { busy: boolean; onAttach: (d
         <input className={inputClass} type="password" value={token} autoComplete="off" onChange={(event) => { invalidate(); setToken(event.target.value); }} />
       </label>
       <div className="flex flex-wrap items-center gap-2">
-        <Button className="touch-hit" busy={loading} disabled={busy || !project.trim() || !documentId.trim() || !token.trim()} onClick={() => void load()}>
+        <Button className="touch-hit" busy={loading === "catalog"} disabled={!canRead} onClick={() => void browse()}>
+          {t("newagent.project_document_browse")}
+        </Button>
+        <Button tone="quiet" className="touch-hit" busy={loading === "preview"} disabled={!canRead || !documentId.trim()} onClick={() => void load()}>
           {t("newagent.project_document_load")}
         </Button>
-        {loading && <p role="status" className="text-submeta text-ink-2">{t("newagent.project_document_loading")}</p>}
       </div>
+      {loading && <p role="status" className="text-submeta text-ink-2">
+        {loading === "preview" ? t("newagent.project_document_loading") : t("newagent.project_document_loading_list")}
+      </p>}
+      {catalog && <ProjectRevisionList
+        page={history?.page ?? catalog}
+        document={history?.document}
+        disabled={!canRead}
+        onBack={() => setHistory(null)}
+        onMore={() => void browse(history?.document, history?.page ?? catalog)}
+        onHistory={(id) => void browse(id)}
+        onPreview={(row) => void load(row)}
+      />}
       {error && <p role="alert" className="text-submeta text-ink-2">{t(error)}</p>}
       {preview && (
         <div className="flex min-w-0 flex-col gap-2">
@@ -161,5 +211,56 @@ function ProjectDocumentLookup({ busy, onAttach }: { busy: boolean; onAttach: (d
         </div>
       )}
     </fieldset>
+  );
+}
+
+function ProjectRevisionList({ page, document, disabled, onBack, onMore, onHistory, onPreview }: {
+  page: ProjectDocumentPage;
+  document?: string;
+  disabled: boolean;
+  onBack: () => void;
+  onMore: () => void;
+  onHistory: (id: string) => void;
+  onPreview: (row: ApprovedProjectRevision) => void;
+}) {
+  const heading = document ? t("newagent.project_document_history", { document }) : t("newagent.project_document_catalog");
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex flex-wrap items-center justify-between gap-1">
+        <h3 className="min-w-0 text-meta font-medium text-ink [overflow-wrap:anywhere]">{heading}</h3>
+        {document && <Button tone="quiet" size="sm" className="touch-hit" disabled={disabled} onClick={onBack}>
+          {t("newagent.project_document_back")}
+        </Button>}
+      </div>
+      {page.items.length === 0 && <p role="status" className="text-submeta text-ink-2">
+        {document ? t("newagent.project_document_no_versions") : t("newagent.project_document_no_documents")}
+      </p>}
+      <ul aria-label={heading} className="max-h-48 overflow-auto divide-y divide-line">
+        {page.items.map(row => (
+          <li key={document ? row.revision : row.document} className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 py-1">
+            <div className="min-w-0 text-submeta [overflow-wrap:anywhere]">
+              <div className="font-medium text-ink">{document
+                ? t("newagent.project_document_version", row)
+                : <>{row.document} · {t("newagent.project_document_version", row)}</>}</div>
+              <div className="text-ink-2">{t("newagent.project_document_approved_details", {
+                approver: row.approved_by, date: formatDate(row.approved_at),
+              })}</div>
+            </div>
+            <div className="flex flex-wrap items-center">
+              {!document && <Button tone="quiet" size="sm" className="touch-hit" disabled={disabled}
+                aria-label={t("newagent.project_document_versions_of", row)} onClick={() => onHistory(row.document)}>
+                {t("newagent.project_document_versions")}
+              </Button>}
+              <Button size="sm" className="touch-hit" disabled={disabled} aria-label={t("newagent.project_document_preview_version", row)} onClick={() => onPreview(row)}>
+                {t("newagent.project_document_view")}
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {page.next && <div><Button size="sm" tone="quiet" className="touch-hit" disabled={disabled} onClick={onMore}>
+        {document ? t("newagent.project_document_older") : t("newagent.project_document_more")}
+      </Button></div>}
+    </div>
   );
 }

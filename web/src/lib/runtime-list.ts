@@ -5,6 +5,7 @@ import { foldedState } from "./child-sessions";
 import { t } from "../i18n";
 import type { Session } from "./types";
 import type { SessionPlace } from "./session-groups";
+import { byTime } from "./times";
 
 // Match Go's JSON tuple spelling, including HTML and line-separator escaping.
 const GO_JSON_ESCAPE = new RegExp("[<>&" + String.fromCharCode(8232, 8233) + "]", "g");
@@ -27,7 +28,7 @@ export function runtimeRemoval(id: string): string {
   throw new Error(t("paged-agents.invalid_page"));
 }
 export const runtimeOrder = (a: Session, b: Session) => {
-  const time = (Date.parse(b.updated_at ?? "") || 0) - (Date.parse(a.updated_at ?? "") || 0);
+  const time = byTime(b.updated_at, a.updated_at);
   if (time) return time;
   // JavaScript timestamps drop sub-millisecond precision; Go's transport order does not.
   const fraction = (s: Session) => (/\.(\d+)/.exec(s.updated_at ?? "")?.[1] ?? "").padEnd(9, "0");
@@ -39,7 +40,7 @@ export const runtimeOrder = (a: Session, b: Session) => {
 export const runtimeActiveAt = (s: Session) => Date.parse(s.updated_at ?? "");
 /** Needs the user by the hub's rule for `state.needs_you` counts, not the client's answered-here state: by the folded
  *  state, which a child that waits gives its parent (`roots=1` counts it so, #5120). */
-export const runtimeNeedsYou = (s: Session) => foldedState(s) === "needs_you";
+export const runtimeNeedsYou = (s: Session) => s.view ? s.view.counted === true : foldedState(s) === "needs_you";
 /** Where a row is, by the attributes the hub groups and filters it by (docs/protocol/protocol.md "Bounded Agents
  *  lists"): its computer, its project directory and its space. */
 // A Just finished row's state section is Just finished's on a hub that lists it apart (lib/session-groups.ts, #9751).

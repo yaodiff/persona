@@ -18,7 +18,7 @@ vi.mock("./store", () => {
 vi.mock("./router", () => ({ navigate: vi.fn() }));
 vi.mock("../ui/atoms", async (actual) => ({ ...(await actual<typeof import("../ui/atoms")>()), toast: vi.fn() }));
 
-import { acceptOutgoing, arrived, checkOutbox, forgetOutgoing, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, queueToSession, registerOutboxRecheck, resetOutboxClaimsForTests, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
+import { acceptOutgoing, arrived, checkOutbox, entryReason, failureText, forgetOutgoing, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, queueToSession, registerOutboxRecheck, resetOutboxClaimsForTests, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
 import { messageFeedback, resetMessageFeedback } from "./message-send";
 import type { ChatLine } from "./turns";
 import { ApiError } from "./api";
@@ -165,7 +165,7 @@ describe("sending from another page", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ ok: true, waits_on_computer: true })).mockResolvedValueOnce(response({ ok: true })));
     expect(await sendToSession("m", "s", { text: "为什么没得点" })).toBe(true);
     expect(outbox()["m/s"][0].state).toBe("sent");
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining("电脑上的那个问题答完后"), "info");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("电脑上的问题回复后"), "info");
     vi.mocked(toast).mockClear();
     expect(await sendToSession("m", "s", { text: "还有一条" })).toBe(true);
     expect(toast).not.toHaveBeenCalled();
@@ -198,7 +198,7 @@ describe("sending from another page", () => {
     vi.stubGlobal("fetch", fetcher);
     expect(await sendToSession("m", "s", { text }, { launcher: "claude" })).toBe(false);
     const failed = outbox()["m/s"][0];
-    expect(failed).toMatchObject({ state: "failed", error: "电脑上的输入框里有没发出去的字", clearable: "old" });
+    expect(failed).toMatchObject({ state: "failed", error: "电脑上的输入框中还有未发送的内容", clearable: "old" });
     expect(await retryOutbox("m", "s", failed.id, failed.clearable)).toBe(true);
     const again = JSON.parse(fetcher.mock.calls[1][1].body);
     expect(again.launcher).toBe("claude");
@@ -588,23 +588,62 @@ describe("messages kept across a reload", () => {
     expect(store.size).toBe(0);
   });
 
-  // A send refused because a dialog had the terminal (#7343) lights the terminal button by its code: the code comes
-  // back with the failed bubble after a reload, and goes once the message is sent, so the dot does not stay behind.
-  it("keeps a refusal's code across a reload and drops it once the message goes", async () => {
-    const refused = new ApiError(409, "a dialog is open", { code: "dialog_open", delivered: "none", retryable: false });
+  const dialog = "Choose a workspace";
+  const refusal = { code: "dialog_open", delivered: "none", dialog, machine_id: "other-box", session_id: "blocked-session" };
+  const blocker = { dialog, dialogMachine: "other-box", dialogSession: "blocked-session" };
+
+  it("keeps the dialog and its terminal across a reload and clears them on successful retry", async () => {
+    const refused = new ApiError(409, "a dialog is open", refusal);
     keepFailed("m", "s", { id: "d1", text: "go on", images: [], at: 1000 }, refused);
-    expect(outbox()["m/s"]).toMatchObject([{ id: "d1", state: "failed", code: "dialog_open" }]);
+    expect(outbox()["m/s"]).toMatchObject([{ id: "d1", state: "failed", code: "dialog_open", ...blocker }]);
+    expect(failureText(refused)).toContain(dialog);
     reload();
     restoreOutbox("m", "s");
-    expect(outbox()["m/s"]).toMatchObject([{ id: "d1", state: "failed", code: "dialog_open", restored: true }]);
+    const [restored] = outbox()["m/s"];
+    expect(restored).toMatchObject({ id: "d1", state: "failed", code: "dialog_open", restored: true, ...blocker });
+    expect(entryReason(restored)).toContain(dialog);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ ok: true })));
     expect(await retryOutbox("m", "s", "d1")).toBe(true);
     const sent = outbox()["m/s"].find((e) => e.text === "go on")!;
     expect(sent).toMatchObject({ state: "sent" });
-    expect(sent.code).toBeUndefined();
-    const kept = [...store.values()].map((v) => JSON.parse(v) as { code?: string });
+    const kept = [...store.values()].map((v) => JSON.parse(v) as Partial<OutboxEntry>);
     expect(kept.length).toBe(1);
-    expect(kept[0].code).toBeUndefined();
+    for (const key of ["code", "dialog", "dialogMachine", "dialogSession"] as const) {
+      expect(sent[key]).toBeUndefined();
+      expect(kept[0]).not.toHaveProperty(key);
+    }
+  });
+
+  it("restores the dialog and its terminal when Check finds a definite refusal", async () => {
+    const id = "123e4567-e89b-42d3-a456-426614174001";
+    keepFailed("m", "s", { id, text: "go on", images: [], at: 1000 }, new ApiError(502, "no response", { delivered: "unknown" }));
+    const body = Buffer.from(JSON.stringify({ error: "a dialog is open", ...refusal })).toString("base64");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      id, kind: "message", target: { path: "/api/v1/sessions/m/s/messages" }, state: "failed", result: { status: 423, body },
+    })));
+    expect(await checkOutbox("m", "s", id)).toBe("not_applied");
+    reload();
+    restoreOutbox("m", "s");
+    const [restored] = outbox()["m/s"];
+    expect(restored).toMatchObject({ state: "failed", inDoubt: false, code: "dialog_open", ...blocker });
+    expect(entryReason(restored)).toContain(dialog);
+  });
+
+  it.each([undefined, "", "  ", 42])("keeps the existing fallback for dialog title %s", (title) => {
+    const refused = new ApiError(409, "a dialog is open", { code: "dialog_open", delivered: "none", dialog: title });
+    keepFailed("m", "s", { id: "d1", text: "go on", images: [], at: 1000 }, refused);
+    reload();
+    restoreOutbox("m", "s");
+    expect(entryReason(outbox()["m/s"][0])).toBe(t("lib-outbox.dialog_open"));
+  });
+
+  it("shows the title and the missing-images warning when only the message text survived a reload", () => {
+    keepFailed("m", "s", { id: "d1", text: "go on", images: [{ mime: "image/png", data: "AA==" }], at: 1000 }, new ApiError(409, "a dialog is open", refusal));
+    reload();
+    restoreOutbox("m", "s");
+    const [restored] = outbox()["m/s"];
+    expect(entryReason(restored)).toContain(dialog);
+    expect(entryReason(restored)).toContain(t("lib-outbox.not_confirmed_images"));
   });
 
   it("restores an accepted message as pending with its original id, never resends, and settles once", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ISLAND_ROWS, ISLAND_SIDE, LIST_WIDTH, NOTCH_WIDTH, ROW_HEIGHT, hasNotch, islandDisplay, islandRect, islandSides, islandState } from "../src/island-model.js";
+import { ISLAND_ROWS, ISLAND_SIDE, ISLAND_WINDOW, LIST_WIDTH, NOTCH_WIDTH, ROW_HEIGHT, hasNotch, islandDisplay, islandRect, islandSides, islandState } from "../src/island-model.js";
 import { ISLAND_URL, islandFile } from "../src/island-page.js";
 
 const row = (n: number, extra: Record<string, unknown> = {}) => ({ title: `Example agent ${n}`, state: "working", label: "Working", line: "", route: `/s/computer/session-${n}`, ...extra });
@@ -50,11 +50,35 @@ test("the island sits around the notch of the built-in display, or as a pill at 
   const closed = islandRect(macbook, false, 3);
   assert.deepEqual(closed, { x: Math.round((1512 - NOTCH_WIDTH - 2 * ISLAND_SIDE) / 2), y: 0, width: NOTCH_WIDTH + 2 * ISLAND_SIDE, height: 38 });
   const open = islandRect(macbook, true, 3);
-  assert.deepEqual([open.width, open.height, open.y], [LIST_WIDTH, 38 + 3 * ROW_HEIGHT + 14, 0]);
-  assert.equal(open.x, Math.round((1512 - LIST_WIDTH) / 2));
+  assert.deepEqual(open, { x: closed.x, y: 0, width: LIST_WIDTH, height: 38 + 3 * ROW_HEIGHT + 14 });
 
   const pill = islandRect(external, false, 0);
   assert.deepEqual(pill, { x: 1512 + Math.round((2560 - 2 * ISLAND_SIDE) / 2), y: -200, width: 2 * ISLAND_SIDE, height: 25 });
+  const pillOpen = islandRect(external, true, 2);
+  assert.deepEqual(pillOpen, { x: 1512 + Math.round((2560 - LIST_WIDTH) / 2), y: -200, width: LIST_WIDTH, height: 25 + 2 * ROW_HEIGHT + 14 });
+});
+
+test("opening the island around a notch only grows it downward: it covers no more of the menu bar than the pill (#16301)", () => {
+  // built-in notched displays of three sizes, with menu bars of 33 to 38 pt
+  for (const [width, height, bar] of [[1512, 982, 38], [1728, 1117, 33], [1470, 956, 37]] as const) {
+    const d = { bounds: { x: 0, y: 0, width, height }, workArea: { x: 0, y: bar, width, height: height - bar }, internal: true };
+    const closed = islandRect(d, false, 0);
+    for (let rows = 1; rows <= ISLAND_ROWS; rows++) {
+      const open = islandRect(d, true, rows);
+      assert.deepEqual([open.x, open.y, open.width], [closed.x, closed.y, closed.width], `${width} pt, ${rows} rows`);
+      assert.equal(open.height, bar + rows * ROW_HEIGHT + 14);
+    }
+  }
+});
+
+test("the island's window has no title bar style, so macOS leaves its corners square at the top of the screen (#16301)", () => {
+  // Electron keeps a frameless window titled unless roundedCorners is false, and macOS rounds a titled window's corners
+  assert.equal(ISLAND_WINDOW.frame, false);
+  assert.equal(ISLAND_WINDOW.roundedCorners, false);
+  assert.equal(ISLAND_WINDOW.transparent, true);
+  assert.equal(ISLAND_WINDOW.hasShadow, false);
+  assert.equal(ISLAND_WINDOW.focusable, false);
+  assert.equal(ISLAND_WINDOW.type, "panel");
 });
 
 test("the island's scheme serves its page's three files and nothing else", () => {

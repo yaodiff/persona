@@ -25,16 +25,16 @@ public struct TimingWindow {
                               blockedMicros: Int64 = 0, refinement: Bool = false) {
         if since == nil { since = now }
         guard !refinement else {
-            bytes += count
+            bytes = Self.saturatingAdd(bytes, max(0, count))
             return
         }
-        self.blockedMicros += max(0, blockedMicros)
+        self.blockedMicros = Self.saturatingAdd(self.blockedMicros, max(0, blockedMicros))
         if sentAt.updateValue(now, forKey: number) == nil { order.append(number) }
         while order.count > Self.remembered { sentAt[order.removeFirst()] = nil }
         capture.append(Self.ms(captureMicros))
         encode.append(Self.ms(encodeMicros))
         frames += 1
-        bytes += count
+        bytes = Self.saturatingAdd(bytes, max(0, count))
     }
 
     /// The phone's report on frame `frame` came at `now`: half the round trip is the network's share. Counted once.
@@ -67,8 +67,8 @@ public struct TimingWindow {
         guard frames > 0, let since, now > since else { return nil }
         let seconds = Double(now - since) / 1_000_000
         var t = TimingMessage(captureMs: Self.median(capture), encodeMs: Self.median(encode), networkMs: Self.median(network),
-                              kbps: Int((Double(bytes) * 8 / 1000 / seconds).rounded()),
-                              fps: Int((Double(frames) / seconds).rounded()))
+                              kbps: Self.clampedInt((Double(bytes) * 8 / 1000 / seconds).rounded()),
+                              fps: Self.clampedInt((Double(frames) / seconds).rounded()))
         if let targetKbps {
             t.targetKbps = targetKbps
             t.skipped = skipped
@@ -76,6 +76,21 @@ public struct TimingWindow {
             t.pending = pending
         }
         return t
+    }
+
+    private static func saturatingAdd(_ a: Int, _ b: Int) -> Int {
+        let (sum, overflow) = a.addingReportingOverflow(b)
+        return overflow ? .max : sum
+    }
+
+    private static func saturatingAdd(_ a: Int64, _ b: Int64) -> Int64 {
+        let (sum, overflow) = a.addingReportingOverflow(b)
+        return overflow ? .max : sum
+    }
+
+    private static func clampedInt(_ value: Double) -> Int {
+        guard !value.isNaN, value > 0 else { return 0 }
+        return value >= Double(Int.max) ? .max : Int(value)
     }
 
     /// Milliseconds to a tenth, never below 0 (ScreenCaptureKit hands frames over before their display time).

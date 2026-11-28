@@ -23,9 +23,10 @@ import subprocess
 # tests, 145 s) were the other shard's longest packages once the database stopped syncing; three each took 106 s and
 # 59 s. internal/hub (about 2,000 tests) took 283 s in one process beside the other managers' partitions; three took
 # 112 s. internal/voice, now internal/modules/voice (about 300 tests, many playing audio in real time) then held the managers shard: 314 s in one
-# process for under ten seconds of CPU; four took 97 s.
-PACKAGES = {"./internal/node": 6, "./internal/assistant": 8, "./internal/hub": 3, "./internal/devices": 3,
-            "./internal/extmgr": 3, "./internal/modules/voice": 4}
+# process for under ten seconds of CPU; four took 97 s. internal/db (about 440 tests, isolated per process via
+# dbtest.Main) took 175 s serially in core-other; four partitions bring it in line with devices and extmgr.
+PACKAGES = {"./internal/node": 6, "./internal/assistant": 8, "./internal/hub": 3, "./internal/devices": 4,
+            "./internal/extmgr": 3, "./internal/modules/voice": 4, "./internal/db": 4}
 # The PACKAGES whose plain `go test` (no -run) splits itself: internal/node's TestMain lists its tests and runs them in
 # concurrent processes of its own binary, half the CPUs but at least three and at most six
 # (server/internal/node/partition_test.go, #5734). go_test_partitioned.py leaves them to that split when it expands a

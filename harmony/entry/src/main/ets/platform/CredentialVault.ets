@@ -23,8 +23,8 @@ function assetErrorCode(error: Error): number {
 }
 
 export class CredentialVault {
-  private readonly context: common.UIAbilityContext;
-  constructor(context: common.UIAbilityContext) { this.context = context; }
+  private readonly context: common.Context;
+  constructor(context: common.Context) { this.context = context; }
 
   async get(hubId: string, receiveAccess?: (access: HubAccess | undefined) => void): Promise<string | null> {
     let values: Array<asset.AssetMap>;

@@ -60,7 +60,7 @@ func TestUsageMeterClaude(t *testing.T) {
 	if len(m.buckets) != 2 {
 		t.Fatalf("buckets = %d, want 2: %+v", len(m.buckets), m.buckets)
 	}
-	b := m.buckets[usageKey{now.Unix() / 60 * 60, "claude-opus-5-5", "", tokenuse.Claude}]
+	b := m.buckets[usageKey{now.Unix() / 60 * 60, "claude-opus-5-5", "", tokenuse.Claude, ""}]
 	if b == nil || b.Input != 2 || b.CacheWrite != 100 || b.CacheRead != 1000 || b.Output != 50 || b.Requests != 1 {
 		t.Fatalf("opus bucket = %+v", b)
 	}
@@ -73,7 +73,7 @@ func TestUsageMeterClaude(t *testing.T) {
 	f.Close()
 	m.dirty = map[usageKey]bool{}
 	scanFile(t, m, p, cutoff)
-	s := m.buckets[usageKey{now.Unix()/60*60 + 60, "claude-sonnet-5-5", "", tokenuse.Claude}]
+	s := m.buckets[usageKey{now.Unix()/60*60 + 60, "claude-sonnet-5-5", "", tokenuse.Claude, ""}]
 	if s == nil || s.Output != 10 || s.Requests != 2 || len(m.dirty) != 1 {
 		t.Fatalf("sonnet bucket = %+v, dirty %v", s, m.dirty)
 	}
@@ -103,7 +103,7 @@ func TestUsageMeterCodex(t *testing.T) {
 	os.WriteFile(p, []byte(body), 0o600)
 	m := newUsageMeter()
 	scanFile(t, m, p, now.Add(-time.Hour))
-	b := m.buckets[usageKey{now.Unix() / 60 * 60, "gpt-6-codex", "", tokenuse.Codex}]
+	b := m.buckets[usageKey{now.Unix() / 60 * 60, "gpt-6-codex", "", tokenuse.Codex, ""}]
 	if b == nil || b.Requests != 2 || b.Input != 150 || b.CacheRead != 1200 || b.Output != 150 {
 		t.Fatalf("codex bucket = %+v", b)
 	}
@@ -127,7 +127,7 @@ func TestUsageStartOffset(t *testing.T) {
 	}
 	m := newUsageMeter()
 	scanFile(t, m, p, cutoff)
-	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "claude-opus-5-5", "", tokenuse.Claude}]; b == nil || b.Output != 9 {
+	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "claude-opus-5-5", "", tokenuse.Claude, ""}]; b == nil || b.Output != 9 {
 		t.Fatalf("bucket = %+v", b)
 	}
 }
@@ -162,19 +162,19 @@ func TestUsageMeterCountsAForkOnce(t *testing.T) {
 		scanFile(t, m, p, now.Add(-time.Hour))
 	}
 	minute := now.Unix() / 60 * 60
-	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "claude", tokenuse.Claude}]; b == nil || b.Requests != 2 || b.Output != 10 {
+	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "claude", tokenuse.Claude, ""}]; b == nil || b.Requests != 2 || b.Output != 10 {
 		t.Fatalf("the original's bucket = %+v", b)
 	}
-	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "sonnetcc", tokenuse.Claude}]; b == nil || b.Requests != 1 || b.Output != 5 {
+	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "sonnetcc", tokenuse.Claude, ""}]; b == nil || b.Requests != 1 || b.Output != 5 {
 		t.Fatalf("the fork's bucket = %+v (its copies of m1, m2 are not counted again)", b)
 	}
-	if b := m.buckets[usageKey{minute, "claude-haiku-5-5", "claude", tokenuse.Claude}]; b == nil || b.Requests != 1 {
+	if b := m.buckets[usageKey{minute, "claude-haiku-5-5", "claude", tokenuse.Claude, ""}]; b == nil || b.Requests != 1 {
 		t.Fatalf("the subagent's bucket = %+v (its session's launcher)", b)
 	}
 	// Rewritten from the start (the file shrank): read again, nothing counted twice.
 	os.WriteFile(orig, []byte(claudeReply(now, "m1", "claude-opus-5-5", 10, 0, 100, 5)), 0o600)
 	scanFile(t, m, orig, now.Add(-time.Hour))
-	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "claude", tokenuse.Claude}]; b.Requests != 2 {
+	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "claude", tokenuse.Claude, ""}]; b.Requests != 2 {
 		t.Fatalf("after the rewrite = %+v", b)
 	}
 	// The counted replies leave with the window.
@@ -224,10 +224,10 @@ func TestUsageMeterCountsWorkflowAgents(t *testing.T) {
 		t.Fatalf("listed %d transcripts, want the session's and its two workflow agents' (not the run's journal)", listed)
 	}
 	minute := now.Unix() / 60 * 60
-	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "claude", tokenuse.Claude}]; b == nil || b.Requests != 2 || b.Output != 120 || b.CacheRead != 3000 {
+	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "claude", tokenuse.Claude, ""}]; b == nil || b.Requests != 2 || b.Output != 120 || b.CacheRead != 3000 {
 		t.Fatalf("opus = %+v, want m1 once and w1", b)
 	}
-	if b := m.buckets[usageKey{minute, "claude-sonnet-5-5", "claude", tokenuse.Claude}]; b == nil || b.Requests != 1 || b.Output != 90 {
+	if b := m.buckets[usageKey{minute, "claude-sonnet-5-5", "claude", tokenuse.Claude, ""}]; b == nil || b.Requests != 1 || b.Output != 90 {
 		t.Fatalf("sonnet = %+v, want w2", b)
 	}
 	if len(sessions) != 1 || !sessions["s1"] {
@@ -255,7 +255,7 @@ func TestUsageMeterCountsACodexForkOnce(t *testing.T) {
 	m.launcherOf = func(s string) string { sessions[s] = true; return "codex" }
 	scanFile(t, m, a, now.Add(-time.Hour))
 	scanFile(t, m, b, now.Add(-time.Hour))
-	got := m.buckets[usageKey{now.Unix() / 60 * 60, "gpt-6-codex", "codex", tokenuse.Codex}]
+	got := m.buckets[usageKey{now.Unix() / 60 * 60, "gpt-6-codex", "codex", tokenuse.Codex, ""}]
 	if got == nil || got.Requests != 2 || got.Output != 200 {
 		t.Fatalf("bucket = %+v, want the shared request once and the fork's own", got)
 	}
@@ -294,7 +294,7 @@ func TestUsageMeterCountsARequestAtItsMost(t *testing.T) {
 	if len(m.buckets) != 1 {
 		t.Fatalf("buckets %+v, want the request's minute only", m.buckets)
 	}
-	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "claude-opus-5-5", "", tokenuse.Claude}]; b == nil || b.Requests != 1 || b.Output != 9 || b.Input != 2 || b.CacheRead != 100 {
+	if b := m.buckets[usageKey{now.Unix() / 60 * 60, "claude-opus-5-5", "", tokenuse.Claude, ""}]; b == nil || b.Requests != 1 || b.Output != 9 || b.Input != 2 || b.CacheRead != 100 {
 		t.Fatalf("bucket = %+v, want one request at its most", b)
 	}
 }

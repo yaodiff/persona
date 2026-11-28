@@ -7,9 +7,9 @@ import { tRich } from "../../i18n/rich";
 import { useEffect, useRef, useState } from "react";
 import { previewBlocked } from "../../lib/extension-model";
 import { ago } from "../../lib/format";
-import { agreeLabel, canUninstall, isGitMarket, itemState, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, specLabel, wantsGitHubToken, GITHUB_TOKEN_URL, isGitHubMarket, type CatalogItem, type Catalog, type Market } from "../../lib/extension-market";
+import { agreeLabel, canUninstall, isGitMarket, itemState, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketKeys, marketLine, parseKeyList, specLabel, wantsGitHubToken, GITHUB_TOKEN_URL, isGitHubMarket, type CatalogItem, type Catalog, type Market } from "../../lib/extension-market";
 import { Button, cx, Dialog, IconButton, toast, useNow } from "../../ui/atoms";
-import { addMarket, AdminError, errorText, getCatalog, getMarkets, installExtension, previewFromMarket, refreshMarket, removeMarket, setMarketToken, upgradeExtension } from "../api";
+import { addMarket, addMarketKey, AdminError, errorText, getCatalog, getMarkets, installExtension, previewFromMarket, refreshMarket, removeMarket, removeMarketKey, setMarketToken, upgradeExtension } from "../api";
 import { AdminIcon } from "../icons";
 import { devDialog } from "../router";
 import type { ExtensionPreview } from "../types";
@@ -36,6 +36,7 @@ export function ExtensionMarkets({ onChanged }: { onChanged: () => void }) {
   const [gone, setGone] = useState(false);
   const [adding, setAdding] = useState(() => devDialog() === "market-add");
   const [tokenFor, setTokenFor] = useState<Market | null>(null);
+  const [keysFor, setKeysFor] = useState<Market | null>(null);
   const [refreshing, setRefreshing] = useState("");
   const [catalogKey, setCatalogKey] = useState(0);
 
@@ -110,6 +111,12 @@ export function ExtensionMarkets({ onChanged }: { onChanged: () => void }) {
                       token
                     </Tag>
                   )}
+                  {marketKeys(m).length > 0 && (
+                    <Tag tone="green" title={marketKeys(m).map((k) => k.key_id).join(", ")}>
+                      <AdminIcon name="shield" size={10} />
+                      {t("admin-pages-extensionmarket.keys_tag", { count: marketKeys(m).length })}
+                    </Tag>
+                  )}
                 </div>
                 <div className="mt-0.5 font-mono text-[11.5px] break-all text-ink-3">{specLabel(m.spec)}</div>
                 <div className="mt-0.5 text-[11.5px] text-ink-3">{marketLine(m, (iso) => ago(iso))}</div>
@@ -137,6 +144,12 @@ export function ExtensionMarkets({ onChanged }: { onChanged: () => void }) {
                     {m.has_token ? t("admin-pages-extensionmarket.change_token") : t("admin-pages-extensionmarket.set_token")}
                   </Button>
                 )}
+                {!m.official && (
+                  <Button tone="quiet" className="h-7 px-2" onClick={() => setKeysFor(m)}>
+                    <AdminIcon name="shield" size={13} />
+                    {t("admin-pages-extensionmarket.signing_keys")}
+                  </Button>
+                )}
                 <ConfirmButton label={t("admin-pages-extensionmarket.remove_label", { name: m.name })} confirm={t("admin-pages-extensionmarket.remove")} onConfirm={() => remove(m)} />
               </div>
             </div>
@@ -146,6 +159,7 @@ export function ExtensionMarkets({ onChanged }: { onChanged: () => void }) {
       {markets && markets.length > 0 && <MarketCatalog key={catalogKey} markets={markets} onChanged={() => (onChanged(), setCatalogKey((k) => k + 1))} />}
       <AddMarketDialog open={adding} onClose={() => setAdding(false)} onAdded={(m) => (setAdding(false), toast(t("admin-pages-extensionmarket.added", { name: m.name }), "ok"), changed())} />
       <TokenDialog market={tokenFor} onClose={() => setTokenFor(null)} onDone={(m) => (put(m), setTokenFor(null), setCatalogKey((k) => k + 1), void load())} />
+      <KeysDialog market={keysFor} onClose={() => setKeysFor(null)} onChanged={(m) => (put(m), setKeysFor(m), setCatalogKey((k) => k + 1))} />
     </>
   );
 }
@@ -318,10 +332,11 @@ function MarketInstallDialog({ item, onClose, onDone }: { item: CatalogItem | nu
 function AddMarketDialog({ open, onClose, onAdded }: { open: boolean; onClose: () => void; onAdded: (m: Market) => void }) {
   const [spec, setSpec] = useState("");
   const [token, setToken] = useState("");
+  const [keys, setKeys] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
-    if (open) (setSpec(""), setToken(""), setError(""));
+    if (open) (setSpec(""), setToken(""), setKeys(""), setError(""));
   }, [open]);
   const git = isGitMarket(spec);
   const go = async () => {
@@ -329,7 +344,7 @@ function AddMarketDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
     setBusy(true);
     setError("");
     try {
-      onAdded(await addMarket(spec.trim(), git ? undefined : token.trim() || undefined));
+      onAdded(await addMarket(spec.trim(), git ? undefined : token.trim() || undefined, parseKeyList(keys)));
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -374,6 +389,16 @@ function AddMarketDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
           autoComplete="new-password"
           disabled={git}
           hint={git ? t("admin-pages-extensionmarket.token_git_hint") : t("admin-pages-extensionmarket.token_hint")}
+        />
+        <Field
+          label={t("admin-pages-extensionmarket.keys_optional")}
+          value={keys}
+          onChange={setKeys}
+          placeholder="ed25519:…"
+          mono
+          multiline
+          autoCapitalize="off"
+          hint={t("admin-pages-extensionmarket.keys_hint")}
         />
         {busy && <p className="text-[12px] text-ink-3">{t("admin-pages-extensionmarket.adding")}</p>}
         {error && <p className="text-[12.5px] leading-relaxed break-words text-red">{error}</p>}
@@ -443,6 +468,76 @@ function TokenDialog({ market, onClose, onDone }: { market: Market | null; onClo
           </div>
         )}
         {error && <p className="text-[12.5px] leading-relaxed break-words text-red">{error}</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+/** A private market's trusted public keys (docs/extensions/extensions.md "Private market keys"): listed whole (they are
+ *  public), removed one at a time, added one at a time. Every change verifies the market's saved index again at once. */
+function KeysDialog({ market, onClose, onChanged }: { market: Market | null; onClose: () => void; onChanged: (m: Market) => void }) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => (setKey(""), setError("")), [market?.id]);
+  const run = async (what: string, call: () => Promise<Market>) => {
+    if (!market) return;
+    setBusy(what);
+    setError("");
+    try {
+      const m = await call();
+      onChanged(m);
+      if (what === "add") setKey("");
+      toast(what === "add" ? t("admin-pages-extensionmarket.key_added", { name: m.name }) : t("admin-pages-extensionmarket.key_removed", { name: m.name }), "ok");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy("");
+    }
+  };
+  const keys = marketKeys(market);
+  return (
+    <Dialog
+      open={Boolean(market)}
+      onClose={onClose}
+      title={market ? t("admin-pages-extensionmarket.keys_title", { name: market.name }) : ""}
+      width={560}
+      footer={
+        <>
+          <Button tone="quiet" onClick={onClose}>
+            {t("admin-pages-extensionmarket.done")}
+          </Button>
+          <Button tone="primary" busy={busy === "add"} disabled={!key.trim() || !!busy} onClick={() => market && void run("add", () => addMarketKey(market.id, key.trim()))}>
+            {t("admin-pages-extensionmarket.add_key")}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3">
+        <p className="text-meta leading-relaxed text-ink-2">{keys.length ? t("admin-pages-extensionmarket.keys_signed_intro") : t("admin-pages-extensionmarket.keys_unsigned_intro")}</p>
+        {keys.length > 0 && (
+          <ul className="grid gap-1.5">
+            {keys.map((k) => (
+              <li key={k.key_id} className="flex items-center gap-2 rounded-[8px] bg-hover px-3 py-2">
+                <AdminIcon name="shield" size={13} className="shrink-0 text-green" />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-mono text-label text-ink">{k.key_id}</span>
+                  <span className="block truncate font-mono text-submeta text-ink-3" title={k.key}>
+                    {k.key}
+                  </span>
+                </span>
+                {market?.signature?.state === "signed" && market.signature.key_id === k.key_id && <Tag tone="green">{t("admin-pages-extensionmarket.key_signs_index")}</Tag>}
+                <ConfirmButton
+                  label={t("admin-pages-extensionmarket.remove_key_label", { key: k.key_id })}
+                  confirm={t("admin-pages-extensionmarket.remove")}
+                  onConfirm={() => (market ? run("remove:" + k.key_id, () => removeMarketKey(market.id, k.key_id)) : undefined)}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+        <Field label={t("admin-pages-extensionmarket.new_key")} value={key} onChange={setKey} placeholder="ed25519:…" mono autoCapitalize="off" hint={t("admin-pages-extensionmarket.new_key_hint")} />
+        {error && <p className="text-meta leading-relaxed break-words text-red">{error}</p>}
       </div>
     </Dialog>
   );

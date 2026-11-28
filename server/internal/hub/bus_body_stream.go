@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -36,7 +37,13 @@ func (h *Hub) callHTTP(ctx context.Context, id string, req assistantwire.HTTPReq
 		}
 		h.logf("bus: [%s] %s %s: the body stream was turned down (%s), sent inline", id, req.Method, req.Path, coded.Code)
 	}
-	return h.callBus(ctx, id, assistantwire.MethodHTTP, httpParams(req), res)
+	return callHTTPInline(ctx, h.managerCaller(id), assistantwire.HTTPMethod, req, res)
+}
+
+// callHTTPInline binds the request and reply types while letting the RPC encoder
+// append the body directly to the outgoing line.
+func callHTTPInline(ctx context.Context, caller buswire.Caller, method buswire.Method[assistantwire.HTTPRequest, assistantwire.HTTPResponse], req assistantwire.HTTPRequest, res *assistantwire.HTTPResponse) error {
+	return caller.Call(ctx, method.Name, httpParams(req), res)
 }
 
 // managerCan: manager id's current connection named capability in its manager.hello.
@@ -58,7 +65,11 @@ func (h *Hub) callHTTPStreamed(ctx context.Context, id string, req assistantwire
 	go pumpBody(pctx, taken, body)
 	req.Body = nil
 	req.BodyStream = &assistantwire.BodyStream{ID: rid, Size: int64(len(body))}
-	return h.callBus(ctx, id, assistantwire.MethodHTTPStreamed, req, res)
+	out, err := buswire.Call(ctx, h.managerCaller(id), assistantwire.HTTPStreamedMethod, req)
+	if err == nil {
+		*res = out
+	}
+	return err
 }
 
 // pumpBody writes body to the relay the manager takes from taken, as a body stream (bus.WriteBody). It gives up when

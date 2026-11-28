@@ -37,6 +37,17 @@ type AgentSession struct {
 	CanSend          bool   `json:"canSend"`
 	UnreadCount      int    `json:"unreadCount"`
 	RankTimeMs       int64  `json:"rankTimeMs"`
+	// PreviewText is the latest message's text as the source shows it in its own list, PreviewIsMine whether the user
+	// sent it; OnTopRankTimeMs is when the user pinned the session at the source (0: not pinned there). All three are
+	// optional: older sources leave them out and the apps show the row without a preview.
+	PreviewText     string `json:"previewText,omitempty"`
+	PreviewIsMine   bool   `json:"previewIsMine,omitempty"`
+	OnTopRankTimeMs int64  `json:"onTopRankTimeMs,omitempty"`
+	// Quota is what is left of the account's allowance at its service, when the source knows: {state, remaining?,
+	// percent?, tone?, kind?, label?, selected?, resetsAt?, checkedAt?, source?, sourceNote?, stale?, show?, buckets?}.
+	// The hub reads none of it, so it is kept as the source wrote it and fields added later pass through; the apps
+	// draw it as a charge. Optional: older sources leave it out.
+	Quota json.RawMessage `json:"quota,omitempty"`
 }
 
 // AgentBlock is one block of a message: text, tool-call {name,status,summary,input}, tool-result, or anything

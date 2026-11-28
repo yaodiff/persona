@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./store", () => ({ onHubEvent: () => () => {} }));
 vi.mock("../ui/atoms", () => ({ toast: vi.fn() }));
 
+import { initI18n } from "../i18n";
 import { toast } from "../ui/atoms";
 import { badgeCount, getInbox, handOffToMain, reloadInbox, replaceItem, resetInboxForTests, sections, suggestionAct, uncertainReplyKey, TIERS, type InboxItem } from "./inbox";
 import {
-  actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingWord, hasEvent, itemAtUid, preparing, statusOf, suggestionButtons, suggestionTitle,
+  actedText, actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingWord, hasEvent, itemAtUid, preparing, statusOf, suggestionButtons, suggestionTitle,
 } from "./inbox-events";
 
 const fixture = JSON.parse(readFileSync(join(__dirname, "../../../scripts/mock/inbox_events.json"), "utf8")) as { items: InboxItem[] };
@@ -62,9 +63,9 @@ describe("收件箱事件：分区", () => {
 
 describe("收件箱事件：行上的标记", () => {
   it("says what is going on", () => {
-    expect(handlingWord(urgent)).toBe("AI 正在看");
-    expect(handlingWord(agentWorking)).toBe("Agent 在做");
-    expect(handlingWord(waiting)).toBe("等对方回复");
+    expect(handlingWord(urgent)).toBe("AI 正在查看");
+    expect(handlingWord(agentWorking)).toBe("Agent 处理中");
+    expect(handlingWord(waiting)).toBe("等待对方回复");
     expect(handlingWord(reply)).toBeUndefined();
     expect(handlingWord(legacy(waiting))).toBeUndefined();
   });
@@ -76,7 +77,7 @@ describe("收件箱事件：行上的标记", () => {
   });
   it("names the suggestion's kind and its first line", () => {
     expect(suggestionTitle(reply.suggestion!)).toBe("建议回复");
-    expect(suggestionTitle(agentSuggestion.suggestion!)).toBe("建议派 Agent");
+    expect(suggestionTitle(agentSuggestion.suggestion!)).toBe("建议启动 Agent");
     expect(suggestionTitle(conclusion.suggestion!)).toBe("结论");
     expect(firstLine("\n  第一行\n第二行")).toBe("第一行");
   });
@@ -88,6 +89,29 @@ describe("收件箱事件：建议的按钮", () => {
     expect(suggestionButtons(agentSuggestion.suggestion!)).toEqual({ confirm: "开始", edit: true });
     expect(suggestionButtons(conclusion.suggestion!)).toEqual({ confirm: "知道了", edit: false });
     expect(suggestionButtons({ ...reply.suggestion!, handback: true })).toEqual({ confirm: "确认", edit: true });
+  });
+});
+
+describe("handoff suggestion copy", () => {
+  const handoff = { kind: "handoff", version: 7, text: "Review the dates", target_title: "Launch", session_id: "s-target" };
+
+  afterEach(async () => { await initI18n("zh-Hans"); });
+  it.each([
+    ["en", "Suggested handoff to Launch", "Hand off", "Handed off"],
+    ["zh-Hans", "建议转交给「Launch」", "转交", "已转交"],
+    ["ja", "「Launch」への引き継ぎ", "引き継ぐ", "引き継ぎました"],
+  ])("names the destination, action and receipt in %s", async (lang, title, button, receipt) => {
+    await initI18n(lang);
+    expect(suggestionTitle(handoff)).toBe(title);
+    expect(suggestionButtons(handoff)).toEqual({ confirm: button, edit: true });
+    expect(actedText(handoff, "confirm")).toBe(receipt);
+  });
+
+  it("keeps unknown kinds generic even when they carry a target", () => {
+    const unknown = { ...handoff, kind: "future" };
+    expect(suggestionTitle(unknown)).toBe("建议");
+    expect(suggestionButtons(unknown)).toEqual({ confirm: "确认", edit: true });
+    expect(actedText(unknown, "confirm")).toBe("已交由 AI 处理");
   });
 });
 
@@ -160,7 +184,7 @@ describe("收件箱事件：确认 / 驳回 / 说一句话", () => {
     expect(body).toMatchObject({ version: 2, action: "confirm", text: "好的，周四给你" });
     expect(body.client_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(getInbox().items.find((x) => x.id === reply.id)?.status).toBe("working");
-    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已发送，等对方回复", "ok"]);
+    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已发送，等待对方回复", "ok"]);
   });
   it("「建议已更新」 and the item as the hub has it now when the version moved", async () => {
     const fresh = { ...reply, suggestion: { ...reply.suggestion!, version: 3, text: "新的建议" } };

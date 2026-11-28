@@ -490,6 +490,61 @@ class CalendarWriteToolsTest {
         assertEquals(reads, backend.reads)
         assertTrue(text, text.startsWith("修改日程「Weekly sync」") || text.startsWith("Change event “Weekly sync”"))
     }
+
+    @Test fun changingOnlyTheEndTimeShowsTheTimeChangeOnTheConfirmationCard() {
+        backend.events[1] = plain
+        val resources = ApplicationProvider.getApplicationContext<Context>().resources
+        // Plain is 15:00–16:00 (+08:00); extend only the end to 17:30 (+08:00).
+        val prepared = tools.prepareUpdate(args("id" to "1", "end" to "2026-11-06T17:30:00+08:00"))
+        assertNull(prepared.change.start)
+        assertEquals(Instant.parse("2026-11-06T09:30:00Z"), prepared.change.end)
+        val text = prepared.text(resources)
+        val expectedBefore = calendarRange(
+            Instant.parse("2026-11-06T07:00:00Z"),
+            Instant.parse("2026-11-06T08:00:00Z"),
+            false,
+            resources,
+            zone,
+        )
+        val expectedAfter = calendarRange(
+            Instant.parse("2026-11-06T07:00:00Z"),
+            Instant.parse("2026-11-06T09:30:00Z"),
+            false,
+            resources,
+            zone,
+        )
+        val expectedTimeLine = resources.getString(R.string.phonetools_calendar_time_change, expectedBefore, expectedAfter)
+        assertTrue("Expected confirmation card to show time change line:\n$text", expectedTimeLine in text.lines())
+        tools.update(prepared)
+        assertEquals(ms("2026-11-06T09:30:00Z"), backend.batches.single().single().values[CalendarContract.Events.DTEND])
+    }
+
+    @Test fun changingEndTimeAlongsideTitleShowsBothChangesOnTheConfirmationCard() {
+        backend.events[1] = plain
+        val resources = ApplicationProvider.getApplicationContext<Context>().resources
+        val prepared = tools.prepareUpdate(args("id" to "1", "title" to "Extended sync", "end" to "2026-11-06T17:00:00+08:00"))
+        assertNull(prepared.change.start)
+        assertEquals(Instant.parse("2026-11-06T09:00:00Z"), prepared.change.end)
+        val text = prepared.text(resources)
+        val expectedBefore = calendarRange(
+            Instant.parse("2026-11-06T07:00:00Z"),
+            Instant.parse("2026-11-06T08:00:00Z"),
+            false,
+            resources,
+            zone,
+        )
+        val expectedAfter = calendarRange(
+            Instant.parse("2026-11-06T07:00:00Z"),
+            Instant.parse("2026-11-06T09:00:00Z"),
+            false,
+            resources,
+            zone,
+        )
+        val expectedTimeLine = resources.getString(R.string.phonetools_calendar_time_change, expectedBefore, expectedAfter)
+        val expectedTitleLine = resources.getString(R.string.phonetools_calendar_title_change, "Weekly sync", "Extended sync")
+        assertTrue("Expected confirmation card to show title change line:\n$text", expectedTitleLine in text.lines())
+        assertTrue("Expected confirmation card to show time change line:\n$text", expectedTimeLine in text.lines())
+    }
 }
 
 /** An in-memory provider: reads come from the maps, a batch is recorded (or fails), inserts get fresh ids. */

@@ -76,6 +76,8 @@ final class UDPRouteNode: @unchecked Sendable {
     private let lock = NSLock()
     private var tlsSeen: [ScreenLinkMessage] = []
     private var udpSeen: [ScreenUDPMessage] = []
+    private var seenNumbers: [UInt64] = []
+    private var replays = 0
     private var sealer: ScreenUDPSealer
     private let opener: TestAESGCM
     private let openIV: Data
@@ -86,7 +88,17 @@ final class UDPRouteNode: @unchecked Sendable {
     var udpSilent: Bool { get { lock.withLock { mute } } set { lock.withLock { mute = newValue } } }
     private var mute = false
     /// Where the stream goes on after a give-up.
-    var resetTo: UInt64 = 0
+    var resetTo: UInt64 { get { lock.withLock { resetOffset } } set { lock.withLock { resetOffset = newValue } } }
+    private var resetOffset: UInt64 = 0
+    /// Per-skip-offset reset targets so a late skip retry for an earlier frame never receives a later round's reset.
+    private var resetBySkipOffset: [UInt64: UInt64] = [:]
+    func setReset(for skipOffset: UInt64, to target: UInt64) { lock.withLock { resetBySkipOffset[skipOffset] = target } }
+    /// How many incoming `skip` packets to ignore before replying with `reset` (simulates lost skip/reset datagrams).
+    var dropSkips: Int { get { lock.withLock { ignoredSkips } } set { lock.withLock { ignoredSkips = newValue } } }
+    private var ignoredSkips = 0
+    /// How many incoming `use` packets to ignore before replying with `resumed` (simulates lost use/resumed datagrams).
+    var dropUses: Int { get { lock.withLock { ignoredUses } } set { lock.withLock { ignoredUses = newValue } } }
+    private var ignoredUses = 0
 
     init(tls: PipeEnd, udp: DatagramEnd) {
         self.tls = tls
@@ -129,16 +141,28 @@ final class UDPRouteNode: @unchecked Sendable {
     private func udpLoop() async {
         while let p = try? await udp.receive() {
             guard let head = ScreenUDPPacket.read(p), head.flow == flowID,
-                  let body = ScreenUDPPacket.open(p, cipher: opener, iv: openIV, number: head.number),
-                  lock.withLock({ window.accept(head.number) }),
-                  let m = try? ScreenUDPMessage.decode(body, fromNode: false) else { continue }
+                  let body = ScreenUDPPacket.open(p, cipher: opener, iv: openIV, number: head.number) else { continue }
+            let accepted = lock.withLock { () -> Bool in
+                seenNumbers.append(head.number)
+                let ok = window.accept(head.number)
+                if !ok { replays += 1 }
+                return ok
+            }
+            guard accepted, let m = try? ScreenUDPMessage.decode(body, fromNode: false) else { continue }
             lock.withLock { udpSeen.append(m) }
             if udpSilent { continue }
             switch m {
             case let .helloPhone(echo):
                 send(echo == 77 ? .helloNode(challenge: 0, validated: true) : .helloNode(challenge: 77, validated: false))
             case let .use(entries):
-                send(.resumed(entries.map { ScreenLinkOffset($0.channel, 0) }))
+                let reply = lock.withLock { () -> Bool in
+                    if ignoredUses > 0 {
+                        ignoredUses -= 1
+                        return false
+                    }
+                    return true
+                }
+                if reply { send(.resumed(entries.map { ScreenLinkOffset($0.channel, 0) })) }
             case let .ping(micros, _, _):
                 send(.pong(micros: micros, dataBytes: 0, parityBytes: 0, resentBytes: 0))
             case let .nack(ch, entries):
@@ -149,8 +173,15 @@ final class UDPRouteNode: @unchecked Sendable {
                         send(.data(h, fragment: frag))
                     }
                 }
-            case let .skip(ch, _):
-                send(.reset(channel: ch, offset: resetTo))
+            case let .skip(ch, off):
+                let replyOffset: UInt64? = lock.withLock {
+                    if ignoredSkips > 0 {
+                        ignoredSkips -= 1
+                        return nil
+                    }
+                    return resetBySkipOffset[off] ?? resetOffset
+                }
+                if let replyOffset { send(.reset(channel: ch, offset: replyOffset)) }
             default:
                 break
             }
@@ -192,6 +223,8 @@ final class UDPRouteNode: @unchecked Sendable {
 
     func tlsMessages() -> [ScreenLinkMessage] { lock.withLock { tlsSeen } }
     func udpMessages() -> [ScreenUDPMessage] { lock.withLock { udpSeen } }
+    func packetNumbers() -> [UInt64] { lock.withLock { seenNumbers } }
+    func replayDropCount() -> Int { lock.withLock { replays } }
     func usedOnTLS(_ ch: UInt8) -> UInt64? {
         tlsMessages().reversed().lazy.compactMap { m -> UInt64? in
             if case let .use(e) = m { return e.first { $0.channel == ch }?.offset }
@@ -199,6 +232,39 @@ final class UDPRouteNode: @unchecked Sendable {
         }.first
     }
     func usedOnUDP() -> Bool { udpMessages().contains { if case .use = $0 { true } else { false } } }
+}
+
+/// A test cipher wrapper that fails (`seal` returns nil) when the plaintext UDP message body matches `failKind`
+/// starting at the `failFromMatch`-th occurrence (1-based), simulating `ScreenUDPSealer` hitting `packetLimit`
+/// deterministically without needing 2^62 packets.
+private final class FailingSealCipher: ScreenUDPCipher, @unchecked Sendable {
+    private let base: TestAESGCM
+    private let failKind: UInt8
+    private let failFromMatch: Int
+    private let matches: SealCounter
+
+    final class SealCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        func next() -> Int { lock.withLock { n += 1; return n } }
+        var count: Int { lock.withLock { n } }
+    }
+
+    init(key: Data, failKind: UInt8, failFromMatch: Int, matches: SealCounter) {
+        self.base = TestAESGCM(key)
+        self.failKind = failKind
+        self.failFromMatch = failFromMatch
+        self.matches = matches
+    }
+
+    func seal(_ body: Data, nonce: Data, header: Data) -> Data? {
+        if body.first == failKind, matches.next() >= failFromMatch { return nil }
+        return base.seal(body, nonce: nonce, header: header)
+    }
+
+    func open(_ sealed: Data, nonce: Data, header: Data) -> Data? {
+        base.open(sealed, nonce: nonce, header: header)
+    }
 }
 
 final class ScreenLinkUDPTests: XCTestCase {
@@ -224,19 +290,27 @@ final class ScreenLinkUDPTests: XCTestCase {
         let s: ScreenLinkSession
         let events: Collected
         let route: UDPRouteNode
+        let udpPhone: DatagramEnd
         let video: ScreenLinkChannelEnd
         let videoNode: FakeNode
     }
 
     /// A session whose video rides a direct route's UDP flow.
-    private func rig(udp: Bool = true, file: StaticString = #filePath, line: UInt = #line) async throws -> Rig {
+    private func rig(
+        udp: Bool = true,
+        now: @escaping @Sendable () -> Double = ScreenLinkSession.monotonic,
+        setup: ScreenUDPSetup? = nil,
+        configureRoute: ((UDPRouteNode) -> Void)? = nil,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> Rig {
         let shared = AutoNode.SharedReceive()
         let (phoneR, nodeR) = PipeEnd.pair()
         _ = AutoNode(nodeR, delayMs: 30, shared: shared)
         let paths = ScreenLinkPaths(token: "tok", cert: "pin", port: 4000, candidates: [.init(kind: "lan", addr: "192.0.2.10", prefix: 24)], udp: 1)
-        let s = ScreenLinkSession(rfbRelay: phoneR, first: ScreenLinkMessage.paths(paths).framed())
+        let s = ScreenLinkSession(rfbRelay: phoneR, first: ScreenLinkMessage.paths(paths).framed(), now: now)
         let events = Collected(s)
-        if udp { await s.enableUDP(ScreenUDPSetup { TestAESGCM($0) }) }
+        if udp { await s.enableUDP(setup ?? ScreenUDPSetup { TestAESGCM($0) }) }
         let (phoneV, nodeV) = PipeEnd.pair()
         let vnode = FakeNode(nodeV)
         try await vnode.say(.resumed([ScreenLinkOffset(2, 0)]))
@@ -244,13 +318,14 @@ final class ScreenLinkUDPTests: XCTestCase {
         let (phoneD, nodeD) = PipeEnd.pair()
         let (phoneU, nodeU) = DatagramEnd.pair()
         let route = UDPRouteNode(tls: nodeD, udp: nodeU)
+        configureRoute?(route)
         await until("paths read") { events.all().contains { if case .paths = $0 { true } else { false } } }
         await s.addDirect(ExportingPipe(phoneD), route: "lan:a", kind: .lan, via: .wifi)
         if udp {
             await until("the session asked for a flow") { events.openFlow() == "lan:a" }
             await s.addFlow(phoneU, route: "lan:a")
         }
-        return Rig(s: s, events: events, route: route, video: video, videoNode: vnode)
+        return Rig(s: s, events: events, route: route, udpPhone: phoneU, video: video, videoNode: vnode)
     }
 
     /// What a channel end hands on, read in the background so a test waits for it with a deadline rather than forever.
@@ -363,6 +438,151 @@ final class ScreenLinkUDPTests: XCTestCase {
         r.route.video(c, ch: 2, at: r.route.resetTo)
         let next = try await r.video.receive()
         XCTAssertEqual(next, c, "the stream goes on at the reset")
+    }
+
+    /// Retrying `skip` for the same single given-up frame while waiting for `reset` must not count as additional
+    /// given-up frames and prematurely tear down the UDP flow as degraded.
+    func testSkipRetriesForASingleFrameDoNotLeaveTheFlowAsDegraded() async throws {
+        let r = try await rig()
+        await until("the video on the flow") { r.route.usedOnUDP() }
+        let got = Received(r.video)
+        let a = frame(1, size: 400), lost = frame(2, size: 5000), b = frame(3, size: 400)
+        r.route.video(a, ch: 2, at: 0)
+        await until("first frame delivered", timeout: 3) { got.data == a }
+        let lostAt = UInt64(a.count)
+        // Drop more skip datagrams than flowGiveUps (2) so the receiver must resend skip for the same frame.
+        r.route.dropSkips = ScreenLinkSession.flowGiveUps + 1
+        let resetAt = lostAt + UInt64(lost.count) + 1000
+        r.route.setReset(for: lostAt, to: resetAt)
+        r.route.video(lost, ch: 2, at: lostAt, lose: Set(0 ..< 4), keep: false)
+        r.route.video(b, ch: 2, at: lostAt + UInt64(lost.count))
+        await until("skip retried past flowGiveUps without leaving UDP", timeout: 3) {
+            let skips = r.route.udpMessages().filter { if case .skip(2, lostAt) = $0 { true } else { false } }.count
+            return skips >= ScreenLinkSession.flowGiveUps + 2
+        }
+        let c = frame(4, size: 600)
+        r.route.video(c, ch: 2, at: resetAt)
+        await until("the stream recovers on UDP once reset arrives", timeout: 3) { got.data == a + c }
+        XCTAssertFalse(r.events.moves().contains { $0.reason == .degraded }, "skip retries for one frame must not degrade the flow")
+        XCTAssertFalse(r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp }, "the video stays on UDP instead of falling back to TLS")
+    }
+
+    /// More than `flowGiveUps` distinct given-up frames within `flowGiveUpWindow` still leave the UDP flow as degraded.
+    func testDistinctGivenUpFramesOverThresholdLeaveTheFlowAsDegraded() async throws {
+        let r = try await rig()
+        await until("the video on the flow") { r.route.usedOnUDP() }
+        let got = Received(r.video)
+        var expected = Data()
+        var off: UInt64 = 0
+        for i in 0 ..< (ScreenLinkSession.flowGiveUps + 1) {
+            let lost = frame(i * 3 + 1, size: 5000), later = frame(i * 3 + 2, size: 400)
+            let lostAt = off
+            let nextOff = lostAt + UInt64(lost.count) + 1000
+            r.route.setReset(for: lostAt, to: nextOff)
+            r.route.video(lost, ch: 2, at: lostAt, lose: Set(0 ..< 4), keep: false)
+            r.route.video(later, ch: 2, at: lostAt + UInt64(lost.count))
+            if i < ScreenLinkSession.flowGiveUps {
+                await until("skip \(i + 1) sent", timeout: 3) {
+                    r.route.udpMessages().contains { if case .skip(2, lostAt) = $0 { true } else { false } }
+                }
+                let after = frame(i * 3 + 3, size: 400)
+                r.route.video(after, ch: 2, at: nextOff)
+                expected += after
+                await until("frame after reset \(i + 1)", timeout: 3) { got.data == expected }
+                off = nextOff + UInt64(after.count)
+            }
+        }
+        await until("flow left as degraded", timeout: 3) {
+            r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp && $0.reason == .degraded }
+        }
+        XCTAssertGreaterThan(off, 0)
+        await until("back on TLS after degraded fallback", timeout: 3) { r.route.usedOnTLS(2) == off }
+    }
+
+    /// Retrying `use` in `flowTick` must keep the advanced sealer packet number instead of overwriting `flows[route]`
+    /// with a stale struct copy (which rolled back `sealer.next`, reused AES-GCM nonces, and triggered replay drops).
+    func testUseRetryDoesNotReusePacketNumbersOrTriggerReplayDrops() async throws {
+        let r = try await rig(configureRoute: { $0.dropUses = 2 })
+        await until("third use accepted by node without replay drops", timeout: 3) {
+            r.route.udpMessages().filter { if case .use = $0 { true } else { false } }.count >= 3
+        }
+        let got = Received(r.video)
+        let a = frame(1, size: 400)
+        r.route.video(a, ch: 2, at: 0)
+        await until("video frame delivered on UDP after use retries", timeout: 3) { got.data == a }
+        let nums = r.route.packetNumbers()
+        XCTAssertEqual(nums.count, Set(nums).count, "every UDP packet must have a unique packet number (no nonce reuse): \(nums)")
+        XCTAssertEqual(r.route.replayDropCount(), 0, "node replay window must not drop retried UDP packets")
+        XCTAssertFalse(r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp },
+                       "the video must stay on UDP once resumed arrives")
+    }
+
+    /// If sealing fails during `startCarrying`'s initial `use`, `flowTick` must not force-unwrap the removed flow
+    /// and `startCarrying` must not emit a spurious `.tcp -> .udp` `.faster` move after `leaveFlow` already ran.
+    func testSealerFailureDuringStartCarryingLeavesFlowWithoutCrashingOrEmittingFaster() async throws {
+        let useSeals = FailingSealCipher.SealCounter()
+        let setup = ScreenUDPSetup { key in
+            FailingSealCipher(key: key, failKind: ScreenUDPWire.Kind.use.rawValue, failFromMatch: 1, matches: useSeals)
+        }
+        let r = try await rig(setup: setup)
+        await until("flow left as lost on sealer failure", timeout: 3) {
+            r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp && $0.reason == .lost }
+        }
+        XCTAssertFalse(r.events.moves().contains { $0.to.transport == .udp && $0.reason == .faster },
+                       "startCarrying must not emit a .faster move after sendFlow left the flow")
+    }
+
+    /// If sealing fails during a `use` retry in `flowTick`, `flowTick` must not resurrect the removed flow with a
+    /// stale struct write back to `flows[route]`.
+    func testSealerFailureDuringUseRetryDoesNotResurrectRemovedFlow() async throws {
+        let useSeals = FailingSealCipher.SealCounter()
+        let setup = ScreenUDPSetup { key in
+            FailingSealCipher(key: key, failKind: ScreenUDPWire.Kind.use.rawValue, failFromMatch: 2, matches: useSeals)
+        }
+        let r = try await rig(setup: setup, configureRoute: { $0.dropUses = 5 })
+        await until("flow left as lost on use retry sealer failure", timeout: 3) {
+            r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp && $0.reason == .lost }
+        }
+        let got = Received(r.video)
+        let a = frame(1, size: 400)
+        try await r.route.say(.data(channel: 2, offset: 0, bytes: a))
+        await until("video continues over TLS after flow leaves", timeout: 3) { got.data == a }
+        let lostMoves = r.events.moves().filter { $0.from?.transport == .udp && $0.to.transport == .tcp && $0.reason == .lost }
+        XCTAssertEqual(lostMoves.count, 1, "removed flow must not be resurrected to leave a second time")
+        XCTAssertEqual(useSeals.count, 2, "no further use retries should be attempted on a removed flow")
+    }
+
+    /// If sealing fails during `pingFlow` inside `flowTick`, `flowTick` must not force-unwrap the removed flow.
+    func testSealerFailureDuringPeriodicPingLeavesFlowWithoutCrashing() async throws {
+        final class Clock: @unchecked Sendable {
+            private let lock = NSLock()
+            private var t = 100.0
+            func now() -> Double { lock.withLock { t } }
+            func advance(_ dt: Double) { lock.withLock { t += dt } }
+        }
+        let clock = Clock()
+        let pingSeals = FailingSealCipher.SealCounter()
+        let setup = ScreenUDPSetup { key in
+            FailingSealCipher(key: key, failKind: ScreenUDPWire.Kind.ping.rawValue, failFromMatch: 2, matches: pingSeals)
+        }
+        let r = try await rig(udp: false, now: { clock.now() })
+        // Ensure the direct route already carries video before opening the UDP flow; gently advance the virtual clock
+        // if an early tick recorded `lastLook` before `"lan:a"` attached under CI load.
+        await until("video on direct route", timeout: 3) {
+            if r.route.usedOnTLS(2) != nil { return true }
+            clock.advance(0.02)
+            return false
+        }
+        await r.s.enableUDP(setup)
+        await until("the session asked for a flow", timeout: 3) { r.events.openFlow() == "lan:a" }
+        await r.s.addFlow(r.udpPhone, route: "lan:a")
+        await until("initial UDP ping answered and video carrying", timeout: 3) { r.route.usedOnUDP() }
+        // Advance past the 1 s periodic ping interval so flowTick invokes pingFlow(route) and hits sealer failure.
+        clock.advance(1.1)
+        await until("flow left as lost on periodic ping sealer failure", timeout: 3) {
+            r.events.moves().contains { $0.from?.transport == .udp && $0.to.transport == .tcp && $0.reason == .lost }
+        }
+        XCTAssertEqual(pingSeals.count, 2, "flow must leave on the second (periodic) ping seal failure")
     }
 
     /// #10005 over TCP: a reset the node owes again goes out on the new route, and its copy on the route the channel

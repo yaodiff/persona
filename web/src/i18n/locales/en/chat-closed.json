@@ -1,0 +1,8 @@
+{
+  "completed": "Its to-do is completed.",
+  "cancelled": "Its to-do was cancelled.",
+  "continue": "You can keep chatting here.",
+  "archived": "This agent is archived. Restore it to bring it back to Agents; a new message brings it back too.",
+  "resume": "Resume",
+  "resume_failed": "Couldn't resume this Agent. {error}"
+}

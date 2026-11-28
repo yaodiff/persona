@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -18,6 +21,8 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -25,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -101,6 +107,35 @@ class ToastShotsTest {
         rule.runOnIdle {
             assertEquals(1, undone)
             assertNull(state.current)
+        }
+    }
+
+    @Test fun toastWithTopBarClearanceClearsChatTopBarAcrossStyles() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val state = JToastState().apply { show(FeedbackNotice("Branched to a new chat")) }
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("toast-scene").width(400.dp).height(240.dp).background(PersonaTheme.palette.background)) {
+                    ChatTopBar(
+                        title = "Migrate blog to Astro",
+                        source = "Mac Studio",
+                        onBack = {},
+                        modifier = Modifier.testTag("top-bar"),
+                    )
+                    JToastHost(state, Modifier.align(Alignment.TopCenter).padding(top = ToastTopBarClearance))
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            rule.runOnIdle { style = s; dark = d }
+            rule.waitForIdle()
+            val name = "toast-clearance-${s.name.lowercase()}-${if (d) "dark" else "light"}"
+            val bar = rule.onNodeWithTag("top-bar").getBoundsInRoot()
+            val toast = rule.onNodeWithTag("toast").getBoundsInRoot()
+            assertTrue("$name: toast top (${toast.top}) must clear top bar bottom (${bar.bottom})", toast.top >= bar.bottom)
+            val bitmap = rule.onNodeWithTag("toast-scene").captureToImage().asAndroidBitmap()
+            File(out(), "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
 }

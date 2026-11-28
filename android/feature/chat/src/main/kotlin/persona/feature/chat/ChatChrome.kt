@@ -22,6 +22,7 @@ import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.engines.Engines
 import persona.core.domain.lines.isLiveStatus
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.ChildRollupKind
@@ -342,8 +343,10 @@ internal fun ChatHeader(
     when (dialog) {
         "rename" -> {
             val unified = session?.usesUnifiedHerdrRename(preferHerdrTabName) == true
+            val engineName = session?.let(Engines::sessionEngineName) ?: Engines.DEFAULT
             JDialog(onDismiss = { dialog = null }, title = stringResource(R.string.chat_chrome_rename),
-                text = chatRenameNote(session, unified = unified)?.let { stringResource(it) },
+                // the engine the tab is in, by name (#17054): herdr, Orca, Herdr App
+                text = chatRenameNote(session, unified = unified)?.let { stringResource(it, engineName) },
                 confirm = stringResource(R.string.chat_chrome_save) to {
                     dialog = null
                     if (unified) state.renameUnified(session!!, tabName) else state.rename(session!!, title, tabName)
@@ -361,7 +364,7 @@ internal fun ChatHeader(
                                     session?.isTern == true -> R.string.chat_chrome_tab_name_tern
                                     session?.isRex == true -> R.string.chat_chrome_tab_name_rex
                                     else -> R.string.chat_chrome_tab_name
-                                }))
+                                }, engineName))
                             JTextField(title, { title = it }, label = stringResource(R.string.chat_chrome_session_name), singleLine = true)
                         }
                     }

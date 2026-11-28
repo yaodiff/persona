@@ -8,13 +8,18 @@ import { requestForHub } from "../lib/compatibility";
 import { resetManagerChoice } from "../lib/manager-choice";
 import { resetModelListsForTests } from "../lib/session-models";
 import { getState } from "../lib/store";
-import { loadApprovedProjectDocument, TeamProjectDocumentError } from "../lib/teamProjectDocument";
+import {
+  listProjectDocuments, listProjectDocumentApprovals, loadApprovedProjectDocument, TeamProjectDocumentError,
+  type ApprovedProjectRevision, type ProjectDocumentPage,
+} from "../lib/teamProjectDocument";
 import { NewAgent } from "./NewAgent";
 import { projectDocumentText } from "./NewAgentProjectDocument";
 
 vi.mock("../lib/teamProjectDocument", async (original) => ({
   ...await original<typeof import("../lib/teamProjectDocument")>(),
   loadApprovedProjectDocument: vi.fn(),
+  listProjectDocuments: vi.fn(),
+  listProjectDocumentApprovals: vi.fn(),
 }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,6 +31,12 @@ const sha256 = createHash("sha256").update(content).digest("hex");
 const approved = { project: "project-one", document: "plan", revision: 7, content, sha256, author: "writer", approved_by: "reviewer" };
 const defaultLaunchers = [{ name: "claude", agent: "claude" }, { name: "codex", agent: "codex", source: "zshrc" }];
 const load = vi.mocked(loadApprovedProjectDocument);
+const catalog = vi.mocked(listProjectDocuments);
+const approvals = vi.mocked(listProjectDocumentApprovals);
+const { content: _body, ...approvedMetadata } = approved;
+const current: ApprovedProjectRevision = { ...approvedMetadata, approved_at: "2026-08-09T15:00:00Z" };
+const earlier: ApprovedProjectRevision = { ...current, revision: 3, approved_at: "2026-08-08T15:00:00Z" };
+const another = { ...current, document: "readme" };
 const label = (key: string) => t(`newagent.project_document_${key}`);
 const button = (text: string) => [...document.querySelectorAll("button")].find((element) => element.textContent?.trim() === text);
 const field = (key: string) => [...document.querySelectorAll("label")].find((element) => element.textContent?.trim() === label(key))?.querySelector("input");
@@ -124,6 +135,8 @@ beforeEach(() => {
   resetModelListsForTests();
   resetManagerChoice();
   load.mockReset();
+  catalog.mockReset();
+  approvals.mockReset();
   load.mockImplementation(async () => ({ ...approved }));
   followClaude = false;
   launchers = defaultLaunchers;
@@ -235,6 +248,23 @@ it("starts with only the user's draft when a loaded preview was not attached", a
   expect(JSON.stringify(posts)).not.toContain(sha256);
 });
 
+// #17053: Orca's terminals take the document as the first message, as herdr's do.
+it("starts with the document in an Orca terminal", async () => {
+  Object.assign(getState(), { machines: [
+    { id: "computer", name: "Synthetic computer", manager: "assistant", online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr" },
+  ] });
+  await show();
+  await attach();
+  await type(textarea(), "Plain task");
+  await click("Orca");
+  expect(document.body.textContent).not.toContain(label("unsupported"));
+  expect(start().disabled).toBe(false);
+  await click(t("newagent.start"));
+  await tick();
+  expect(posts.find((item) => item.path.endsWith("/sessions"))?.body).toMatchObject({ launcher: "claude", host: "orca", name_hint: "project-one/plan r7" });
+  expect(posts.find((item) => item.path.endsWith("/messages"))?.body.text).toBe(`Plain task\n\n${renderExpectedSource()}`);
+});
+
 it("keeps the source visible and blocks an unsupported start until it is removed", async () => {
   await show();
   await attach();
@@ -332,4 +362,118 @@ it.each([
   await show("local-wrapper");
   expect(button(label("use"))).toBeUndefined();
   expect(load).not.toHaveBeenCalled();
+});
+
+const namedButton = (name: string) => [...document.querySelectorAll("button")].find(el => el.getAttribute("aria-label") === name);
+const historyLabel = (row: ApprovedProjectRevision) => t("newagent.project_document_versions_of", row);
+const previewLabel = (row: ApprovedProjectRevision) => t("newagent.project_document_preview_version", row);
+async function enterProject() {
+  await click(label("use"));
+  await type(field("project")!, approved.project);
+  await type(field("token")!, secret);
+}
+
+it("browses documents and approval pages without reading content, then attaches exactly the previewed version", async () => {
+  catalog.mockResolvedValueOnce({ items: [current], next: current.document }).mockResolvedValueOnce({ items: [another] });
+  approvals.mockResolvedValueOnce({ items: [current], next: String(current.revision) }).mockResolvedValueOnce({ items: [earlier] });
+  await show("codex");
+  await enterProject();
+  expect(catalog).not.toHaveBeenCalled();
+  await click(label("browse"));
+  expect(catalog).toHaveBeenCalledWith(current.project, secret, expect.any(AbortSignal), undefined);
+  expect(namedButton(previewLabel(current))).toBeDefined();
+  await click(label("more"));
+  expect(catalog).toHaveBeenLastCalledWith(current.project, secret, expect.any(AbortSignal), current.document);
+  expect(namedButton(previewLabel(another))).toBeDefined();
+  await act(async () => namedButton(historyLabel(current))!.click());
+  expect(approvals).toHaveBeenCalledWith(current.project, current.document, secret, expect.any(AbortSignal), undefined);
+  await click(label("older"));
+  expect(approvals).toHaveBeenLastCalledWith(current.project, current.document, secret, expect.any(AbortSignal), String(current.revision));
+  expect(namedButton(previewLabel(earlier))).toBeDefined();
+  expect(load).not.toHaveBeenCalled();
+  expect(start().disabled).toBe(true);
+  const returned = { ...approved, revision: earlier.revision };
+  load.mockResolvedValueOnce(returned);
+  await act(async () => namedButton(previewLabel(earlier))!.click());
+  expect(load).toHaveBeenCalledExactlyOnceWith(current.project, current.document, secret, expect.any(AbortSignal), earlier);
+  expect(field("token")?.value).toBe("");
+  expect(document.querySelector("dd")?.textContent).toBe(String(earlier.revision));
+  expect(preview()?.textContent).toBe(content);
+  expect(start().disabled).toBe(true);
+  expect(stored()).not.toContain(sha256);
+  await click(label("attach"));
+  expect(posts).toHaveLength(0);
+  expect(start().disabled).toBe(false);
+  await click(t("newagent.start"));
+  await tick();
+  expect(posts[0].body.prompt).toBe(projectDocumentText(returned));
+  expect(JSON.stringify(posts)).not.toContain(secret);
+});
+
+it.each(["project", "token", "collapse"])("drops a late catalog after changing the %s", async change => {
+  let resolvePage!: (page: ProjectDocumentPage) => void;
+  catalog.mockImplementationOnce(() => new Promise(resolve => { resolvePage = resolve; }));
+  await show();
+  await enterProject();
+  await act(async () => { const control = button(label("browse"))!; control.click(); control.click(); });
+  expect(catalog).toHaveBeenCalledTimes(1);
+  if (change === "collapse") {
+    await click(label("use"));
+    await click(label("use"));
+    expect(field("token")?.value).toBe("");
+  } else {
+    await type(field(change)!, "changed");
+  }
+  expect(catalog.mock.calls[0][2].aborted).toBe(true);
+  await act(async () => resolvePage({ items: [current] }));
+  expect(namedButton(historyLabel(current))).toBeUndefined();
+  expect(load).not.toHaveBeenCalled();
+});
+
+it("clears lists when the service refuses a subsequent read after membership changes", async () => {
+  catalog.mockResolvedValueOnce({ items: [current] });
+  approvals.mockRejectedValueOnce(new TeamProjectDocumentError("access"));
+  await show();
+  await enterProject();
+  await click(label("browse"));
+  await act(async () => namedButton(historyLabel(current))!.click());
+  expect(namedButton(historyLabel(current))).toBeUndefined();
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe(label("error_access"));
+  expect(button(label("attach"))).toBeUndefined();
+});
+
+it("keeps direct lookup available on a project service without the catalog route", async () => {
+  catalog.mockRejectedValueOnce(new TeamProjectDocumentError("missing"));
+  await show();
+  await enterProject();
+  await click(label("browse"));
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe(label("catalog_unavailable"));
+  await type(field("id")!, current.document);
+  await click(label("load"));
+  expect(load).toHaveBeenCalledExactlyOnceWith(current.project, current.document, secret, expect.any(AbortSignal));
+  expect(preview()?.textContent).toBe(content);
+});
+
+it("returns to previously listed documents from empty history without another request", async () => {
+  catalog.mockResolvedValueOnce({ items: [current] });
+  approvals.mockResolvedValueOnce({ items: [] });
+  await show();
+  await enterProject();
+  await click(label("browse"));
+  await act(async () => namedButton(historyLabel(current))!.click());
+  expect(document.body.textContent).toContain(label("no_versions"));
+  await click(label("back"));
+  expect(namedButton(historyLabel(current))).toBeDefined();
+  expect(catalog).toHaveBeenCalledTimes(1);
+  expect(approvals).toHaveBeenCalledTimes(1);
+});
+
+it("shows an empty catalog without offering a preview or another page", async () => {
+  catalog.mockResolvedValueOnce({ items: [] });
+  await show();
+  await enterProject();
+  await click(label("browse"));
+  expect(document.body.textContent).toContain(label("no_documents"));
+  expect(button(label("more"))).toBeUndefined();
+  expect(button(label("attach"))).toBeUndefined();
 });

@@ -41,6 +41,12 @@ class HerdrNoticeTest {
         assertTrue(stopped.copy(engine = "herdr", engineHosts = listOf("herdr", "orca")).herdrStopped(off))
     }
 
+    /** The notice follows the engine set, not its default: herdr enabled beside an Orca default still offers Start (#17037). */
+    @Test fun herdrInTheSetCountsWhateverTheDefault() {
+        assertTrue(stopped.copy(engine = "orca", engineHosts = listOf("herdr", "orca"), engineDefault = "orca").herdrStopped(off))
+        assertFalse(stopped.copy(engine = "orca", engineHosts = listOf("herdr-core", "orca"), engineDefault = "orca").herdrStopped(off))
+    }
+
     @Test fun choosingNoEngineHidesTheNoticeAndPickingHerdrBringsItBack() = runTest {
         val api = Api()
         val repository = Repository(stopped.copy(engine = "herdr", engineHosts = listOf("herdr")))

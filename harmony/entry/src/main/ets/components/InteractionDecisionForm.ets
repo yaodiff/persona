@@ -8,13 +8,14 @@ import { PhoneOutlineIcon } from '../design/PhoneOutlineIcon';
 import { QuestionDraft } from '../models/QuestionWorkspace';
 import { Symbols } from '../design/Symbols';
 import { MarkdownText } from './MarkdownText';
+import { RuleSuggestionBar } from './RuleSuggestionBar';
 import { ClientModel } from '../models/ClientModel';
 import { Decision, DecisionField, ResourceRow, Wire } from '../models/Wire';
 import { AgentDecisionQueue, AgentDecisionCard } from '../models/AgentDecisionQueue';
 import { util } from '@kit.ArkTS';
 import {
   InteractionChoice, InteractionSchemaField, InteractionValidation,
-  interactionCardAgent, interactionQuestionHeader, interactionPermissionTool, interactionPermissionSubject, interactionSessionAllowance, interactionAllowanceScope,
+  interactionCardAgent, interactionCanHandBack, interactionQuestionHeader, interactionPermissionTool, interactionPermissionSubject, interactionSessionAllowance, interactionAllowanceScope,
   recordedPlanMode, interactionCanDefer, interactionCanSubmit, interactionSupervisorHeld, interactionToolName, interactionElicitationDefaults, interactionElicitationMessage,
   interactionElicitationMode, interactionElicitationSupported, interactionElicitationUrl, interactionHistoryResolution,
   interactionPermissionFieldPlaceholder, interactionPlanTitle, interactionQuestionOptions,
@@ -23,8 +24,11 @@ import {
 } from '../models/InteractionDecision';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
 import { ButtonStyles } from '../design/Controls';
 import { tr } from '../design/Strings';
+import { Haptics } from '../platform/Haptics';
 
 @ComponentV2
 export struct InteractionDecisionForm {
@@ -113,6 +117,7 @@ export struct InteractionDecisionForm {
   @Local openedUrl: string = '';
   @Local busy: boolean = false;
   @Local deferred: boolean = false;
+  @Local private pressedButton: string = '';
   @Local textValues: Record<string, string> = Wire.payload([], []) as Record<string, string>;
   @Local questionOptions: Record<string, InteractionChoice[]> = {};
   @Local questionPicks: Record<string, string[]> = Wire.payload([], []) as Record<string, string[]>;
@@ -362,8 +367,13 @@ export struct InteractionDecisionForm {
     const request=this.request, raw=request.raw, agent=this.taskAgent, card=this.taskCard;
     const answer=this.taskQueue && agent && card ? this.taskQueue.answerForm(this.model,agent,card,option,values,util.generateRandomUUID(),this.admission) :
       this.model.answer(option,values,request,this.admission);
-    answer.then(() => { if (request===this.request && request.raw===raw && request.status==='resolved') this.onResolved(); })
-      .catch(() => { if (request===this.request && request.raw===raw && this.admission()) this.model.error='failed'; })
+    answer.then(() => {
+      if (request===this.request && request.raw===raw && request.status==='resolved') {
+        Haptics.success();
+        this.onResolved();
+      }
+    })
+      .catch(() => { if (request===this.request && request.raw===raw && this.admission()) { Haptics.error(); this.model.error='failed'; } })
       .finally(() => { if (request===this.request && request.raw===raw) this.busy=false; });
   }
 
@@ -585,7 +595,19 @@ export struct InteractionDecisionForm {
         Text(this.deferred ? tr('interaction_question_later') : this.statusLabel()).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).layoutWeight(1)
         if (this.readOnly) Text(tr('read_only')).fontSize(Tokens.meta).fontColor(Colors.secondary)
       }.width('100%')
-      if (this.headerPrompt()) Text(this.headerPrompt()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+      if (this.request.kind === 'plan' && this.taskPlanSource()) {
+        Column() {
+          MarkdownText({ text: this.taskPlanSource(), chatReply: true, onLink: this.onLink })
+        }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding(12)
+          .backgroundColor(this.headerEnvironment.dark ? Colors.hairlineGlass : Colors.subtle)
+          .borderRadius(Tokens.radiusCard - 2)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.headerEnvironment.dark), radius: Tokens.radiusCard - 2 })
+      } else if (this.headerPrompt()) {
+        Text(this.headerPrompt()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+      }
     }.width('100%').alignItems(HorizontalAlign.Start)
 
   }
@@ -617,8 +639,9 @@ export struct InteractionDecisionForm {
 
   private toggleCard():void {
     if (!this.admission()) return;
+    Haptics.tap();
     if (this.docked) this.onDockFold();
-    else this.cardFolded=!this.cardFolded;
+    else Motion.run(this.getUIContext(), Motion.state(this.headerEnvironment.reduceMotion), () => { this.cardFolded=!this.cardFolded; });
   }
 
   @Builder planReader() {
@@ -640,7 +663,7 @@ export struct InteractionDecisionForm {
 
   @Builder dockMenu() {
     Menu() {
-      if ((this.taskQueue || this.agentCard) && interactionToolName(this.request) !== 'ask_user') MenuItem({content:tr('phone_interaction_terminal')})
+      if ((this.taskQueue || this.agentCard) && interactionCanHandBack(this.request)) MenuItem({content:tr('phone_interaction_terminal')})
         .enabled(this.canRespond()).onClick(() => this.submit('dismiss'))
     }
   }
@@ -680,68 +703,107 @@ export struct InteractionDecisionForm {
     }.width('100%').padding(12).alignItems(VerticalAlign.Top).backgroundColor(Colors.control).borderRadius(12)
       .accessibilityGroup(true).id('interaction.supervisor-held')
   }
+  private headerSemanticColor(): ResourceColor {
+    if (this.request.kind === 'plan') return Colors.needsMark;
+    if (this.request.kind === 'permission') return Colors.workingMark;
+    if (this.request.kind === 'question') return Colors.link;
+    return Colors.needsMark;
+  }
+  private headerTitleColor(): ResourceColor {
+    if (this.systemDockHeader) return $r('app.color.decision_header_title');
+    if (this.request.kind === 'permission') return Colors.working;
+    if (this.request.kind === 'plan' || this.request.kind === 'question') return $r('app.color.decision_header_title');
+    return Colors.needs;
+  }
+  private panelSurface(): ResourceColor {
+    return Colors.styleCard || (Colors.styleID === 'glass' ? Colors.glassSurface : Colors.surface);
+  }
+  private secondaryButtonFill(): ResourceColor {
+    return Colors.styleID === 'glass' ? Colors.pressOverlay : Colors.control;
+  }
+  private secondaryButtonBorder(): ResourceColor {
+    return PhoneStyle.floatingBorder(this.headerEnvironment.dark);
+  }
+  private secondaryButtonInk(): ResourceColor {
+    return Colors.ink;
+  }
+  @Builder moreDotsGlyph(tint: ResourceColor) {
+    Row({ space: 3.5 }) {
+      ForEach([0, 1, 2], (_dot: number) => {
+        Circle().width(4).height(4).fill(tint)
+      }, (dot: number) => String(dot))
+    }.accessibilityLevel('no')
+  }
   @Builder taskHeader() {
-    Row({space:this.docked ? 6 : 5}) {
-      Button({type:ButtonType.Normal}) {
-        Row({space:this.docked ? 6 : 5}) {
-          if (this.docked && this.request.kind==='plan') {
-            Stack() {
-              PhoneOutlineIcon({name:'decisionClipboard',color:this.systemDockHeader ? Colors.needsMark : Colors.link})
-                .scale({x:this.dockGlyphScale(12),y:this.dockGlyphScale(12)})
-            }.width(13*this.dockGlyphScale(12)).height(this.headerControlSide()).accessibilityLevel('no')
+    Column({space:4}) {
+      Row({space:this.docked ? 6 : 5}) {
+        Button({type:ButtonType.Normal}) {
+          Row({space:this.docked ? 6 : 5}) {
+            if (this.docked && this.request.kind==='plan') {
+              Stack() {
+                PhoneOutlineIcon({name:'decisionClipboard',color:this.systemDockHeader ? Colors.needsMark : this.headerSemanticColor()})
+                  .scale({x:this.dockGlyphScale(12),y:this.dockGlyphScale(12)})
+              }.width(13*this.dockGlyphScale(12)).height(this.headerControlSide()-4).accessibilityLevel('no')
+            } else {
+              SymbolGlyph(this.request.kind==='plan' ? Symbols.document : this.request.kind==='question' ? $r('sys.symbol.ellipsis_bubble') : $r('sys.symbol.hand_raised_fingers_spread'))
+                .fontSize(this.agentCard || this.docked ? Tokens.interfaceFontVp(13,this.headerEnvironment.fontScale) : '13vp').fontColor([this.headerSemanticColor()])
+            }
+            Text(this.cardHeading()).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(600)
+              .fontColor(this.headerTitleColor()).maxLines(1)
+              .layoutWeight(this.docked && !this.cardFolded ? 1 : 0).textOverflow({overflow:TextOverflow.Ellipsis})
+            if (this.cardFolded && this.foldPreview()) Text(this.foldPreview()).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
+              .fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
+          }.align(Alignment.Start).width('100%').padding({right:this.docked ? 4 : 0}).clip(this.docked)
+        }.layoutWeight(1).height(this.headerControlSide()).backgroundColor(Color.Transparent).padding(0)
+          .onClick(() => this.toggleCard()).accessibilityText(this.cardHeading()).accessibilityDescription(tr(this.cardFolded ? 'control_collapsed' : 'control_expanded'))
+        if (!this.docked && !this.supervisorHeld && this.agentCard && interactionScreenCanCancel(this.request)) Button(tr('decision_skip'),{type:ButtonType.Normal})
+          .height(this.headerControlSide()).padding({left:3,right:3}).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.link)
+          .backgroundColor(Color.Transparent).enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.task.skip')
+        if (!this.cardFolded && this.request.kind==='plan') Button({type:ButtonType.Circle}) {
+          if (this.docked) {
+            PhoneOutlineIcon({name:'decisionEnlarge',color:this.systemDockHeader ? $r('app.color.decision_header_secondary') : Colors.secondary})
+              .scale({x:this.dockGlyphScale(13),y:this.dockGlyphScale(13)})
           } else {
-            SymbolGlyph(this.request.kind==='plan' ? Symbols.document : this.request.kind==='question' ? $r('sys.symbol.ellipsis_bubble') : $r('sys.symbol.hand_raised_fingers_spread'))
-              .fontSize(this.agentCard || this.docked ? Tokens.interfaceFontVp(13,this.headerEnvironment.fontScale) : '13vp').fontColor([Colors.link])
+            SymbolGlyph($r('sys.symbol.arrow_up_left_and_arrow_down_right')).fontSize('13vp').fontColor([Colors.secondary])
           }
-          Text(this.cardHeading()).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(600)
-            .fontColor(this.systemDockHeader ? $r('app.color.decision_header_title') : Colors.link).maxLines(1)
-            .layoutWeight(this.docked && !this.cardFolded ? 1 : 0).textOverflow({overflow:TextOverflow.Ellipsis})
-          if (this.cardFolded && this.foldPreview()) Text(this.foldPreview()).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
-            .fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
-        }.align(Alignment.Start).width('100%').padding({right:this.docked ? 4 : 0}).clip(this.docked)
-      }.layoutWeight(1).height(this.headerControlSide()).backgroundColor(Color.Transparent).padding(0)
-        .onClick(() => this.toggleCard()).accessibilityText(this.cardHeading()).accessibilityDescription(tr(this.cardFolded ? 'control_collapsed' : 'control_expanded'))
-      if (this.docked && this.taskAgent) Button(tr('decision_view_in_chat'),{type:ButtonType.Normal})
-        .height(this.headerControlSide()).padding({left:8,right:6}).margin({right:-6}).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
-        .fontColor(this.systemDockHeader ? Colors.needsMark : Colors.link)
-        .responseRegion({x:0,y:-5,width:'100%',height:Math.max(44,this.headerControlSide())}).backgroundColor(Color.Transparent)
-        .onClick(() => { if (this.admission()) this.onViewTask(); }).id('interaction.task.source')
-      if (!this.supervisorHeld && this.docked && interactionSkipReason(this.request)) Button(tr('decision_skip'),{type:ButtonType.Normal})
-        .height(this.dockSkipTarget()-16).constraintSize({minWidth:this.dockSkipTarget()}).padding({left:5,right:5})
-        .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(this.systemDockHeader ? Colors.needsMark : Colors.tertiary)
-        .responseRegion({x:0,y:-8,width:'100%',height:this.dockSkipTarget()}).backgroundColor(Color.Transparent).enabled(false).id('interaction.task.skip_unavailable')
-      else if (!this.supervisorHeld && (this.docked || this.agentCard) && interactionScreenCanCancel(this.request)) Button(tr('decision_skip'),{type:ButtonType.Normal})
-        .height(this.headerControlSide()).padding({left:3,right:3}).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.link)
-        .backgroundColor(Color.Transparent).enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.task.skip')
-      if (!this.cardFolded && this.request.kind==='plan') Button({type:ButtonType.Circle}) {
-        if (this.docked) {
-          PhoneOutlineIcon({name:'decisionEnlarge',color:this.systemDockHeader ? $r('app.color.decision_header_secondary') : Colors.secondary})
-            .scale({x:this.dockGlyphScale(13),y:this.dockGlyphScale(13)})
-        } else {
-          SymbolGlyph($r('sys.symbol.arrow_up_left_and_arrow_down_right')).fontSize('13vp').fontColor([Colors.secondary])
-        }
-      }.width(this.headerControlSide()).height(this.headerControlSide()).padding(0).backgroundColor(Color.Transparent).accessibilityText(tr('phone_plan_fullscreen'))
-        .onClick(() => { if (this.admission()) this.fullPlan=true; }).id('interaction.task.expand_plan')
-      if (!this.supervisorHeld && (this.taskQueue || this.agentCard) && interactionToolName(this.request)!=='ask_user') Button({type:ButtonType.Circle}) {
-        Row({space:this.docked ? 2.17 : 2}) {
-          ForEach([0,1,2],(_dot:number) => {
-            Circle().width(this.docked ? 2.67 : 2.5).height(this.docked ? 2.67 : 2.5)
-              .fill(this.systemDockHeader ? $r('app.color.decision_header_secondary') : Colors.secondary)
-          },(dot:number) => String(dot))
-        }.scale({x:this.docked ? this.dockGlyphScale(13) : 1,y:this.docked ? this.dockGlyphScale(13) : 1})
-      }.width(this.headerControlSide()).height(this.headerControlSide()).padding(0).backgroundColor(Color.Transparent).enabled(this.canRespond()).accessibilityText(tr('more'))
-        .bindMenu(this.dockMenu).id('interaction.task.menu')
-      Button({type:ButtonType.Circle}) {
-        if (this.docked) {
-          PhoneOutlineIcon({name:'decisionChevron',color:this.systemDockHeader ? $r('app.color.decision_header_secondary') : Colors.secondary})
-            .rotate({angle:this.cardFolded ? 180 : 0}).scale({x:this.dockGlyphScale(13),y:this.dockGlyphScale(13)})
-        } else {
-          SymbolGlyph(this.cardFolded ? Symbols.up : Symbols.down).fontSize('13vp').fontColor([Colors.secondary])
-        }
-      }.width(this.agentCard || this.docked ? this.headerControlSide() : 27).height(this.agentCard || this.docked ? this.headerControlSide() : 27).padding(0)
-        .backgroundColor(this.systemDockHeader ? $r('app.color.decision_header_chip') : Colors.control)
-        .accessibilityText(tr(this.cardFolded ? 'agent_expand' : 'agent_collapse'))
-        .accessibilityDescription(tr(this.cardFolded ? 'control_collapsed' : 'control_expanded')).onClick(() => this.toggleCard()).id('interaction.task.fold')
+        }.width(this.headerControlSide()).height(this.headerControlSide()).padding(0).backgroundColor(Color.Transparent).accessibilityText(tr('phone_plan_fullscreen'))
+          .onClick(() => { if (this.admission()) this.fullPlan=true; }).id('interaction.task.expand_plan')
+        if (!this.supervisorHeld && (this.taskQueue || this.agentCard) && interactionCanHandBack(this.request)) Button({type:ButtonType.Circle}) {
+          Row({space:this.docked ? 2.17 : 2}) {
+            ForEach([0,1,2],(_dot:number) => {
+              Circle().width(this.docked ? 2.67 : 2.5).height(this.docked ? 2.67 : 2.5)
+                .fill(this.systemDockHeader ? $r('app.color.decision_header_secondary') : Colors.secondary)
+            },(dot:number) => String(dot))
+          }.scale({x:this.docked ? this.dockGlyphScale(13) : 1,y:this.docked ? this.dockGlyphScale(13) : 1})
+        }.width(this.headerControlSide()).height(this.headerControlSide()).padding(0).backgroundColor(Color.Transparent).enabled(this.canRespond()).accessibilityText(tr('more'))
+          .bindMenu(this.dockMenu).id('interaction.task.menu')
+        Button({type:ButtonType.Circle}) {
+          if (this.docked) {
+            PhoneOutlineIcon({name:'decisionChevron',color:this.systemDockHeader ? $r('app.color.decision_header_secondary') : Colors.secondary})
+              .rotate({angle:this.cardFolded ? 180 : 0}).animation(Motion.state(this.headerEnvironment.reduceMotion))
+              .scale({x:this.dockGlyphScale(13),y:this.dockGlyphScale(13)})
+          } else {
+            SymbolGlyph(Symbols.down).fontSize('13vp').fontColor([Colors.secondary])
+              .rotate({angle:this.cardFolded ? 180 : 0}).animation(Motion.state(this.headerEnvironment.reduceMotion))
+          }
+        }.width(this.agentCard || this.docked ? this.headerControlSide() : 27).height(this.agentCard || this.docked ? this.headerControlSide() : 27).padding(0)
+          .backgroundColor(this.systemDockHeader ? $r('app.color.decision_header_chip') : Colors.control)
+          .accessibilityText(tr(this.cardFolded ? 'agent_expand' : 'agent_collapse'))
+          .accessibilityDescription(tr(this.cardFolded ? 'control_collapsed' : 'control_expanded')).onClick(() => this.toggleCard()).id('interaction.task.fold')
+      }.width('100%')
+      if (this.docked && !this.cardFolded && (this.taskAgent || (!this.supervisorHeld && interactionScreenCanCancel(this.request)))) {
+        Row({space:Tokens.spaceM}) {
+          if (this.taskAgent) Button(tr('decision_view_in_chat'),{type:ButtonType.Normal})
+            .height(this.headerControlSide()).padding({left:0,right:6}).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
+            .fontColor(this.systemDockHeader ? Colors.needsMark : Colors.link)
+            .responseRegion({x:-6,y:-5,width:'100%',height:Math.max(44,this.headerControlSide())}).backgroundColor(Color.Transparent)
+            .onClick(() => { if (this.admission()) this.onViewTask(); }).id('interaction.task.source')
+          if (!this.supervisorHeld && interactionScreenCanCancel(this.request)) Button(tr('decision_skip'),{type:ButtonType.Normal})
+            .height(this.headerControlSide()).padding({left:3,right:3}).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.link)
+            .responseRegion({x:0,y:-5,width:'100%',height:Math.max(44,this.headerControlSide())})
+            .backgroundColor(Color.Transparent).enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.task.skip')
+        }.width('100%').alignItems(VerticalAlign.Center)
+      }
     }.width('100%').onAreaChange((_before:Area,area:Area) => {
       const height=Number(area.height);
       if (height>0 && Math.abs(this.inlineHeaderHeight-height)>0.5) this.inlineHeaderHeight=height;
@@ -750,6 +812,7 @@ export struct InteractionDecisionForm {
 
   private approveTaskPlan(mode:string):void {
     if (!this.canRespond()) return;
+    Haptics.tap();
     this.selected='approve'; this.setText('mode',mode); this.submit('approve');
   }
 
@@ -762,12 +825,25 @@ export struct InteractionDecisionForm {
     return this.model.style==='system' ? Colors.ink : Colors.onAction;
   }
   @Builder dockSecondary(label:string,id:string,edits:boolean) {
-    Button(tr(label),{type:ButtonType.Capsule}).layoutWeight(1).height(this.dockActionSize(false)).padding({left:8,right:8})
-      .fontSize(17).maxFontScale(19/17).fontWeight(FontWeight.Normal).fontColor(Colors.link).backgroundColor($r('app.color.persona_dock_secondary_surface'))
-      .border({width:Tokens.divider,color:Colors.divider,radius:this.dockActionSize(false)/2})
-      .shadow({radius:3,color:nativeEnvironment.dark ? '#30000000' : '#16000000',offsetY:1})
-      .responseRegion({x:0,y:(this.dockActionSize(false)-44)/2,width:'100%',height:Math.max(44,this.dockActionSize(false))})
-      .enabled(this.canRespond()).onClick(() => { if (edits) this.approveTaskPlan('acceptEdits'); else this.selected='deny'; }).id(id)
+    Button(tr(label),{type:ButtonType.Capsule}).layoutWeight(1)
+      .constraintSize({minHeight:Math.max(Tokens.controlBar,this.dockActionSize(false))})
+      .padding({left:Tokens.spaceM,right:Tokens.spaceM,top:Tokens.spaceXs,bottom:Tokens.spaceXs})
+      .fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontWeight(FontWeight.Medium)
+      .labelStyle({maxLines:2,minFontSize:12,maxFontSize:Tokens.typeSecondary,overflow:TextOverflow.Ellipsis})
+      .fontColor(this.secondaryButtonInk())
+      .backgroundColor(this.secondaryButtonFill())
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:this.secondaryButtonBorder(),radius:Tokens.radiusCapsule})
+      .shadow(PhoneStyle.cardElevation(this.headerEnvironment.dark))
+      .scale({x:this.pressedButton===id ? MotionTokens.pressScale : 1,y:this.pressedButton===id ? MotionTokens.pressScale : 1})
+      .animation(Motion.release(this.headerEnvironment.reduceMotion))
+      .onTouch((event:TouchEvent) => {
+        if (event.type===TouchType.Down) this.pressedButton=id;
+        else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton===id) this.pressedButton=''; }
+      })
+      .enabled(this.canRespond()).onClick(() => {
+        Haptics.tap();
+        if (edits) this.approveTaskPlan('acceptEdits'); else this.selected='deny';
+      }).id(id)
   }
 
   @Builder beautifulPlanChoice(label:string,detail:string,mode:string,id:string) {
@@ -831,6 +907,12 @@ export struct InteractionDecisionForm {
               .fontColor(this.dockActionInk()).fontWeight(FontWeight.Medium).maxLines(1)
           }
         }.width('100%').height(this.dockActionSize(true)).padding({left:8,right:8}).backgroundColor(Colors.action)
+          .scale({x:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='plan_approve';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_approve') this.pressedButton=''; }
+          })
           .accessibilityText(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run')).enabled(this.canRespond())
           .onClick(() => this.approveTaskPlan(recordedPlanMode(this.request) || 'bypassPermissions')).id('interaction.task.approve')
         Row({space:8}) {
@@ -841,17 +923,47 @@ export struct InteractionDecisionForm {
         Button({type:ButtonType.Capsule}) {
           Row({space:6}) {
             SymbolGlyph($r('sys.symbol.play_fill')).fontSize('14vp').fontColor([Colors.onAction])
-            Text(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.onAction)
+            Text(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontWeight(FontWeight.Medium).fontColor(Colors.onAction)
           }
         }.width('100%').constraintSize({minHeight:44}).accessibilityText(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run'))
           .backgroundColor(Colors.action).enabled(this.canRespond())
+          .scale({x:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='plan_approve';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_approve') this.pressedButton=''; }
+          })
           .onClick(() => this.approveTaskPlan(recordedPlanMode(this.request) || 'bypassPermissions')).id('interaction.task.approve')
-        Row({space:6}) {
-          if (!recordedPlanMode(this.request)) Button(tr('session_task_auto_edits')).layoutWeight(1).fontSize(13).maxFontScale(Tokens.navigationTextMaxScale)
-            .constraintSize({minHeight:38}).backgroundColor(Colors.control).fontColor(Colors.link).enabled(this.canRespond())
+        Row({space:Tokens.spaceS}) {
+          if (!recordedPlanMode(this.request)) Button(tr('session_task_auto_edits'),{type:ButtonType.Capsule}).layoutWeight(1)
+            .fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+            .fontWeight(FontWeight.Medium).constraintSize({minHeight:Tokens.controlBar})
+            .padding({left:Tokens.spaceM,right:Tokens.spaceM,top:Tokens.spaceXs,bottom:Tokens.spaceXs})
+            .labelStyle({maxLines:2,minFontSize:12,maxFontSize:Tokens.typeSecondary,overflow:TextOverflow.Ellipsis})
+            .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:this.secondaryButtonBorder(),radius:Tokens.radiusCapsule})
+            .scale({x:this.pressedButton==='plan_edits' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_edits' ? MotionTokens.pressScale : 1})
+            .animation(Motion.release(this.headerEnvironment.reduceMotion))
+            .onTouch((event:TouchEvent) => {
+              if (event.type===TouchType.Down) this.pressedButton='plan_edits';
+              else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_edits') this.pressedButton=''; }
+            })
+            .enabled(this.canRespond())
             .onClick(() => this.approveTaskPlan('acceptEdits')).id('interaction.task.edits')
-          Button(tr('session_task_return')).layoutWeight(1).fontSize(13).maxFontScale(Tokens.navigationTextMaxScale).constraintSize({minHeight:38})
-            .backgroundColor(Colors.control).fontColor(Colors.link).enabled(this.canRespond()).onClick(() => this.selected='deny').id('interaction.task.return')
+          Button(tr('session_task_return'),{type:ButtonType.Capsule}).layoutWeight(1)
+            .fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+            .fontWeight(FontWeight.Medium).constraintSize({minHeight:Tokens.controlBar})
+            .padding({left:Tokens.spaceM,right:Tokens.spaceM,top:Tokens.spaceXs,bottom:Tokens.spaceXs})
+            .labelStyle({maxLines:2,minFontSize:12,maxFontSize:Tokens.typeSecondary,overflow:TextOverflow.Ellipsis})
+            .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:this.secondaryButtonBorder(),radius:Tokens.radiusCapsule})
+            .scale({x:this.pressedButton==='plan_return' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_return' ? MotionTokens.pressScale : 1})
+            .animation(Motion.release(this.headerEnvironment.reduceMotion))
+            .onTouch((event:TouchEvent) => {
+              if (event.type===TouchType.Down) this.pressedButton='plan_return';
+              else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_return') this.pressedButton=''; }
+            })
+            .enabled(this.canRespond()).onClick(() => { Haptics.tap(); this.selected='deny'; }).id('interaction.task.return')
         }.width('100%')
       }
       if (this.taskQueue?.error) Text(tr(this.taskQueue.error)).fontSize(12).fontColor(Colors.danger)
@@ -901,7 +1013,12 @@ export struct InteractionDecisionForm {
         .maxLines(this.commandExpanded || !this.longPermissionCommand() ? undefined : 5).textOverflow({overflow:TextOverflow.Ellipsis})
         .width('100%').padding(12).backgroundColor(Colors.subtle).borderRadius(10).id('interaction.permission.command')
       if (this.longPermissionCommand()) Button(tr(this.commandExpanded ? 'agent_collapse' : 'agent_expand'),{buttonStyle:ButtonStyleMode.TEXTUAL})
-        .fontSize(13).fontColor(Colors.link).onClick(() => this.commandExpanded=!this.commandExpanded).id('interaction.permission.expand')
+        .fontSize(13).fontColor(Colors.link).onClick(() => {
+          Haptics.tap();
+          Motion.run(this.getUIContext(), Motion.state(this.headerEnvironment.reduceMotion), () => {
+            this.commandExpanded=!this.commandExpanded;
+          });
+        }).id('interaction.permission.expand')
       ForEach(this.request.fields,(field:DecisionField) => this.permissionField(field),(field:DecisionField) => field.key)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -909,11 +1026,26 @@ export struct InteractionDecisionForm {
     Column({space:12}) {
       Row({space:8}) {
         Button(tr('deny'),{type:ButtonType.Capsule}).layoutWeight(1).height(this.agentActionHeight()).constraintSize({minHeight:this.agentActionHeight()}).fontSize(17)
-          .maxFontScale(Tokens.interfaceScaleFor(17)).backgroundColor(Colors.control).fontColor(Colors.link).enabled(this.canRespond())
-          .onClick(() => this.sendPermission('deny')).id('interaction.permission.deny')
+          .maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(FontWeight.Medium)
+          .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:this.secondaryButtonBorder(),radius:this.agentActionHeight()/2})
+          .enabled(this.canRespond())
+          .scale({x:this.pressedButton==='deny'?MotionTokens.pressScale:1,y:this.pressedButton==='deny'?MotionTokens.pressScale:1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='deny';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='deny') this.pressedButton=''; }
+          })
+          .onClick(() => { Haptics.tap(); this.sendPermission('deny'); }).id('interaction.permission.deny')
         Button(tr('allow'),{type:ButtonType.Capsule}).layoutWeight(1).height(this.agentActionHeight()).constraintSize({minHeight:this.agentActionHeight()}).fontSize(17)
           .maxFontScale(Tokens.interfaceScaleFor(17)).backgroundColor(Colors.action).fontColor(Colors.onAction).enabled(this.permissionAllowed())
-          .onClick(() => this.sendPermission('allow')).id('interaction.permission.allow')
+          .scale({x:this.pressedButton==='allow'?MotionTokens.pressScale:1,y:this.pressedButton==='allow'?MotionTokens.pressScale:1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='allow';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='allow') this.pressedButton=''; }
+          })
+          .onClick(() => { Haptics.tap(); this.sendPermission('allow'); }).id('interaction.permission.allow')
       }.width('100%')
       if (interactionSessionAllowance(this.request)) {
         Row() {
@@ -947,7 +1079,12 @@ export struct InteractionDecisionForm {
             if (this.pickedQuestion(field,choice.label)) SymbolGlyph(Symbols.check).fontSize('16vp').fontColor([Colors.link])
           }.width('100%').padding(12).constraintSize({minHeight:choice.detail ? 64 : 48}).enabled(this.canRespond())
             .accessibilityGroup(true).accessibilitySelected(this.pickedQuestion(field,choice.label)).accessibilityText(choice.label)
-            .onClick(() => this.chooseAgentAnswer(field,choice)).id('interaction.question.'+field.key+'.'+choice.label)
+            .onClick(() => {
+              Haptics.selection();
+              Motion.run(this.getUIContext(), Motion.state(this.headerEnvironment.reduceMotion), () => {
+                this.chooseAgentAnswer(field,choice);
+              });
+            }).id('interaction.question.'+field.key+'.'+choice.label)
           Divider().color(Colors.divider).strokeWidth(0.5).margin({left:52})
         },(choice:InteractionChoice) => choice.label)
         if (!this.questionChoices(field).length || this.otherQuestion===field.key || this.textValues[field.key+':other']) {
@@ -966,17 +1103,42 @@ export struct InteractionDecisionForm {
   }
   @Builder agentQuestionActions() {
     Row({space:8}) {
-      if (this.questionPage>0 || this.reviewingQuestions) Button(tr('decision_previous')).layoutWeight(1).fontSize(15)
+      if (this.questionPage>0 || this.reviewingQuestions) Button(tr('decision_previous'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(15)
+        .fontWeight(FontWeight.Medium).constraintSize({minHeight:42})
+        .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:this.secondaryButtonBorder(),radius:21})
+        .scale({x:this.pressedButton==='q_prev'?MotionTokens.pressScale:1,y:this.pressedButton==='q_prev'?MotionTokens.pressScale:1})
+        .animation(Motion.release(this.headerEnvironment.reduceMotion))
+        .onTouch((event:TouchEvent) => {
+          if (event.type===TouchType.Down) this.pressedButton='q_prev';
+          else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='q_prev') this.pressedButton=''; }
+        })
         .enabled(this.canRespond()).onClick(() => {
+          Haptics.tap();
           if (this.reviewingQuestions) this.reviewingQuestions=false;
           else this.questionPage--;
         }).id('interaction.question.previous')
       if (this.reviewingQuestions || this.request.fields.length===1)
-        Button(tr('answer'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(16).backgroundColor(Colors.action).fontColor(Colors.onAction)
-          .enabled(this.canSubmit()).onClick(() => this.submit('answer')).id('interaction.submit')
-      else if (this.request.fields.length>0) Button(tr(this.questionPage+1<this.request.fields.length ? 'decision_next' : 'review'))
-        .layoutWeight(1).fontSize(15).enabled(this.canRespond() && !!this.pickedAnswer(this.request.fields[this.questionPage]))
-        .onClick(() => { if (this.questionPage+1<this.request.fields.length) this.questionPage++;else this.reviewingQuestions=true; })
+        Button(tr('answer'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(16).fontWeight(FontWeight.Medium).constraintSize({minHeight:42})
+          .backgroundColor(Colors.action).fontColor(Colors.onAction)
+          .scale({x:this.pressedButton==='q_submit'?MotionTokens.pressScale:1,y:this.pressedButton==='q_submit'?MotionTokens.pressScale:1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='q_submit';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='q_submit') this.pressedButton=''; }
+          })
+          .enabled(this.canSubmit()).onClick(() => { Haptics.tap(); this.submit('answer'); }).id('interaction.submit')
+      else if (this.request.fields.length>0) Button(tr(this.questionPage+1<this.request.fields.length ? 'decision_next' : 'review'),{type:ButtonType.Capsule})
+        .layoutWeight(1).fontSize(15).fontWeight(FontWeight.Medium).constraintSize({minHeight:42})
+        .backgroundColor(Colors.action).fontColor(Colors.onAction)
+        .scale({x:this.pressedButton==='q_next'?MotionTokens.pressScale:1,y:this.pressedButton==='q_next'?MotionTokens.pressScale:1})
+        .animation(Motion.release(this.headerEnvironment.reduceMotion))
+        .onTouch((event:TouchEvent) => {
+          if (event.type===TouchType.Down) this.pressedButton='q_next';
+          else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='q_next') this.pressedButton=''; }
+        })
+        .enabled(this.canRespond() && !!this.pickedAnswer(this.request.fields[this.questionPage]))
+        .onClick(() => { Haptics.tap(); if (this.questionPage+1<this.request.fields.length) this.questionPage++;else this.reviewingQuestions=true; })
         .id('interaction.question.next')
     }.width('100%')
   }
@@ -1023,9 +1185,22 @@ export struct InteractionDecisionForm {
           .onAreaChange((_before:Area,after:Area) => {
             const h=Number(after.height); if (h>0 && Math.abs(this.inlineFooterHeight-h)>0.5) this.inlineFooterHeight=h;
           })
+        if (Object.keys(this.ruleSuggestionObject()).length > 0) {
+          RuleSuggestionBar({
+            model: this.model,
+            rawSuggestion: this.ruleSuggestionObject(),
+            cardKey: 'card|' + this.request.id,
+            manager: this.ruleSuggestionManager(),
+            onSettled: () => { this.model.refresh().catch(() => undefined); }
+          })
+        }
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({left:16,right:16,top:12,bottom:16})
-      .backgroundColor(Colors.surface).border({width:0.6,color:Colors.divider,radius:20}).borderRadius(20).id('interaction.card')
+      .backgroundColor(this.panelSurface())
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.headerEnvironment.dark),radius:22}).borderRadius(22)
+      .shadow(PhoneStyle.floatingElevation(this.headerEnvironment.dark))
+      .id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
   }
 
@@ -1039,7 +1214,7 @@ export struct InteractionDecisionForm {
             .onClick(() => { this.deferred = true; this.onLater(); }).id('interaction.later')
           if (interactionScreenCanCancel(this.request) && !this.pinFooter && !this.docked) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('cancel')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('cancel', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('cancel')).bindTips(tr('cancel')).flexShrink(0).margin({ end: LengthMetrics.vp(Tokens.gap) })
             .enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.cancel')
-          if (interactionScreenCanCancel(this.request) && this.pinFooter) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
+          if (interactionScreenCanCancel(this.request) && this.pinFooter) Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.ink) }
             .attributeModifier(ButtonStyles.chrome).enabled(this.canRespond()).accessibilityText(tr('more'))
             .margin({ end: LengthMetrics.vp(Tokens.gap) }).bindMenu([{ value: tr('interaction_question_cancel'), action: () => this.submit('cancel') }]).flexShrink(0).id('interaction.more')
           Button(tr('answer'), { type: ButtonType.Capsule }).fontSize(16).fontWeight(FontWeight.Medium)
@@ -1107,13 +1282,13 @@ export struct InteractionDecisionForm {
     if (event.type===TouchType.Move && touch) {
       const dy=touch.windowY-this.gripWindowY;
       if (!this.gripMoved && Math.abs(dy)>=4 && Math.abs(dy)>Math.abs(touch.windowX-this.gripWindowX)) {
-        this.gripMoved=true;this.onDockResize('begin',0);
+        this.gripMoved=true;Haptics.selection();this.onDockResize('begin',0);
       }
       if (this.gripMoved) { this.gripDistance=dy;this.onDockResize('move',dy); }
     } else if (event.type===TouchType.Up || event.type===TouchType.Cancel) {
       this.gripDown=false;this.gripEnded=Date.now();
-      if (this.gripMoved) this.onDockResize(event.type===TouchType.Up ? 'end' : 'cancel',this.gripDistance);
-      else if (event.type===TouchType.Up) this.onDockResize('toggle',0);
+      if (this.gripMoved) { Haptics.tap(); this.onDockResize(event.type===TouchType.Up ? 'end' : 'cancel',this.gripDistance); }
+      else if (event.type===TouchType.Up) { Haptics.tap(); this.onDockResize('toggle',0); }
     }
     event.stopPropagation();
   }
@@ -1149,6 +1324,18 @@ export struct InteractionDecisionForm {
         .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
     }
   }
+  private ruleSuggestionObject(): Record<string, Object> {
+    const envelope = Wire.parse(this.request.raw);
+    const top = Wire.object(envelope, 'suggestion');
+    if (Object.keys(top).length > 0) return top;
+    return Wire.object(Wire.object(envelope, 'interaction'), 'suggestion');
+  }
+
+  private ruleSuggestionManager(): string {
+    const envelope = Wire.parse(this.request.raw);
+    return Wire.text(envelope, 'manager') || this.model.profile.manager;
+  }
+
   @Builder dockPanel() {
     Column() {
       if (this.resizeDock && !this.cardFolded) this.dockGrip()
@@ -1179,15 +1366,26 @@ export struct InteractionDecisionForm {
           if (this.taskQueue && this.request.kind==='plan' && this.model.style==='beautiful') this.beautifulPlanSubmit()
           else if (this.taskQueue && this.request.kind==='plan') this.taskPlanActions()
           else this.responseFooter()
+          if (Object.keys(this.ruleSuggestionObject()).length > 0) {
+            RuleSuggestionBar({
+              model: this.model,
+              rawSuggestion: this.ruleSuggestionObject(),
+              cardKey: 'card|' + this.request.id,
+              manager: this.ruleSuggestionManager(),
+              onSettled: () => { this.model.refresh().catch(() => undefined); }
+            })
+          }
         }.width('100%').onAreaChange((_before:Area,area:Area):void => {
           const h=Number(area.height);if (h>=0 && Math.abs(h-this.inlineFooterHeight)>0.5) this.inlineFooterHeight=h;
         })
       }.width('100%').padding({top:this.dockHeadingAway() ? 0 : 12})
     }.width('100%').padding({left:16,right:16,top:this.resizeDock && !this.cardFolded ? 0 : 12,bottom:16})
-      .alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(22)
+      .alignItems(HorizontalAlign.Start).backgroundColor(this.panelSurface())
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .borderRadius(22)
       .background(this.dockBacklight)
-      .outline({width:PhoneStyle.surfaceEdgeWidth(Tokens.divider),color:Colors.styleEdge || Colors.divider,radius:22})
-      .shadow(PhoneStyle.surfaceShadow({radius:8,color:nativeEnvironment.dark ? '#36000000' : '#15000000',offsetY:2})).id('interaction.card')
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.headerEnvironment.dark),radius:22})
+      .shadow(PhoneStyle.floatingElevation(this.headerEnvironment.dark)).id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
   }
   private inlineSpace(): number {
@@ -1199,7 +1397,10 @@ export struct InteractionDecisionForm {
       this.taskHeader()
       if (!this.cardFolded) this.supervisorNote()
     }.width('100%').padding({left:16,right:16,top:12,bottom:16}).alignItems(HorizontalAlign.Start)
-      .backgroundColor(Colors.surface).border({width:0.6,color:Colors.divider,radius:20}).borderRadius(20).id('interaction.card')
+      .backgroundColor(this.panelSurface())
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.headerEnvironment.dark),radius:22}).borderRadius(22)
+      .shadow(PhoneStyle.floatingElevation(this.headerEnvironment.dark)).id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
     else if (this.agentCard) this.agentDecisionCard()
     else if (this.docked) this.dockPanel()
@@ -1212,10 +1413,10 @@ export struct InteractionDecisionForm {
           if (this.docked && interactionSkipReason(this.request)) Text(tr(interactionSkipReason(this.request)))
             .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%').id('interaction.task.skip_reason')
           if (!this.docked && !this.taskQueue) Row({space: 6}) {
-            Circle().width(7).height(7).fill(Colors.needs)
-            Text(tr(this.request.kind === 'question' ? 'question' : this.request.kind === 'plan' ? 'plan' : 'needs_you'))
-              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
-          }.width('100%')
+            Circle().width(7).height(7).fill(this.headerSemanticColor())
+            Text(this.cardHeading())
+              .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(600).fontColor(this.headerTitleColor())
+          }
           if (this.taskQueue && this.request.kind==='plan') MarkdownText({text:this.taskPlanSource(),chatReply:true,onLink:this.onLink})
           else this.formBody()
         }.width('100%').alignItems(HorizontalAlign.Start).onAreaChange((_before: Area, area: Area) => {
@@ -1227,12 +1428,24 @@ export struct InteractionDecisionForm {
       if (!this.cardFolded) Column() {
         if (this.taskQueue && this.request.kind==='plan') this.taskPlanActions()
         else this.responseFooter()
+        if (Object.keys(this.ruleSuggestionObject()).length > 0) {
+          RuleSuggestionBar({
+            model: this.model,
+            rawSuggestion: this.ruleSuggestionObject(),
+            cardKey: 'card|' + this.request.id,
+            manager: this.ruleSuggestionManager(),
+            onSettled: () => { this.model.refresh().catch(() => undefined); }
+          })
+        }
       }.width('100%').onAreaChange((_before: Area, area: Area) => {
         const h = Number(area.height);
         if (Number.isFinite(h) && h > 0 && Math.abs(this.inlineFooterHeight - h) > 0.5) this.inlineFooterHeight = h;
       })
-    }.width('100%').padding({left:this.docked ? 16 : 12,right:this.docked ? 16 : 12,top:8,bottom:8}).alignItems(HorizontalAlign.Start)
-      .backgroundColor(Colors.surface).border({width:0.6,color:Colors.divider,radius:16}).borderRadius(16).id('interaction.card')
+    }.width('100%').padding({left:this.docked ? 16 : 14,right:this.docked ? 16 : 14,top:10,bottom:12}).alignItems(HorizontalAlign.Start)
+      .backgroundColor(this.panelSurface())
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.headerEnvironment.dark),radius:22}).borderRadius(22)
+      .shadow(PhoneStyle.floatingElevation(this.headerEnvironment.dark)).id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
     else if (this.fillAvailable && !this.pinFooter && this.request.kind !== 'question') Scroll() {
       Column({ space: Tokens.gap }) { this.formBody(); this.responseFooter() }

@@ -12,7 +12,7 @@
 // (not the turn's leftover clock); the count stays whole on a narrow screen. A subagent still running (#5030, cindy's
 // background subtasks) gets cindy's Activity mark and "Background subtasks running, still consuming model usage…" with
 // no time and no tokens; cindy's "Stop all" waits for a node that can stop one (#5044). Commands that only wait (#6045,
-// `background_waiting`) get a still, lighter line, timed from when the wait began, with no breath and no tokens. A real
+// `background_waiting`) get a still line, timed from when the wait began, with no breath and no tokens. A real
 // background command or Monitor (#7341) instead gets the working treatment: a terminal mark and "Background task", then
 // the command's description or one-line command and "N more", timed only from that command's own start, with no time
 // when it has none and never the turn's tokens or speed. With the hub out of reach the bar says so in front of the last
@@ -23,6 +23,7 @@ import { parseRetryAPIError } from "../../lib/api-errors";
 import type { RunStep } from "../../lib/run-step";
 import { useStore } from "../../lib/store";
 import { compactTokens } from "../../lib/tokens";
+import { timeOrNaN } from "../../lib/times";
 import { toolDisplayName } from "../../lib/turns";
 import type { SessionLive } from "../../lib/types";
 import { TICKING_DURATION, workDuration } from "../../lib/work-groups";
@@ -137,17 +138,17 @@ function Disconnected() {
   return <span className="shrink-0 text-ink-3" data-running-offline>{t("chat-runningstatusbar.disconnected")} ·</span>;
 }
 
-/** The bar of an agent that only waits in the background (#6045): still, in the waiting color, timed from when it began. */
+/** The bar of an agent that only waits in the background (#6045): still, timed from when it began. */
 export function WaitingView({ wait, offline }: { wait: WaitLine; offline?: boolean }) {
   const now = useNow(1000, !offline);
-  const since = wait.since ? Date.parse(wait.since) : NaN;
+  const since = timeOrNaN(wait.since);
   // what it waits on: the header's title line says the state ("Waiting in the background"), once (#3956); the state's name
   // only stands in when the wait has no words of its own
   const words = [wait.what || stateName("bg_waiting"), wait.more > 0 ? t("chat-runningstatusbar.more_waits", { count: wait.more }) : ""].filter(Boolean).join(" · ");
   return (
     <div data-running-status="on" data-running-background="waiting" className="flex select-none items-center justify-between gap-3 px-2 py-1.5 text-[13px] font-medium">
-      <div className="flex min-w-0 items-center gap-1.5 text-status-waiting">
-        <Icon name="clock" size={14} className="shrink-0 -translate-y-px" />
+      <div className="flex min-w-0 items-center gap-1.5 text-ink-2">
+        <Icon name="clock" size={14} className="shrink-0 -translate-y-px text-accent-ink" />
         {offline && <Disconnected />}
         <span className="truncate" data-running-verb>{words}</span>
       </div>
@@ -261,13 +262,13 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const retry = working && live?.retry_error && (live.retry_attempt ?? 0) > 0 && (live.retry_max ?? 0) > 0
     ? { error: live.retry_error, attempt: live.retry_attempt!, max: live.retry_max!, info: parseRetryAPIError(live.retry_error) }
     : null;
-  const bg = kept.background;
+  const bg = retry ? null : kept.background;
   const behind = inBackground(bg, shown, kept.clock, kept.step);
   // the turn is over and background subagents run on: neither the turn's time nor its tokens say anything of them
-  const usage = Boolean(kept.subtasks);
+  const usage = !retry && Boolean(kept.subtasks);
   // a real background command has its own optional clock; there is no turn-clock or mount-time fallback for it
-  const task = kept.command;
-  const commandStart = task?.since ? Date.parse(task.since) : NaN;
+  const task = retry ? null : kept.command;
+  const commandStart = timeOrNaN(task?.since);
   // The hub can serialize Go's zero time as 0001-01-01: that is an absent start, not a gigantic elapsed time.
   const commandTimed = Number.isFinite(commandStart) && commandStart > 0;
   // the turn's own work, measured: an Agent's, not the Persona conversation's, not background work's
@@ -313,18 +314,14 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
       <div
         onAnimationEnd={done ? undefined : breath.ended}
         aria-hidden={hidden || undefined}
-        className={`flex min-w-0 items-center gap-1.5 text-ink-2 ${hidden ? "invisible" : done ? "status-done" : breath.cycle ? "status-breath" : ""}`}
+        className={`flex min-w-0 items-center gap-1.5 ${retry ? "text-orange" : "text-ink-2"} ${hidden ? "invisible" : done ? "status-done" : breath.cycle ? "status-breath" : ""}`}
         data-running-done={done || undefined}
         style={breath.cycle && !done && !hidden && !(breath.cycle % 2) ? { ...fade, animationName: "status-breath-again" } : fade}
       >
         <Icon name={icon} size={14} stroke={done ? 2.5 : undefined} className={`shrink-0 ${iconTone} ${done ? "" : "-translate-y-px"}`} />
         {offline && <Disconnected />}
-        {behind ? <BackgroundWords line={bg} /> : task ? <BackgroundCommandWords line={task} now={now} /> : retry ? (
-          <span className="flex min-w-0 items-center whitespace-pre" data-running-verb>
-            <span className="min-w-0 shrink truncate text-status-working">{words}</span>
-            <span className="min-w-0 truncate font-normal text-ink-3" data-running-retry-detail>{` · ${retry.error}`}</span>
-          </span>
-        ) : <span className={phase === "on" && !done ? "chat-shimmer truncate" : "truncate"} data-running-verb>{words}</span>}
+        {behind ? <BackgroundWords line={bg} /> : task ? <BackgroundCommandWords line={task} now={now} />
+          : <span className={!retry && phase === "on" && !done ? "chat-shimmer truncate" : "truncate"} data-running-verb title={retry?.error}>{words}</span>}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums" style={pinned ? undefined : fade}>
         {usage || (task && !commandTimed) ? null : own && SpeedView ? (
@@ -390,6 +387,6 @@ function useElapsed(live: SessionLive | null, startedAt: string | undefined, now
   if (live?.elapsed_s === undefined) base.current = null;
   else if (base.current?.s !== live.elapsed_s) base.current = { s: live.elapsed_s, at: Date.now() };
   if (base.current) return base.current.s + Math.max(0, Math.floor((now - base.current.at) / 1000));
-  const from = startedAt ? Date.parse(startedAt) : NaN;
+  const from = timeOrNaN(startedAt);
   return Math.max(0, Math.floor((now - (Number.isNaN(from) ? mounted.current : from)) / 1000));
 }

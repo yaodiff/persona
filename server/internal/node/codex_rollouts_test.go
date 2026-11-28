@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // rolloutID reads the same id as rolloutIDRe, for any name.
@@ -128,5 +130,47 @@ func TestRolloutsMetasPruned(t *testing.T) {
 	// The two kept rollouts and the one outside the window, still on disk.
 	if n := rolloutMetaCount(codex); n != 3 {
 		t.Fatalf("metas after the older days are listed again: %d, want 3", n)
+	}
+}
+
+func TestCodexRolloutCompressedMetadataAndStart(t *testing.T) {
+	const id = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	for _, dir := range []string{"sessions/2026/01/02", "archived_sessions"} {
+		t.Run(dir, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, dir, "rollout-time-"+id+"_11111111-2222-3333-4444-555555555555.jsonl.zst")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			encoder, err := zstd.NewWriter(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer encoder.Close()
+			data := `{"timestamp":"2026-01-02T03:04:05Z","type":"session_meta","payload":{"id":"` + id + `","cwd":"/w"}}` + "\n" +
+				`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"text":"hello"}]}}}` + "\n"
+			if err := os.WriteFile(path, encoder.EncodeAll([]byte(data), nil), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path+".tmp", []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+			if rolloutID(path) != id || !rolloutIDRe.MatchString(path) || rolloutID(path+".tmp") != "" {
+				t.Fatal("compressed rollout identity")
+			}
+			if got := rolloutPath(home, id); got != path {
+				t.Fatalf("path = %q, want %q", got, path)
+			}
+			if meta, whole := readRolloutMeta(path); !whole || meta.cwd != "/w" || meta.threadID != id {
+				t.Fatalf("metadata = %+v, whole = %v", meta, whole)
+			}
+			if began, first := codexThreadStart(path); !began.Equal(old) || first != "hello" {
+				t.Fatalf("start = %v, %q", began, first)
+			}
+		})
 	}
 }

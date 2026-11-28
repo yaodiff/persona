@@ -12,6 +12,72 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalCriticalPathTest {
+    @Test fun initiallyPollingPageRegistersReadOnlyPresenceUntilExitAndAfterReconnect() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val transport = FakeTerminal()
+            transport.features.value = setOf("terminal_control")
+            val model = TerminalViewModel(SessionKey("machine", "session"), transport, dispatcher)
+            model.grid(TerminalSize(40, 20))
+            val first = launch { model.run() }
+            runCurrent()
+            try {
+                assertTrue(transport.screens > 0)
+                assertEquals("polling must still report a viewer", 1, transport.subscriptions.size)
+                assertNull(transport.subscriptions.last().size)
+                assertFalse(transport.subscriptions.last().takeover)
+                assertFalse(model.state.value.streaming)
+                assertEquals(TerminalControl.Watching, model.state.value.control)
+                advanceTimeBy(1500); runCurrent()
+                assertEquals("a quiet polling page must not subscribe on every tick", 1, transport.subscriptions.size)
+                transport.connection.value = ConnectionState.Connecting
+                advanceTimeBy(250); runCurrent()
+                transport.connection.value = ConnectionState.Online
+                advanceTimeBy(250); runCurrent()
+                assertEquals("reconnect must restore the viewer", 2, transport.subscriptions.size)
+                assertNull(transport.subscriptions.last().size)
+                assertFalse(transport.subscriptions.last().takeover)
+            } finally { first.cancelAndJoin() }
+            assertEquals(1, transport.unsubscribes)
+            transport.subscriptions.clear()
+            val second = launch { model.run() }
+            runCurrent()
+            try {
+                assertEquals("returning to the retained polling page registers again", 1, transport.subscriptions.size)
+                assertNull(transport.subscriptions.last().size)
+            } finally { second.cancelAndJoin() }
+            assertEquals(2, transport.unsubscribes)
+            advanceTimeBy(1500); runCurrent()
+            assertEquals("leaving the page must not recreate presence", 1, transport.subscriptions.size)
+        } finally { Dispatchers.resetMain() }
+    }
+
+    @Test fun aPollingPageUnsubscribesAndRegistersAgainWhenShown() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        try {
+            val transport = FakeTerminal()
+            val model = TerminalViewModel(SessionKey("machine", "session"), transport, dispatcher)
+            val first = launch { model.run() }
+            runCurrent()
+            model.grid(TerminalSize(40, 20)); advanceTimeBy(250); runCurrent()
+            assertEquals(1, transport.subscriptions.size)
+            transport.events.emit(TerminalEvent("machine", "session", error = "unsupported stream", unsupported = true))
+            advanceTimeBy(250); runCurrent()
+            assertTrue(transport.screens > 0)
+            assertEquals(1, transport.subscriptions.size)
+            first.cancelAndJoin()
+            assertEquals(1, transport.unsubscribes)
+            transport.subscriptions.clear()
+            val second = launch { model.run() }
+            runCurrent()
+            try { assertEquals(1, transport.subscriptions.size) }
+            finally { second.cancelAndJoin() }
+            assertEquals(2, transport.unsubscribes)
+        } finally { Dispatchers.resetMain() }
+    }
+
     @Test fun resumesFramesRecoversGapsReleasesControlAndBatchesWheel() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)

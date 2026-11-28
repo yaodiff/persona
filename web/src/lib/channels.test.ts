@@ -21,18 +21,18 @@ describe("the list", () => {
     expect(s.map((x) => [x.title, x.channels.map((c) => c.id)])).toEqual([
       ["Persona", ["app"]],
       ["已接入", ["wechat", "feishu", "examplechat"]],
-      ["可以安装", ["examplemarket"]],
+      ["可安装", ["examplemarket"]],
     ]);
     expect(channelSections([app]).map((x) => x.title)).toEqual(["Persona"]);
   });
 
   it("says how each is doing, in words", () => {
-    expect([wechat, feishu, fresh, market].map(channelStateText)).toEqual(["已连接", "出错了", "未连接", "没安装"]);
+    expect([wechat, feishu, fresh, market].map(channelStateText)).toEqual(["已连接", "出错", "未连接", "未安装"]);
     expect(channelSubtitle(app)).toBe("iPhone · 网页");
     expect(channelSubtitle(wechat)).toBe("微信用户 a1b2c3");
     expect(channelSubtitle(feishu)).toBe("长连接断了");
     expect(channelSubtitle(fresh)).toBe("示例");
-    expect(channelsSummary([app, wechat, feishu, fresh])).toBe("1 个已连接 · 1 个出错");
+    expect(channelsSummary([app, wechat, feishu, fresh])).toBe("1 个已连接 · 1 个异常");
     expect(channelsSummary([app, wechat])).toBe("1 个已连接");
   });
 });
@@ -56,16 +56,16 @@ describe("a channel's page", () => {
 
   it("names where messages go", () => {
     expect(targetText(undefined)).toBe("主对话");
-    expect(targetText({ kind: "new" })).toBe("新对话（下一条消息开）");
+    expect(targetText({ kind: "new" })).toBe("新对话（发送下一条消息时创建）");
     expect(targetText({ kind: "conversation", machine_id: "m", session_id: "s", title: "周报" })).toBe("周报");
   });
 
   it("says what it can do", () => {
     expect(capabilityText({ images_in: true, voice_in: true, format: "plain", max_text: 3500, asks: "text", typing: true })).toEqual([
-      "收文字、图片、语音", "回答是纯文字", "一条最多 3500 字，长的拆开发", "提问和批准回复序号或文字", "处理时显示「正在输入」",
+      "支持接收文字、图片、语音", "以纯文本格式回复", "单条消息最多 3500 字，超出部分将自动分段发送", "可通过回复序号或文字响应提问与批准请求", "处理时显示「正在输入」",
     ]);
     expect(capabilityText({ format: "plain", reply_only: true })).toEqual([
-      "收文字", "回答是纯文字", "仅回复收到的消息",
+      "支持接收文字", "以纯文本格式回复", "仅回复收到的消息",
     ]);
   });
 

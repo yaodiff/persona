@@ -146,6 +146,8 @@ func (d *mirrorDevices) UsageAccounts(context.Context) []proto.UsageAccount { re
 
 func (d *mirrorDevices) GatewayRetryAt(string, string, time.Time) time.Time { return time.Time{} }
 
+func (d *mirrorDevices) UsageGatewayAccounts() proto.GatewayAccounts { return proto.GatewayAccounts{} }
+
 func (d *mirrorDevices) SetAttention(link.Attention) {}
 
 func (d *mirrorDevices) LinkRang(context.Context, string, time.Duration) bool { return false }

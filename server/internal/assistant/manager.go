@@ -234,7 +234,7 @@ func RunManagerWith(ctx context.Context, build update.Build, dir string, h MainH
 	}
 	return run(ctx, build, runOptions{ID: c.ID, Hub: c.Hub, Token: c.Token, Fingerprint: c.Fingerprint, Deploy: deploy,
 		Dir: dir, HostDataDir: hostDataDir, ConfigFile: file, ExtConfig: ext, DatabaseURL: url, StopWhenRevoked: true,
-		Logf: logger.Printf, Ready: h.Ready, PendingRestart: h.PendingRestart})
+		Logf: logger.Printf, Ready: h.Ready, PendingRestart: h.PendingRestart, HubVersion: h.HubVersion})
 }
 
 // pinnedHTTPClient dials the hub only when its TLS key is fp's.

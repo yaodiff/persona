@@ -191,7 +191,13 @@ const (
 
 // sent is how the noted send went (err: the send call's; the top of this file says what each outcome does).
 func (n *agentSendNote) sent(ctx context.Context, err error) {
-	if n == nil || n.task == "" {
+	if n == nil {
+		return
+	}
+	if n.task == "" {
+		if err == nil {
+			n.s.noteTaskFollowup(ctx, n.from, n.key[0], n.key[1])
+		}
 		return
 	}
 	how := sendTaken
@@ -204,6 +210,9 @@ func (n *agentSendNote) sent(ctx context.Context, err error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	n.s.sendAnswered(ctx, n, how)
+	if err == nil {
+		n.s.noteTaskFollowup(ctx, n.from, n.key[0], n.key[1])
+	}
 }
 
 // sendAnswered is what n's answer makes of its task, under s.tasks.completionMu: a turn start opens the task under it

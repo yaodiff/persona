@@ -14,6 +14,9 @@
 #   curl -fsSL <site>/install.sh | sh -s -- --node --pair '<link from personad hub pair --machine <id>>'   # this one connects to the hub
 #   curl -fsSL <site>/install.sh | sh -s -- --node --listen [:18663] [--addr <address the hub reaches this one at>]  # the hub connects here
 #
+# --core installs the core edition (Persona Core alone, no built-in module: docs/operations/core-install.md), --full the
+# full one; a computer keeps the edition it has when neither is given.
+#
 # --pair and --listen imply --node (PERSONA_ROLE=node, PERSONA_PAIR, PERSONA_LISTEN do the same). Without a role and with
 # a terminal it asks, and says so when it hears a hub on this LAN already (mDNS). --hub is the machine that runs the hub.
 #
@@ -38,7 +41,7 @@ install_language() {
 
 # install_text <key>: print the text for key in INSTALL_LANG. Keys and all three translations live in this block.
 # Catalog entries are printed as data: install_format, not this lookup, substitutes their placeholders.
-INSTALL_TEXT_KEYS="admin_help admin_choose admin_invalid_choice admin_cidrs admin_any_confirm admin_any_fallback admin_reminder admin_reminder_if_hub lang_invalid unknown_option pair_hub_conflict pair_listen_conflict role_invalid admin_access_invalid state_conflict python_required state_symlink_unavailable legacy_command_directory artifact_missing unsupported_os unsupported_arch gzip_required fetch_required checksum_tool_required download_failed checksum_missing checksum_mismatch unpack_failed empty_binary create_dest_failed write_failed install_failed release_program_required release_program_kept node_link_required unknown_version program_installed not_on_path herdr_already herdr_installing herdr_installed herdr_failed node_connect_help node_connect_choose node_pair_prompt mac_connector node_switch_warning node_stays_warning hub_found hub_one_only install_node_confirm run_hub_confirm connect_node_confirm hub_setup_next hub_setup_incomplete hub_upgraded hub_run_next messaging_connectors other_computers"
+INSTALL_TEXT_KEYS="admin_help admin_choose admin_invalid_choice admin_cidrs admin_any_confirm admin_any_fallback admin_reminder admin_reminder_if_hub lang_invalid unknown_option pair_hub_conflict pair_listen_conflict role_invalid admin_access_invalid state_conflict python_required state_symlink_unavailable legacy_command_directory artifact_missing unsupported_os unsupported_arch gzip_required fetch_required checksum_tool_required download_failed checksum_missing checksum_mismatch unpack_failed empty_binary create_dest_failed write_failed install_failed release_program_required release_program_kept node_link_required unknown_version program_installed not_on_path herdr_already herdr_installing herdr_installed herdr_failed node_connect_help node_connect_choose node_pair_prompt mac_connector node_switch_warning node_stays_warning hub_found hub_one_only install_node_confirm run_hub_confirm connect_node_confirm hub_setup_next hub_setup_incomplete hub_upgraded hub_run_next messaging_connectors other_computers edition_kept edition_unknown"
 # shellcheck disable=SC2183 # Catalog entries are format strings; install_format supplies their arguments.
 install_text() {
 	case "$INSTALL_LANG:$1" in
@@ -93,9 +96,9 @@ TEXT
 	en:lang_invalid) printf '%s' 'personad: --lang must be en, zh-Hans or ja' ;;
 	zh-Hans:lang_invalid) printf '%s' 'personad：--lang 必须是 en、zh-Hans 或 ja' ;;
 	ja:lang_invalid) printf '%s' 'personad：--lang は en、zh-Hans、ja のいずれかを指定してください' ;;
-	en:unknown_option) printf '%s' 'personad: unknown option %s (--node [--pair <link> [--machine <id>] | --listen [addr] [--addr <host>]], --hub, --admin-access <loopback|lan|cidrs|any>, --admin-cidrs a,b, --lang <en|zh-Hans|ja>)' ;;
-	zh-Hans:unknown_option) printf '%s' 'personad：未知选项 %s（可用：--node [--pair <链接> [--machine <id>] | --listen [地址] [--addr <主机>]]、--hub、--admin-access <loopback|lan|cidrs|any>、--admin-cidrs a,b、--lang <en|zh-Hans|ja>）' ;;
-	ja:unknown_option) printf '%s' 'personad：不明なオプション %s（使用可能：--node [--pair <リンク> [--machine <id>] | --listen [アドレス] [--addr <ホスト>]]、--hub、--admin-access <loopback|lan|cidrs|any>、--admin-cidrs a,b、--lang <en|zh-Hans|ja>）' ;;
+	en:unknown_option) printf '%s' 'personad: unknown option %s (--node [--pair <link> [--machine <id>] | --listen [addr] [--addr <host>]], --hub, --core | --full, --admin-access <loopback|lan|cidrs|any>, --admin-cidrs a,b, --lang <en|zh-Hans|ja>)' ;;
+	zh-Hans:unknown_option) printf '%s' 'personad：未知选项 %s（可用：--node [--pair <链接> [--machine <id>] | --listen [地址] [--addr <主机>]]、--hub、--core | --full、--admin-access <loopback|lan|cidrs|any>、--admin-cidrs a,b、--lang <en|zh-Hans|ja>）' ;;
+	ja:unknown_option) printf '%s' 'personad：不明なオプション %s（使用可能：--node [--pair <リンク> [--machine <id>] | --listen [アドレス] [--addr <ホスト>]]、--hub、--core | --full、--admin-access <loopback|lan|cidrs|any>、--admin-cidrs a,b、--lang <en|zh-Hans|ja>）' ;;
 	en:pair_hub_conflict) printf '%s' 'personad: --pair / --listen are for the node service, not --hub' ;;
 	zh-Hans:pair_hub_conflict) printf '%s' 'personad：--pair / --listen 用于 node 服务，不能和 --hub 一起使用' ;;
 	ja:pair_hub_conflict) printf '%s' 'personad：--pair / --listen は node サービス用で、--hub では使用できません' ;;
@@ -174,6 +177,12 @@ TEXT
 	en:unknown_version) printf '%s' 'unknown' ;;
 	zh-Hans:unknown_version) printf '%s' '版本未知' ;;
 	ja:unknown_version) printf '%s' 'バージョン不明' ;;
+	en:edition_kept) printf '%s' 'This computer has the core edition of Persona (no built-in modules): installing the core edition again. Run the install command with --full to change to the full edition.' ;;
+	zh-Hans:edition_kept) printf '%s' '这台电脑装的是 Persona 的 core 版（不含内置模块）：继续安装 core 版。要换成完整版，请在安装命令后加 --full。' ;;
+	ja:edition_kept) printf '%s' 'このコンピュータには Persona の core 版（組み込みモジュールなし）が入っています。引き続き core 版をインストールします。完全版に切り替えるには、インストールコマンドに --full を付けてください。' ;;
+	en:edition_unknown) printf '%s' 'personad: unknown edition %s (core or full)' ;;
+	zh-Hans:edition_unknown) printf '%s' 'personad：未知的版本类型 %s（可用：core 或 full）' ;;
+	ja:edition_unknown) printf '%s' 'personad：不明なエディション %s（core または full）' ;;
 	en:program_installed) printf '%s' '%s %s installed at %s' ;;
 	zh-Hans:program_installed) printf '%s' '%s %s 已安装到 %s' ;;
 	ja:program_installed) printf '%s' '%s %s を %s にインストールしました' ;;
@@ -372,6 +381,10 @@ PAIR="${PERSONA_PAIR:-}"
 MACHINE="${PERSONA_MACHINE:-}"
 LISTEN="${PERSONA_LISTEN:-}"
 LISTEN_SET="${PERSONA_LISTEN:+1}"
+# The edition (docs/operations/core-install.md): full, every built-in module, or core, Persona Core alone. --core,
+# --full or PERSONA_EDITION say which; with none, a computer keeps the edition it has (EDITION_MARK below), and a new
+# one gets the full edition, as before.
+EDITION="${PERSONA_EDITION:-}"
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--admin-access) ADMIN_ACCESS="${2:-}" && shift ;;
@@ -380,6 +393,8 @@ while [ $# -gt 0 ]; do
 	--admin-cidrs=*) ADMIN_CIDRS="${1#*=}" ;;
 	--node) ROLE=node ;;
 	--hub) ROLE=hub ;;
+	--core) EDITION=core ;;
+	--full) EDITION=full ;;
 	--pair) PAIR="${2:-}" && shift ;;
 	--pair=*) PAIR="${1#*=}" ;;
 	--machine) MACHINE="${2:-}" && shift ;;
@@ -452,6 +467,21 @@ fail() {
 	exit 1
 }
 
+# A core-only install says so in $DEST/.edition, written when it is installed: installing again without --core or
+# --full keeps it core-only, so no update by this script turns it into the full edition by itself. EP is what the
+# edition's files are served under beside the full release's: nothing, or core- (core-SHA256SUMS, core-latest.json,
+# core-personad-<os>-<arch>.gz).
+EDITION_MARK="$DEST/.edition"
+if [ -z "$EDITION" ] && [ "$(cat "$EDITION_MARK" 2>/dev/null)" = core ]; then
+	EDITION=core
+	say edition_kept
+fi
+case "${EDITION:-full}" in
+full) EDITION=full EP="" ;;
+core) EP=core- ;;
+*) fail edition_unknown "$EDITION" ;;
+esac
+
 prepare_state() {
 	if [ -L "$STATE" ] && [ ! -d "$STATE" ]; then
 		fail state_symlink_unavailable "$STATE"
@@ -520,7 +550,7 @@ https://github.com/*/releases/latest/download/) DL="${DL%/}" ;;
 esac
 case "$DL" in
 https://github.com/*/releases/latest/download)
-	fetch "$DL/latest.json" "$tmp/latest.json" || fail download_failed "$DL/latest.json"
+	fetch "$DL/${EP}latest.json" "$tmp/latest.json" || fail download_failed "$DL/${EP}latest.json"
 	release_version="$(awk '
 	  match($0, /"version"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9]{12})?"/) {
 	    value = substr($0, RSTART, RLENGTH)
@@ -533,11 +563,18 @@ https://github.com/*/releases/latest/download)
 	    exit
 	  }
 	  END { if (!found) exit 1 }
-	' "$tmp/latest.json")" || fail download_failed "$DL/latest.json"
+	' "$tmp/latest.json")" || fail download_failed "$DL/${EP}latest.json"
 	DL="${DL%/releases/latest/download}/releases/download/v$release_version"
 	;;
 esac
-fetch "$DL/SHA256SUMS" "$tmp/SHA256SUMS" || fail download_failed "$DL/SHA256SUMS"
+fetch "$DL/${EP}SHA256SUMS" "$tmp/SHA256SUMS" || fail download_failed "$DL/${EP}SHA256SUMS"
+if [ -n "$EP" ]; then
+	# The core edition's sums list core-<name>.gz: read under the names the files have once here, so everything
+	# below looks a download up as it does for the full edition and only its address differs ($DL/$EP<name>.gz).
+	awk -v p="$EP" '{ n = $2; star = ""; if (substr(n, 1, 1) == "*") { star = "*"; n = substr(n, 2) }
+		if (index(n, p) == 1) print $1 "  " star substr(n, length(p) + 1) }' "$tmp/SHA256SUMS" > "$tmp/SHA256SUMS.edition"
+	mv "$tmp/SHA256SUMS.edition" "$tmp/SHA256SUMS"
+fi
 
 # get <name> <installed as>: downloads <name>.gz, checks it against SHA256SUMS and puts it in $DEST.
 get() {
@@ -549,7 +586,7 @@ get() {
 fetch_checked() {
     source=$(artifact_name "$1") || return 1
 	archive="$source.gz"
-	fetch "$DL/$archive" "$tmp/$archive" || fail download_failed "$DL/$archive"
+	fetch "$DL/$EP$archive" "$tmp/$archive" || fail download_failed "$DL/$EP$archive"
 	want="$(awk -v n="$archive" '$2 == n || $2 == "*" n { print $1 }' "$tmp/SHA256SUMS")"
 	[ -n "$want" ] || fail checksum_missing "$archive"
 	[ "$(sum "$tmp/$archive")" = "$want" ] || fail checksum_mismatch "$archive"
@@ -683,6 +720,12 @@ else
 	version="$("$DEST/personad" version 2>/dev/null || install_text unknown_version)"
 	say program_installed personad "$version" "$DEST/personad"
 fi
+# What is installed here is this edition from now on (EDITION_MARK).
+if [ "$EDITION" = core ]; then
+	printf 'core\n' > "$EDITION_MARK" || fail write_failed "$EDITION_MARK"
+else
+	rm -f "$EDITION_MARK"
+fi
 case ":$PATH:" in
 *":$DEST:"*) ;;
 *) say not_on_path "$DEST/$program" "$DEST" ;;
@@ -714,7 +757,7 @@ fetch_link() {
 	[ -z "${LINK_FETCHED:-}" ] || return 0
     lname=$(artifact_name "persona-link-$os-$arch") || return 1
 	larchive="$lname.gz"
-	fetch "$DL/$larchive" "$tmp/$larchive" || { warn download_failed "$DL/$larchive" && return 1; }
+	fetch "$DL/$EP$larchive" "$tmp/$larchive" || { warn download_failed "$DL/$EP$larchive" && return 1; }
 	lwant="$(awk -v n="$larchive" '$2 == n || $2 == "*" n { print $1 }' "$tmp/SHA256SUMS")"
 	[ -n "$lwant" ] || { warn checksum_missing "$larchive" && return 1; }
 	[ "$(sum "$tmp/$larchive")" = "$lwant" ] || { warn checksum_mismatch "$larchive" && return 1; }
@@ -732,7 +775,7 @@ fetch_link() {
 fetch_bridge() {
 	bname="persona-iphone-bridge-$os-$arch"
 	awk -v n="$bname.gz" '$2 == n || $2 == "*" n { found=1 } END { exit !found }' "$tmp/SHA256SUMS" || return 0
-	fetch "$DL/$bname.gz" "$tmp/$bname.gz" || { warn download_failed "$DL/$bname.gz" && return 1; }
+	fetch "$DL/$EP$bname.gz" "$tmp/$bname.gz" || { warn download_failed "$DL/$EP$bname.gz" && return 1; }
 	bwant="$(awk -v n="$bname.gz" '$2 == n || $2 == "*" n { print $1 }' "$tmp/SHA256SUMS")"
 	[ "$(sum "$tmp/$bname.gz")" = "$bwant" ] || { warn checksum_mismatch "$bname.gz" && return 1; }
 	gzip -dc "$tmp/$bname.gz" > "$tmp/$bname" && [ -s "$tmp/$bname" ] || { warn unpack_failed "$bname.gz" && return 1; }

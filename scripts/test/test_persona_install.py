@@ -406,6 +406,31 @@ printf 'catalog placeholders preserved in all languages\n'
                 if terminal:
                     self.assertEqual(os.readlink(state / 'bin' / (FORMER_NAME + 'd')), 'personad')
 
+    def test_core_packaging_failure_stops_the_release_only_when_core_is_published(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        start = publisher.index('core_step() {')
+        helper = publisher[start:publisher.index('\n}\n', start) + 3]
+        self.assertIn('core_step build env LDFLAGS="$LDFLAGS" scripts/release/core_edition.sh build', publisher)
+        self.assertIn('core_step checks pack_core_packages', publisher)
+        for publish_core in ('0', '1'):
+            with self.subTest(publish_core=publish_core), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                core = root / 'core'
+                core.mkdir()
+                command = ('set -e\nCORE=' + json.dumps(str(core)) + '\n' + helper +
+                           '\ncore_step build false\nprintf "full-release-continues\\n"\n')
+                result = subprocess.run(['bash', '-c', command], env={'PATH': '/usr/bin:/bin',
+                                        'PERSONA_PUBLISH_CORE': publish_core}, capture_output=True, text=True, timeout=10)
+                if publish_core == '1':
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn('full-release-continues', result.stdout)
+                    self.assertIn('requires the core packages', result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('full-release-continues', result.stdout)
+                    self.assertIn('FULL RELEASE CONTINUES', result.stderr)
+                    self.assertFalse(core.exists())
+
     def test_publish_installer_downloads_from_the_compiled_update_base(self):
         publisher = (ROOT / 'scripts/release/publish.sh').read_text()
         self.assertIn('-X main.updateURL=$UPDATE_URL', publisher)

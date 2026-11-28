@@ -122,14 +122,14 @@ describe("Add computer for the current assistant", () => {
     answer = () => "assistant";
     await add();
     expect(note()?.dataset.addedUnder).toBe("assistant");
-    expect(note()?.textContent).toBe("这台电脑加到了「Persona」名下。");
+    expect(note()?.textContent).toBe("这台电脑已添加到「Persona」下。");
   });
 
   it("says a hub from before add.manager put the new computer under its own assistant", async () => {
     act(() => chooseManager("m-work"));
     answer = () => undefined;
     await add();
-    expect(note()?.textContent).toBe("这台电脑加到了「Persona」名下。");
+    expect(note()?.textContent).toBe("这台电脑已添加到「Persona」下。");
   });
 
   it("names no manager on a new code for a computer added before", async () => {
@@ -144,7 +144,7 @@ describe("Add computer for the current assistant", () => {
     act(() => chooseManager("m-home"));
     await act(async () => root.render(<AddComputer open onClose={() => {}} />));
     await flush();
-    expect(text()).toContain("「Home」离线，暂时不能给它添加电脑。");
+    expect(text()).toContain("「Home」当前离线，暂时无法向其添加电脑。");
     expect(button("下一步")).toBeUndefined();
     expect(document.querySelector("input")).toBeNull();
     expect(posts).toEqual([]);

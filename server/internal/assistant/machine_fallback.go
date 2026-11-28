@@ -440,6 +440,7 @@ func (s *Service) wakeRelaysFor(machine, sid string) {
 		return
 	}
 	delete(b.failedAt, sid)
+	delete(b.msgFailedAt, sid)
 	delete(b.stuck, sid)
 	delete(b.roleChange, sid)
 	b.mu.Unlock()

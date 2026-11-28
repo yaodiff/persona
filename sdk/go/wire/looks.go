@@ -11,9 +11,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Looks' files (docs/extensions/extensions.md "Avatars"): what the hub holds a look's pictures to when it installs an extension and
@@ -267,8 +267,6 @@ func svgToken(t xml.StartElement) xml.StartElement {
 	return out
 }
 
-var cssURL = regexp.MustCompile(`(?i)url\(\s*['"]?\s*([^)'"]*)`)
-
 // cleanAttrs keeps the attributes that only draw: no on* handlers, no namespaced ones but xlink:href, hrefs and
 // url()s only to the same document.
 func cleanAttrs(attrs []xml.Attr) []xml.Attr {
@@ -284,19 +282,17 @@ func cleanAttrs(attrs []xml.Attr) []xml.Attr {
 			if a.Name.Space != "" && a.Name.Space != "http://www.w3.org/1999/xlink" {
 				continue
 			}
-			if !strings.HasPrefix(strings.TrimSpace(a.Value), "#") {
+			if !isSameDocumentFragment(a.Value) {
 				continue
 			}
 			out = append(out, xml.Attr{Name: xml.Name{Local: "href"}, Value: a.Value})
 			continue
 		case a.Name.Space != "" && a.Name.Space != "http://www.w3.org/XML/1998/namespace":
 			continue
-		case name == "style" || strings.Contains(strings.ToLower(a.Value), "url("):
-			if !sameDocumentURLs(a.Value) {
-				continue
-			}
+		case name == "base":
+			continue
 		}
-		if strings.Contains(strings.ToLower(a.Value), "javascript:") {
+		if !sameDocumentURLs(a.Value, name == "style") {
 			continue
 		}
 		out = append(out, xml.Attr{Name: xml.Name{Local: a.Name.Local}, Value: a.Value})
@@ -304,11 +300,404 @@ func cleanAttrs(attrs []xml.Attr) []xml.Attr {
 	return out
 }
 
-func sameDocumentURLs(v string) bool {
-	for _, m := range cssURL.FindAllStringSubmatch(v, -1) {
-		if !strings.HasPrefix(strings.TrimSpace(m[1]), "#") {
+func trimCSSSpace(s string) string {
+	start := 0
+	for start < len(s) && isCSSWhitespace(s[start]) {
+		start++
+	}
+	end := len(s)
+	for end > start && isCSSWhitespace(s[end-1]) {
+		end--
+	}
+	return s[start:end]
+}
+
+func isSameDocumentFragment(s string) bool {
+	s = trimCSSSpace(s)
+	return len(s) > 1 && s[0] == '#'
+}
+
+func isCSSWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f'
+}
+
+func isHexDigit(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
+}
+
+func hexDigitValue(b byte) rune {
+	switch {
+	case b >= '0' && b <= '9':
+		return rune(b - '0')
+	case b >= 'a' && b <= 'f':
+		return rune(b-'a') + 10
+	default:
+		return rune(b-'A') + 10
+	}
+}
+
+func toLowerASCII(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + ('a' - 'A')
+	}
+	return r
+}
+
+func isCSSIdentByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-' || b >= 0x80
+}
+
+func isValidCSSEscape(s string, i int) bool {
+	return i+1 < len(s) && s[i] == '\\' && s[i+1] != '\n' && s[i+1] != '\r' && s[i+1] != '\f'
+}
+
+// consumeCSSEscape decodes one CSS Syntax L3 §4.3.7 escape starting at s[i] == '\\'.
+func consumeCSSEscape(s string, i int) (rune, int) {
+	i++
+	if i >= len(s) {
+		return '\uFFFD', i
+	}
+	if isHexDigit(s[i]) {
+		var val rune
+		digits := 0
+		for i < len(s) && digits < 6 && isHexDigit(s[i]) {
+			val = val*16 + hexDigitValue(s[i])
+			i++
+			digits++
+		}
+		if i < len(s) {
+			if s[i] == '\r' && i+1 < len(s) && s[i+1] == '\n' {
+				i += 2
+			} else if isCSSWhitespace(s[i]) {
+				i++
+			}
+		}
+		if val == 0 || val > 0x10FFFF || (val >= 0xD800 && val <= 0xDFFF) {
+			val = '\uFFFD'
+		}
+		return val, i
+	}
+	r, sz := utf8.DecodeRuneInString(s[i:])
+	return r, i + sz
+}
+
+func consumeCSSIdent(s string, i int) (string, int) {
+	var b strings.Builder
+	for i < len(s) {
+		if isCSSIdentByte(s[i]) {
+			if s[i] >= 'A' && s[i] <= 'Z' {
+				b.WriteByte(s[i] + ('a' - 'A'))
+			} else {
+				b.WriteByte(s[i])
+			}
+			i++
+		} else if isValidCSSEscape(s, i) {
+			r, next := consumeCSSEscape(s, i)
+			b.WriteRune(toLowerASCII(r))
+			i = next
+		} else {
+			break
+		}
+	}
+	return b.String(), i
+}
+
+// consumeCSSString consumes a quoted CSS string per CSS Syntax L3 §4.3.5.
+func consumeCSSString(s string, i int) (string, int, bool) {
+	quote := s[i]
+	i++
+	var b strings.Builder
+	for i < len(s) {
+		c := s[i]
+		if c == quote {
+			return b.String(), i + 1, false
+		}
+		if c == '\n' || c == '\r' || c == '\f' {
+			return b.String(), i, true
+		}
+		if c == '\\' {
+			if i+1 >= len(s) {
+				return b.String(), i + 1, false
+			}
+			if s[i+1] == '\r' && i+2 < len(s) && s[i+2] == '\n' {
+				i += 3
+				continue
+			}
+			if s[i+1] == '\n' || s[i+1] == '\r' || s[i+1] == '\f' {
+				i += 2
+				continue
+			}
+			r, next := consumeCSSEscape(s, i)
+			b.WriteRune(r)
+			i = next
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String(), i, false
+}
+
+func isForbiddenCSSFunc(name string) bool {
+	switch name {
+	case "image-set", "-webkit-image-set", "-moz-image-set", "-o-image-set", "-ms-image-set",
+		"image", "cross-fade", "-webkit-cross-fade", "src", "expression":
+		return true
+	}
+	return false
+}
+
+func hasForbiddenScheme(s string) bool {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c <= 0x20 || c == 0x7f {
+			continue
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b.WriteByte(c)
+	}
+	norm := b.String()
+	return strings.Contains(norm, "javascript:") || strings.Contains(norm, "vbscript:")
+}
+
+func hasDangerousDecodedIdent(ident string) bool {
+	if strings.ContainsRune(ident, '(') {
+		for _, fn := range []string{
+			"url(", "image-set(", "-webkit-image-set(", "-moz-image-set(", "-o-image-set(", "-ms-image-set(",
+			"image(", "cross-fade(", "-webkit-cross-fade(", "src(", "expression(",
+		} {
+			if strings.Contains(ident, fn) {
+				return true
+			}
+		}
+	}
+	if strings.ContainsRune(ident, ':') {
+		if hasForbiddenScheme(ident) || strings.Contains(ident, "behavior:") || strings.Contains(ident, "-moz-binding:") {
+			return true
+		}
+	}
+	return false
+}
+
+func skipCSSSpaceAndComments(s string, i int) int {
+	for i < len(s) {
+		if isCSSWhitespace(s[i]) {
+			i++
+		} else if s[i] == '/' && i+1 < len(s) && s[i+1] == '*' {
+			end := strings.Index(s[i+2:], "*/")
+			if end < 0 {
+				return len(s)
+			}
+			i += 2 + end + 2
+		} else {
+			break
+		}
+	}
+	return i
+}
+
+// stripCSSComments removes top-level /* ... */ comments outside quoted strings in O(N) time.
+func stripCSSComments(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if c == '\'' || c == '"' {
+			quote := c
+			b.WriteByte(c)
+			i++
+			for i < len(s) {
+				ch := s[i]
+				if ch == quote {
+					b.WriteByte(ch)
+					i++
+					break
+				}
+				if ch == '\n' || ch == '\r' || ch == '\f' {
+					break
+				}
+				if ch == '\\' && i+1 < len(s) {
+					if s[i+1] == '\r' && i+2 < len(s) && s[i+2] == '\n' {
+						b.WriteString("\\\r\n")
+						i += 3
+					} else if s[i+1] == '\n' || s[i+1] == '\r' || s[i+1] == '\f' {
+						b.WriteString(s[i : i+2])
+						i += 2
+					} else {
+						_, next := consumeCSSEscape(s, i)
+						b.WriteString(s[i:next])
+						i = next
+					}
+					continue
+				}
+				b.WriteByte(ch)
+				i++
+			}
+			continue
+		}
+		if c == '<' && strings.HasPrefix(s[i:], "<!--") {
+			b.WriteString("<!--")
+			i += 4
+			continue
+		}
+		if c == '-' && strings.HasPrefix(s[i:], "-->") {
+			b.WriteString("-->")
+			i += 3
+			continue
+		}
+		if c == '/' && i+1 < len(s) && s[i+1] == '*' {
+			end := strings.Index(s[i+2:], "*/")
+			if end < 0 {
+				break
+			}
+			i += 2 + end + 2
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
+
+func checkCSSTokens(v string, isStyle bool) bool {
+	for i := 0; i < len(v); {
+		c := v[i]
+		if isCSSWhitespace(c) {
+			i++
+			continue
+		}
+		if c == '/' && i+1 < len(v) && v[i+1] == '*' {
+			end := strings.Index(v[i+2:], "*/")
+			if end < 0 {
+				break
+			}
+			i += 2 + end + 2
+			continue
+		}
+		if c == '<' && strings.HasPrefix(v[i:], "<!--") {
+			i += 4
+			continue
+		}
+		if c == '-' && strings.HasPrefix(v[i:], "-->") {
+			i += 3
+			continue
+		}
+		if c == '\'' || c == '"' {
+			str, next, bad := consumeCSSString(v, i)
+			i = next
+			if bad && isStyle {
+				return false
+			}
+			if hasForbiddenScheme(str) {
+				return false
+			}
+			continue
+		}
+		if c == '@' {
+			i++
+			if i < len(v) && (isCSSIdentByte(v[i]) || isValidCSSEscape(v, i)) {
+				ident, next := consumeCSSIdent(v, i)
+				i = next
+				if strings.TrimSpace(ident) == "import" {
+					return false
+				}
+			}
+			continue
+		}
+		if isCSSIdentByte(c) || isValidCSSEscape(v, i) {
+			ident, next := consumeCSSIdent(v, i)
+			i = next
+			if hasDangerousDecodedIdent(ident) {
+				return false
+			}
+			if ident == "-moz-binding" {
+				return false
+			}
+			if ident == "behavior" || ident == "javascript" || ident == "vbscript" {
+				peek := skipCSSSpaceAndComments(v, i)
+				if peek < len(v) && v[peek] == ':' {
+					return false
+				}
+			}
+			if i < len(v) && v[i] == '(' {
+				i++
+				if isForbiddenCSSFunc(ident) {
+					return false
+				}
+				if ident == "url" {
+					for i < len(v) && isCSSWhitespace(v[i]) {
+						i++
+					}
+					if i >= len(v) {
+						return false
+					}
+					if v[i] == '\'' || v[i] == '"' {
+						rawURL, nextPos, bad := consumeCSSString(v, i)
+						if bad || !isSameDocumentFragment(rawURL) {
+							return false
+						}
+						i = nextPos
+						for i < len(v) && isCSSWhitespace(v[i]) {
+							i++
+						}
+						if i >= len(v) || v[i] != ')' {
+							return false
+						}
+						i++
+						continue
+					}
+					var u strings.Builder
+					for i < len(v) {
+						ch := v[i]
+						if ch == ')' || isCSSWhitespace(ch) {
+							break
+						}
+						if ch == '"' || ch == '\'' || ch == '(' || ch <= 0x1f || ch == 0x7f {
+							return false
+						}
+						if ch == '\\' {
+							if !isValidCSSEscape(v, i) {
+								return false
+							}
+							r, nextPos := consumeCSSEscape(v, i)
+							u.WriteRune(r)
+							i = nextPos
+							continue
+						}
+						u.WriteByte(ch)
+						i++
+					}
+					for i < len(v) && isCSSWhitespace(v[i]) {
+						i++
+					}
+					if i >= len(v) || v[i] != ')' {
+						return false
+					}
+					i++
+					if !isSameDocumentFragment(u.String()) {
+						return false
+					}
+				}
+			}
+			continue
+		}
+		i++
+	}
+	return true
+}
+
+func sameDocumentURLs(v string, isStyle bool) bool {
+	if !checkCSSTokens(v, isStyle) {
+		return false
+	}
+	if strings.Contains(v, "/*") {
+		if !checkCSSTokens(stripCSSComments(v), isStyle) {
 			return false
 		}
 	}
-	return !strings.Contains(strings.ToLower(v), "@import") && !strings.Contains(strings.ToLower(v), "expression(")
+	return true
 }

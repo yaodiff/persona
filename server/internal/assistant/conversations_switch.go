@@ -60,7 +60,8 @@ type conversationSwitchItem struct {
 	// Cancel marks a restore of an item whose switch has not activated: it cancels the original operation
 	// OperationID instead of starting a switch back. It is saved with its batch before the cancel runs, so a restart
 	// finishes it (runConversationSwitchCancel).
-	Cancel bool `json:"cancel,omitempty"`
+	Cancel       bool                  `json:"cancel,omitempty"`
+	BlockedInput *db.ConversationInput `json:"blocked_input,omitempty"`
 }
 
 type conversationSwitchBatch struct {
@@ -449,6 +450,20 @@ func (s *Service) reconcileConversationSwitchItem(ctx context.Context, st logica
 			return true, nil
 		}
 	case "active":
+		c, err := st.LogicalConversation(ctx, item.Machine, item.ConversationID)
+		if err != nil {
+			return false, err
+		}
+		blocked := s.logicalBlockedInput(ctx, st, c)
+		if blocked != nil {
+			item.BlockedInput = blocked
+			item.Reason = "blocked_input: " + blocked.ClientMsgID + ": " + blocked.BlockedReason
+			return true, nil
+		}
+		if item.BlockedInput != nil {
+			item.BlockedInput, item.Reason = nil, ""
+			return true, nil
+		}
 		if firstTurn {
 			// Its first input carries the summary (drainLogicalInput) and settles it as accepted or rejected.
 			return false, nil

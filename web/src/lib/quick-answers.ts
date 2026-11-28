@@ -4,15 +4,16 @@
 // are the chat card's (views/chat/Interactions.tsx sends them through the same resolve).
 import { t } from "../i18n";
 import type { Resolution } from "./answered";
-import { isSecretHandoff, isSecretRun } from "./tool-detail";
+import { isCommandInput, isSecretHandoff, isSecretRun } from "./tool-detail";
 import { supervisorHeld } from "./supervisor-held";
 import type { Interaction } from "./types";
 
 /** A permission card only its own form can allow: it has fields to fill in (#4987), it is a password card (#1137),
- *  answered only with the password typed on it, or a hand-off card (#3962), approved only on the card. Its quick paths
- *  (a row's answers, a notification's buttons) open the chat instead. */
+ *  answered only with the password typed on it, a hand-off card (#3962), approved only on the card, or a command waiting
+ *  for a line (#14527), answered only with the line typed on it. Its quick paths (a row's answers, a notification's
+ *  buttons) open the chat instead. */
 export function needsFieldValues(ix: Interaction): boolean {
-  return ix.kind === "permission" && (!!ix.fields?.length || isSecretRun(ix) || isSecretHandoff(ix));
+  return ix.kind === "permission" && (!!ix.fields?.length || isSecretRun(ix) || isSecretHandoff(ix) || isCommandInput(ix));
 }
 
 /** What a permission card's "Allow" sends. */

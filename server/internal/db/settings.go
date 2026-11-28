@@ -320,13 +320,16 @@ func (d *DB) CompareSetting(ctx context.Context, key string, revision int64, val
 	if err != nil {
 		return false, err
 	}
-	table := d.settingsTable()
-	tag, err := d.pool.Exec(ctx, `INSERT INTO `+table+` AS s (key, value, updated_at)
+	return compareSetting(ctx, d.pool, d.settingsTable(), key, revision, raw)
+}
+
+func compareSetting(ctx context.Context, q execer, table, key string, revision int64, raw json.RawMessage) (bool, error) {
+	tag, err := q.Exec(ctx, `INSERT INTO `+table+` AS s (key, value, updated_at)
 		SELECT $1, $2::jsonb, now() WHERE $3::bigint = 0
 		ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = now()
 		WHERE COALESCE((s.value->>'revision')::bigint, 0) = $3`, key, raw, revision)
 	if revision != 0 && err == nil && tag.RowsAffected() == 0 {
-		tag, err = d.pool.Exec(ctx, `UPDATE `+table+` SET value = $2::jsonb, updated_at = now()
+		tag, err = q.Exec(ctx, `UPDATE `+table+` SET value = $2::jsonb, updated_at = now()
 			WHERE key = $1 AND COALESCE((value->>'revision')::bigint, 0) = $3`, key, raw, revision)
 	}
 	return tag.RowsAffected() == 1, err

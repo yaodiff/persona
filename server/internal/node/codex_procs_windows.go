@@ -34,7 +34,8 @@ func scanCodexProcessesOS() ([]codexProcess, bool) {
 	ok := true
 	e := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
 	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
-		if imageName(windows.UTF16ToString(e.ExeFile[:])) != "codex" {
+		img := imageName(windows.UTF16ToString(e.ExeFile[:]))
+		if img != "codex" && img != "chatgpt" {
 			continue
 		}
 		p, rerr := readWinProc(e.ProcessID, []string{"CODEX_HOME", herdrPaneEnv, herdrCorePaneEnv, ternPaneEnv, orcaTerminalHandleEnv, orcaPaneEnv, orcaLegacyPaneEnv})
@@ -45,11 +46,11 @@ func scanCodexProcessesOS() ([]codexProcess, bool) {
 			continue
 		}
 		argv := p.argv
-		if len(argv) == 0 || progName(argv[0]) != "codex" {
+		if img == "codex" && (len(argv) == 0 || progName(argv[0]) != "codex") {
 			// The image is codex.exe whatever its command line calls it.
 			argv = append([]string{"codex.exe"}, argv[min(len(argv), 1):]...)
 		}
-		if cp, isCodex := codexProcessArgs(int(e.ProcessID), argv, envListing(p.env)); isCodex {
+		if cp, isCodex := codexProcessArgs(int(e.ProcessID), argv, envListing(p.env)); isCodex && (img == "codex" || cp.desktop) {
 			out = append(out, cp)
 		}
 	}

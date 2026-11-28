@@ -62,6 +62,22 @@ func TestShareCreationLogManagerPersistence(t *testing.T) {
 	}
 }
 
+func TestShareCreationLogSystemStartDoesNotExpectReceipt(t *testing.T) {
+	var logs []string
+	d := New(Options{Store: new(db.DB), Logf: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }})
+	p := devicewire.NodeCall{MachineID: "synthetic-machine", Method: "session.start", Caller: &devicewire.Caller{Kind: "system"}}
+	params := json.RawMessage(`{"creation_id":"forged","incarnation":"forged"}`)
+	prepared, receipt, result, err := d.prepareShareCall(t.Context(), p, params)
+	if err != nil || string(prepared) != `{}` || receipt != "" {
+		t.Fatalf("unexpected preparation: %s, receipt %q, error %v", prepared, receipt, err)
+	}
+	out := json.RawMessage(`{"session":{"session_id":"synthetic-start-result"}}`)
+	d.observeCreationCall(p, prepared, out, result, nil)
+	if len(logs) != 2 || !strings.Contains(logs[0], `"result":"caller_not_device"`) || !strings.Contains(logs[1], `"result":"receipt_not_requested"`) {
+		t.Fatalf("system start logs = %v", logs)
+	}
+}
+
 func TestShareCreationLogPreparationAndReply(t *testing.T) {
 	dsn := os.Getenv(dbtest.Env)
 	if dsn == "" {

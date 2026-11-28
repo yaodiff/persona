@@ -97,6 +97,60 @@ test('held Agent HTTP 202 and client hello use the actual transport contract', a
   assert.equal(requests.at(-1).headers['X-Persona-Features'],undefined);
   await assert.rejects(client.request('/api/v1/files/a%2Fb','GET'), /invalid_path/);
 });
+test('chat sends and photo uploads use their own outgoing limits and keep the normal response caps', async () => {
+  const client = transport(), mib = 1024 * 1024;
+  const message = '/api/v1/sessions/desk/chat/messages';
+  const upload = '/api/v1/machines/desk/files?name=original.jpg&dest=attachment';
+  const calls = [];
+  client.requestData = async (path, method, body, type, responseLimit) => {
+    calls.push({path, responseLimit});
+    return {data: new ArrayBuffer(0), contentType: type};
+  };
+
+  const large = 'a'.repeat(4 * mib) + '界';
+  await client.request(message, 'POST', large, 'message', 4 * mib + 3);
+  assert.deepEqual(calls.pop(), {path: message, responseLimit: 4 * mib});
+  await assert.rejects(client.request(message, 'POST', large, 'message', 4 * mib + 2), /request_too_large/);
+  await assert.rejects(client.request('/api/v1/todos', 'POST', large, 'todo', 32 * mib), /request_too_large/);
+
+  const sessions = '/api/v1/sessions?limit=50';
+  await client.request(sessions, 'GET');
+  assert.deepEqual(calls.pop(), {path: sessions, responseLimit: 64 * mib});
+  const todos = '/api/v1/todos';
+  await client.request(todos, 'GET');
+  assert.deepEqual(calls.pop(), {path: todos, responseLimit: 4 * mib});
+
+  const original = new ArrayBuffer(64 * mib);
+  await client.requestBytes(upload, 'POST', original, 'application/octet-stream', 'photo', 64 * mib);
+  assert.deepEqual(calls.pop(), {path: upload, responseLimit: 32 * mib});
+  await assert.rejects(client.requestBytes(upload, 'POST', original, 'application/octet-stream', 'photo', original.byteLength - 1), /request_too_large/);
+  await assert.rejects(client.requestBytes(upload, 'POST', original), /request_too_large/);
+  assert.deepEqual(calls, []);
+});
+
+test('only an explicit old-hub refusal of the attachment destination permits a temp-file retry', async () => {
+  const client = transport(), rcp = globalThis.socketTestKit.rcp;
+  client.clientMetadata = () => ({platform: 'harmony', version: '1', build: '1', os: {}});
+  const path = '/api/v1/machines/desk/files?name=image.png&dest=attachment';
+  let body, status = 400;
+  rcp.Request = class {};
+  rcp.createSession = () => ({close() {}, async fetch(request) {
+    request.destination(new TextEncoder().encode(JSON.stringify(body)).buffer);
+    return {statusCode: status, headers: {}};
+  }});
+  const post = (destination = path) => client.requestBytes(destination, 'POST', new ArrayBuffer(8));
+  const refused = error => error.code === 'unknown_upload_destination' && !error.resultUnknown;
+  for (body of [{error: 'unknown dest'}, {code: 'bad_request', error: 'Bad request', detail: 'unknown dest'}])
+    await assert.rejects(post(), refused);
+  await assert.rejects(post(path.replace('attachment', 'health')), error => error.code === 'bad_request');
+  body = {code: 'bad_request', error: 'invalid image'};
+  await assert.rejects(post(), error => error.code === 'bad_request');
+  body = {code: 'bad_request', error: 'unknown dest', state: 'unknown'};
+  await assert.rejects(post(), error => error.resultUnknown);
+  status = 500;
+  await assert.rejects(post(), error => error.code === 'bad_request' && error.resultUnknown);
+});
+
 const v4 = { address: '192.0.2.20', family: 1 }, v6 = { address: '2001:db8::20', family: 2 };
 function reset(answers) {
   records = answers; refused = new Set(); dials = []; tlsCalls = []; closed = new Set(); writes = 0;

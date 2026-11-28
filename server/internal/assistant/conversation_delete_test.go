@@ -241,6 +241,17 @@ func TestDeletePersonaWaitingAndAuthorization(t *testing.T) {
 	}
 }
 
+func TestDeletePersonaRefusesInternalRelay(t *testing.T) {
+	f := healthHub()
+	s := newTestService(t, f)
+	if _, ok := s.keepRelayLater("work-0000-0000", relayMsg{FromTitle: "Card ledger", Text: "internal", Internal: true, At: time.Now()}); !ok {
+		t.Fatal("could not keep the internal relay")
+	}
+	if err := s.deleteConversation(context.Background(), "server", "work-0000-0000"); convCode(err) != "conversation_busy" {
+		t.Fatalf("chat with an internal relay deleted: %v", err)
+	}
+}
+
 func TestDeletePersonaDiscardsReadAlreadyInFlight(t *testing.T) {
 	f := healthHub()
 	s := newTestService(t, f)

@@ -166,20 +166,20 @@ describe("等你的 Agent", () => {
   });
 
   it("等什么、问什么", () => {
-    expect(interactionTitle(ix("a"))).toBe("Claude 在问你");
-    expect(interactionTitle(ix("a", { kind: "plan" }))).toBe("计划等你审批");
-    expect(interactionTitle(ix("a", { tool_name: "ask_user" }))).toBe("Persona 在问你");
-    expect(interactionTitle(ix("a", { agent: "codex", kind: "permission" }))).toBe("Codex 在等你批准");
+    expect(interactionTitle(ix("a"))).toBe("Claude 向你提问");
+    expect(interactionTitle(ix("a", { kind: "plan" }))).toBe("计划等待你审批");
+    expect(interactionTitle(ix("a", { tool_name: "ask_user" }))).toBe("Persona 向你提问");
+    expect(interactionTitle(ix("a", { agent: "codex", kind: "permission" }))).toBe("Codex 等待你批准");
     expect(interactionAsk(ix("a", { questions: [{ question: "用哪种格式？", options: [] }] }))).toBe("用哪种格式？");
     expect(interactionAsk(ix("a", { kind: "permission", tool_name: "Bash", tool_input: { command: "swift test" } }))).toBe("swift test");
   });
 
   it("names another agent's card by the name it carries, never the engine's id (#8142)", () => {
     // one of Paseo's providers runs under Paseo's own id; the card carries the provider's label
-    expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok", kind: "permission" }))).toBe("Grok 在等你批准");
-    expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok" }))).toBe("Grok 在问你");
-    expect(interactionTitle(ix("a", { agent: "dsh", agent_label: "DSH" }))).toBe("DSH 在问你");
-    expect(interactionTitle(ix("a", { agent: "traex", kind: "permission" }))).toBe("TRAE CLI 在等你批准");
+    expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok", kind: "permission" }))).toBe("Grok 等待你批准");
+    expect(interactionTitle(ix("a", { agent: "paseo", agent_label: "Grok" }))).toBe("Grok 向你提问");
+    expect(interactionTitle(ix("a", { agent: "dsh", agent_label: "DSH" }))).toBe("DSH 向你提问");
+    expect(interactionTitle(ix("a", { agent: "traex", kind: "permission" }))).toBe("TRAE CLI 等待你批准");
   });
 
   it("助手的会话跳到 Persona，其余跳到会话页", () => {
@@ -193,12 +193,12 @@ describe("等你的 Agent", () => {
 describe("交给 AI 的消息", () => {
   it("飞书：上下文标签 + feedId，标题转义", () => {
     const text = handOffMessage({ ...mention, title: `"设计" & <评审>`, context: "示例乙：看一眼图标" }, "");
-    expect(text).toBe(`<persona-context kind="context" title="飞书 · &quot;设计&quot; &amp; &lt;评审&gt;" url="">\n示例乙：看一眼图标\n\n（飞书会话 feedId f2，可用飞书工具读更多上下文或回复）\n</persona-context>\n\n总结一下，告诉我要做什么，给出建议的回复`);
+    expect(text).toBe(`<persona-context kind="context" title="飞书 · &quot;设计&quot; &amp; &lt;评审&gt;" url="">\n示例乙：看一眼图标\n\n（飞书会话 feedId 为 f2，可使用飞书工具读取更多上下文或回复）\n</persona-context>\n\n请帮我总结要点、说明需要我做什么，并给出回复建议。`);
   });
 
   it("邮件：没有 context 时用发件人和内容，带最新一封的 uid", () => {
     const text = handOffMessage(mail, "查清楚背景再告诉我");
-    expect(text.startsWith(`<persona-context kind="context" title="邮件 · 分享改期" url="">\nLucy：内容\n\n（邮件 account_id acc1，mailbox INBOX，uid 501，`)).toBe(true);
+    expect(text.startsWith(`<persona-context kind="context" title="邮件 · 分享改期" url="">\nLucy：内容\n\n（邮件 account_id 为 acc1，mailbox 为 INBOX，uid 为 501，`)).toBe(true);
     expect(text.endsWith("</persona-context>\n\n查清楚背景再告诉我")).toBe(true);
   });
 
@@ -238,12 +238,12 @@ describe("连接器的条目", () => {
 
   it("drafts only what the hub can answer; the rest open where they are answered", () => {
     expect([review, ci, tg, dm].map(canDraft)).toEqual([true, false, false, true]);
-    expect(openTitle(tg)).toBe("在 Telegram 里回复");
-    expect(openTitle(sms)).toBe("在信息里回复");
+    expect(openTitle(tg)).toBe("在 Telegram 中回复");
+    expect(openTitle(sms)).toBe("在「信息」中回复");
     expect(openTitle(ci)).toBe("打开");
     // a plugin's connector with a link of its own names the connector, never Telegram
-    expect(openTitle(item("example:1", { source: "example", account_name: "示例", connector: { thread: "t1", open_url: "https://example.com/t1" } }))).toBe("在示例里打开");
-    expect(openTitle(item("example:2", { source: "example", account_name: "Example", connector: { thread: "t2", open_url: "https://example.com/t2" } }))).toBe("在 Example 里打开");
+    expect(openTitle(item("example:1", { source: "example", account_name: "示例", connector: { thread: "t1", open_url: "https://example.com/t1" } }))).toBe("在示例中打开");
+    expect(openTitle(item("example:2", { source: "example", account_name: "Example", connector: { thread: "t2", open_url: "https://example.com/t2" } }))).toBe("在 Example 中打开");
     expect(openURL(sms)).toBe("sms:+15550100&body=%E5%A5%BD%E7%9A%84%20%E8%A7%81");
     expect(openURL(tg)).toBe("tg://resolve?domain=example");
     expect(openURL(ci)).toBeUndefined();
@@ -457,19 +457,19 @@ describe("inbox deltas (#9175)", () => {
 
 describe("全部清理的文案", () => {
   it("范围和件数", () => {
-    expect(bulkScope(["", ""], "", 12)).toBe("全部 · 12 件");
-    expect(bulkScope(["飞书", "@我"], "", 3)).toBe("飞书 · @我 · 3 件");
-    expect(bulkScope([], " 周报 ", 2)).toBe("搜索「周报」 · 2 件");
-    expect(bulkScope(["飞书"], "", 0)).toBe("没有未处理的");
+    expect(bulkScope(["", ""], "", 12)).toBe("全部 · 12 项");
+    expect(bulkScope(["飞书", "@我"], "", 3)).toBe("飞书 · @我 · 3 项");
+    expect(bulkScope([], " 周报 ", 2)).toBe("搜索「周报」 · 2 项");
+    expect(bulkScope(["飞书"], "", 0)).toBe("暂无待处理事项");
   });
   it("范围的名字不带件数", () => {
     expect(bulkScopeName(["飞书", ""], "周报")).toBe("飞书 · 搜索「周报」");
     expect(bulkScopeName([], "")).toBe("全部");
   });
   it("结果", () => {
-    expect(bulkMessage("dismiss", { changed: [dm], unchanged: [], skipped: [{ id: "b", reason: "changed" }] })).toBe("已清理 1 件，1 件有新消息，留在收件箱");
-    expect(bulkMessage(true, { changed: [], unchanged: ["a"], skipped: [] })).toBe("没有要标的");
-    expect(bulkMessage(false, { changed: [], unchanged: [], skipped: [{ id: "a", reason: "missing" }] })).toBe("没有要移回的");
+    expect(bulkMessage("dismiss", { changed: [dm], unchanged: [], skipped: [{ id: "b", reason: "changed" }] })).toBe("已清理 1 项；另有 1 项收到新消息，已保留在收件箱中");
+    expect(bulkMessage(true, { changed: [], unchanged: ["a"], skipped: [] })).toBe("暂无可标记项");
+    expect(bulkMessage(false, { changed: [], unchanged: [], skipped: [{ id: "a", reason: "missing" }] })).toBe("暂无可移回项");
   });
 });
 
@@ -494,7 +494,7 @@ describe("列表状态", () => {
     fetcher.mockResolvedValueOnce(ok({ items: [dm], triage: waiting }));
     await reloadInbox();
     expect(getInbox().triage).toEqual(waiting);
-    expect(triageBanner(getInbox().triage)?.text).toBe("有 3 条飞书消息在等分拣：还没配分拣模型");
+    expect(triageBanner(getInbox().triage)?.text).toBe("有 3 条飞书消息等待分拣：尚未配置分拣模型");
     fetcher.mockResolvedValueOnce(ok({ items: [dm], triage: { state: "ok", waiting: 0 } }));
     await reloadInbox();
     expect(triageBanner(getInbox().triage)).toBeNull();
@@ -557,7 +557,7 @@ describe("列表状态", () => {
     finish(fail(500, "boom"));
     await p;
     expect(getInbox().items[0].done_at).toBeUndefined();
-    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/^没标成已处理：.*HTTP 500: boom/), "error");
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/^标为已处理失败：.*HTTP 500: boom/), "error");
     const [url, init] = fetcher.mock.calls[1];
     expect(url).toBe("/api/v1/inbox/lark:f1:1/done");
     expect(JSON.parse(init.body)).toEqual({ done: true });
@@ -580,14 +580,14 @@ describe("列表状态", () => {
     finish(fail(503, "assistant_offline"));
     await p;
     expect(getInbox().items.every((x) => !x.done_at)).toBe(true);
-    expect(toast).toHaveBeenLastCalledWith(expect.stringContaining("没静音成"), "error");
+    expect(toast).toHaveBeenLastCalledWith(expect.stringContaining("静音失败"), "error");
     const [url, init] = fetcher.mock.calls[1];
     expect(url).toBe("/api/v1/inbox/mutes");
     expect(JSON.parse(init.body)).toEqual({ item_id: a.id, tag: "sender" });
 
     fetcher.mockResolvedValueOnce(ok({ mute: { id: "m1", source: "lark", ...sender }, settled: 2 }));
     await muteItem(a, sender);
-    expect(toast).toHaveBeenLastCalledWith("已静音「示例甲」，以后不再进收件箱", "ok");
+    expect(toast).toHaveBeenLastCalledWith("已静音「示例甲」，后续消息将不再进入收件箱。", "ok");
     expect(getInbox().items[0].done_by).toBe("read");
   });
 
@@ -883,7 +883,7 @@ describe("列表状态", () => {
     expect(JSON.parse(init.body)).toEqual({ action: "done", items: [{ id: a.id, version: "v1" }, { id: b.id, version: "v2" }] });
     expect(fetcher).toHaveBeenCalledTimes(3); // the list again, for b's new message
     const [message, tone, action] = vi.mocked(toast).mock.lastCall!;
-    expect([message, tone]).toEqual(["已将 1 件标为已处理，1 件有新消息，留在收件箱", "ok"]);
+    expect([message, tone]).toEqual(["已将 1 项标为已处理；另有 1 项收到新消息，已保留在收件箱中", "ok"]);
     expect(action?.label).toBe("撤销");
 
     // "Undo" sends back only what was filed.
@@ -892,7 +892,7 @@ describe("列表状态", () => {
     action!.run();
     await vi.waitFor(() => expect(toast).toHaveBeenCalled());
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ action: "reopen", items: [{ id: a.id, version: "v1" }] });
-    expect(vi.mocked(toast).mock.lastCall).toEqual(["已移回 1 件", "ok", undefined]);
+    expect(vi.mocked(toast).mock.lastCall).toEqual(["已移回 1 项", "ok", undefined]);
 
     // Undo reopens what was filed even when the list no longer carries it (only the newest done items, #5549).
     vi.mocked(toast).mockClear();
@@ -914,7 +914,7 @@ describe("列表状态", () => {
     fetcher.mockReset().mockResolvedValueOnce(fail(502, "boom"));
     await setAllDone(getInbox().items, true);
     expect(getInbox().items.every((x) => !x.done_at)).toBe(true);
-    expect(toast).toHaveBeenLastCalledWith(expect.stringMatching(/^没标成已处理：.*HTTP 502: boom/), "error");
+    expect(toast).toHaveBeenLastCalledWith(expect.stringMatching(/^标为已处理失败：.*HTTP 502: boom/), "error");
   });
 
   it("several managers: each one's items go to it (X-Persona-Manager), in one request each, the answers put together", async () => {
@@ -933,7 +933,7 @@ describe("列表状态", () => {
     expect(getInbox().items.every((x) => x.done_by === "user")).toBe(true);
     // they keep their stamps: the group they show in, and where their Undo goes
     expect(getInbox().items.map((x) => x.manager)).toEqual(["assistant", "m-1", "m-1"]);
-    expect(vi.mocked(toast).mock.lastCall?.[0]).toBe("已将 3 件标为已处理");
+    expect(vi.mocked(toast).mock.lastCall?.[0]).toBe("已将 3 项标为已处理");
   });
 
   it("several managers: one that does not answer leaves the others' done, puts its own back and says so", async () => {
@@ -948,7 +948,7 @@ describe("列表状态", () => {
     expect(getInbox().items.map((x) => Boolean(x.done_at))).toEqual([true, false]);
     expect(getInbox().items[1].manager).toBe("m-2");
     const [message, tone, action] = vi.mocked(toast).mock.lastCall!;
-    expect(message).toMatch(/^已将 1 件标为已处理；1 件没改成：.*HTTP 503: assistant offline/);
+    expect(message).toMatch(/^已将 1 项标为已处理；另有 1 项未能修改：.*HTTP 503: assistant offline/);
     expect(tone).toBe("error");
     // Undo takes back only what was filed, from its own manager
     fetcher.mockReset().mockResolvedValueOnce(ok({ changed: [a], unchanged: [], skipped: [] }));
@@ -980,7 +980,7 @@ describe("列表状态", () => {
     await p;
     expect(JSON.parse(fetcher.mock.calls[1][1].body).action).toBe("dismiss");
     const [message, , action] = vi.mocked(toast).mock.lastCall!;
-    expect(message).toBe("已清理 2 件");
+    expect(message).toBe("已清理 2 项");
     fetcher.mockResolvedValueOnce(ok({ action: "reopen", changed: [a, b], unchanged: [], skipped: [], ids: [a.id, b.id] }));
     action!.run();
     await vi.waitFor(() => expect(getInbox().items[0].done_by).toBeFalsy());
@@ -989,7 +989,7 @@ describe("列表状态", () => {
     fetcher.mockResolvedValueOnce(fail(502, "boom"));
     await setAllDone([a], "dismiss");
     expect(getInbox().items[0].done_at).toBeFalsy();
-    expect(toast).toHaveBeenLastCalledWith(expect.stringMatching(/^没清理成：.*HTTP 502: boom/), "error");
+    expect(toast).toHaveBeenLastCalledWith(expect.stringMatching(/^清理失败：.*HTTP 502: boom/), "error");
   });
 
   it("老 hub 没有 /inbox/bulk：已处理和全部清理都退回 /inbox/done", async () => {
@@ -1014,7 +1014,7 @@ describe("列表状态", () => {
     expect(await sendReply(mail, "好的")).toBe(true);
     expect(getInbox().items[2].done_by).toBe("replied");
     expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ text: "好的" });
-    expect(toast).toHaveBeenLastCalledWith("已发送，标为已处理", "ok");
+    expect(toast).toHaveBeenLastCalledWith("已发送并标为已处理", "ok");
 
     fetcher.mockResolvedValueOnce(fail(502, "lark: send timed out"));
     expect(await sendReply(dm, "能赶上")).toBe(false);
@@ -1043,7 +1043,7 @@ describe("列表状态", () => {
     fetcher.mockResolvedValueOnce(fail(409, "文档刚被改过"));
     await setDocStatus(getInbox().items[1], row, { ...st, value: "已完成" }, "进行中");
     expect(getInbox().items[1].doc!.rows![0].status![0].value).toBe("已完成");
-    expect(toast).toHaveBeenLastCalledWith("没改成：文档刚被改过", "error");
+    expect(toast).toHaveBeenLastCalledWith("修改失败：文档刚被改过", "error");
   });
 
   it("发送飞书原生消息与回复接口正确构造请求", async () => {
@@ -1086,21 +1086,21 @@ describe("列表状态", () => {
 describe("等分拣的横幅（#1773）", () => {
   const src = (source: string, name: string, waiting: number, state = "behind") => ({ source, name, state, waiting });
   it("一个来源写出它的名字，几个来源不写；原因是 hub 的", () => {
-    expect(triageBanner({ state: "unconfigured", waiting: 3, sources: [src("lark", "飞书", 3, "unconfigured")] })).toEqual({ text: "有 3 条飞书消息在等分拣：还没配分拣模型", configure: true });
-    expect(triageBanner({ state: "behind", waiting: 12, sources: [src("lark", "飞书", 7), src("mail", "邮件", 5)] })).toEqual({ text: "有 12 条消息在等分拣：新消息太多，正在排队", configure: false });
-    expect(triageBanner({ state: "error", reason: "模型没有额度", waiting: 2, sources: [src("github", "GitHub", 2, "error")] })?.text).toBe("有 2 条GitHub消息在等分拣：模型没有额度");
+    expect(triageBanner({ state: "unconfigured", waiting: 3, sources: [src("lark", "飞书", 3, "unconfigured")] })).toEqual({ text: "有 3 条飞书消息等待分拣：尚未配置分拣模型", configure: true });
+    expect(triageBanner({ state: "behind", waiting: 12, sources: [src("lark", "飞书", 7), src("mail", "邮件", 5)] })).toEqual({ text: "有 12 条消息等待分拣：新消息较多，正在排队处理", configure: false });
+    expect(triageBanner({ state: "error", reason: "模型没有额度", waiting: 2, sources: [src("github", "GitHub", 2, "error")] })?.text).toBe("有 2 条GitHub消息等待分拣：模型没有额度");
     // a source without a name, or one that waits for nothing, is not named
-    expect(triageBanner({ state: "timeout", waiting: 4, sources: [src("x", "", 4, "timeout")] })?.text).toBe("有 4 条消息在等分拣：分拣模型太慢了");
-    expect(triageBanner({ state: "paused", waiting: 4, sources: [src("lark", "飞书", 4, "paused"), src("mail", "邮件", 0, "ok")] })?.text).toBe("有 4 条飞书消息在等分拣：分拣模型暂停了");
-    expect(triageBanner({ state: "paused", waiting: 1 })?.text).toBe("有 1 条消息在等分拣：分拣模型暂停了");
+    expect(triageBanner({ state: "timeout", waiting: 4, sources: [src("x", "", 4, "timeout")] })?.text).toBe("有 4 条消息等待分拣：分拣模型响应过慢");
+    expect(triageBanner({ state: "paused", waiting: 4, sources: [src("lark", "飞书", 4, "paused"), src("mail", "邮件", 0, "ok")] })?.text).toBe("有 4 条飞书消息等待分拣：分拣模型已暂停");
+    expect(triageBanner({ state: "paused", waiting: 1 })?.text).toBe("有 1 条消息等待分拣：分拣模型已暂停");
   });
   it("每个状态有自己的话；不认识的状态又没有原因只说条数", () => {
     for (const [state, words] of Object.entries(TRIAGE_REASONS)) {
-      expect(triageBanner({ state, waiting: 1 })).toEqual({ text: `有 1 条消息在等分拣：${words}`, configure: state === "unconfigured" });
+      expect(triageBanner({ state, waiting: 1 })).toEqual({ text: `有 1 条消息等待分拣：${words}`, configure: state === "unconfigured" });
     }
     expect(Object.keys(TRIAGE_REASONS)).toEqual(["unconfigured", "paused", "error", "timeout", "behind"]);
-    expect(triageBanner({ state: "later", waiting: 2 })).toEqual({ text: "有 2 条消息在等分拣", configure: false });
-    expect(triageBanner({ state: "error", reason: "  ", waiting: 2 })?.text).toBe("有 2 条消息在等分拣：分拣模型出错了");
+    expect(triageBanner({ state: "later", waiting: 2 })).toEqual({ text: "有 2 条消息等待分拣", configure: false });
+    expect(triageBanner({ state: "error", reason: "  ", waiting: 2 })?.text).toBe("有 2 条消息等待分拣：分拣模型运行出错");
   });
   it("ok、没有等的、老 hub 都不显示", () => {
     expect(triageBanner(null)).toBeNull();
@@ -1117,9 +1117,9 @@ describe("等分拣的横幅（#1773）", () => {
 
 describe("静音的文字", () => {
   it("菜单的字和下面的名字", () => {
-    expect(muteTitle({ tag: "repo" })).toBe("静音这个仓库");
-    expect(muteTitle({ tag: "chat" })).toBe("静音这个会话");
-    expect(muteTitle({ tag: "sender" })).toBe("静音这个发件人");
+    expect(muteTitle({ tag: "repo" })).toBe("静音此仓库");
+    expect(muteTitle({ tag: "chat" })).toBe("静音此会话");
+    expect(muteTitle({ tag: "sender" })).toBe("静音此发件人");
     expect(muteShortName({ tag: "repo", value: "o/example-repo", name: "o/example-repo" })).toBe("example-repo");
     expect(muteShortName({ tag: "chat", value: "f1", name: "a/b 群" })).toBe("a/b 群");
   });

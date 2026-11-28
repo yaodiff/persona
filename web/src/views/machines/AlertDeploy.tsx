@@ -1,8 +1,8 @@
 // The alert sheet's section for a computer whose Persona is not the hub's build, or whose last update failed (#8037):
 // both builds side by side and how far apart they are, why it matters, how many Agents are working (an update waits
 // for them); Redeploy behind a confirmation, then a stepper the machine's pushed `deploy_phase` drives (waiting for
-// idle → transferring → restarting → confirming → done) ending in the build the node reports, or the error and Try
-// again. Where the hub cannot update it (`can_deploy` false), the hub's reason instead.
+// idle → transferring → waiting to restart → restarting → confirming → done) ending in the build the node reports, or
+// the error and Try again. Where the hub cannot update it (`can_deploy` false), the hub's reason instead.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDate, formatList, t } from "../../i18n";
 import { stateOf } from "../../lib/format";
@@ -16,7 +16,7 @@ import { HostedManagersList } from "./HostedManagersList";
 import { useDeploy } from "./MachineDeploy";
 import { SheetPart } from "./AlertParts";
 
-const STEPS = ["waiting_idle", "transferring", "restarting", "confirming", "done"] as const;
+const STEPS = ["waiting_idle", "transferring", "draining", "restarting", "confirming", "done"] as const;
 type Step = (typeof STEPS)[number];
 
 const stepLabel = (s: Step): string => {
@@ -25,6 +25,8 @@ const stepLabel = (s: Step): string => {
       return t("lib-machine-deploy.waiting_idle");
     case "transferring":
       return t("lib-machine-deploy.transferring");
+    case "draining":
+      return t("lib-machine-deploy.draining");
     case "restarting":
       return t("lib-machine-deploy.restarting");
     case "confirming":
@@ -44,7 +46,10 @@ export interface DeployProgress {
  *  updating since), the furthest step seen, and the machine as pushed now. */
 export function deployProgress(m: Machine, started: boolean, sawBusy: boolean, furthest: number, requesting: boolean, refused: string): DeployProgress {
   const busy = !!(m.deploying || m.deploy_phase);
-  if (busy) return { step: m.deploy_phase ? STEPS.indexOf(m.deploy_phase) : Math.max(0, furthest), outcome: "running" };
+  if (busy) {
+    const idx = m.deploy_phase ? STEPS.indexOf(m.deploy_phase) : -1;
+    return { step: idx >= 0 ? idx : Math.max(0, furthest), outcome: "running" };
+  }
   if (!started) return { step: 0, outcome: "idle" };
   if (requesting) return { step: 0, outcome: "running" };
   if (refused) return { step: Math.max(0, furthest), outcome: "failed" };
@@ -67,7 +72,10 @@ export function DeploySection({ machine, agents }: { machine: Machine; agents: r
   const furthest = useRef(0);
   const { busy } = deployment;
   if (busy && started) sawBusy.current = true;
-  if (machine.deploy_phase) furthest.current = Math.max(furthest.current, STEPS.indexOf(machine.deploy_phase));
+  if (machine.deploy_phase) {
+    const idx = STEPS.indexOf(machine.deploy_phase);
+    if (idx >= 0) furthest.current = Math.max(furthest.current, idx);
+  }
   const progress = deployProgress(machine, started || busy, sawBusy.current || busy, furthest.current, pending, error);
   const working = agents.filter((s) => stateOf(s) === "working").length;
   const nodeVersion = machine.node_version;
@@ -136,6 +144,11 @@ export function DeploySection({ machine, agents }: { machine: Machine; agents: r
       </SheetPart>
       <SheetPart part="do">
         {progress.outcome !== "idle" && <Steps steps={STEPS.map((s) => ({ key: s, label: stepLabel(s) }))} step={progress.step} outcome={progress.outcome} label={t("machines-alerts.stepper_label")} testId="deploy-stepper" />}
+        {progress.outcome === "running" && machine.deploy_phase === "draining" && (
+          <p className="mt-2 text-meta text-ink-2" role="status" data-testid="deploy-draining-note">
+            {deployment.message}
+          </p>
+        )}
         {progress.outcome === "done" && <p className="mt-2 text-meta text-green" role="status" data-testid="deploy-done">{t("machines-alerts.deploy_done", { build: nodeVersion || "—" })}</p>}
         {progress.outcome === "failed" && (
           <p className="mt-2 break-words text-meta text-red" role="alert" data-testid="deploy-failed">

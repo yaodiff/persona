@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -81,10 +82,8 @@ func (h *Manager) modelsAppCall(ctx context.Context, p assistantwire.AppCall) (j
 // triageUsable says whether inbox.triage ("message triage") can be called now, as the assistant resolves it; an error
 // while it can't be asked (not connected: assistant_offline).
 func (h *Manager) triageUsable(ctx context.Context) (bool, error) {
-	var res struct {
-		Usable bool `json:"usable"`
-	}
-	err := h.callAssistant(ctx, assistantwire.MethodModelsUsable, map[string]any{"purpose": "inbox.triage"}, &res)
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.ModelsUsableMethod,
+		assistantwire.ModelsUsableParams{Purpose: "inbox.triage"})
 	return res.Usable, err
 }
 
@@ -110,10 +109,7 @@ func (h *Manager) launcherCall(ctx context.Context, params map[string]any, out a
 // addresses, no key), for the plugins' gateway.launchers. While the assistant is not connected the error is
 // assistant_offline; a manager too old to list them is unsupported, not the plugin's unknown method.
 func (h *Manager) gatewayLaunchers(ctx context.Context) ([]assistantwire.GatewayLauncher, error) {
-	var res struct {
-		Launchers []assistantwire.GatewayLauncher `json:"launchers"`
-	}
-	err := h.callAssistant(ctx, assistantwire.MethodModelsLaunchers, map[string]any{}, &res)
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.ModelsLaunchersMethod, buswire.None{})
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code == bus.CodeUnknownMethod {
 		return nil, &rpc.Error{Code: extension.CodeUnsupported, Message: "the manager is too old to list the launchers; update it"}

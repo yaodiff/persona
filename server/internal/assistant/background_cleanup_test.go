@@ -86,7 +86,13 @@ func newRestartedService(t *testing.T, o Options) *Service {
 	s := New(o)
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.running.Store(&runCtx)
-	t.Cleanup(func() { drainFleetBackground(t, s, cancel) })
+	t.Cleanup(func() {
+		// Invalidate a delayed recovery retry before the fixture closes its store.
+		s.approvals.mu.Lock()
+		s.approvals.recoverySeq++
+		s.approvals.mu.Unlock()
+		drainFleetBackground(t, s, cancel)
+	})
 	return s
 }
 

@@ -31,6 +31,7 @@ export default function MessageDraft({ item, tasks }: { item: FeedItem; tasks: D
   const [text, setText] = useState<string | null>(null);
   const headingId = useId();
   const draft = text ?? field(item, "draft") ?? "";
+  const displayed = sent?.text ?? draft;
   const blank = resolved ? undefined : draftPlaceholder(draft);
   const dismiss = async () => {
     try {
@@ -88,8 +89,8 @@ export default function MessageDraft({ item, tasks }: { item: FeedItem; tasks: D
             rows={Math.min(6, Math.max(2, draft.split("\n").length))}
             className="-mx-1.5 resize-none rounded-control bg-transparent px-1.5 text-[14.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
           />
-        ) : (
-          <div className="whitespace-pre-line text-[14.5px]">{sent ? sent.text : draft}</div>
+        ) : displayed && (
+          <div className="whitespace-pre-line text-[14.5px]">{displayed}</div>
         )}
       </div>
       {blank && <div className="text-[12px] text-red">{t("assistant-task-actions.draft_blank", { blank })}</div>}

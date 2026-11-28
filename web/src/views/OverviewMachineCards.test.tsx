@@ -183,7 +183,7 @@ describe("Overview computer monitoring cards", () => {
     act(() => root.render(<OverviewMachineCards machines={machines} agentCounts={new Map([["mac", 2]])} offlineText={offlineText} />));
     await flush();
 
-    expect(host.querySelector("[role=alert]")?.textContent).toContain("读取不到机器的监控");
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("无法加载机器监控数据");
     expect(host.querySelector("[data-testid='machine-metrics-summary']")).toBeNull();
 
     failing = false;
@@ -195,7 +195,7 @@ describe("Overview computer monitoring cards", () => {
     failing = true;
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
-    expect(host.querySelector("[role=alert]")?.textContent).toContain("显示的是上次的数据");
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("当前显示上次的数据");
     expect(host.querySelector("[role=alert]")?.textContent).toContain("10");
     expect(host.querySelector("[data-testid='machine-metrics-summary']")?.textContent).toContain("42%");
   });
@@ -259,7 +259,7 @@ describe("Overview computer monitoring cards", () => {
     failing = true;
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
-    expect(host.querySelector("[role=alert]")?.textContent).toContain("读取不到机器的监控");
-    expect(host.querySelector("[role=alert]")?.textContent).not.toContain("显示的是上次的数据");
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("无法加载机器监控数据");
+    expect(host.querySelector("[role=alert]")?.textContent).not.toContain("当前显示上次的数据");
   });
 });
