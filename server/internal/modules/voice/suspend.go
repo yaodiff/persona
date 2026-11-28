@@ -190,6 +190,7 @@ func (c *conversation) pause(now time.Time) {
 	if c.tts != nil {
 		c.ttsDropText = false
 		c.ttsCutReply = ""
+		c.ttsCutAt = time.Time{}
 		c.cancelTTSLocked(false)
 	}
 	c.closeAsst()

@@ -98,6 +98,7 @@ func (c *conversation) onTTSStart(gen uint64) {
 		return
 	}
 	t.opened = true
+	c.ttsCutAt = time.Time{}
 	startedAt := t.startedAt
 	if startedAt.IsZero() {
 		startedAt = time.Now()
@@ -126,6 +127,7 @@ func (c *conversation) onTTSFrame(gen uint64, pcm []byte) {
 		c.openReply(startedAt)
 	}
 	t.voiced = true
+	c.ttsCutAt = time.Time{}
 	if t.replyID == "" || t.replyID == c.reply {
 		c.replyVoiced = true
 	}
@@ -262,15 +264,33 @@ func (c *conversation) cancelTTSLocked(sendClear bool) {
 	}
 }
 
+// ttsPlaying reports whether TTS speech is still playing or queued for the app (mu held): either
+// the bridge still has an active/queued turn or the app is still playing frames already sent
+// (now < c.pace.playEnd). Used to keep the energy cut-in armed even when c.signals is true.
+func (c *conversation) ttsPlaying(now time.Time) bool {
+	return c.tts != nil && (c.tts.Active() || now.Before(c.pace.playEnd))
+}
+
+// ttsAlreadyCutLocked reports whether an upstream evInterrupted refers to TTS speech that was
+// already cancelled and cleared (by energy cut-in or app interrupt), avoiding a duplicate clear
+// or unpaired reply frame (mu held).
+func (c *conversation) ttsAlreadyCutLocked(now time.Time, replyID string) bool {
+	if replyID != "" {
+		return replyID == c.ttsCutReply
+	}
+	return !c.ttsPlaying(now) && !c.replyOpen && !c.ttsCutAt.IsZero()
+}
+
 // ttsCutLocked cancels TTS due to an interruption (upstream evInterrupted, app interrupt, or energy
 // cut-in) and drops remaining text deltas of the interrupted upstream reply if one is still open (mu held).
-func (c *conversation) ttsCutLocked(sendClear bool) {
+func (c *conversation) ttsCutLocked(now time.Time, sendClear bool) {
 	if c.replying || c.ttsCurGen != 0 {
 		c.ttsDropText = true
 		if c.replying && c.reply != "" {
 			c.ttsCutReply = c.reply
 		}
 	}
+	c.ttsCutAt = now
 	c.cancelTTSLocked(sendClear)
 }
 

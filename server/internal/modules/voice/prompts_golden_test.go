@@ -92,6 +92,8 @@ func TestGoldenVoicePrompts(t *testing.T) {
 			// After a pause (suspend.go): what was said before it, without a drop.
 			"paused": render("paused", prompts.VoiceInstructions{Owner: x.owner, Tools: "bound", Target: x.agent, History: x.history,
 				Waiting: x.waiting, Paused: true}),
+			// With external streaming TTS (#17843): adds voice/tts_after_ack; non-TTS goldens stay byte-for-byte identical.
+			"bound_tts": render("bound_tts", prompts.VoiceInstructions{Owner: x.owner, Tools: "bound", Target: x.agent, TTS: true}),
 		}
 		for name, got := range bound {
 			// The three marks, the measured sentence, and other people's words inside one block they cannot close.
@@ -151,6 +153,7 @@ func TestGoldenVoiceMeetingPrompts(t *testing.T) {
 			"plain":   {},
 			"tool":    {Owner: x.owner, Tool: true, Title: x.title, Recent: x.recent},
 			"resumed": {Owner: x.owner, Tool: true, Title: x.title, Recent: x.recent, History: x.history, Waiting: x.waiting},
+			"tts":     {Owner: x.owner, Tool: true, Title: x.title, Recent: x.recent, TTS: true},
 		} {
 			d.Lang = lang
 			got := prompts.RenderVoiceMeeting(d)

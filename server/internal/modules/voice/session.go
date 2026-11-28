@@ -106,6 +106,7 @@ type conversation struct {
 	ttsFedText      string
 	ttsDropText     bool
 	ttsCutReply     string
+	ttsCutAt        time.Time
 	ttsTurns        []*ttsCallTurn
 	// down is the last session the service said it cannot serve (error upstream_unavailable, its model's backend is
 	// down) with its words, clipped: it closes that session right after (docs/lessons/voice.md "Errors"), so the

@@ -63,11 +63,11 @@ func (c *conversation) connect(woken bool) error {
 		return err
 	}
 	c.mu.Lock()
-	snap, waiting := c.snap, c.waiting()
+	snap, waiting, hasTTS := c.snap, c.waiting(), c.tts != nil
 	c.mu.Unlock()
 	in := prompts.VoiceInstructions{
 		Lang: string(c.language()), Owner: c.pl.cfg.Owner, Notes: c.pl.cfg.Notes, History: clipHistory(history),
-		Target: snap, Waiting: waiting, Paused: woken,
+		Target: snap, Waiting: waiting, Paused: woken, TTS: hasTTS,
 	}
 	tools := c.toolSet()
 	var rate int
@@ -625,6 +625,7 @@ func (c *conversation) handle(gen int, e event) {
 			}
 			c.ttsDropText = false
 			c.ttsCutReply = ""
+			c.ttsCutAt = time.Time{}
 			c.ttsReplyHadTurn = false
 			c.ttsCurReply = e.id
 			c.ttsCurStart = time.Now()
@@ -674,14 +675,17 @@ func (c *conversation) handle(gen int, e event) {
 			return
 		}
 		if c.tts != nil {
-			if e.id != "" && e.id == c.ttsCutReply {
+			now := time.Now()
+			if c.ttsAlreadyCutLocked(now, e.id) {
 				// Already cancelled and cleared by app interrupt or energy cut-in: drop remaining text without double-clearing.
-				c.ttsDropText = true
+				if c.replying || c.ttsCurGen != 0 {
+					c.ttsDropText = true
+				}
 				c.closeAsst()
 				return
 			}
-			c.ttsCutLocked(true)
-			c.pace.playEnd = time.Now() // the app drops what it had not played
+			c.ttsCutLocked(now, true)
+			c.pace.playEnd = now // the app drops what it had not played
 			c.barge = barge{}
 			c.closeAsst()
 			return
@@ -803,6 +807,7 @@ func (c *conversation) lost(gen int, why error) {
 		if c.tts != nil {
 			c.ttsDropText = false
 			c.ttsCutReply = ""
+			c.ttsCutAt = time.Time{}
 			c.cancelTTSLocked(false)
 		}
 		c.closeReply(true)
