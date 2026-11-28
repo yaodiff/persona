@@ -37,6 +37,10 @@ func TestExtensionCallsWire(t *testing.T) {
 	checkMethodWire[wire.MemoryEntriesParams, json.RawMessage](t, extwire.MemoryEntriesMethod, "memory.entries",
 		`{"contribution":"library","limit":200,"after":"example-cursor"}`,
 		`{"entries":[],"tagged":true,"has_more":true,"after":"next-page","standing_bytes":4096}`)
+	checkMethodWire[buswire.None, wire.AuthStatus](t, extwire.AuthStatusMethod, "auth.status",
+		`{}`, `{"state":"signed_in","account":"me@example.com","message":"Signed in","expires_at":"2030-01-02T03:04:05Z"}`)
+	checkMethodWire[buswire.None, wire.AuthStatus](t, extwire.AuthLogoutMethod, "auth.logout",
+		`{}`, `{"state":"signed_out"}`)
 }
 
 func checkMethodWire[P, R any](t *testing.T, method buswire.Method[P, R], name, request, reply string) {

@@ -18,6 +18,8 @@ const (
 	MethodShortcutRun       = "shortcut.run"
 	MethodOffloadCancel     = "offload.cancel"
 	MethodMemoryEntries     = "memory.entries"
+	MethodAuthStatus        = "auth.status"
+	MethodAuthLogout        = "auth.logout"
 )
 
 var (
@@ -31,4 +33,7 @@ var (
 	OffloadCancelMethod     = buswire.Method[wire.OffloadJobParams, buswire.None]{Name: MethodOffloadCancel}
 	// The caller checks the raw page size and shape before decoding entries.
 	MemoryEntriesMethod = buswire.Method[wire.MemoryEntriesParams, json.RawMessage]{Name: MethodMemoryEntries}
+
+	AuthStatusMethod = buswire.Method[buswire.None, wire.AuthStatus]{Name: MethodAuthStatus}
+	AuthLogoutMethod = buswire.Method[buswire.None, wire.AuthStatus]{Name: MethodAuthLogout}
 )

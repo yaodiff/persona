@@ -1583,8 +1583,6 @@
   "literal-call": {
    "assistant.credentials": 1,
    "assistant.summary": 1,
-   "auth.logout": 1,
-   "auth.status": 1,
    "auth.step": 1,
    "engine.use": 1,
    "hello": 1,

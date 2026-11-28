@@ -22,6 +22,8 @@ import (
 	pserve "github.com/nwverse/persona/server/internal/extension/serve"
 )
 
+const testAuthExpiry = "2030-01-02T03:04:05Z"
+
 // serveAuthExtensionForTest signs in with a device code: auth.step "" gives a link, the same step answers done once
 // the file "approved" is in its data directory; its status says what its tool (hello-tool, from manifest.tools)
 // printed, so the test sees the tool is on its PATH.
@@ -39,7 +41,7 @@ func serveAuthExtensionForTest() {
 			msg = "no tool: " + err.Error()
 		}
 		if signedIn() {
-			return map[string]any{"state": "signed_in", "account": "me@example.com", "message": msg}
+			return map[string]any{"state": "signed_in", "account": "me@example.com", "message": msg, "expires_at": testAuthExpiry}
 		}
 		if _, err := os.Stat(filepath.Join(data, "pending")); err == nil {
 			return map[string]any{"state": "pending", "message": msg}
@@ -75,7 +77,9 @@ func serveAuthExtensionForTest() {
 				case "logout":
 					_ = os.Remove(filepath.Join(data, "session"))
 					_ = os.Remove(filepath.Join(data, "approved"))
-					return status(), nil
+					st := status()
+					st["expires_at"] = nil
+					return st, nil
 				}
 				return nil, pserve.UnknownMethod("auth." + method)
 			},
@@ -170,6 +174,9 @@ func TestExtensionToolsAndAuth(t *testing.T) {
 	if auth["message"] != "hello-tool 3.1.0" || auth["title"] != "示例登录" || auth["page"] != "login" {
 		t.Fatalf("its tool runs from its PATH: %v", auth)
 	}
+	if _, ok := auth["expires_at"]; ok {
+		t.Fatalf("signed-out status should omit an absent expiration: %v", auth)
+	}
 	_, detail := call(t, mux, "GET", "/api/v1/extensions/example-auth/-/", master, "")
 	if a, _ := detail["auth"].(map[string]any); a["state"] != "signed_out" || !strings.Contains(fmt.Sprint(detail["warnings"]), "还没登录（示例登录）") {
 		t.Fatalf("the detail says so, for old apps too: %v %v", detail["auth"], detail["warnings"])
@@ -192,7 +199,7 @@ func TestExtensionToolsAndAuth(t *testing.T) {
 		t.Fatalf("%v", step)
 	}
 	_, auth = call(t, mux, "GET", "/api/v1/extensions/example-auth/-/auth", master, "")
-	if auth["state"] != "signed_in" || auth["account"] != "me@example.com" {
+	if auth["state"] != "signed_in" || auth["account"] != "me@example.com" || auth["expires_at"] != testAuthExpiry {
 		t.Fatalf("%v", auth)
 	}
 	waitLong(t, "extension_auth signed_in", func() bool {
@@ -204,6 +211,9 @@ func TestExtensionToolsAndAuth(t *testing.T) {
 	_, auth = call(t, mux, "POST", "/api/v1/extensions/example-auth/-/auth/logout", master, "")
 	if auth["state"] != "signed_out" {
 		t.Fatalf("%v", auth)
+	}
+	if _, ok := auth["expires_at"]; ok {
+		t.Fatalf("logout should omit a null expiration: %v", auth)
 	}
 	if code, out := call(t, mux, "GET", "/api/v1/extensions/nope/-/auth", master, ""); code != 404 {
 		t.Fatalf("%d %v", code, out)
