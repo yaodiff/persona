@@ -527,16 +527,27 @@ all talk to that server. With T3 Code enabled, the node runs an in-process runti
   the session when the bridge stops. A session T3 Code no longer takes ends the bridge, which issues a new one.
 - **Reading**: projects, threads and timelines through the server's `/mcp` endpoint (`t3_project_list`, `t3_thread_list`, `t3_thread_read`),
   every 2 seconds. A thread is session `t3code-<thread id>`; its project's folder is its space. Messages, reasoning and tool calls are shown;
-  checkpoints and other bookkeeping items are not.
+  checkpoints and other bookkeeping items are not. A call T3 Code records as a dynamic tool shows under its own tool's name with its input (an
+  AskUserQuestion as the questions it asked), and a question as its text, options and, once answered, its answer, not as raw JSON.
+- **Waiting on the user**: a run that asks a question or wants an approval keeps running in T3 Code, and its thread's status says only
+  `running`; T3 Code's `waiting` means background work the run still holds. So for each live thread the bridge reads `pendingRequestCount`
+  (`t3_thread_read`, as T3 Code's own command line does), and a thread with one or more is Needs you; `waiting` with none is working. A server
+  that leaves the count out keeps the old reading, `waiting` as Needs you.
+- **Questions on the phone**: `t3_pending_request` lists, reads and answers a thread's questions. T3 Code takes an answer only from a caller
+  whose mode ceiling covers the thread's mode, so a question becomes a card (`interaction.create`, id `t3code_<hash of thread and request>`)
+  only in a thread at approval-required, and the card's answer goes back with `t3_pending_request respond` (option values where options have
+  them, a multi-select as a list, typed text where the question takes it). A question answered in T3 Code takes its card back; a card handed
+  back to the computer leaves the question to T3 Code. In a thread above the ceiling, full access among them, the question is shown in the
+  chat and answered in T3 Code.
 - **Writing**: a message is `t3 thread send` and a new thread `t3 thread start` (the message on standard input), which run with the machine
   owner's authority as T3 Code's own clients do. A session the bridge issues has T3 Code's narrowest mode ceiling (approval-required), which
   would refuse sending to threads in T3 Code's default full-access mode. A new thread goes to the T3 project whose folder is the deepest one holding
   the chosen directory, with that project's default model and mode; a directory outside every T3 project is refused.
 - **Interrupting and closing**: Stop is `t3_thread_interrupt`, which the session's ceiling allows only for threads at approval-required; a
   thread above it is refused with a line saying to stop it in T3 Code. Closing archives the thread.
-- **Not supported**: answering approvals and questions (T3 Code's MCP tools cannot; such a thread shows as Needs you and is answered in T3
-  Code), pictures (refused, never dropped), changing modes, choosing the model, worktrees, rewinding. Not yet tested against a live T3 Code
-  install; the tests run a synthetic MCP server and command line.
+- **Not supported**: answering approvals (T3 Code's MCP tools cannot) and questions in threads above approval-required (both show as Needs
+  you and are answered in T3 Code), pictures (refused, never dropped), changing modes, choosing the model, worktrees, rewinding. Not yet
+  tested against a live T3 Code install; the tests run a synthetic MCP server and command line.
 
 ## tmux (approvals only)
 
