@@ -120,8 +120,8 @@ func (s *Service) observeTopicFollowup(ctx context.Context, st topicFollowupStor
 	if t.ReopenedAt != nil && t.ReopenedAt.After(state.Since) {
 		state.Since, state.Seen, state.Pending = *t.ReopenedAt, nil, nil
 	}
-	watch := connectorwire.LarkTopicWatch{Identity: state.Identity, ChatID: t.Thread.ChatID,
-		ThreadID: t.Thread.ThreadID, Since: state.Since}
+	watch := connectorwire.LarkTopicWatch{Identity: state.Identity, ChatID: connectorwire.LarkChatID(t.Thread.ChatID),
+		ThreadID: connectorwire.LarkThreadID(t.Thread.ThreadID), Since: state.Since}
 	var observation connectorwire.LarkTopicObservation
 	rctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	err = s.appCall(rctx, AppConnectors, assistantwire.ConnectorsLarkTopic, watch, &observation)
@@ -193,14 +193,15 @@ func topicFollowupMatches(w connectorwire.LarkTopicWatch, o connectorwire.LarkTo
 	id := o.Watch.Identity
 	if o.Watch.ChatID != w.ChatID || o.Watch.ThreadID != w.ThreadID || !o.Watch.Since.Equal(w.Since) ||
 		w.Identity != (connectorwire.LarkTopicIdentity{}) && id != w.Identity ||
-		(id.Brand != "feishu" && id.Brand != "lark") || !parkReplyID(id.AppID) || !parkReplyID(id.AccountOpenID) ||
+		(id.Brand != "feishu" && id.Brand != "lark") || !parkReplyID(string(id.AppID)) || !parkReplyID(string(id.AccountOpenID)) ||
 		o.CheckedAt.IsZero() || o.CheckedAt.After(time.Now()) || o.CheckedAt.Before(w.Since) || len(o.Messages) > 200 {
 		return false
 	}
 	for _, m := range o.Messages {
-		if !parkReplyID(m.ID) || !parkReplyID(m.SenderID) || m.SenderID == id.AccountOpenID ||
+		if !parkReplyID(m.ID) || !parkReplyID(m.SenderID) || connectorwire.LarkOpenID(m.SenderID) == id.AccountOpenID ||
 			m.SenderType != "user" || m.IDType != "open_id" || m.AppID != "" ||
-			m.ChatID != w.ChatID || m.ThreadID != w.ThreadID || m.At.IsZero() || !m.Before.After(m.At) ||
+			connectorwire.LarkChatID(m.ChatID) != w.ChatID || connectorwire.LarkThreadID(m.ThreadID) != w.ThreadID ||
+			m.At.IsZero() || !m.Before.After(m.At) ||
 			m.Before.Sub(m.At) > time.Minute || m.Before.After(o.CheckedAt) {
 			return false
 		}

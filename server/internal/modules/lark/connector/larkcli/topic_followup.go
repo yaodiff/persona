@@ -12,7 +12,8 @@ import (
 // It returns human source receipts, never message bodies or an interpretation of what was said.
 func (c *Connector) ObserveTopic(ctx context.Context, watch connectorwire.LarkTopicWatch) (connectorwire.LarkTopicObservation, error) {
 	var out connectorwire.LarkTopicObservation
-	if c == nil || c.runner == nil || !validOpaqueID(watch.ChatID) || !validOpaqueID(watch.ThreadID) {
+	chatID, threadID := string(watch.ChatID), string(watch.ThreadID)
+	if c == nil || c.runner == nil || !validOpaqueID(chatID) || !validOpaqueID(threadID) {
 		return out, errors.New("invalid or unavailable Lark topic reader")
 	}
 	id := watch.Identity
@@ -24,13 +25,15 @@ func (c *Connector) ObserveTopic(ctx context.Context, watch connectorwire.LarkTo
 		if !auth.LoggedIn || auth.Expired {
 			return out, errors.New("linked Lark topic account is unavailable")
 		}
-		id = connectorwire.LarkTopicIdentity{Brand: auth.Brand, AppID: auth.AppID, AccountOpenID: auth.OpenID}
+		id = connectorwire.LarkTopicIdentity{
+			Brand: auth.Brand, AppID: connectorwire.LarkAppID(auth.AppID), AccountOpenID: connectorwire.LarkOpenID(auth.OpenID),
+		}
 	}
-	if (id.Brand != "feishu" && id.Brand != "lark") || !validOpaqueID(id.AppID) || !validOpaqueID(id.AccountOpenID) {
+	scope := connectorwire.LarkReplyWatch{Brand: id.Brand, AppID: string(id.AppID), AccountOpenID: string(id.AccountOpenID),
+		ChatID: chatID, ThreadID: threadID}
+	if (scope.Brand != "feishu" && scope.Brand != "lark") || !validOpaqueID(scope.AppID) || !validOpaqueID(scope.AccountOpenID) {
 		return out, errors.New("incomplete linked Lark topic identity")
 	}
-	scope := connectorwire.LarkReplyWatch{Brand: id.Brand, AppID: id.AppID, AccountOpenID: id.AccountOpenID,
-		ChatID: watch.ChatID, ThreadID: watch.ThreadID}
 	before, err := c.replyAuth(ctx, scope)
 	if err != nil {
 		return out, err
@@ -58,7 +61,7 @@ func (c *Connector) ObserveTopic(ctx context.Context, watch connectorwire.LarkTo
 			}
 			if msg.Deleted || (msg.MsgType != "text" && msg.MsgType != "post") || forwardedContent(msg.Content) ||
 				msg.Sender.SenderType != "user" || msg.Sender.IDType != "open_id" || msg.Sender.AppID != "" ||
-				msg.Sender.ID == id.AccountOpenID || !validOpaqueID(msg.Sender.ID) || !validOpaqueID(msg.MessageID) {
+				msg.Sender.ID == scope.AccountOpenID || !validOpaqueID(msg.Sender.ID) || !validOpaqueID(msg.MessageID) {
 				continue
 			}
 			if !stamped {
