@@ -274,13 +274,19 @@ func newOrphanTestMarket(t *testing.T, official bool) *orphanTestMarket {
 	return mk
 }
 
-func (mk *orphanTestMarket) preview(t *testing.T, reg *extension.Registry, raw []byte) (*extension.Preview, error) {
+// program, when given, is the package's one program file (its path in the package).
+func (mk *orphanTestMarket) preview(t *testing.T, reg *extension.Registry, raw []byte, program ...string) (*extension.Preview, error) {
 	t.Helper()
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(gz)
 	_ = tw.WriteHeader(&tar.Header{Name: extension.ManifestFile, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(raw))})
 	_, _ = tw.Write(raw)
+	for _, name := range program {
+		body := []byte("#!/bin/sh\nexit 1\n")
+		_ = tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o755, Size: int64(len(body))})
+		_, _ = tw.Write(body)
+	}
 	_ = tw.Close()
 	_ = gz.Close()
 	pkg := archive.Bytes()
@@ -447,6 +453,142 @@ func TestOrphanAdoptionThroughRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p := again.Get(id); p == nil || !p.Record.VerifiedBuiltinPredecessor() {
+		t.Fatal("the adopted package is not read back")
+	}
+}
+
+// voiceOrphanManifest is a manifest of the built-in voice extension's shape (#16264) under id: calls and meeting
+// transcription served over HTTP and a key; the built-in holds the full hub token, the package (pkg) named scopes,
+// its address as its network and an events subscription.
+func voiceOrphanManifest(t *testing.T, id, version string, pkg bool) []byte {
+	t.Helper()
+	m := map[string]any{"manifest_version": 1, "id": id, "name": id, "version": version,
+		"engines": map[string]any{"extension_protocol": extension.Protocol},
+		"runtime": map[string]any{"command": "bin/voice", "rpc": "none", "http": true}, "activation_events": []string{extension.OnStartup},
+		"contributes": map[string]any{
+			"voice":         []map[string]string{{"id": "voice", "name": "Voice"}},
+			"transcription": []map[string]string{{"id": "gpt-live", "name": "GPT-Live"}}},
+		"permissions": map[string]any{"hub_api": true},
+		"configuration": map[string]any{"type": "object", "properties": map[string]any{
+			"url":             map[string]string{"type": "string", "pattern": "^wss?://[^/?#\\s]+"},
+			"archive_machine": map[string]string{"type": "string", "format": "machine"}}},
+		"secrets": []map[string]any{{"name": "key", "title": "API Key"}}}
+	if pkg {
+		m["runtime"] = map[string]any{"command": "bin/voice", "http": true}
+		m["contributes"].(map[string]any)["events"] = []map[string]any{{"id": "runs", "subscribe": []string{"agent.finished"}}}
+		m["permissions"] = map[string]any{"hub": []string{"kb.read", "agents.read", "agents.control", "machines.read", "assistant.ask"},
+			"network": []string{"config:url:http"}}
+		m["configuration"].(map[string]any)["properties"].(map[string]any)["url"] = map[string]string{"type": "string", "format": "uri", "pattern": "^wss?://[^/?#\\s]+"}
+		m["secrets"] = []map[string]any{{"name": "key", "title": "API Key", "required": true}}
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// The built-in voice extension's row on a build without its module (#16264) is adopted in place by its official
+// package through the registry on real Postgres: the same slot, settings, switch and sealed key, the package's own
+// grant (named scopes, no full token); a local upload of the id is still refused and leaves the row and key alone.
+func TestVoiceOrphanAdoptionThroughRegistry(t *testing.T) {
+	d, ctx := open(t), t.Context()
+	const id = "voice-orphan-registry-test"
+	cleanupStorageFixture(t, d, id)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = d.pool.Exec(cleanupCtx, `DELETE FROM plugin_audit WHERE plugin=$1; DELETE FROM plugin_secrets WHERE plugin=$1; DELETE FROM plugin_identities WHERE plugin=$1`, id)
+	})
+	root := t.TempDir()
+	store := &planTestStore{DB: d}
+	builtin, err := extension.Parse(voiceOrphanManifest(t, id, "9.0.0", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withModule := extension.NewRegistry(root, store, planTestSealer{}, 202611100000)
+	if err = withModule.AddBuiltin(builtin, t.TempDir(), false); err != nil {
+		t.Fatal(err)
+	}
+	withModule.HoldModule(id, false)
+	if err = withModule.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = withModule.SetConfig(ctx, id, json.RawMessage(`{"url":"wss://live.example.com/v1/live"}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err = withModule.SetSecret(ctx, id, "key", "synthetic-value", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err = withModule.SetContribution(ctx, id, "transcription", "gpt-live", false, "test"); err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := d.ExtensionSecrets(ctx, id)
+	if err != nil || secrets["key"] == "" {
+		t.Fatalf("the built-in's key: %v %v", secrets, err)
+	}
+
+	without := extension.NewRegistry(root, store, planTestSealer{}, 202611100000)
+	without.HoldModule(id, false)
+	if err = without.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if without.Get(id) != nil {
+		t.Fatal("the orphan is listed")
+	}
+	t.Run("upload", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, extension.ManifestFile), voiceOrphanManifest(t, id, "1.0.0", true), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "bin", "voice"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		pv, err := without.Preview(ctx, "dir:"+dir, "")
+		if err == nil {
+			_, err = without.Install(ctx, pv.ID, pv.Digest, "test")
+		}
+		if !errors.Is(err, extension.ErrIdentity) {
+			t.Fatalf("expected ErrIdentity, got %v", err)
+		}
+		if now, err := d.ExtensionSecrets(ctx, id); err != nil || !reflect.DeepEqual(now, secrets) {
+			t.Fatalf("the refused install changed the key: %v", err)
+		}
+	})
+
+	pv, err := newOrphanTestMarket(t, true).preview(t, without, voiceOrphanManifest(t, id, "1.0.0", true), "bin/voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = without.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatalf("the official package over the orphan: %v", err)
+	}
+	rows, err := d.Extensions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(rows, func(r extension.Record) bool { return r.StorageKey() == id })
+	if i < 0 {
+		t.Fatal("the slot is gone")
+	}
+	got := rows[i]
+	if got.Source != extension.SourceInstalled || !got.VerifiedBuiltinPredecessor() || got.PreviousOrigin != "builtin:"+id || got.PreviousVersion != "9.0.0" ||
+		!strings.Contains(string(got.Config), "live.example.com") || !slices.Contains(got.DisabledContributions, "transcription/gpt-live") ||
+		got.Granted.HubAPI || len(got.Granted.Hub) != 5 {
+		t.Fatalf("adopted row %+v", got)
+	}
+	if now, err := d.ExtensionSecrets(ctx, id); err != nil || !reflect.DeepEqual(now, secrets) {
+		t.Fatalf("the key moved: %v", err)
+	}
+	again := extension.NewRegistry(root, store, planTestSealer{}, 202611100000)
+	again.HoldModule(id, false)
+	if err = again.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p := again.Get(id); p == nil || !p.Record.VerifiedBuiltinPredecessor() || len(p.Full.Items("events")) != 1 {
 		t.Fatal("the adopted package is not read back")
 	}
 }

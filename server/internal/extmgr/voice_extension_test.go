@@ -93,9 +93,10 @@ func TestNoVoiceWithoutItsModule(t *testing.T) {
 	if p := h.extensions.reg.Get("talk"); p == nil || p.Record.Source == extension.SourceBuiltin {
 		t.Fatalf("hub.json's entry: %+v", p)
 	}
+	// Both addresses are still read without the module (the official package's keys follow them, #16264).
 	if h.extensions.voiceID != "" || takesOverVoice(h.modules(), voiceEntry("talk")) ||
-		voiceURL(h.modules(), json.RawMessage(`{"url":"wss://x/v1/live"}`)) != "" ||
-		voiceTTSURL(h.modules(), json.RawMessage(`{"tts_url":"https://tts.example.com"}`)) != "" {
+		voiceURL(h.modules(), json.RawMessage(`{"url":"wss://x/v1/live"}`)) != "wss://x/v1/live" ||
+		voiceTTSURL(h.modules(), json.RawMessage(`{"tts_url":"https://tts.example.com"}`)) != "https://tts.example.com" {
 		t.Fatal("the built-in voice extension is named without its module")
 	}
 	if _, _, ok := h.extensions.transcriptionRef(""); ok {

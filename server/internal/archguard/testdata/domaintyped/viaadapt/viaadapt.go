@@ -22,11 +22,13 @@ type listedOnly struct{}
 func (listedOnly) VisitListed() {}
 
 // Quiet branches on the visibility through the planted visitors, its own and a helper's, next to the twin that asks
-// the core.
-func Quiet(s *proto.Session) (bool, bool, bool) {
+// the core, and logs a core value obtained through the adapter to a custom logger.
+func Quiet(s *proto.Session, logf func(string, ...any)) (bool, bool, bool) {
 	var v quietView
 	fleetcountadapt.Visibility(s).Accept(&v)
 	var f helper.Flags // planted: typed-visitor-impl
 	fleetcountadapt.Visibility(s).Accept(&f)
+	logf("vis %v", fleetcountadapt.Visibility(s)) // planted: typed-codec
+	logf("left out %v", fleetcountadapt.Visibility(s).LeftOut())
 	return v.quiet, f.Quiet(), fleetcountadapt.Visibility(s).LeftOut()
 }

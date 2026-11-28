@@ -15,17 +15,27 @@ import (
 // The modules setting knows the ids installed extensions may supply (modapi.ExtensionModules, #16254) on a manager
 // without the built-in module of that id: the owner can switch off what an installed package supplies on any build.
 func TestSetModuleSwitchAcceptsExtensionModules(t *testing.T) {
+	ext := modapi.ExtensionModules()
+	if len(ext) == 0 {
+		t.Fatal("modapi.ExtensionModules is empty")
+	}
+	// Every listed id, voice included (#16264): its built-in may be in this build, but the test manager has no module
+	// of the id, as a build without it.
+	if !slices.ContainsFunc(ext, func(m modapi.ExtensionModule) bool { return m.ID == "voice" }) {
+		t.Fatal("voice is not in modapi.ExtensionModules")
+	}
+	for _, em := range ext {
+		t.Run(string(em.ID), func(t *testing.T) { setExtensionModuleSwitch(t, string(em.ID)) })
+	}
+}
+
+func setExtensionModuleSwitch(t *testing.T, id string) {
 	ctx := context.Background()
 	st := &memStore{}
 	m := testSlotModule{info: moduleTestInfo("switch-test")}
 	f := newFakeHub().withMachine()
 	f.hello.Locale = "en"
 	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{m}}))
-	ext := modapi.ExtensionModules()
-	if len(ext) == 0 {
-		t.Fatal("modapi.ExtensionModules is empty")
-	}
-	id := string(ext[0].ID)
 	if s.modules.Loaded(id) || s.modules.Skipped(id) != "" {
 		t.Fatalf("the test manager must not know %s as a built-in module", id)
 	}

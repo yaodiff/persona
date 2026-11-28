@@ -3,6 +3,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -40,8 +41,24 @@ func (host) VisitAgent(s *proto.Session) {}
 // holder keeps a core value in a field, which %v prints through reflection.
 type holder struct{ ref agentref.Ref }
 
+type logger interface{ Printf(string, ...any) }
+
+type round struct{ logf func(string, ...any) }
+
+type anyBox struct{ v any }
+
+type ctxKey struct{}
+
+func keepRef(agentref.Ref) {}
+
+func refPair(ref agentref.Ref) (string, agentref.Ref) { return "ref %v", ref }
+
+func returnBoxed(ref agentref.Ref) any {
+	return ref // planted: typed-codec
+}
+
 // Run drops outcomes and failures, prints core values and compares failures, next to the twins that do not.
-func Run(s *proto.Session, f1, f2 fail.Fail, ref agentref.Ref) string {
+func Run(s *proto.Session, f1, f2 fail.Fail, ref agentref.Ref, logf func(string, ...any), l logger, ch chan any) string {
 	_ = fleetcountadapt.Agent(s, false, 0) // planted: typed-discard
 	fleetcountadapt.Agent(s, false, 0)     // planted: typed-discard
 	if _, failed := outcome.Unpack(fleetcountadapt.Agent(s, false, 0)); failed != nil {
@@ -53,6 +70,30 @@ func Run(s *proto.Session, f1, f2 fail.Fail, ref agentref.Ref) string {
 	if f1 == f2 { // planted: typed-fail-compare
 		return ""
 	}
+	logf("ref %v", ref) // planted: typed-codec
+	logf(refPair(ref))  // planted: typed-codec
+	r := round{logf: logf}
+	r.logf("holder %v", holder{ref: ref}) // planted: typed-codec
+	l.Printf("ref %v", ref)               // planted: typed-codec
+	helper.Logf("ref %v", ref)            // planted: typed-codec
+	helper.Print(ref)                     // planted: typed-codec
+	_ = any(ref)                          // planted: typed-codec
+	var boxed any = ref                   // planted: typed-codec
+	boxed = ref                           // planted: typed-codec
+	_ = boxed
+	_ = []any{ref}                 // planted: typed-codec
+	_ = map[string]any{"ref": ref} // planted: typed-codec
+	_ = anyBox{v: ref}             // planted: typed-codec
+	ch <- ref                      // planted: typed-codec
+	// Compliant twins: adapter-formatted strings, plain booleans, context.WithValue, and typed non-any calls pass.
+	logf("ref %s", agentrefadapt.Log(ref))
+	r.logf("same %v", ref.IsSame(ref))
+	l.Printf("same %v", ref.IsSame(ref))
+	helper.Logf("count %d", 1)
+	helper.Print(agentrefadapt.Log(ref))
+	keepRef(ref)
+	_ = context.WithValue(context.Background(), ctxKey{}, ref)
+	_ = returnBoxed(ref)
 	if f1 == nil {
 		return fmt.Sprintf("%s", agentrefadapt.Log(ref))
 	}

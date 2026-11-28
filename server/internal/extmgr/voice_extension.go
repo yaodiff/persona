@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 )
 
 // The built-in voice extension, `personad voice` (docs/extensions/extensions.md "Built-in voice extension", docs/assistant/voice.md
@@ -145,8 +146,10 @@ func takesOverVoice(s moduleswitch.Set, c ExtensionConfig) bool {
 // addVoiceExtension registers the built-in voice extension in reg (attachExtensions, before Load): under the id of the
 // hub.json entry it takes over, on unless that entry says disabled (then always off); without one as "voice", off
 // until the user turns it on, unless hub.json has a voice extension of its own (another program) or a package was
-// installed under that id before (it keeps the id). It never yields its id to a package installed later: that one is
-// refused as any of the same id (Preview), so no other program is handed the key set here.
+// installed under that id before (it keeps the id). The form's built-in hands its id over only to the official package
+// the owner upgrades it to (builtinMarketUpgrade, #16264), and comes back on a rollback; any other package of the id
+// is refused as any of the same id (Preview), so no other program is handed the key set here. hub.json's takeover
+// never hands over: its id and upstreams are hub.json's.
 func (h *Manager) addVoiceExtension(ctx context.Context, reg *extension.Registry, store extension.Store) {
 	voice, ok := builtinext.VoiceExtension(h.modules())
 	if !ok { // the module is not in this build
@@ -167,7 +170,7 @@ func (h *Manager) addVoiceExtension(ctx context.Context, reg *extension.Registry
 				return
 			}
 			if slices.ContainsFunc(rows, func(r extension.Record) bool {
-				return r.ID == voiceExtensionID && r.Source == extension.SourceInstalled
+				return r.ID == voiceExtensionID && r.Source == extension.SourceInstalled && !r.BuiltinPredecessor
 			}) {
 				return // the package installed under this id before keeps it (Load)
 			}
@@ -176,6 +179,8 @@ func (h *Manager) addVoiceExtension(ctx context.Context, reg *extension.Registry
 			h.logf("plugin %s: %v", voiceExtensionID, err)
 			return
 		}
+		// Its verified official package may take the same row (and give it back on a rollback), as for volc.
+		reg.AllowBuiltinHandoff(voiceExtensionID)
 		ps.voiceID = voiceExtensionID
 		return
 	}
@@ -196,6 +201,55 @@ func (h *Manager) addVoiceExtension(ctx context.Context, reg *extension.Registry
 // isVoice says whether p is the built-in voice extension.
 func (ps *extensions) isVoice(p *extension.Extension) bool {
 	return p != nil && ps.voiceID != "" && p.Record.ID == ps.voiceID && p.Record.Source == extension.SourceBuiltin
+}
+
+// voiceModule is the module the official voice package supplies (modapi.ExtensionModules).
+func voiceModule() (modapi.ExtensionModule, bool) {
+	for _, m := range modapi.ExtensionModules() {
+		if m.ID == voiceExtensionID {
+			return m, true
+		}
+	}
+	return modapi.ExtensionModule{}, false
+}
+
+// isVoiceProvider says whether p provides the voice extension the host keeps its guarantees for: the built-in, or the
+// official package of its id (approvedModuleProvider), which the owner may have upgraded the built-in to or installed
+// fresh in a build without it. Its key follows its address (voiceKeyFollowsURL) as the built-in's does. A local upload
+// or a private market's package of the id never is. Called by the registry's BoundSecrets and SecretNeeds outside its
+// lock: the markets' lock it may take never waits for the registry's.
+func (ps *extensions) isVoiceProvider(p *extension.Extension) bool {
+	if p == nil {
+		return false
+	}
+	if ps.isVoice(p) {
+		return true
+	}
+	m, ok := voiceModule()
+	return ok && ps.h != nil && p.Record.ID == voiceExtensionID && approvedModuleProvider(m, p.Record, ps.h.marketSpec)
+}
+
+// voiceOfficialPackage says whether p is the official voice package that took the built-in's place
+// (Record.VerifiedBuiltinPredecessor): it alone inherits the built-in's default meeting transcription (""), so
+// installing the package fresh never sends it meeting audio.
+func (ps *extensions) voiceOfficialPackage(p *extension.Extension) bool {
+	return p != nil && p.Record.ID == voiceExtensionID && p.Record.VerifiedBuiltinPredecessor() && ps.isVoiceProvider(p)
+}
+
+// voiceDefaultTranscriber is the extension "" (the default meeting transcription) names: the built-in voice
+// extension, or the official package that took its place. Without one, nothing.
+func (ps *extensions) voiceDefaultTranscriber(p *extension.Extension) bool {
+	return ps.isVoice(p) || ps.voiceOfficialPackage(p)
+}
+
+// voiceArchiveSet says whether p's saved settings name a computer to archive calls on (archive_machine): the official
+// package's first version writes no archive, so such a hub keeps the built-in (builtinMarketUpgrade).
+func voiceArchiveSet(config json.RawMessage) bool {
+	var f struct {
+		ArchiveMachine string `json:"archive_machine"`
+	}
+	_ = json.Unmarshal(config, &f)
+	return strings.TrimSpace(f.ArchiveMachine) != ""
 }
 
 const gatewaySecretKey = "gateway_key"
@@ -331,7 +385,7 @@ func (ps *extensions) voiceView(ctx context.Context, p *extension.Extension, v *
 // deletes its bound key before saving, whoever saves it, in the same registry operation a key is set in, so neither key
 // is ever sent as a Bearer to a host it was not given for.
 func (ps *extensions) voiceKeyFollowsURL(p *extension.Extension, old, next json.RawMessage) []string {
-	if !ps.isVoice(p) {
+	if !ps.isVoiceProvider(p) {
 		return nil
 	}
 	var cleared []string
@@ -349,10 +403,10 @@ type keyNeedsURLError struct{ error }
 
 func (e keyNeedsURLError) Unwrap() error { return e.error }
 
-// voiceKeyNeedsURL refuses a key for the built-in voice extension while its bound address is empty (the registry's
-// SecretNeeds): each key is set for its own address (voiceKeyFollowsURL).
+// voiceKeyNeedsURL refuses a key for the voice extension (isVoiceProvider) while its bound address is empty (the
+// registry's SecretNeeds): each key is set for its own address (voiceKeyFollowsURL).
 func (ps *extensions) voiceKeyNeedsURL(p *extension.Extension, name string, config json.RawMessage) error {
-	if !ps.isVoice(p) {
+	if name != voiceSecretKey && name != voiceTTSSecretKey || !ps.isVoiceProvider(p) {
 		return nil
 	}
 	switch name {
@@ -371,22 +425,29 @@ func (ps *extensions) voiceKeyNeedsURL(p *extension.Extension, name string, conf
 	}
 }
 
-// voiceURL is the settings' realtime address ("" none).
+// voiceURL is the settings' realtime address ("" none), as the module reads its form; in a build without it, read
+// here, so the official package's key stays with its address too (its settings are the built-in's, url the same key).
 func voiceURL(s moduleswitch.Set, config json.RawMessage) string {
-	voice, ok := builtinext.VoiceExtension(s)
-	if !ok {
-		return ""
+	if voice, ok := builtinext.VoiceExtension(s); ok {
+		return voice.FormURL(config)
 	}
-	return voice.FormURL(config)
+	var f struct {
+		URL string `json:"url"`
+	}
+	_ = json.Unmarshal(config, &f)
+	return strings.TrimSpace(f.URL)
 }
 
-// voiceTTSURL is the settings' streaming TTS endpoint address ("" none).
+// voiceTTSURL is the settings' streaming TTS endpoint address ("" none), read as voiceURL is (tts_url).
 func voiceTTSURL(s moduleswitch.Set, config json.RawMessage) string {
-	voice, ok := builtinext.VoiceExtension(s)
-	if !ok || voice.FormTTSURL == nil {
-		return ""
+	if voice, ok := builtinext.VoiceExtension(s); ok && voice.FormTTSURL != nil {
+		return voice.FormTTSURL(config)
 	}
-	return voice.FormTTSURL(config)
+	var f struct {
+		TTSURL string `json:"tts_url"`
+	}
+	_ = json.Unmarshal(config, &f)
+	return strings.TrimSpace(f.TTSURL)
 }
 
 // sameOrigin says whether two addresses have the same scheme, host and port (a default port written or not); two

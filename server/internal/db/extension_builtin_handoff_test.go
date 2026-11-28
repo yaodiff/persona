@@ -129,13 +129,30 @@ func TestExtensionBuiltinHandoffCAS(t *testing.T) {
 // registry prepares (extension/dormant.go), pinned to the row as it was read. ① A plain new install never overwrites
 // it. ② The adoption takes the same slot in place: settings, switch and the sealed key stay. ③ Of two concurrent
 // adoptions only one wins. ④ A snapshot older than the row is refused.
+// The same holds for a row of the built-in voice extension's shape (#16264): two contribution points (calls and
+// meeting transcription), the full hub token for the built-in, and a package granted named scopes and its address.
 func TestExtensionOrphanAdoptionCAS(t *testing.T) {
+	voicePoints := `"contributes":{"voice":[{"id":"voice","name":"Voice"}],"transcription":[{"id":"gpt-live","name":"GPT-Live"}]}`
+	for _, tc := range []struct {
+		name, id, builtin, pkg string
+		granted                extension.Permissions
+	}{
+		{"generic", "orphan-cas-test", `{"id":"orphan-cas-test"}`, `{"id":"orphan-cas-test","version":"1.0.0"}`, extension.Permissions{}},
+		{"voice-shaped", "voice-orphan-cas-test",
+			`{"id":"voice-orphan-cas-test",` + voicePoints + `,"permissions":{"hub_api":true}}`,
+			`{"id":"voice-orphan-cas-test","version":"1.0.0",` + voicePoints + `,"permissions":{"hub":["kb.read","agents.read","agents.control","machines.read","assistant.ask"],"network":["config:url:http"]}}`,
+			extension.Permissions{Hub: []string{"kb.read", "agents.read", "agents.control", "machines.read", "assistant.ask"}, Network: []string{"config:url:http"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { orphanAdoptionCAS(t, tc.id, tc.builtin, tc.pkg, tc.granted) })
+	}
+}
+
+func orphanAdoptionCAS(t *testing.T, id, builtinManifest, pkgManifest string, granted extension.Permissions) {
 	d, ctx := open(t), t.Context()
-	const id = "orphan-cas-test"
 	cleanupStorageFixture(t, d, id)
 	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
 	if err := d.PutExtension(ctx, extension.Record{
-		ID: id, Source: extension.SourceBuiltin, Version: "9.0.0", Manifest: json.RawMessage(`{"id":"orphan-cas-test"}`),
+		ID: id, Source: extension.SourceBuiltin, Version: "9.0.0", Manifest: json.RawMessage(builtinManifest),
 		Config: json.RawMessage(`{"voice":"kept"}`), Enabled: true, DisabledContributions: []string{"ui/status"}, InstalledAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -165,7 +182,7 @@ func TestExtensionOrphanAdoptionCAS(t *testing.T) {
 	}
 	orphan := read()
 	pkg := extension.Record{ID: id, Source: extension.SourceInstalled, Origin: "market:official/" + id, Version: "1.0.0",
-		Manifest: json.RawMessage(`{"id":"orphan-cas-test","version":"1.0.0"}`), GrantedDigest: "package-digest",
+		Manifest: json.RawMessage(pkgManifest), Granted: granted, GrantedDigest: "package-digest",
 		MarketKey: "ed25519:fixture", Config: json.RawMessage(`{}`), Enabled: true, InstalledAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour)}
 
 	// ① A plain new install (what an install over an unknown row prepares) is refused and leaves the row's bytes.
@@ -235,6 +252,9 @@ func TestExtensionOrphanAdoptionCAS(t *testing.T) {
 	secrets, err := d.ExtensionSecrets(ctx, id)
 	if err != nil || secrets["key"] != "sealed-fixture" {
 		t.Fatalf("② the key under the same storage key: %v %v", secrets, err)
+	}
+	if !slices.Equal(got.Granted.Hub, granted.Hub) || !slices.Equal(got.Granted.Network, granted.Network) || got.Granted.HubAPI {
+		t.Fatalf("② the grant: %+v, want %+v", got.Granted, granted)
 	}
 	// And a later plain install still cannot take it.
 	if err := d.PutExtension(ctx, fresh); !errors.Is(err, extension.ErrIdentity) {

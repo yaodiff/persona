@@ -1,4 +1,6 @@
 {
+  "back_to_chat": "返回聊天",
+  "mark_seen": "标为已读",
   "unpin": "取消置顶",
   "pin": "置顶",
   "rename": "重命名…",

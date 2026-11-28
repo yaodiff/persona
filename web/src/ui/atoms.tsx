@@ -400,7 +400,7 @@ const errMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** One open submenu: its rows (loaded when they come from a function), the row that opened it and where that row is. */
 interface Sub {
-  from: number;
+  from: string;
   items: MenuItem[];
   rect: { left: number; right: number; top: number; bottom: number };
   loading?: boolean;
@@ -444,8 +444,8 @@ export function Menu({
   container?: Element | null;
 }) {
   const id = useId();
-  const [subs, setSubs] = useState<Sub[]>([]); // the open submenus: depth d (d ≥ 1) is subs[d - 1]
-  const [actives, setActives] = useState<number[]>([-1]); // the highlighted row of each level
+  const [openPath, setSubs] = useState<Sub[]>([]); // one parent key per open submenu
+  const [activeKeys, setActiveKeys] = useState<(string | undefined)[]>([]);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -465,33 +465,46 @@ export function Menu({
   // A row that opens a sheet or a panel takes the menu's entry over (back-close reuses an entry closed a tick before).
   useCloseOnBack(true, onClose, useMedia(NARROW_QUERY));
 
-  const levels = [items, ...subs.map((s) => s.items)];
+  // Array children can change while open (for example, a chat review becomes available).
+  // Follow the parent keys through the current inventory. Only a lazy loader owns a snapshot.
+  const levels = [items];
+  for (const sub of openPath) {
+    const children = levels[levels.length - 1].find((item) => item.key === sub.from)?.children;
+    if (!children) break;
+    levels.push(typeof children === "function" ? sub.items : children);
+  }
+  const subs = openPath.slice(0, levels.length - 1);
+  if (subs.length !== openPath.length) {
+    setSubs(subs);
+    setActiveKeys(activeKeys.slice(0, levels.length));
+  }
   // the key handler is registered once and reads this: what the menu is now
+  const actives = levels.map((level, depth) => level.findIndex((item) => item.key === activeKeys[depth]));
   const live = useRef({ levels, actives, subs, confirming, renaming, busy });
   live.current = { levels, actives, subs, confirming, renaming, busy };
 
   const setActive = (depth: number, index: number) => {
-    setActives((a) => {
-      const next = a.slice(0, depth + 1);
-      for (let i = next.length; i < depth; i++) next[i] = -1;
-      next[depth] = index;
+    const it = live.current.levels[depth]?.[index];
+    setActiveKeys((keys) => {
+      const next = keys.slice(0, depth);
+      next[depth] = it?.key;
       return next;
     });
-    const it = live.current.levels[depth]?.[index];
     // moving to another row takes the question back; the pointer leaving (-1) does not: a finger lifting off sends that
     if (index >= 0 && it?.key !== live.current.confirming) setConfirming(null);
   };
   const closeSubsTo = (depth: number) => {
+    if (live.current.subs.length > depth) ++loads.current;
     setSubs((s) => (s.length > depth ? s.slice(0, depth) : s));
-    setActives((a) => (a.length > depth + 1 ? a.slice(0, depth + 1) : a));
+    setActiveKeys((a) => (a.length > depth + 1 ? a.slice(0, depth + 1) : a));
   };
   const openSub = (depth: number, index: number, focus: boolean) => {
     const { levels: ls, subs: open } = live.current;
     const it = ls[depth]?.[index];
     const el = rows.current[depth]?.[index];
     if (!it?.children || !el) return;
-    if (open[depth]?.from === index) {
-      if (focus) setActives((a) => [...a.slice(0, depth + 1), a[depth + 1] >= 0 ? a[depth + 1] : edge(open[depth].items, false)]);
+    if (open[depth]?.from === it.key) {
+      if (focus && live.current.actives[depth + 1] < 0) setActive(depth + 1, edge(ls[depth + 1], false));
       return;
     }
     const r = el.getBoundingClientRect();
@@ -499,15 +512,18 @@ export function Menu({
     const token = ++loads.current;
     const put = (sub: Sub) => {
       setSubs((s) => [...s.slice(0, depth), sub]);
-      setActives((a) => [...a.slice(0, depth + 1), focus ? edge(sub.items, false) : -1]);
+      setActiveKeys((a) => [...a.slice(0, depth), it.key, focus ? sub.items.find(enabled)?.key : undefined]);
     };
     setFailure(null);
-    if (typeof it.children !== "function") return put({ from: index, items: it.children, rect });
-    put({ from: index, items: [], rect, loading: true });
+    if (typeof it.children !== "function") return put({ from: it.key, items: it.children, rect });
+    put({ from: it.key, items: [], rect, loading: true });
     const settle = (patch: Partial<Sub>) => {
       if (loads.current !== token) return; // another row's submenu has replaced it since
       setSubs((s) => s.map((x, d) => (d === depth ? { ...x, ...patch, loading: false } : x)));
-      if (focus && patch.items) setActives((a) => [...a.slice(0, depth + 1), edge(patch.items!, false)]);
+      if (focus && patch.items) {
+        const first = patch.items.find(enabled)?.key;
+        setActiveKeys((a) => a[depth] === it.key && a.length > depth + 1 ? [...a.slice(0, depth + 1), first] : a);
+      }
     };
     (it.children as () => Promise<MenuItem[]>)().then((list) => settle({ items: list }), (e) => settle({ error: errMessage(e) }));
   };

@@ -86,7 +86,9 @@ async function menu(page, tag) {
   await more.click();
   const m = page.getByRole("menu").first();
   await m.waitFor({ state: "visible", timeout: 5000 }).catch(() => fail(`${tag}: ⋯ did not open`));
-  return m;
+  if (before) return m;
+  await m.getByRole("menuitem", { name: "更多", exact: true }).click();
+  return page.getByRole("menu").last();
 }
 
 const closeMenu = async (page) => {

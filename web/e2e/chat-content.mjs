@@ -324,6 +324,7 @@ try {
     await p.locator("[data-work-group] > button").first().waitFor({ timeout: 30_000 });
     await p.waitForTimeout(1000);
     await p.locator('button[aria-label="更多操作"]').first().click();
+    await p.getByRole("menuitem", { name: "更多", exact: true }).click();
     await p.getByText("会话内搜索", { exact: true }).last().click();
     await p.locator("[data-chat-search] input").fill("make step-600");
     await p.waitForTimeout(2500);

@@ -2,6 +2,7 @@
 // Each item pushed to the open conversation renders ChatView again (its transcript changed). The header and the composer
 // around it did not change, so they stay put: counted through a leaf each one draws (the header's "Session info" dialog,
 // the composer's context chips, the composer's permission picker).
+import { openAgentMore } from "../../test/agent-menu";
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -56,7 +57,8 @@ vi.mock("./chat-actions", async (load) => {
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
-import { applyCompleteSessions, applyMachine, getState, refreshTodos, reset, type ItemsEvent } from "../../lib/store";
+import { applyCompleteSessions, applyMachine, getSession, getState, refreshTodos, reset, type ItemsEvent } from "../../lib/store";
+import { runtimeAgents, SESSIONS_LOOKUP_FEATURE } from "../../lib/runtime-list";
 import { whenComposer } from "../../lib/links";
 import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
@@ -92,7 +94,7 @@ const waitForUpdateNotice = (label: string) => vi.waitFor(async () => {
 let host: HTMLDivElement;
 let root: Root;
 let opened = "";
-let fetcher: ReturnType<typeof vi.fn>;
+let fetcher: ReturnType<typeof vi.fn<(url: string, init?: RequestInit) => Promise<Response>>>;
 // An agent's header loads its compare menu lazily (ChatView: import("../../lib/compare-runs")) and finished replies
 // load their bar lazily (MessageActions: import("./ReplyBar")), each drawing again when it arrives. Loaded here first,
 // neither arrives mid-test under a full parallel run and counts as a render caused by pushes or turn transitions.
@@ -197,7 +199,7 @@ it("a completed task remains a labelled, clickable owner, not a prompt to link i
     }));
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
     await settle();
-    const menu = document.querySelector('[role="menu"]')!;
+    const menu = openAgentMore();
     const label = t("chat-chatview.todo_completed_label", { title: "Completed example task" });
     expect(menu.textContent).toContain(label);
     expect(menu.textContent).not.toContain(t("chat-chatview.link_todo"));
@@ -568,6 +570,37 @@ it("/workflows opens the Background tasks panel at the latest run instead of goi
   expect(posted("/sessions/mac/s1/messages")).toHaveLength(0);
   expect(getPanel()).toEqual({ kind: "background", mid: "mac", sid: "s1", run: "new" });
   act(() => openPanel(null));
+});
+
+it.each(["list", "lookup"])("does not interrupt from an open Agent header after the %s revokes permission", async (source) => {
+  const shown = row({ capabilities: { read: true, send: true, interrupt: true }, updated_at: "2026-01-01T00:00:00.123000000Z" });
+  const revoked = { ...shown, capabilities: { ...shown.capabilities, interrupt: false }, updated_at: "2026-01-01T00:00:00.123000001Z" };
+  let exact = shown;
+  const page = (session: Session) => Response.json({ sessions: [session], revision: "2", has_more: false, total: 1, remove: [] });
+  const fallback = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.includes("/sessions?") && url.includes("session_id=s1")) return Promise.resolve(page(exact));
+    if (url.includes("/sessions?agents_only=1")) return Promise.resolve(page({ ...revoked, waiting: false }));
+    return fallback(url, init);
+  });
+  if (source === "lookup") applyCompleteSessions([shown], [], { features: [SESSIONS_LOOKUP_FEATURE] });
+  await open(<ChatView mid="mac" sid="s1" inPage />, shown);
+  act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+  const stop = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((r) => r.textContent?.includes(t("chat-chatview.interrupt")))!;
+  expect(stop).toBeDefined();
+  if (source === "list") {
+    await act(async () => { await runtimeAgents.load(); });
+    expect(runtimeAgents.getSnapshot().rows[0].capabilities?.interrupt).toBe(false);
+  } else {
+    exact = revoked;
+  }
+  expect(getSession("mac", "s1")?.capabilities?.interrupt).toBe(true);
+  const reads = () => fetcher.mock.calls.filter(([url]) => String(url).includes("session_id=s1")).length;
+  const before = reads();
+  await act(async () => stop.click());
+  await settle();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+  if (source === "lookup") expect(reads()).toBe(before + 1);
 });
 
 it("after the pushes, sending and stopping still go out", async () => {

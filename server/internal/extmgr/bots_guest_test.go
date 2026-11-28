@@ -34,6 +34,11 @@ func (w *botWorld) takeGuest(t *testing.T, id, from, text, chat, thread string) 
 		got := w.handed()
 		return len(got) > 0 && got[len(got)-1] == drain
 	})
+	// The drain does not fence the guest turn: botGuestMessage lets the next message through first, then reads the
+	// guest's name and calls the assistant. Wait for the turn itself.
+	eventually(t, 5*time.Second, "the guest turn reached the assistant", func() bool {
+		return len(w.a.got(assistantwire.MethodFeishuGuest)) > before
+	})
 	got := w.a.got(assistantwire.MethodFeishuGuest)
 	if len(got) != before+1 {
 		t.Fatalf("%s: the assistant got %d guest turns, want %d", id, len(got), before+1)
@@ -120,10 +125,17 @@ func TestGuestConversationKey(t *testing.T) {
 	ev["event"].(map[string]any)["message"].(map[string]any)["mentions"] = []any{map[string]any{"key": "@_user_1", "id": map[string]string{"open_id": "ou_bot"}}}
 	ev["event"].(map[string]any)["message"].(map[string]any)["content"] = textContent("@_user_1 two")
 	raw, _ := json.Marshal(ev)
+	before := len(w.a.got(assistantwire.MethodFeishuGuest))
 	w.send(t, raw)
 	w.send(t, botMessageEvent("om_k_dm", "ou_me", "text", textContent("ping"), nil))
 	eventually(t, 5*time.Second, "drained", func() bool { g := w.handed(); return len(g) > 0 && g[len(g)-1] == "om_k_dm" })
+	eventually(t, 5*time.Second, "the root guest turn reached the assistant", func() bool {
+		return len(w.a.got(assistantwire.MethodFeishuGuest)) > before
+	})
 	got := w.a.got(assistantwire.MethodFeishuGuest)
+	if len(got) != before+1 {
+		t.Fatalf("root: the assistant got %d guest turns, want %d", len(got), before+1)
+	}
 	var turn assistantwire.FeishuGuestTurn
 	_ = json.Unmarshal(got[len(got)-1], &turn)
 	if turn.Conversation != "om_root" {

@@ -90,6 +90,7 @@ async function verify(browser, kind, theme, width = 1280, zoom = 1) {
   const menu = async () => {
     await page.getByRole("button", { name: "More actions", exact: true }).filter({ visible: true }).first().click();
     await page.getByRole("menu").waitFor();
+    if (!assistant) await page.getByRole("menuitem", { name: "More", exact: true }).click();
   };
   const shot = (state) => page.screenshot({ path: join(shots, `${kind}-${width}-${zoom}x-${theme}-${state}.png`), animations: "disabled" });
   await menu();

@@ -23,3 +23,9 @@ func (p Peek[S, W, I, T]) VisitTotal(total T)           { *p.total = total }
 
 // NewPeek is a Peek that writes the total it is told into total.
 func NewPeek[S, W, I, T any](total *T) Peek[S, W, I, T] { return Peek[S, W, I, T]{total: total} }
+
+// Logf models a user-declared logger that forwards its variadic any arguments to fmt/log.
+func Logf(string, ...any) {}
+
+// Print models a helper taking a single any value that forwards it to reflection-based formatting.
+func Print(any) {}

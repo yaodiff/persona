@@ -1,4 +1,5 @@
 {
+  "interrupt_unavailable": "This Agent can no longer be interrupted.",
   "save_failed": "Couldn't save: {error}",
   "pinned": "Pinned",
   "unpinned": "Unpinned",

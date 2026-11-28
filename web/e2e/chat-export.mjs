@@ -100,9 +100,10 @@ const shot = async (page, name) => {
 };
 
 /** ⋯ › Export Conversation…, until it has read the conversation; the dialog. */
-async function exportDialog(page, where) {
+async function exportDialog(page, where, agent) {
   const more = page.locator('header button[aria-label="More actions"]:visible').first();
   await more.click();
+  if (agent) await page.getByRole("menuitem", { name: "More", exact: true }).click();
   const item = page.locator('[role="menu"]').last().getByRole("menuitem", { name: "Export Conversation…" });
   if (!(await item.count())) fail(`${where}: no Export Conversation… in the chat's ⋯`);
   await item.click();
@@ -123,7 +124,7 @@ async function download(page, dialog, where) {
 async function agentChat(page, where) {
   await go(page, `/s/macbook/${WIDGET}`);
   await page.locator("main").getByText(asked, { exact: false }).first().waitFor({ state: "visible" });
-  let dialog = await exportDialog(page, where);
+  let dialog = await exportDialog(page, where, true);
   await shot(page, `${where}-1-dialog`);
   let file = await download(page, dialog, where);
   if (!/^.+ \d{4}-\d{2}-\d{2}\.md$/.test(file.name)) fail(`${where}: the file is called ${file.name}`);
@@ -131,7 +132,7 @@ async function agentChat(page, where) {
   if (file.md.includes("<details>")) fail(`${where}: work steps are in a file without them`);
   ok(`${where}: Download .md saves ${file.name} with the conversation and no work steps`);
 
-  dialog = await exportDialog(page, where);
+  dialog = await exportDialog(page, where, true);
   await dialog.locator('[data-testid="export-work"]').check();
   await dialog.locator('[data-testid="export-status"]').filter({ hasText: /\d+ messages · / }).waitFor();
   await shot(page, `${where}-2-work`);
@@ -144,7 +145,7 @@ async function agentChat(page, where) {
 async function personaChat(page, where) {
   await go(page, `/persona/${NOTES}`);
   await page.locator("main").waitFor({ state: "visible" });
-  const dialog = await exportDialog(page, `${where} (Persona)`);
+  const dialog = await exportDialog(page, `${where} (Persona)`, false);
   const file = await download(page, dialog, `${where}-persona`);
   if (!file.md.includes("## You · ") || (file.md.match(/^## /gm) ?? []).length < 2) fail(`${where}: the Persona conversation's file has no parts:\n${file.md.slice(0, 400)}`);
   ok(`${where}: a Persona conversation exports too`);

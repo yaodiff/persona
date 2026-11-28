@@ -420,7 +420,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		d := ps().detail(r.Context(), ps().reg.Get(p.Record.ID))
 		if len(cleared) > 0 {
 			d.SecretsCleared = cleared
-			if ps().isVoice(p) {
+			if ps().isVoiceProvider(p) {
 				d.Warnings = append(slices.Clone(d.Warnings), i18n.T(h.contextLang(r.Context()), "hub-voice_extension.key_cleared"))
 			}
 		}

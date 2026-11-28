@@ -198,3 +198,24 @@ func TestNodeHubFeaturesCarryReportedModules(t *testing.T) {
 	reportFrom(t, h, a, volcReport(false))
 	wantFeatures(t, "provider off", nodeFeatures(), []string{"modules"}, []string{"module.volc"})
 }
+
+// The official voice package supplies module.voice the same way (#16264): with the built-in announced in the hello,
+// the installed package that is off removes the flag (it decides), and no other module's; on, it adds it on a build
+// without the built-in.
+func TestReportedModulesCarryVoice(t *testing.T) {
+	h := newTestHub(t)
+	t.Cleanup(func() { waitHubWorkers(t, h) })
+	voice := func(on bool) extwire.Report {
+		return extwire.Report{Modules: []extwire.ModuleProvider{{ID: "voice", On: on}}}
+	}
+	a := helloManager(t, h, assistantwire.AssistantID, "modules", "module.voice", "module.volc")
+	reportFrom(t, h, a, voice(false))
+	wantFeatures(t, "installed voice off", h.features(), []string{"modules", "module.volc"}, []string{"module.voice"})
+	reportFrom(t, h, a, voice(true))
+	wantFeatures(t, "installed voice on", h.features(), []string{"module.voice", "module.volc"}, nil)
+	a = helloManager(t, h, assistantwire.AssistantID, "modules")
+	reportFrom(t, h, a, voice(true))
+	wantFeatures(t, "without the built-in", h.features(), []string{"modules", "module.voice"}, []string{"module.volc"})
+	reportFrom(t, h, a, voice(false))
+	wantFeatures(t, "without the built-in, off", h.features(), []string{"modules"}, []string{"module.voice"})
+}

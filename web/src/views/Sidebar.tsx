@@ -946,13 +946,13 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   // a hub that folds side sessions (#7944) leaves them out of the list: nothing to nest under a parent
   const sideFold = useStore((s) => s.features.includes(SESSIONS_SIDE_FOLD_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
-  const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt; readSource?: () => Session | undefined } | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
   const [deleting, setDeleting] = useState<Session | null>(null);
   const [linkTarget, setLinkTarget] = useState<Session>();
   const closeLinkTarget = useCallback(() => setLinkTarget(undefined), []);
   // the ⋯ toggles the menu, as in the full list
-  const onRowMenu = useCallback<RowMenuFn>((s, anchor, at) => setRowMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
+  const onRowMenu = useCallback<RowMenuFn>((s, anchor, at, readSource) => setRowMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at, readSource })), []);
   // The complete list's grouping bar (#6662): the same segments, so a pin or an unpin changes nothing above the list.
   // By repository takes the complete list (AgentsBlock).
   const groupings = useGroupings();
@@ -1129,7 +1129,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
           return <SessionRow s={s} k={k} reg={reg} hover={hover} active={activeKey === k} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} hint={where.filter(Boolean).join(" · ")} showTodoTag={within !== "todo"} />;
         }} />
     </>}
-    {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} />}
+    {rowMenu && <AgentRowMenu s={rowMenu.s} readSource={rowMenu.readSource} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTarget} />}
     {renaming && <RenameDialog open session={renaming} onClose={() => setRenaming(null)} />}
     {deleting && <DeleteSessionDialog open session={deleting} machineName={machineWithHub(deleting.machine_id, machines)} onClose={() => setDeleting(null)} />}
     <LinkTodoDialog open={Boolean(linkTarget)} session={linkTarget} onClose={closeLinkTarget} />
@@ -1467,7 +1467,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     setKept((cur) => removeKept(cur, keys));
     hover(null);
   }, [hover]);
-  const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt; readSource?: () => Session | undefined } | null>(null);
   const [spaceMenu, setSpaceMenu] = useState<{ sp: Space; anchor: HTMLElement; at?: MenuAt; fold?: MenuNode["fold"] } | null>(null);
   const [nodeMenu, setNodeMenu] = useState<{ node: MenuNode; at: MenuAt; header?: string } | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
@@ -1476,7 +1476,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
   const [confirmSeen, setConfirmSeen] = useState<{ list: Session[]; release?: Session[] } | null>(null);
   // stable, like `go`: every row gets it, and a new one each render would re-render them all (SessionRow's memo)
-  const onRowMenu = useCallback<RowMenuFn>((s, anchor, at) => setRowMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
+  const onRowMenu = useCallback<RowMenuFn>((s, anchor, at, readSource) => setRowMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at, readSource })), []);
   // stable too: TabRow builds the menu of a tab with several panes on onNodeMenu, and that menu is its lead row's onMenu
   const onSpaceMenu = useCallback<SpaceMenuFn>((sp, anchor, at, fold) => setSpaceMenu((m) => (!at && m?.anchor === anchor ? null : { sp, anchor, at, fold })), []);
   const onNodeMenu = useCallback<NodeMenuFn>((node, at, header, toggle) => setNodeMenu((m) => (toggle && m?.at.anchor && m.at.anchor === at.anchor ? null : { node, at, header })), []);
@@ -1691,7 +1691,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     </SidebarGroup>
       {/* the row's ⋯ (and its right click): pin, rename, mute, the todo it hangs on, close, delete — a long press on iOS
           Safari sends no contextmenu, so nothing lives only there */}
-      {rowMenu && <AgentRowMenu s={rowMenu.s} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTargetSession} />}
+      {rowMenu && <AgentRowMenu s={rowMenu.s} readSource={rowMenu.readSource} anchor={rowMenu.anchor} at={rowMenu.at} onClose={() => setRowMenu(null)} onRename={setRenaming} onDelete={setDeleting} onLinkTodo={setLinkTargetSession} />}
       {spaceMenu && (
         <SpaceMenu
           sp={spaceMenu.sp}

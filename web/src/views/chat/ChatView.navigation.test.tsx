@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { openAgentMore } from "../../test/agent-menu";
 import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -84,6 +85,7 @@ async function pickFoldedHit() {
   await render();
   await imports();
   act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+  openAgentMore();
   const search = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.includes(t("chat-chatview.search_menu")))!;
   await act(async () => search.click());
   await imports();

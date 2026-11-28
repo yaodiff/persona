@@ -33,7 +33,7 @@ export interface SeenMark {
   /** The hub's `seen_at` and the agent's `updated_at` when it was marked (ms). */
   seenBefore: number;
   updatedBefore: number;
-  /** The `seen_at` this page wrote into its own copy ("Mark all as seen"): not the hub's record. */
+  /** The `seen_at` this page wrote into its own copy when marking rows seen: not the hub's record. */
   localSeenAt?: string;
   /** On the page's clock. */
   markedAt: number;

@@ -18,6 +18,7 @@ import {
 import { awaitsReply, justFinished, sessionSource, sourceName, type AgentMutes } from "../../lib/agent-groups";
 import { activityOf, backgroundWaiting, sessionPreview, sessionTitle, stateOf, tabLabel } from "../../lib/format";
 import { rowCards } from "../../lib/supervisor-held";
+import { ownRow } from "../../lib/folded-rows";
 import { machineWithHub } from "../../lib/mesh";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { openPaletteWith } from "../../lib/palette";
@@ -34,7 +35,7 @@ import { contextMenuProps } from "../../ui/context-menu";
 import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { UltraMark } from "../chat/Ultracode";
-import { CURRENT_ROW, type GoFn, type RegFn, type RowMenuFn } from "../SidebarParts";
+import { CURRENT_ROW, type GoFn, type RegFn, type RowMenuFn, useRowMenuSource } from "../SidebarParts";
 import { sidebarRowHover } from "../SidebarRowHover";
 
 type FilterPage = "root" | "scope" | "harnesses" | "projects" | "models" | "machines";
@@ -371,6 +372,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
   const modelLabel = sessionModelId(s);
   const source = sessionSource(s);
   const regRow = useMemo(() => reg(k), [reg, k]);
+  const readSource = useRowMenuSource(ownRow(s));
 
   return (
     <div
@@ -389,7 +391,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
           rememberSessionRow(s);
           go(to)(e);
         }}
-        {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at)) : {})}
+        {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at, readSource)) : {})}
         {...sidebarRowHover(() => ({ title, session: row, draft, tab: associatedTab }))}
         onMouseEnter={() => hover(k)}
         onFocus={() => hover(k)}
@@ -528,7 +530,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              onMenu(s, e.currentTarget.parentElement ?? e.currentTarget);
+              onMenu(s, e.currentTarget.parentElement ?? e.currentTarget, undefined, readSource);
             }}
             className="flex size-6 items-center justify-center rounded-[6px] bg-hover text-ink-3 hover:bg-hover-2 hover:text-ink"
           >

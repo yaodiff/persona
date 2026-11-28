@@ -84,10 +84,11 @@ async function checkControls(context) {
     try {
       await chat(page, id, title);
       const menu = await openMenu(page, "chat", id);
-      const archive = menu.getByRole("menuitem", { name: /^Archive\b/ }).first();
+      await item(menu, "More").click();
+      const archive = page.getByRole("menuitem", { name: /^Archive\b/ }).first();
       assert.equal(await archive.isDisabled(), busy, title + " archive");
       assert.equal(await item(menu, "Close…").count(), busy ? 1 : 0, title + " close");
-      assert.equal(await item(menu, "Delete chat…").count(), 0, title + " delete");
+      assert.equal(await item(page, "Delete chat…").count(), 0, title + " delete");
     } finally {
       await page.close();
     }
@@ -127,15 +128,18 @@ async function run(page, entry, tag) {
   const show = () => openMenu(page, entry);
   const shot = state => page.screenshot({ path: join(out, `${tag}-${entry}-${state}.png`), animations: "disabled" });
   let menu = await show();
-  await item(menu, "Archive").waitFor();
   const remove = item(menu, "Delete chat…");
   const close = item(menu, "Close…");
   if (before) {
+    await item(menu, "Archive").waitFor();
     assert.equal(await remove.count(), 0, "original menu unexpectedly offers Delete");
     await close.scrollIntoViewIfNeeded();
     await shot("before");
     return { tag, entry, archive: true, close: await close.isEnabled(), delete: false };
   }
+  await item(menu, "More").click();
+  await item(page, "Archive").waitFor();
+  await page.keyboard.press("ArrowLeft");
   assert.equal(await close.count(), 0, "there is no computer process to close");
   await remove.scrollIntoViewIfNeeded();
   await shot("menu");

@@ -1,4 +1,5 @@
 {
+  "interrupt_unavailable": "当前无法中断这个 Agent。",
   "save_failed": "保存失败：{error}",
   "pinned": "已置顶",
   "unpinned": "已取消置顶",

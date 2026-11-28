@@ -106,12 +106,15 @@ async function sessionMenu(browser, theme) {
     } else {
       check(m.top >= anchor.y + anchor.height, `menu: opens below its button, not over it, at 1280 × 560 (${theme})`, { menuTop: m.top, anchorBottom: anchor.y + anchor.height });
       check(m.bottom <= height - 8 + 1, `menu: kept inside the window at 1280 × 560 (${theme})`, m);
-      check(m.scroll > m.client && m.down && !m.up, `menu: a fade at the bottom says there is more (${theme})`, m);
+      await page.getByRole("menuitem", { name: "更多", exact: true }).click();
+      await page.setViewportSize({ width: 1280, height: 320 });
+      await settle(page);
+      const child = page.getByRole("menu").last();
+      check(await child.locator('[data-menu-more="down"]').count() === 1, `submenu: a fade at the bottom says there is more (${theme})`);
       // End from the keyboard: the last row is scrolled into view, not highlighted out of sight
       await page.keyboard.press("End");
       await settle(page);
-      const last = await page.evaluate(() => {
-        const el = document.querySelector("[role=menu]");
+      const last = await child.evaluate((el) => {
         const rows = el.querySelectorAll("[role=menuitem]");
         const box = el.getBoundingClientRect();
         const r = rows[rows.length - 1].getBoundingClientRect();
@@ -119,8 +122,7 @@ async function sessionMenu(browser, theme) {
       });
       await shot(page, `11-session-menu-1280x${height}-end-${theme}`);
       check(last.scrollTop > 0 && last.rowBottom <= last.menuBottom, `menu: End scrolls the last row into view (${theme})`, last);
-      const end = await page.evaluate(() => {
-        const el = document.querySelector("[role=menu]");
+      const end = await child.evaluate((el) => {
         return { down: Boolean(el.querySelector('[data-menu-more="down"]')), up: Boolean(el.querySelector('[data-menu-more="up"]')) };
       });
       await shot(page, `11-session-menu-1280x${height}-scrolled-${theme}`);

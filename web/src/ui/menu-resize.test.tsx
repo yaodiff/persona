@@ -15,7 +15,7 @@ const media = vi.hoisted(() => {
   })) as typeof window.matchMedia;
   return state;
 });
-import { Menu } from "./atoms";
+import { Menu, type MenuItem } from "./atoms";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -137,4 +137,54 @@ describe("Menu placement with wrapping rows", () => {
     act(() => root.render(<Menu anchor={anchor} side="top" width={WIDTH} onClose={() => {}} items={[{ key: "a", label: "Alpha", detail: "A sentence that wraps", onSelect: () => {} }]} />));
     expect(panel().style.top).toBe(`${600 - 240 - 6}px`);
   });
+});
+
+it("updates an open submenu when its parent moves and its available actions change", () => {
+  const open = vi.fn();
+  const paint = (ready: boolean) => act(() => root.render(<Menu anchor={anchor} onClose={() => {}} items={[
+    ...(ready ? [{ key: "seen", label: "Mark as seen", onSelect: () => {} }] : []),
+    { key: "more", label: "More", onSelect: () => {}, children: [
+      { key: "review", label: "Review", disabled: !ready, onSelect: open },
+    ] },
+  ]} />));
+  paint(false);
+  act(() => document.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!.click());
+  const review = () => document.querySelector<HTMLButtonElement>('[data-menu]:last-of-type [role="menuitem"]')!;
+  expect(review().disabled).toBe(true);
+  paint(true);
+  expect(review().disabled).toBe(false);
+  act(() => review().click());
+  expect(open).toHaveBeenCalledOnce();
+});
+
+it("keeps keyboard selection on the same command across a submenu update", () => {
+  const run = vi.fn();
+  const paint = (keys: string[]) => act(() => root.render(<Menu anchor={anchor} onClose={() => {}} items={[
+    { key: "more", label: "More", onSelect: () => {}, children: keys.map((key) => ({ key, label: key, onSelect: () => run(key) })) },
+  ]} />));
+  const press = (key: string) => act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key })));
+  paint(["mute", "delete"]);
+  press("Home");
+  press("ArrowRight");
+  paint(["delete"]);
+  press("Enter");
+  expect(run).not.toHaveBeenCalled();
+});
+
+it("ignores a lazy submenu's result after the keyboard has left it", async () => {
+  let loaded!: (items: MenuItem[]) => void;
+  const done = vi.fn();
+  const list = new Promise<MenuItem[]>((resolve) => { loaded = resolve; });
+  act(() => root.render(<Menu anchor={anchor} onClose={() => {}} items={[
+    { key: "launch", label: "Launch", onSelect: () => {}, children: () => list },
+    { key: "done", label: "Done", onSelect: done },
+  ]} />));
+  const press = (key: string) => act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key })); });
+  press("Home");
+  press("ArrowRight");
+  press("ArrowLeft");
+  press("ArrowDown");
+  await act(async () => loaded([]));
+  press("Enter");
+  expect(done).toHaveBeenCalledOnce();
 });

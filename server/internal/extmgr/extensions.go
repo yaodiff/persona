@@ -629,7 +629,9 @@ func (ps *extensions) changed(c extension.Change) {
 		changedGW := next != ps.voiceGatewaySent
 		ps.mu.Unlock()
 		if changedGW {
-			if vp := ps.reg.Get(ps.voiceID); vp != nil && vp.Record.Enabled {
+			// Only the built-in is given the gateway's upstream (voiceSpec): a package that took its id is not
+			// restarted, which would drop its calls.
+			if vp := ps.reg.Get(ps.voiceID); vp != nil && vp.Record.Enabled && ps.isVoice(vp) {
 				ps.apply(ctx, ps.voiceID)
 			}
 		}

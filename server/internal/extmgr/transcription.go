@@ -42,8 +42,9 @@ const (
 var ErrNoTranscriber = errors.New("no transcription contribution is running")
 
 // TranscriptionInfo is ref's GET /transcription/{cid}/info. ref is the assistant's meeting_transcription_extension:
-// "" the built-in voice extension's contribution, else "<extension id>/<contribution id>". An extension started by
-// requests is started for it, as for any relayed request; reading it never opens a job.
+// "" the built-in voice extension's contribution (or its official package's, once it took the built-in's place),
+// else "<extension id>/<contribution id>". An extension started by requests is started for it, as for any relayed
+// request; reading it never opens a job.
 func (h *Manager) TranscriptionInfo(ctx context.Context, ref string) (extwire.TranscriptionInfo, error) {
 	var info extwire.TranscriptionInfo
 	hp, cid, end, err := h.beginTranscriber(ctx, ref)
@@ -94,7 +95,8 @@ func (h *Manager) TranscriptionDial(ctx context.Context, ref string) (conn *webs
 }
 
 // IsTranscriptionContribution says whether ref names an installed extension's transcription contribution (whether
-// or not it is enabled, or switched off). "" is the built-in voice extension's, there while that extension is.
+// or not it is enabled, or switched off). "" is the built-in voice extension's, there while that extension is, or the
+// official package's that took its place; a package installed fresh never is.
 func (h *Manager) IsTranscriptionContribution(ref string) bool {
 	ps := h.extensions
 	if ps == nil {
@@ -105,7 +107,7 @@ func (h *Manager) IsTranscriptionContribution(ref string) bool {
 		return false
 	}
 	p := ps.reg.Snapshot(id)
-	if p == nil || p.Full == nil || (ref == "" && !ps.isVoice(p)) {
+	if p == nil || p.Full == nil || (ref == "" && !ps.voiceDefaultTranscriber(p)) {
 		return false
 	}
 	return slices.Contains(p.Full.Items(transcriptionPoint), cid)
@@ -147,12 +149,23 @@ func transcriptionInstallOf(r extension.Record) string {
 }
 
 // transcriptionRef is the extension and contribution ref names: "" the built-in voice extension's (its
-// TranscriptionContribution, internal/builtinext; none in a build without the voice module), else
+// TranscriptionContribution, internal/builtinext), or in a build without the voice module the official package's that
+// took its place (voiceOfficialPackage, its installed manifest's transcription contribution; #16264), else
 // "<extension id>/<contribution id>".
 func (ps *extensions) transcriptionRef(ref string) (id, cid string, ok bool) {
 	if ref == "" {
-		voice, has := builtinext.VoiceExtension(ps.modules())
-		return ps.voiceID, voice.TranscriptionContribution, has && ps.voiceID != ""
+		if voice, has := builtinext.VoiceExtension(ps.modules()); has {
+			return ps.voiceID, voice.TranscriptionContribution, ps.voiceID != ""
+		}
+		p := ps.reg.Snapshot(voiceExtensionID)
+		if !ps.voiceOfficialPackage(p) || p.Full == nil {
+			return "", "", false
+		}
+		items := p.Full.Items(transcriptionPoint)
+		if len(items) == 0 {
+			return "", "", false
+		}
+		return voiceExtensionID, items[0], true
 	}
 	id, cid, ok = strings.Cut(ref, "/")
 	return id, cid, ok && extension.ValidID(id) && extension.ValidID(cid)
@@ -173,7 +186,7 @@ func (h *Manager) beginTranscriber(ctx context.Context, ref string) (hp *hubExte
 	}
 	p := ps.reg.Snapshot(id)
 	switch {
-	case p == nil || p.Manifest == nil || (ref == "" && !ps.isVoice(p)):
+	case p == nil || p.Manifest == nil || (ref == "" && !ps.voiceDefaultTranscriber(p)):
 		return nil, "", nil, ErrNoTranscriber
 	case !p.Record.Enabled || p.Problem != "" || !slices.Contains(p.Manifest.Items(transcriptionPoint), cid):
 		return nil, "", nil, fmt.Errorf("transcription %s/%s is switched off: %w", p.Record.ID, cid, ErrNoTranscriber)

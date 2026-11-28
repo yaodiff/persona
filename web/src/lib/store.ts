@@ -26,7 +26,7 @@ import { clientInstance, helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { justFinished } from "./agent-groups";
-import { activityOf } from "./format";
+import { activityOf, sessionCan, sessionMenuActions } from "./format";
 import { timeMs, timeNs } from "./times";
 import { agentKey, NO_PINS, pinsOf, type AgentPins } from "./pins";
 import { holdNotedSeen, recordMarkedSeen, releaseOpenSeen, releaseSeen, resetSeenVisit } from "./seen-rows";
@@ -1385,6 +1385,66 @@ export function savePins(pins: AgentPins): Promise<void> {
   return save("pins", "/pins", pins, pinsSaves);
 }
 
+/** Older hubs have no exact lookup. A filtered or grouped list may be the only view with a newer
+ *  row for an open chat. Read its mounted source on demand, without retaining the list's data. */
+type AgentRowSource = () => Session | undefined;
+const mountedAgentRows = new Map<string, Set<AgentRowSource>>();
+
+export function mountAgentRowSource(id: string, read: AgentRowSource): () => void {
+  const sources = mountedAgentRows.get(id) ?? new Set<AgentRowSource>();
+  sources.add(read);
+  mountedAgentRows.set(id, sources);
+  return () => {
+    sources.delete(read);
+    if (!sources.size && mountedAgentRows.get(id) === sources) mountedAgentRows.delete(id);
+  };
+}
+
+/** The menu may have opened on a filtered row outside the retained detail cache. Prefer the
+ *  latest hub state if a list refresh or a push arrived while the menu was open. */
+const seenRowTime = (s: Session) => Math.max(timeMs(s.updated_at), timeMs(s.state_since), timeMs(s.seen_at));
+function currentAgentMenuRows(shown: Session): Session[] {
+  const { machine_id: mid, session_id: sid } = shown;
+  const matches = (row: Session) => row.machine_id === mid && row.session_id === sid;
+  const current = getSession(mid, sid);
+  if (current?.deleted) return [current];
+  // getSession prefers a retained detail even when one of the lists has received a newer row.
+  const listed = runtimeAgents.getSnapshot().rows.find(matches);
+  const summary = state.sessionSummaries.find(matches);
+  const mounted = Array.from(mountedAgentRows.get(runtimeIdentity(shown)) ?? [], (read) => read());
+  return [current, listed, summary, shown, ...mounted].filter((row): row is Session => row !== undefined);
+}
+
+function activityTimeNs(s: Session): bigint {
+  const updated = timeNs(s.updated_at) ?? 0n;
+  const since = timeNs(s.state_since) ?? 0n;
+  return updated > since ? updated : since;
+}
+
+export function canInterruptAgentRow(shown: Session, allowAwaiting = false): boolean {
+  const candidates = currentAgentMenuRows(shown).map((s) => {
+    // A read receipt does not grant control. Compare the activity clocks at full wire precision.
+    return { s, at: activityTimeNs(s) };
+  });
+  const newest = candidates.reduce((latest, row) => row.at > latest ? row.at : latest, 0n);
+  // A conflicting row at the same instant can veto an interrupt.
+  return candidates.every(({ s, at }) => at < newest || (allowAwaiting ? sessionCan(s, "interrupt") : sessionMenuActions(s).includes("stop")));
+}
+
+export function markRowSeen(shown: Session) {
+  const newest = currentAgentMenuRows(shown).map((s) => {
+    const activity = activityTimeNs(s);
+    const receipt = timeNs(s.seen_at) ?? 0n;
+    return { s, at: activity > receipt ? activity : receipt };
+  }).reduce((latest, row) => row.at > latest.at || (row.at === latest.at && !unseen(row.s)) ? row : latest);
+  const s = newest.s;
+  if (s.deleted || !unseen(s)) return;
+  const cached = state.sessions[s.machine_id]?.find((row) => row.session_id === s.session_id);
+  // A newer list summary updates only an existing detail's list fields. Keep paged-only summaries off the detail cache.
+  const updated = cached && (cached === s ? cached : { ...listedOver(cached, s), waiting: cached.waiting });
+  markSingleSeen(s, updated);
+}
+
 /** "Mark all as seen": every finished one of these nobody has seen (Unread, Just finished) is seen now, in one update of the list (iOS AppModel.markSeen). The
  * hub pushes the sessions back as seen; the list does not wait for it, and each waits in the seen outbox until it does. */
 export function markSeen(list: Session[]) {
@@ -1392,7 +1452,6 @@ export function markSeen(list: Session[]) {
   releaseSeen(list.map(agentKey));
   const keys = new Set<string>();
   const retained = new Map(Object.values(state.sessions).flat().map((s) => [runtimeIdentity(s), s]));
-  const changedAt = (s: Session) => Math.max(timeMs(s.updated_at), timeMs(s.state_since), timeMs(s.seen_at));
   const now = new Date().toISOString();
   const changed: Session[] = [];
   const marks: Record<string, SeenMark> = {};
@@ -1403,7 +1462,7 @@ export function markSeen(list: Session[]) {
     // The full-list fallback can supply rows absent from the bounded store. Retain only acted-on rows,
     // and honor a more recent local state (for example, an agent that has started working again).
     const current = retained.get(id);
-    const s = current && changedAt(current) >= changedAt(given) ? current : given;
+    const s = current && seenRowTime(current) >= seenRowTime(given) ? current : given;
     const mark = newMark(s, Date.now(), now);
     if (!mark) continue;
     marks[id] = deliverSeen(s.machine_id, s.session_id, mark);
@@ -2204,16 +2263,23 @@ onDefaultManager((was) => {
  *  in the outbox. */
 export function markSeenLocally(mid: string, sid: string) {
   const s = getSession(mid, sid);
-  const mark = s ? newMark(s, Date.now()) : undefined;
-  if (!mark) {
-    send({ type: "seen", machine_id: mid, session_id: sid });
-    return;
+  if (!s || !markSingleSeen(s)) send({ type: "seen", machine_id: mid, session_id: sid });
+}
+
+function markSingleSeen(s: Session, updatedDetail?: Session): boolean {
+  const now = Date.now();
+  const localSeenAt = updatedDetail ? new Date(now).toISOString() : undefined;
+  const mark = newMark(s, now, localSeenAt);
+  if (!mark) return false;
+  const id = runtimeIdentity(s);
+  if (activityOf(s) === "unread" || justFinished(s, state.mutes)) {
+    recordMarkedSeen(s, activityOf(s) === "idle" ? "just_finished" : "unread", viewed.has(id));
   }
-  if (s && (activityOf(s) === "unread" || justFinished(s, state.mutes))) {
-    recordMarkedSeen(s, activityOf(s) === "idle" ? "just_finished" : "unread", viewed.has(runtimeIdentity(s)));
-  }
-  set({ seen: { ...state.seen, [runtimeIdentity(s!)]: deliverSeen(mid, sid, mark) } });
+  const seen = { ...state.seen, [id]: deliverSeen(s.machine_id, s.session_id, mark) };
+  if (updatedDetail) applyCompleteSessions([{ ...seenCopy(updatedDetail), seen_at: localSeenAt }], [], { seen });
+  else set({ seen });
   scheduleSeenCheck();
+  return true;
 }
 
 // ── chats on screen ─────────────────────────────────────
@@ -2343,6 +2409,7 @@ export function reset() {
   askedForUnlisted.clear(); // the conversations asked about were the old login's
   resetAgents();
   rowHints.clear();
+  mountedAgentRows.clear();
   taskRowsAsked.clear();
   listedFull.clear();
   runtimeSessions.reset();

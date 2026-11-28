@@ -1075,6 +1075,7 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
   - If `key` is set and `PUT -/config` changes `url` origin (scheme + host + port), the manager deletes `key` in the same request and notes it in the response; App and admin UI say "Address changed; Key cleared, please enter it again". `tts_key` follows `tts_url`'s origin independently under the same rule (#17843).
   - Empty `url` makes `PUT -/secrets/key` return 400 (`needs_url`); empty `tts_url` makes `PUT -/secrets/tts_key` return 400 (`needs_url`).
   - Prevents changing an address to an attacker's host and receiving its Bearer key.
+  - The same holds for both keys of the official `voice` package from the official market (#16264, `isVoiceProvider`), on a build without the module too (the manager reads `url` and `tts_url` itself); a local upload or a private market's package of the id is not held to it.
   - Generic manifest `bound_to` field comes later.
 - `ssh`, `key_file`, `key_command`, an explicit `tools`, and `fake` dialect **manager.json only**: `key_command` executes on the manager's machine (usually hub machine).
 - **The form's upstream declares the function tools automatically** (#1420): without a `tools` switch it is auto (`Provider.Tools` unset), like any live-dialect upstream whose manager.json entry leaves `tools` out.
@@ -1137,6 +1138,7 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 - **Existing hub.json voice entry**: transparent, same id/upstreams/model ids.
 - **No entry**: **Settings › Extensions** adds disabled "Realtime Voice"; enable and enter address/Key.
 - **Rollback to old personad**: old version ignores built-in voice DB row; hub.json entry still works. `plugin_secrets` Key remains for later upgrade.
+- **To the official package** (#16264): the catalog offers the official `voice` package as the form built-in's upgrade (preview, then confirm), in the same row: settings, switch, Key and the default meeting transcription (`""`, which follows the verified successor) stay, and a rollback returns to the built-in. Not offered, so the hub keeps the built-in: hub.json's takeover, a quota gateway's upstream, or a call archive computer set (`archive_machine`; the package's first version writes no archive). A build without the module adopts the built-in's row the same way when the package is installed; a package installed fresh never takes `""`.
 
 ### 5.9 Clients
 

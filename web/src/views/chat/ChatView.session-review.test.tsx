@@ -2,6 +2,7 @@
 // #1808 AC1 / web AC6: an explicit, hub-capability-gated session review. Reading the review's availability never
 // starts one; only the menu choice POSTs the start. The same route reports { running, has_changes } so the menu can
 // explain why it is disabled without asking the source Agent or inspecting its reasoning.
+import { openAgentMore } from "../../test/agent-menu";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -102,6 +103,7 @@ async function openMenu() {
   act(() => more!.click());
   await loadPages();
   await settle();
+  openAgentMore();
 }
 
 function reviewItem(): HTMLButtonElement | undefined {
@@ -127,6 +129,19 @@ describe("the explicit session-review menu entry", () => {
     expect(item).toBeDefined();
     expect(item!.disabled).toBe(false);
     expect(startCalls()).toHaveLength(0);
+  });
+
+  it("updates the open submenu when the review check finishes", async () => {
+    let finishCheck!: (response: Response) => void;
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => String(input) === reviewRoute
+      ? new Promise<Response>((resolve) => { finishCheck = resolve; })
+      : originalFetch(input, init));
+    await open();
+    await openMenu();
+    expect(reviewItem()?.disabled).toBe(true);
+    await act(async () => finishCheck(json(available)));
+    expect(reviewItem()?.disabled).toBe(false);
   });
 
   it.each([

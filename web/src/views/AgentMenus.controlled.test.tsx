@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 // Controlled panels supply explicit agent menu state, node actions and mark-seen handlers; default fallbacks stay pinned too.
 import { act } from "react";
+import { openAgentMore } from "../test/agent-menu";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { AGENT_ARCHIVE_CLOSE_FEATURE, AGENT_ARCHIVES_FEATURE } from "../lib/agent-archives";
+import { foldedRow } from "../lib/folded-rows";
 import type { NodeActionDeps } from "../lib/node-actions";
 import type { Machine, Session } from "../lib/types";
 import type { MenuItem } from "../ui/menu-model";
@@ -11,8 +13,11 @@ import type { AgentRowMenuProps, MarkSeenDialogProps } from "./AgentMenus";
 
 const mocks = vi.hoisted(() => ({
   useStore: vi.fn(),
+  canInterruptAgentRow: vi.fn(() => true),
   getState: vi.fn(),
   markSeen: vi.fn(),
+  markRowSeen: vi.fn(),
+  interruptAgent: vi.fn(),
   refresh: vi.fn(),
   refreshTodos: vi.fn(),
   flipPin: vi.fn(),
@@ -31,12 +36,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../lib/store", () => ({
   useStore: mocks.useStore,
+  canInterruptAgentRow: mocks.canInterruptAgentRow,
   getState: mocks.getState,
   markSeen: mocks.markSeen,
+  markRowSeen: mocks.markRowSeen,
   refresh: mocks.refresh,
   refreshTodos: mocks.refreshTodos,
 }));
-vi.mock("../lib/agent-actions", () => ({
+vi.mock("../lib/agent-actions", async (original) => ({
+  ...await original<typeof import("../lib/agent-actions")>(),
+  interruptAgent: mocks.interruptAgent,
   flipPin: mocks.flipPin,
   flipMute: mocks.flipMute,
   handToPersona: mocks.handToPersona,
@@ -149,6 +158,9 @@ const expectNoDefaultSingletons = () => {
 const menuButton = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("[role=menuitem]")].find((b) => b.textContent?.includes(label));
 
+const menuLabels = (level: number) =>
+  [...document.querySelectorAll("[role=menu]")[level].querySelectorAll("[role=menuitem]")].map((b) => b.querySelector("span")!.textContent);
+
 const dialogButton = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent?.trim() === label);
 
@@ -186,6 +198,81 @@ afterEach(() => {
 });
 
 describe("AgentMenus controlled mode", () => {
+  it.each(["en", "zh-Hans", "ja"])("keeps the default row's primary order and every original action exactly once (%s)", async (lang) => {
+    await initI18n(lang);
+    const s = baseSession({ state: "unread" });
+    // Older hubs can offer both Close and Delete. Use the actual session node, including its Git submenu.
+    await act(async () => root.render(
+      <AgentRowMenu s={s} anchor={anchor} features={[]} onClose={vi.fn()} onRename={vi.fn()} onDelete={vi.fn()} onLinkTodo={vi.fn()} />,
+    ));
+    await flush();
+    expect(menuLabels(0)).toEqual([
+      t("agentmenus.mark_seen"), t("agentmenus.rename"), t("agentmenus.pin"), t("sidebar.more"), t("agentmenus.close"),
+    ]);
+    openAgentMore();
+    expect(menuLabels(1)).toEqual([
+      t("agentmenus.mute"), t("agentmenus.move_to_other_todo"), t("agentmenus.unlink"), t("agentmenus.hand_to_persona"),
+      t("lib-node-actions.copy_session_id"), t("agentmenus.copy_folder"), t("agentmenus.copy_resume"), "Git", t("agentmenus.delete_chat"),
+    ]);
+    await act(async () => { menuButton(t("agentmenus.mark_seen"))!.click(); });
+    expect(mocks.markRowSeen).toHaveBeenCalledWith(s);
+  });
+
+  it("shows only available row actions when the Agent is offline, cannot rename and has no folder", async () => {
+    const s = baseSession({ status: "offline", state: "offline", cwd: "", capabilities: { read: true, rename: false } });
+    await act(async () => root.render(
+      <AgentRowMenu s={s} anchor={anchor} pinned muted features={[]} online={false} nodeDeps={makeNodeDeps()}
+        onClose={vi.fn()} onRename={vi.fn()} onDelete={vi.fn()} onCloseAgent={vi.fn()} />,
+    ));
+    await flush();
+    expect(menuLabels(0)).toEqual([t("agentmenus.unpin"), t("sidebar.more"), t("agentmenus.delete_chat")]);
+    openAgentMore();
+    expect(menuLabels(1).sort()).toEqual([t("agentmenus.unmute"), t("agentmenus.hand_to_persona"), t("lib-node-actions.copy_session_id")].sort());
+    expectNoDefaultSingletons();
+  });
+
+  it("does not interrupt an idle parent when only its folded child is working", () => {
+    const parent = baseSession({ capabilities: { interrupt: true }, children: { total: 1, working: 1 } });
+    const folded = foldedRow(parent);
+    expect(folded.state).toBe("working");
+    const items = agentRowMenuItems(folded, { muted: false, pinned: false, features: [], onRename: vi.fn(), onDelete: vi.fn() });
+    expect(items.map((item) => item.key)).not.toContain("stop");
+  });
+
+  it("rechecks the Agent before dispatching a row interrupt", async () => {
+    const busy = baseSession({ state: "working", status: "working", capabilities: { interrupt: true } });
+    const items = agentRowMenuItems(busy, { muted: false, pinned: false, features: [], onRename: vi.fn(), onDelete: vi.fn() });
+    const stop = items.find((item) => item.key === "stop")!;
+    mocks.canInterruptAgentRow.mockReturnValueOnce(false);
+    await stop.onSelect();
+    expect(mocks.interruptAgent).not.toHaveBeenCalled();
+    mocks.interruptAgent.mockResolvedValueOnce(undefined);
+    await stop.onSelect();
+    expect(mocks.interruptAgent).toHaveBeenCalledExactlyOnceWith(busy.machine_id, busy.session_id);
+  });
+
+  it("runs the controlled row's primary Interrupt and Mark as Seen callbacks for the selected Agent", async () => {
+    const busy = baseSession({ state: "working", status: "working", capabilities: { interrupt: true, close: true, rename: true } });
+    const onInterrupt = vi.fn();
+    const onMarkSeen = vi.fn();
+    const show = async (s: Session) => {
+      await act(async () => root.render(<AgentRowMenu s={s} anchor={anchor} pinned={false} muted features={[]} online nodeItems={[]}
+        onClose={vi.fn()} onRename={vi.fn()} onDelete={vi.fn()} onCloseAgent={vi.fn()} onInterrupt={onInterrupt} onMarkSeen={onMarkSeen} />));
+      await flush();
+    };
+    await show(busy);
+    expect(menuLabels(0)).toEqual([t("chat-chatview.interrupt"), t("agentmenus.rename"), t("agentmenus.pin"), t("sidebar.more"), t("agentmenus.close")]);
+    await act(async () => { menuButton(t("chat-chatview.interrupt"))!.click(); });
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(busy);
+    const unread = baseSession({ state: "unread" });
+    await show(unread);
+    await act(async () => { menuButton(t("agentmenus.mark_seen"))!.click(); });
+    expect(onMarkSeen).toHaveBeenCalledExactlyOnceWith(unread);
+    expect(mocks.markRowSeen).not.toHaveBeenCalled();
+    expect(mocks.interruptAgent).not.toHaveBeenCalled();
+    expectNoDefaultSingletons();
+  });
+
   it("routes all agentRowMenuItems, archiveCloseItems and closeItems callbacks without touching default singletons", async () => {
     const s = baseSession();
     const onRename = vi.fn();
@@ -312,6 +399,7 @@ describe("AgentMenus controlled mode", () => {
 
     await mountRowMenu();
     expect(menuButton(t("agentmenus.pin"))).toBeTruthy();
+    openAgentMore();
     expect(menuButton(t("lib-node-actions.copy_session_id"))).toBeTruthy();
 
     await act(async () => { menuButton(t("agentmenus.hand_to_persona"))!.click(); });
@@ -356,6 +444,7 @@ describe("AgentMenus controlled mode", () => {
     };
 
     await renderMenu(sessionA);
+    openAgentMore();
     // First click arms inline confirmation for session A without executing.
     await act(async () => { menuButton("Purge scratch")!.click(); });
     expect(destructive).not.toHaveBeenCalled();
@@ -364,6 +453,7 @@ describe("AgentMenus controlled mode", () => {
     // Switching to session B while mounted clears confirmation so a single click cannot confirm session B.
     await renderMenu(sessionB);
     expect(menuButton("Confirm purge?")).toBeUndefined();
+    openAgentMore();
     expect(menuButton("Purge scratch")).toBeTruthy();
     await act(async () => { menuButton("Purge scratch")!.click(); });
     expect(destructive).not.toHaveBeenCalled();

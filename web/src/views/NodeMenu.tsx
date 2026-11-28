@@ -2,6 +2,7 @@
 // at the pointer for a right click and beside the row for its ⋯, the menu key and Shift+F10.
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { defaultNodeDeps, nodeActions, type MenuNode, type NodeActionDeps, type NodeActionOptions } from "../lib/node-actions";
+import { groupAgentMenu } from "./agent-menu-layout";
 import { refresh } from "../lib/store";
 import { Menu } from "../ui/atoms";
 import type { MenuAt, MenuItem } from "../ui/menu-model";
@@ -197,7 +198,9 @@ export function NodeMenu({ node, at, onClose, header, before, omit, changed, dep
     own = (deps?.buildActions ?? nodeActions)(guardedNode, fenceNodeDeps(baseDeps!, isCurrent), { omit });
   }
 
-  const merged = before?.length && own.length ? [...before, { ...own[0], divider: true }, ...own.slice(1)] : [...(before ?? []), ...own];
+  const merged = node.sessionOnly && before
+    ? groupAgentMenu(before, own)
+    : before?.length && own.length ? [...before, { ...own[0], divider: true }, ...own.slice(1)] : [...(before ?? []), ...own];
   const items = fenceMenuItems(merged, isCurrent);
   const viewProps: NodeMenuViewProps = { at, onClose: fencedOnClose, header, items, menuKey: scope.epoch };
   if (deps?.renderMenu) return <>{deps.renderMenu(viewProps)}</>;

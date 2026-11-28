@@ -60,7 +60,8 @@ const multiScopeChineseBrief = `本次处理三个范围：
 
 // #13169 core regression: a reworded handoff deliberately avoids every wording-guard regex while leaving two scopes of
 // a multi-scope brief uncovered without a card or follow-up to-do. The structural check must refuse bare accepted,
-// name the uncovered scopes and all three exits, and write nothing.
+// name the uncovered scopes and both exits, never offer user_check (#17096: it no longer covers missing scope), and
+// write nothing.
 func TestAcceptScopeGuardRefusesRewordedHandoffWithoutWordingMatch(t *testing.T) {
 	doneWhen := []string{"Code fix for webhook retry storm shipped and verified"}
 	s, _, todo := multiScopeReviewTask(
@@ -103,12 +104,14 @@ func TestAcceptScopeGuardRefusesRewordedHandoffWithoutWordingMatch(t *testing.T)
 		"Production data cleanup for stale duplicate records",
 		"Alarm rule changes for retry thresholds",
 		"needs_user",
-		"user_check",
 		"follow-up to-do",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal error missing %q:\n%s", want, msg)
 		}
+	}
+	if strings.Contains(msg, "user_check") {
+		t.Errorf("refusal offers user_check, which the guard refuses for uncovered scope:\n%s", msg)
 	}
 	cur := todoNow(s, todo.ID)
 	if cur.DoneAt != nil || cur.Supervision.State != reviewPending || len(cur.Supervision.Reviews) != 0 {
@@ -570,7 +573,7 @@ func TestAcceptScopeGuardPromptAndToolGuidance(t *testing.T) {
 		t.Fatalf("supervision_instructions.md should state uncovered brief scope card-or-follow-up rule")
 	}
 	desc := prompts.Tool("task_review", "en").Description
-	if !strings.Contains(desc, "uncovered scope") || !strings.Contains(desc, "linked follow-up to-do") {
+	if !strings.Contains(desc, "uncovered scope") || !strings.Contains(desc, "needs_user") || !strings.Contains(desc, "linked follow_up_todo_id") {
 		t.Fatalf("task_review.md should state uncovered scope card-or-follow-up rule:\n%s", desc)
 	}
 }

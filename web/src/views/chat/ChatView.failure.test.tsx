@@ -2,6 +2,7 @@
 // A message that did not go stays in the chat as a failed bubble with why, Retry and Delete, the box empty (#1122). A
 // refused send in a Persona conversation also gets a card above the composer (docs/assistant/onboarding.md 4.6); the next
 // send that goes through takes it away, so it does not linger over a later setup step.
+import { openAgentMore } from "../../test/agent-menu";
 import { act, useEffect, useReducer } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -163,6 +164,7 @@ describe("the deferred search dialog", () => {
     expect(document.querySelector("[data-chat-search]")).toBeNull();
     const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!;
     expect(more).toBeTruthy(); act(() => more.click()); await flush();
+    if (!assistant) openAgentMore();
     const search = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === t("chat-chatview.search_menu"))!;
     expect(search).toBeTruthy();
     await act(async () => { search.click(); await import("./ChatSearch"); }); await flush();
@@ -179,6 +181,7 @@ describe("the deferred search dialog", () => {
       await act(async () => root.render(<ChatView mid="hub" sid="c1" />)); await flush();
       const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!;
       await act(async () => more.click()); await flush();
+      openAgentMore();
       const search = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent === t("chat-chatview.search_menu"))!;
       await act(async () => { search.click(); await import("./ChatSearch"); }); await flush();
       const input = document.querySelector<HTMLInputElement>("[data-chat-search] input")!;

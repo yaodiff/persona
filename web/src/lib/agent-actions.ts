@@ -3,12 +3,55 @@
 import { t } from "../i18n";
 import { toast } from "../ui/atoms";
 import { agentHandoffText } from "./agent-handoff";
-import { errorText } from "./api";
+import { credentialOwner, errorText, pastHub, sessionPath } from "./api";
+import { activityOf, sessionCan } from "./format";
+import { managerHeaderFor } from "./manager-choice";
+import { stopMessageFeedback } from "./message-send";
+import { apiOp } from "./ops";
+import { unseen } from "./seen-outbox";
 import { askPersona } from "./outbox";
 import { isPinned, isSpacePinned, spaceKey, togglePin, toggleSpacePin, toggled, type AgentPins } from "./pins";
 import { isMuted, toggleMute } from "./session-actions";
-import { getState, saveMutes, savePins } from "./store";
+import { SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
+import { canInterruptAgentRow, getState, saveMutes, savePins } from "./store";
 import type { Session } from "./types";
+
+/** A finished reply can be marked as seen. Muting suppresses Just finished for legacy rows;
+ *  with a manager view the phase and reason already account for the user's preferences. */
+export function canMarkAgentSeen(s: Session, muted: boolean): boolean {
+  return unseen(s) && (Boolean(s.view) || !muted || activityOf(s) === "unread");
+}
+
+const pendingInterrupts = new Map<string, Promise<void>>();
+
+/** The row and chat can interrupt the same turn while its first request is still in flight. */
+export function interruptAgent(mid: string, sid: string): Promise<void> {
+  const path = `${sessionPath(mid, sid)}/interrupt`;
+  const requestKey = () => JSON.stringify([credentialOwner(), managerHeaderFor(path), path]);
+  const key = requestKey();
+  const pending = pendingInterrupts.get(key);
+  if (pending) return pending;
+  const current = () => requestKey() === key;
+  const manager = managerHeaderFor(path);
+  async function send() {
+    if (getState().features.includes(SESSIONS_LOOKUP_FEATURE)) {
+      // A filtered list can refresh before the chat's retained detail. Ask about this Agent only.
+      const { exactSession } = await import("./runtime-session");
+      if (!current()) throw new DOMException("Retired interrupt", "AbortError");
+      const row = await exactSession(mid, sid, undefined, manager);
+      if (!row || !sessionCan(row, "interrupt") || !canInterruptAgentRow(row, true)) {
+        throw new Error(t("lib-agent-actions.interrupt_unavailable"));
+      }
+    }
+    const result = await apiOp<{ state?: string }>(path, { method: "POST", timeout: pastHub(90_000), isAuthContextCurrent: current });
+    if (!current()) throw new DOMException("Retired interrupt", "AbortError");
+    if (result.state === "unknown") throw new Error(t("lib-new-agent.outcome_unknown"));
+    stopMessageFeedback(mid, sid);
+  }
+  const request = send().finally(() => pendingInterrupts.delete(key));
+  pendingInterrupts.set(key, request);
+  return request;
+}
 
 async function putPins(next: AgentPins, done: string) {
   try {

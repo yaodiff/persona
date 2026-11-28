@@ -184,5 +184,9 @@ type ModuleID string
 // ExtensionModules is the host-owned list of the modules installed extensions may supply (#16254). Only the host adds
 // to it: a package never names the module it claims, and one whose id is not here announces no module flag.
 func ExtensionModules() []ExtensionModule {
-	return []ExtensionModule{{ID: "volc", Contributions: []string{"transcription/volc", "speech/volc"}}}
+	return []ExtensionModule{
+		{ID: "volc", Contributions: []string{"transcription/volc", "speech/volc"}},
+		// Only the call contribution: switching meeting transcription off (transcription/gpt-live) keeps voice calls.
+		{ID: "voice", Contributions: []string{"voice/voice"}},
+	}
 }

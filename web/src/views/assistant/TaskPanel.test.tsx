@@ -98,6 +98,7 @@ async function clickMenu(label: string) {
 }
 async function expectSessionWindow(s = first) {
   await clickMore();
+  expect(document.querySelector('[role="menuitem"]')?.textContent).toBe(t("assistant-taskpanel.open_in_new_window"));
   await clickMenu(t("assistant-taskpanel.open_in_new_window"));
   expect(newWindow).toHaveBeenLastCalledWith(href({ name: "session", mid: s.machine_id, sid: s.session_id }), "_blank", "noopener");
   expect(newWindow.mock.calls.at(-1)?.[0]).not.toContain("/todos");
@@ -158,6 +159,18 @@ describe("Agent panel new-window destination", () => {
     await expectSessionWindow();
   });
 
+  it("keeps a single-Agent panel's window command first, with only one destructive action on top", async () => {
+    const session: Session = { ...first, status: "idle", state: "idle" };
+    await open({ kind: "agent", mid: session.machine_id, sid: session.session_id }, task(), [session]);
+    await clickMore();
+    const labels = () => [...document.querySelectorAll('[role="menuitem"]')].map((row) => row.querySelector("span")?.textContent);
+    const top = [t("assistant-taskpanel.open_in_new_window"), t("chat-chatview.rename"), t("chat-chatview.pin"), t("sidebar.more"), t("agentmenus.close")];
+    expect(labels()).toEqual(top);
+    await clickMenu(t("sidebar.more"));
+    expect(labels().slice(top.length)).toContain(t("chat-chatview.delete_chat"));
+    expect(new Set(labels()).size).toBe(labels().length);
+  });
+
   it("follows the Agent selected in a multi-Agent task, including its machine", async () => {
     await open({ kind: "task", todo: "example-task" }, task([first, second]), [first, second]);
     await expectSessionWindow();
@@ -167,8 +180,10 @@ describe("Agent panel new-window destination", () => {
     await expectSessionWindow(second);
   });
 
-  it("uses linked Agent identity before the session list arrives", async () => {
+  it("keeps Open in new window first before and after the linked Agent loads", async () => {
     await open({ kind: "task", todo: "example-task" }, task(), []);
+    await expectSessionWindow();
+    act(() => applyCompleteSessions([first]));
     await expectSessionWindow();
   });
 

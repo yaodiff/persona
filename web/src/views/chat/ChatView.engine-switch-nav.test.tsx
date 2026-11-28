@@ -3,6 +3,7 @@
 // B's by EarlierStretches, so the chat's own rail, jumps and search cover only the live stretch (docs/web/web.md). Its
 // inputs before the live stretch are no ticks (they could never be reached), and the search neither finds them nor
 // offers to load past the live stretch's start.
+import { openAgentMore } from "../../test/agent-menu";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,6 +47,7 @@ const until = async (ok: () => boolean) => {
 const openSearch = async () => {
   const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!;
   act(() => more.click());
+  openAgentMore();
   await until(() => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].some((item) => item.textContent === t("chat-chatview.search_menu")));
   const search = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent === t("chat-chatview.search_menu"))!;
   await act(async () => { search.click(); await import("./ChatSearch"); });

@@ -96,6 +96,40 @@ func TestModuleProviderPredicate(t *testing.T) {
 		t.Fatal("the host's list names volc2")
 	}
 
+	// The voice module (#16264) under the same rule: its own official package only, the built-in never; its flag needs
+	// the call contribution alone, so switching meeting transcription off keeps it.
+	vm, ok := voiceModule()
+	if !ok || !slices.Equal(vm.Contributions, []string{"voice/voice"}) {
+		t.Fatalf("voice in the host's list: %+v %v", vm, ok)
+	}
+	officialVoice := with(func(r *extension.Record) { r.ID, r.Origin = "voice", extension.MarketOrigin("off1", "voice") })
+	for _, tc := range []struct {
+		name     string
+		m        modapi.ExtensionModule
+		rec      extension.Record
+		approved bool
+	}{
+		{"official voice", vm, officialVoice, true},
+		{"voice from a private market", vm, with(func(r *extension.Record) {
+			r.ID, r.Origin, r.MarketKey = "voice", extension.MarketOrigin("priv", "voice"), private
+		}), false},
+		{"voice uploaded", vm, with(func(r *extension.Record) { r.ID, r.Origin, r.MarketKey = "voice", "", "" }), false},
+		{"built-in voice", vm, with(func(r *extension.Record) {
+			r.ID, r.Source, r.Origin, r.MarketKey = "voice", extension.SourceBuiltin, "builtin:voice", ""
+		}), false},
+		{"volc's package for voice", vm, good, false},
+		{"voice's package for volc", m, officialVoice, false},
+	} {
+		if got := approvedModuleProvider(tc.m, tc.rec, specOf); got != tc.approved {
+			t.Errorf("%s: approved = %v, want %v", tc.name, got, tc.approved)
+		}
+	}
+	if !moduleProviderOn(vm, with(func(r *extension.Record) { r.ID, r.DisabledContributions = "voice", []string{"transcription/gpt-live"} }), moduleswitch.Set{}) ||
+		moduleProviderOn(vm, with(func(r *extension.Record) { r.ID, r.DisabledContributions = "voice", []string{"voice/voice"} }), moduleswitch.Set{}) ||
+		moduleProviderOn(vm, officialVoice, moduleswitch.Off("voice")) {
+		t.Error("the voice flag does not follow its call contribution and the modules setting")
+	}
+
 	// 5 and 6: the flag of an approved provider follows the owner's choices, not its program.
 	for _, tc := range []struct {
 		name string

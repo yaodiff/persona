@@ -3,6 +3,7 @@
 // panel (a task's or an Agent's), which shows no terminal in place, the same button opens the agent's page in its
 // terminal view. While the conversation is shown, the button carries the attention dot when the terminal waits on a
 // dialog: herdr calls the agent blocked, or a send here was refused with dialog_open.
+import { openAgentMore } from "../../test/agent-menu";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -61,6 +62,7 @@ const dot = () => terminalButton()?.parentElement?.querySelector("[data-terminal
 async function menuItems(): Promise<string[]> {
   act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
   await settle();
+  openAgentMore();
   const items = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')].map((x) => x.textContent ?? "");
   act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
   return items;
@@ -85,7 +87,7 @@ it("in the side panel: the terminal button opens the agent's page in its termina
   const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});
   const onClose = vi.fn();
   try {
-    await open(<ChatView mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
+    await open(<ChatView mid="mac" sid="s1" panel={{ kind: "agent", onClose, items: [] }} />);
     expect(terminalButton()).not.toBeNull();
     expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(false);
     act(() => terminalButton()!.click());
@@ -103,9 +105,10 @@ it("the side panel's localized terminal menu item opens the terminal page and cl
   const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});
   const onClose = vi.fn();
   try {
-    await open(<ChatView mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
+    await open(<ChatView mid="mac" sid="s1" panel={{ kind: "agent", onClose, items: [] }} />);
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
     await settle();
+    openAgentMore();
     const item = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
       .find((x) => x.textContent?.includes(t("lib-terminals.terminal")));
     expect(item).toBeDefined();
@@ -120,7 +123,7 @@ it("the side panel's localized terminal menu item opens the terminal page and cl
 it("an agent herdr calls blocked lights the terminal button, on its page and in the panel", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "blocked", state: "needs_you" }));
   expect(dot()).not.toBeNull();
-  act(() => root.render(<ChatView key="panel" mid="mac" sid="s1" panel={{ onClose: () => {}, items: [] }} />));
+  act(() => root.render(<ChatView key="panel" mid="mac" sid="s1" panel={{ kind: "agent", onClose: () => {}, items: [] }} />));
   for (let i = 0; i < 6; i++) await settle();
   expect(dot()).not.toBeNull();
 });
@@ -143,6 +146,6 @@ it("a dialog refusal offers no current-session shortcut when the chat has no ter
 });
 
 it("an offline agent, or a chat that cannot show a terminal, offers none in the panel", async () => {
-  await open(<ChatView mid="mac" sid="s1" panel={{ onClose: () => {}, items: [] }} />, row({ status: "offline", state: "offline", capabilities: { read: true, terminal: false } as Session["capabilities"] }));
+  await open(<ChatView mid="mac" sid="s1" panel={{ kind: "agent", onClose: () => {}, items: [] }} />, row({ status: "offline", state: "offline", capabilities: { read: true, terminal: false } as Session["capabilities"] }));
   expect(terminalButton()).toBeNull();
 });

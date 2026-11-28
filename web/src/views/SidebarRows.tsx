@@ -51,7 +51,7 @@ import { askOverviewSubagents } from "../lib/subagent-link";
 import { backgroundStall } from "../lib/background-work";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, useGoingIds } from "../lib/agents";
-import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section } from "./SidebarParts";
+import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section, useRowMenuSource } from "./SidebarParts";
 import { sidebarRowHover } from "./SidebarRowHover";
 import { requestDirectWaiting } from "../lib/direct-waiting";
 import { needsYouAutoOpen } from "../lib/needs-you-auto-open";
@@ -430,6 +430,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // the page's own mark on the parent clears its own part only: a side session's unread reply keeps it Unread, and its
   // line below says which (#13299). `own`: the row in its own state, as the hub sent it.
   const ownSeen = heldSeen(ownRow(row), seenMark, nowHandoff);
+  const readSource = useRowMenuSource(ownSeen);
   const marked = heldSeen(answeredSession(given, Boolean(ix), justAnswered, pending), seenMark, nowHandoff);
   const keptBySide = marked.state !== given.state && activityOf(given) === "unread" && foldedStateWith(ownSeen, sides && countSides(sides)) === "unread";
   const base = heldLaunchWorking(keptBySide ? { ...marked, state: "unread" } : marked, launch, nowHandoff);
@@ -546,7 +547,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       ref={regRow}
       {...destination}
       // right click (at the pointer), the menu key and Shift+F10 (beside the row): the row's menu, the same as its ⋯
-      {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at)) : {})}
+      {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at, readSource)) : {})}
       {...sidebarRowHover(() => ({
         title: displayTitle, session: s, titleDetail: displayTitle !== title ? title : sessionTitleDetail(s, preferTab),
         draft, working: leadActive, tab: associatedTab || structuralTabHint,
@@ -687,7 +688,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       aria-haspopup="menu"
       title={t("sidebar.more")}
       tabIndex={-1}
-      onClick={(e) => onMenu(s, e.currentTarget.parentElement ?? e.currentTarget)}
+      onClick={(e) => onMenu(s, e.currentTarget.parentElement ?? e.currentTarget, undefined, readSource)}
       className={inFlow
         ? cx("relative z-20 my-1 flex size-6 shrink-0 items-center justify-center self-center rounded-[6px] text-ink-3 transition-opacity hover:bg-hover hover:text-ink [@media(hover:none)]:size-11",
           active ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100")

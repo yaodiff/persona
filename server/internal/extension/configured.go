@@ -152,7 +152,8 @@ func isLoopbackHost(h string) bool {
 }
 
 // ConfiguredTarget is the host:port a "config:" entry lets through, from the field's value now ("" when it has none
-// that may be reached: unset, not a URL, http where only https is allowed, user info in it). The value is the user's:
+// that may be reached: unset, not a URL, http or ws where only https is allowed, user info in it). A ws:// or wss://
+// value counts as its http:// or https:// one. The value is the user's:
 // only the settings pages and the hub write an extension's configuration, never the extension itself.
 func ConfiguredTarget(c ConfiguredNetwork, config json.RawMessage) (egress.Target, string) {
 	var values map[string]any
@@ -175,22 +176,25 @@ func configuredTargetValue(c ConfiguredNetwork, raw string) (egress.Target, stri
 		return egress.Target{}, "not a host"
 	}
 	port := u.Port()
+	// A WebSocket address is its HTTP one's (#16264): wss as https, ws as plain http, which needs :http or loopback.
+	plain := false
 	switch strings.ToLower(u.Scheme) {
-	case "https":
+	case "https", "wss":
 		if port == "" {
 			port = "443"
 		}
-	case "http":
+	case "http", "ws":
 		if !c.HTTP && !isLoopbackHost(host) {
 			return egress.Target{}, "http (only https)"
 		}
 		if port == "" {
 			port = "80"
 		}
+		plain = true
 	default:
-		return egress.Target{}, "not http(s)"
+		return egress.Target{}, "not http(s) or ws(s)"
 	}
-	return egress.Target{Host: host, Port: port, HTTP: strings.EqualFold(u.Scheme, "http")}, ""
+	return egress.Target{Host: host, Port: port, HTTP: plain}, ""
 }
 
 // ConfiguredTargets are the host:ports p's "config:" entries let through with configuration config now.

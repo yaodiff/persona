@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
 import { applyCompleteSessions, getSession, getState, markConversationDeleted, onHubEvent, subscribe, useStore } from "./store";
+import { MANAGER_HEADER } from "./manager-choice";
 import { SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
 import type { ListPage } from "./session-list";
 import type { Session } from "./types";
@@ -9,15 +10,15 @@ import { t } from "../i18n";
 
 export class UnsupportedSessionLookup extends Error {}
 
-export async function exactSession(mid: string, sid: string, signal?: AbortSignal): Promise<Session | undefined> {
-  return (await exactLookup(mid, sid, signal)).row;
+export async function exactSession(mid: string, sid: string, signal?: AbortSignal, manager?: string): Promise<Session | undefined> {
+  return (await exactLookup(mid, sid, signal, manager)).row;
 }
 
 /** exactSession's row, and the revision of the index it was read at. */
-async function exactLookup(mid: string, sid: string, signal?: AbortSignal): Promise<{ row: Session | undefined; revision: string }> {
+async function exactLookup(mid: string, sid: string, signal?: AbortSignal, manager?: string): Promise<{ row: Session | undefined; revision: string }> {
   const params = new URLSearchParams({ summary: "0", limit: "50", machine_id: mid, session_id: sid });
   let page: ListPage<Session>;
-  try { page = await api<ListPage<Session>>(`/sessions?${params}`, { signal }); }
+  try { page = await api<ListPage<Session>>(`/sessions?${params}`, { signal, ...(manager && { headers: { [MANAGER_HEADER]: manager } }) }); }
   catch (error) {
     if (error instanceof ApiError && ([404, 405, 501].includes(error.status) || ["unsupported", "unsupported_feature", "not_supported"].includes(error.code ?? ""))) {
       throw new UnsupportedSessionLookup(t("runtime-session.unsupported"));

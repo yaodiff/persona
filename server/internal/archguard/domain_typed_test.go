@@ -44,7 +44,7 @@ var typedRules = map[string]typedRule{
 		"server/internal/assistant/fleet_live.go (fill)",
 	},
 	"typed-codec": {
-		"fmt, log, slog, json and templates read a value's unexported fields through reflection, a getter by another name",
+		"fmt, log, slog, json, templates, and custom loggers or any-typed sinks read a value's unexported fields through reflection, a getter by another name",
 		"hand the value to its adapter, which writes its wire form or its Log line",
 		"server/internal/agentref/agentrefadapt/agentrefadapt.go (Log)",
 	},
@@ -172,7 +172,7 @@ func TestDomainTypedPlanted(t *testing.T) {
 		layers[u.path] = u.layer
 	}
 	listed, err := goListExport(serverDir, []string{serverModule + "/internal/assistant/fleetcount/fleetcountadapt",
-		serverModule + "/internal/agentref/agentrefadapt", "fmt", "maps", "slices", "encoding/json", "log/slog"})
+		serverModule + "/internal/agentref/agentrefadapt", "context", "fmt", "maps", "slices", "encoding/json", "log/slog"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,38 +391,78 @@ func visits(layer string) bool {
 }
 
 func (c *typedChecks) file(f *ast.File) {
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.ExprStmt:
-			if call, ok := ast.Unparen(x.X).(*ast.CallExpr); ok && !c.core() {
-				if t := c.info.Types[call].Type; t != nil && c.mustUse(t) {
-					c.add(call.Pos(), "typed-discard", types.ExprString(call.Fun)+" discards "+c.typeName(t))
+	var fnResults []*types.Tuple
+	var walk func(ast.Node)
+	walk = func(node ast.Node) {
+		ast.Inspect(node, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncDecl:
+				var res *types.Tuple
+				if obj, ok := c.info.Defs[x.Name].(*types.Func); ok {
+					if sig, ok := obj.Type().(*types.Signature); ok {
+						res = sig.Results()
+					}
 				}
-			}
-		case *ast.AssignStmt:
-			if !c.core() {
-				c.blanks(x)
-			}
-		case *ast.CallExpr:
-			c.codec(x)
-		case *ast.RangeStmt:
-			if c.core() {
-				if t := c.info.Types[x.X].Type; t != nil {
-					if _, ok := t.Underlying().(*types.Map); ok {
-						c.add(x.Pos(), "typed-map-range", c.unit.path+" ranges over "+types.ExprString(x.X)+", a map")
+				if x.Body != nil {
+					fnResults = append(fnResults, res)
+					walk(x.Body)
+					fnResults = fnResults[:len(fnResults)-1]
+				}
+				return false
+			case *ast.FuncLit:
+				var res *types.Tuple
+				if sig, ok := c.info.Types[x.Type].Type.(*types.Signature); ok {
+					res = sig.Results()
+				}
+				if x.Body != nil {
+					fnResults = append(fnResults, res)
+					walk(x.Body)
+					fnResults = fnResults[:len(fnResults)-1]
+				}
+				return false
+			case *ast.ExprStmt:
+				if call, ok := ast.Unparen(x.X).(*ast.CallExpr); ok && !c.core() {
+					if t := c.info.Types[call].Type; t != nil && c.mustUse(t) {
+						c.add(call.Pos(), "typed-discard", types.ExprString(call.Fun)+" discards "+c.typeName(t))
+					}
+				}
+			case *ast.AssignStmt:
+				if !c.core() {
+					c.blanks(x)
+				}
+				c.assignAny(x)
+			case *ast.ValueSpec:
+				c.valueSpecAny(x)
+			case *ast.CompositeLit:
+				c.compositeLitAny(x)
+			case *ast.SendStmt:
+				c.sendAny(x)
+			case *ast.ReturnStmt:
+				if len(fnResults) > 0 {
+					c.returnAny(x, fnResults[len(fnResults)-1])
+				}
+			case *ast.CallExpr:
+				c.codec(x)
+			case *ast.RangeStmt:
+				if c.core() {
+					if t := c.info.Types[x.X].Type; t != nil {
+						if _, ok := t.Underlying().(*types.Map); ok {
+							c.add(x.Pos(), "typed-map-range", c.unit.path+" ranges over "+types.ExprString(x.X)+", a map")
+						}
+					}
+				}
+			case *ast.BinaryExpr:
+				if x.Op == token.EQL || x.Op == token.NEQ {
+					l, r := c.info.Types[x.X], c.info.Types[x.Y]
+					if !l.IsNil() && !r.IsNil() && c.isFail(l.Type) && c.isFail(r.Type) {
+						c.add(x.Pos(), "typed-fail-compare", types.ExprString(x)+" compares two failures")
 					}
 				}
 			}
-		case *ast.BinaryExpr:
-			if x.Op == token.EQL || x.Op == token.NEQ {
-				l, r := c.info.Types[x.X], c.info.Types[x.Y]
-				if !l.IsNil() && !r.IsNil() && c.isFail(l.Type) && c.isFail(r.Type) {
-					c.add(x.Pos(), "typed-fail-compare", types.ExprString(x)+" compares two failures")
-				}
-			}
-		}
-		return true
-	})
+			return true
+		})
+	}
+	walk(f)
 }
 
 // blanks is typed-discard on an assignment's blank identifiers: an outcome or a failure assigned to _ is dropped.
@@ -457,8 +497,69 @@ var codecs = map[string][]string{
 	"html/template": {"Execute", "ExecuteTemplate"},
 }
 
-// codec is typed-codec on one call: an argument that is, or holds, a strict core's value.
+// isAny reports whether t's underlying type is the empty interface (any / interface{}), excluding type parameters.
+func isAny(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if _, tp := types.Unalias(t).(*types.TypeParam); tp {
+		return false
+	}
+	iface, ok := t.Underlying().(*types.Interface)
+	return ok && iface.Empty()
+}
+
+// exprValues yields the (position, expression text, type) of each value in exprs, unpacking a single multi-return call
+// into its tuple elements when expected > 1.
+func (c *typedChecks) exprValues(exprs []ast.Expr, expected int) []struct {
+	pos  token.Pos
+	text string
+	typ  types.Type
+} {
+	var out []struct {
+		pos  token.Pos
+		text string
+		typ  types.Type
+	}
+	if len(exprs) == 1 && expected > 1 {
+		if tuple, ok := c.info.Types[exprs[0]].Type.(*types.Tuple); ok {
+			pos, text := exprs[0].Pos(), types.ExprString(exprs[0])
+			for i := range tuple.Len() {
+				out = append(out, struct {
+					pos  token.Pos
+					text string
+					typ  types.Type
+				}{pos: pos, text: text, typ: tuple.At(i).Type()})
+			}
+			return out
+		}
+	}
+	for _, e := range exprs {
+		out = append(out, struct {
+			pos  token.Pos
+			text string
+			typ  types.Type
+		}{pos: e.Pos(), text: types.ExprString(e), typ: c.info.Types[e].Type})
+	}
+	return out
+}
+
+// codec is typed-codec on one call or type conversion: an argument that is, or holds, a strict core's value passed to
+// a reflection codec, passed to an any / ...any parameter (such as a custom logger logf func(string, ...any)), or
+// converted directly to any.
 func (c *typedChecks) codec(call *ast.CallExpr) {
+	funTV := c.info.Types[call.Fun]
+	if funTV.IsType() {
+		if len(call.Args) == 1 && isAny(funTV.Type) {
+			arg := call.Args[0]
+			if t := c.info.Types[arg].Type; t != nil {
+				if core := c.holdsCore(t, map[types.Type]bool{}); core != "" {
+					c.add(arg.Pos(), "typed-codec", types.ExprString(arg)+" holds "+core+", converted to "+c.typeName(funTV.Type))
+				}
+			}
+		}
+		return
+	}
 	var obj types.Object
 	switch fn := ast.Unparen(call.Fun).(type) {
 	case *ast.Ident:
@@ -466,18 +567,167 @@ func (c *typedChecks) codec(call *ast.CallExpr) {
 	case *ast.SelectorExpr:
 		obj = c.info.Uses[fn.Sel]
 	}
-	if obj == nil || obj.Pkg() == nil {
-		return
-	}
-	names, ok := codecs[obj.Pkg().Path()]
-	if !ok || !slices.Contains(names, "") && !slices.Contains(names, obj.Name()) {
-		return
-	}
-	for _, arg := range call.Args {
-		if t := c.info.Types[arg].Type; t != nil {
-			if core := c.holdsCore(t, map[types.Type]bool{}); core != "" {
-				c.add(arg.Pos(), "typed-codec", types.ExprString(arg)+" holds "+core+", passed to "+obj.Pkg().Path()+"."+obj.Name())
+	if obj != nil && obj.Pkg() != nil {
+		if names, ok := codecs[obj.Pkg().Path()]; ok && (slices.Contains(names, "") || slices.Contains(names, obj.Name())) {
+			for _, v := range c.exprValues(call.Args, 2) {
+				if v.typ != nil {
+					if core := c.holdsCore(v.typ, map[types.Type]bool{}); core != "" {
+						c.add(v.pos, "typed-codec", v.text+" holds "+core+", passed to "+obj.Pkg().Path()+"."+obj.Name())
+					}
+				}
 			}
+			return
+		}
+	}
+	if funTV.Type == nil {
+		return
+	}
+	sig, ok := funTV.Type.Underlying().(*types.Signature)
+	if !ok {
+		return
+	}
+	params := sig.Params()
+	n := params.Len()
+	if n == 0 {
+		return
+	}
+	ellipsis := call.Ellipsis.IsValid()
+	isContextWithValue := obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "context" && obj.Name() == "WithValue"
+	for i, v := range c.exprValues(call.Args, n) {
+		if v.typ == nil {
+			continue
+		}
+		if isContextWithValue && i == 2 {
+			// context.WithValue stores an opaque request-scoped value and never reflects on its fields
+			// (its String method prints "<not Stringer>" for non-Stringer values).
+			continue
+		}
+		var pt types.Type
+		if sig.Variadic() && i >= n-1 {
+			if ellipsis && i == n-1 {
+				pt = params.At(n - 1).Type()
+			} else if sl, ok := params.At(n - 1).Type().(*types.Slice); ok {
+				pt = sl.Elem()
+			}
+		} else if i < n {
+			pt = params.At(i).Type()
+		}
+		if !isAny(pt) {
+			continue
+		}
+		if core := c.holdsCore(v.typ, map[types.Type]bool{}); core != "" {
+			c.add(v.pos, "typed-codec", v.text+" holds "+core+", passed to "+types.ExprString(call.Fun)+" as "+c.typeName(pt))
+		}
+	}
+}
+
+func (c *typedChecks) checkAnyValue(pos token.Pos, text string, target, val types.Type, where string) {
+	if !isAny(target) || val == nil {
+		return
+	}
+	if core := c.holdsCore(val, map[types.Type]bool{}); core != "" {
+		c.add(pos, "typed-codec", text+" holds "+core+", "+where+" "+c.typeName(target))
+	}
+}
+
+func (c *typedChecks) assignAny(a *ast.AssignStmt) {
+	if a.Tok != token.ASSIGN {
+		return
+	}
+	vals := c.exprValues(a.Rhs, len(a.Lhs))
+	for i, lhs := range a.Lhs {
+		if id, ok := lhs.(*ast.Ident); ok && id.Name == "_" {
+			continue
+		}
+		if i < len(vals) {
+			c.checkAnyValue(vals[i].pos, vals[i].text, c.info.Types[lhs].Type, vals[i].typ, "assigned to")
+		}
+	}
+}
+
+func (c *typedChecks) valueSpecAny(s *ast.ValueSpec) {
+	if s.Type == nil || len(s.Values) == 0 {
+		return
+	}
+	target := c.info.Types[s.Type].Type
+	if !isAny(target) {
+		return
+	}
+	for _, v := range c.exprValues(s.Values, len(s.Names)) {
+		c.checkAnyValue(v.pos, v.text, target, v.typ, "assigned to")
+	}
+}
+
+func (c *typedChecks) compositeLitAny(lit *ast.CompositeLit) {
+	lt := c.info.Types[lit].Type
+	if lt == nil {
+		return
+	}
+	switch u := lt.Underlying().(type) {
+	case *types.Slice:
+		if !isAny(u.Elem()) {
+			return
+		}
+		for _, elt := range lit.Elts {
+			val := elt
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				val = kv.Value
+			}
+			c.checkAnyValue(val.Pos(), types.ExprString(val), u.Elem(), c.info.Types[val].Type, "placed in")
+		}
+	case *types.Array:
+		if !isAny(u.Elem()) {
+			return
+		}
+		for _, elt := range lit.Elts {
+			val := elt
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				val = kv.Value
+			}
+			c.checkAnyValue(val.Pos(), types.ExprString(val), u.Elem(), c.info.Types[val].Type, "placed in")
+		}
+	case *types.Map:
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			c.checkAnyValue(kv.Key.Pos(), types.ExprString(kv.Key), u.Key(), c.info.Types[kv.Key].Type, "used as map key of")
+			c.checkAnyValue(kv.Value.Pos(), types.ExprString(kv.Value), u.Elem(), c.info.Types[kv.Value].Type, "placed in")
+		}
+	case *types.Struct:
+		for i, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				if id, ok := kv.Key.(*ast.Ident); ok {
+					if obj := c.info.Uses[id]; obj != nil {
+						c.checkAnyValue(kv.Value.Pos(), types.ExprString(kv.Value), obj.Type(), c.info.Types[kv.Value].Type, "placed in field of")
+					}
+				}
+			} else if i < u.NumFields() {
+				c.checkAnyValue(elt.Pos(), types.ExprString(elt), u.Field(i).Type(), c.info.Types[elt].Type, "placed in field of")
+			}
+		}
+	}
+}
+
+func (c *typedChecks) sendAny(s *ast.SendStmt) {
+	ct := c.info.Types[s.Chan].Type
+	if ct == nil {
+		return
+	}
+	if ch, ok := ct.Underlying().(*types.Chan); ok {
+		c.checkAnyValue(s.Value.Pos(), types.ExprString(s.Value), ch.Elem(), c.info.Types[s.Value].Type, "sent to channel of")
+	}
+}
+
+func (c *typedChecks) returnAny(r *ast.ReturnStmt, results *types.Tuple) {
+	if results == nil || results.Len() == 0 || len(r.Results) == 0 {
+		return
+	}
+	vals := c.exprValues(r.Results, results.Len())
+	for i := range results.Len() {
+		if i < len(vals) {
+			c.checkAnyValue(vals[i].pos, vals[i].text, results.At(i).Type(), vals[i].typ, "returned as")
 		}
 	}
 }

@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../ui/atoms", () => ({ toast: vi.fn() }));
 
-import { flipMute, flipPin } from "./agent-actions";
+import { flipMute, flipPin, interruptAgent } from "./agent-actions";
+import { chooseManager, pinManager } from "./manager-choice";
 import { getState, refresh, reset } from "./store";
 import type { Session } from "./types";
 
@@ -22,7 +23,7 @@ function heldHub(): Held[] {
   vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const path = url.replace(/^.*\/api\/v1/, "").split("?")[0]!;
     const method = init?.method ?? "GET";
-    if (path !== "/pins" && path !== "/mutes") return Promise.resolve(new Response("{}", { status: 200 }));
+    if (path !== "/pins" && path !== "/mutes" && !path.endsWith("/interrupt")) return Promise.resolve(new Response("{}", { status: 200 }));
     return new Promise<Response>((r) => held.push({ method, path, answer: (body, status = 200) => r(new Response(JSON.stringify(body), { status })) }));
   }));
   return held;
@@ -39,6 +40,54 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   reset();
+});
+
+it("shares a pending interrupt for one Agent, delivers its failure to both callers and permits a retry", async () => {
+  const requests = heldHub();
+  const first = interruptAgent("m", "a");
+  const second = interruptAgent("m", "a");
+  await settle();
+  expect(requests).toHaveLength(1);
+  requests[0].answer({ state: "unknown" });
+  const results = await Promise.allSettled([first, second]);
+  expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+  const retry = interruptAgent("m", "a");
+  await settle();
+  expect(requests).toHaveLength(2);
+  requests[1].answer({ state: "ok" });
+  await retry;
+});
+
+it("shares a pending interrupt across a switch of the displayed assistant when the route stays the same", async () => {
+  const requests = heldHub();
+  const first = interruptAgent("m", "a");
+  chooseManager("another-assistant");
+  try {
+    const second = interruptAgent("m", "a");
+    await settle();
+    expect(requests).toHaveLength(1);
+    requests[0].answer({ state: "ok" });
+    await Promise.all([first, second]);
+  } finally {
+    chooseManager(null);
+  }
+});
+
+it.each(["manager", "credential"])("separates pending interrupts when the %s changes", async (scope) => {
+  const requests = heldHub();
+  const first = interruptAgent("m", "a");
+  const release = scope === "manager" ? pinManager("/sessions/m/a", "next") : () => {};
+  if (scope === "credential") vi.stubGlobal("localStorage", { getItem: () => "another-mock-token", setItem() {}, removeItem() {} });
+  try {
+    const next = interruptAgent("m", "a");
+    await settle();
+    expect(requests).toHaveLength(2);
+    requests.forEach((request) => request.answer({ state: "ok" }));
+    const results = await Promise.allSettled([first, next]);
+    expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
+  } finally {
+    release();
+  }
 });
 
 describe("pins and mutes: an older answer does not undo a newer change", () => {

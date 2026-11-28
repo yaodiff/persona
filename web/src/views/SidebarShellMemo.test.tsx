@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // Exercise the real store and sidebar: a telemetry push must skip tree construction, while the fields the sidebar
 // draws and each memoized component's own subscriptions still reach the screen.
+import { openAgentMore } from "../test/agent-menu";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,6 +217,7 @@ describe("the sidebar shell across store pushes", () => {
     const openLink = async () => {
       act(() => row()!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
       await flush();
+      openAgentMore();
       const link = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((b) => b.textContent?.includes(t("agentmenus.link_to_todo")))!;
       expect(link).toBeTruthy();
       await act(async () => {

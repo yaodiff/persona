@@ -97,7 +97,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           mid={chosen.machine_id}
           sid={chosen.session_id}
           // the bubble before × opens the Agent shown (the one ⌄ picked) as its own page
-          panel={{ onClose, page: { name: "session", mid: chosen.machine_id, sid: chosen.session_id }, title: todo.title, sub: subtitle, items: taskItems, beside: switcher.length > 1 ? <AgentSwitch agents={switcher} /> : undefined }}
+          panel={{ kind: "task", onClose, page: { name: "session", mid: chosen.machine_id, sid: chosen.session_id }, title: todo.title, sub: subtitle, items: taskItems, beside: switcher.length > 1 ? <AgentSwitch agents={switcher} /> : undefined }}
           // what the task's result waits on from the user (#2056), and what its agent last reported, as it wrote it (#3181),
           // over its agent's chat
           banner={waitInfo || ask || reportText(todo.supervision) || planned?.workspace ? (
@@ -175,7 +175,7 @@ function PanelMore({ items }: { items: MenuItem[] }) {
 export function AgentPanel({ mid, sid, onClose }: { mid: string; sid: string; onClose: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ChatView key={`${mid}/${sid}`} mid={mid} sid={sid} panel={{ onClose, page: { name: "session", mid, sid }, items: [openInWindow({ name: "session", mid, sid })] }} />
+      <ChatView key={`${mid}/${sid}`} mid={mid} sid={sid} panel={{ kind: "agent", onClose, page: { name: "session", mid, sid }, items: [openInWindow({ name: "session", mid, sid })] }} />
     </div>
   );
 }

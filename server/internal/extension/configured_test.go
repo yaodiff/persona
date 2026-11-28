@@ -89,6 +89,41 @@ func TestConfiguredTarget(t *testing.T) {
 	}
 }
 
+// A WebSocket address lets through what its HTTP one would (#16264): wss as https (443 by default), ws as plain http
+// (80 by default), which needs :http in the manifest or a loopback host; user info, no host or another scheme still
+// let nothing through. A voice upstream (wss://<host>/v1/live) is such an address.
+func TestConfiguredTargetTakesWebSocketSchemes(t *testing.T) {
+	https, http := ConfiguredNetwork{Field: "url"}, ConfiguredNetwork{Field: "url", HTTP: true}
+	cfg := func(v string) json.RawMessage { b, _ := json.Marshal(map[string]string{"url": v}); return b }
+	for _, c := range []struct {
+		c    ConfiguredNetwork
+		url  string
+		want egress.Target
+	}{
+		{https, "wss://Live.Example.com/v1/live", egress.Target{Host: "live.example.com", Port: "443"}},
+		{https, "WSS://live.example.com:9443/v1/live", egress.Target{Host: "live.example.com", Port: "9443"}},
+		{http, "wss://live.example.com/v1/live", egress.Target{Host: "live.example.com", Port: "443"}},
+		{https, "ws://live.example.com/v1/live", egress.Target{}},
+		{https, "ws://192.0.2.10:8080/v1/live", egress.Target{}},
+		{https, "ws://127.0.0.1:8080/v1/live", egress.Target{Host: "127.0.0.1", Port: "8080", HTTP: true}},
+		{https, "ws://[::1]/v1/live", egress.Target{Host: "::1", Port: "80", HTTP: true}},
+		{http, "ws://live.example.com/v1/live", egress.Target{Host: "live.example.com", Port: "80", HTTP: true}},
+		{http, "ws://live.example.com:8080/v1/live", egress.Target{Host: "live.example.com", Port: "8080", HTTP: true}},
+		{http, "wss://me:pw@live.example.com/v1/live", egress.Target{}},
+		{http, "wss:///v1/live", egress.Target{}},
+		{http, "wsx://live.example.com/v1/live", egress.Target{}},
+	} {
+		if got, _ := ConfiguredTarget(c.c, cfg(c.url)); got != c.want {
+			t.Errorf("%+v %q: %+v, want %+v", c.c, c.url, got, c.want)
+		}
+	}
+	// The manifest's entry as a package names it: the address reaches the host, whichever scheme it is written in.
+	m := &Manifest{Permissions: Permissions{Network: []string{"config:url:http"}}}
+	if got := ConfiguredTargets(m, cfg("wss://live.example.com/v1/live")); len(got) != 1 || got[0] != (egress.Target{Host: "live.example.com", Port: "443"}) {
+		t.Fatalf("targets %+v", got)
+	}
+}
+
 func TestSecretHint(t *testing.T) {
 	last4 := SecretSpec{Name: "k", Hint: HintLast4}
 	if got := SecretHint(last4, "ag-demo-key-0000-7f3a"); got != "7f3a" {

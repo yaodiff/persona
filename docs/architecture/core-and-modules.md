@@ -519,8 +519,8 @@ then the built-in module's flag stands as before.
 An installed extension may supply a module's flag (#16254), so a module can move out of the binary into an
 extension package without its clients noticing. Only the host decides which: `modapi.ExtensionModules`
 (`server/internal/modapi/modapi.go`) lists the module ids an extension may supply and the contributions
-(`<point>/<id>`) each needs; today it is `volc` (`transcription/volc`, `speech/volc`). A package never names the
-module it claims.
+(`<point>/<id>`) each needs; today it is `volc` (`transcription/volc`, `speech/volc`) and `voice` (`voice/voice`
+only, #16264: switching its meeting transcription off keeps the calls). A package never names the module it claims.
 
 - **Who is a provider** (`server/internal/extmgr/module_providers.go`): the registry's record of the listed id, a
   package installed on the hub's machine (`source: installed`, not a remote plugin installed from `remote:` without a
@@ -559,6 +559,13 @@ module it claims.
   row that changed meanwhile is refused. Anything else over an orphan (a local upload, a private market, a missing
   contribution, a module switched off) is refused with the identity error and writes nothing. Once adopted it is an
   ordinary installed package: it can be upgraded, rolled back to the built-in on a build that has it, or uninstalled.
+- **Handing a built-in off** (`server/internal/extmgr/builtin_market_upgrade.go`): the catalog offers the official
+  package as the built-in's upgrade only when the built-in registered for it (`Registry.AllowBuiltinHandoff`) and the
+  package provides every contribution the built-in's own manifest names, under the same ids; a point the package adds
+  (voice's `events` subscription) is its own and shown in the preview to agree to. The built-in `voice` registers only
+  in its form's shape (hub.json's takeover keeps its id and upstreams), and is not offered while it has what the
+  package cannot take: a quota gateway's upstream, or a computer to archive calls on (`archive_machine`; the package's
+  first version writes no archive, so such a hub keeps the built-in).
 - **Rollback across builds**: a package rolled back to its first version on a build without the built-in has no
   built-in to name as its previous version. On a build with the built-in again, rollback still returns to it
   (`Registry.Rollback`), with the owner's settings, switches and secrets. On a build without it, rolling back to the
@@ -579,7 +586,10 @@ chosen extension or on the phone. The apps' composer dictation is core; the exte
 (docs/assistant/voice.md 4.18) goes with the module, and apps use it only while the extension advertises its
 `dictation` feature. Still in the core and named by string, to move as the host serves their slots: the channel kind
 (`channel.KindVoice`), `assistantwire.PluginsVoice`, the `voice` and `speech` extension points, the extension host's
-glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings. The developer tool
+glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings. The official `voice` package
+(#16264) takes the built-in's row over as volc's does ("Modules from extensions"); the host keeps two guarantees for
+it on any build: its key follows its address (`isVoiceProvider`), and the default meeting transcription (`""`) follows
+the built-in's verified successor, never a package installed fresh. A gateway change restarts only the built-in. The developer tool
 `server/scripts/transcribelive` measures live transcription and reads the knowledge base.
 
 ### Recording

@@ -2438,7 +2438,9 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
   only changed it would move everyone who never filled the field in without asking again (#6099).
   - Only that host and port, as written: no subdomain, no other port. A redirect to another host is refused like any
     host.
-  - https only (a CONNECT tunnel) unless the entry is `config:<field>:http`, which also takes plain http.
+  - https only (a CONNECT tunnel) unless the entry is `config:<field>:http`, which also takes plain http. A WebSocket
+    address counts as its HTTP one (#16264): `wss://` as https, `ws://` as plain http (so it too needs `:http` or a
+    loopback host).
   - The proxy resolves the name itself and dials the address it checked. It refuses the name when any answer is
     loopback, link-local (the usual cloud metadata address included), unspecified, multicast, a metadata address (`fd00:ec2::254`,
     `100.100.100.200`), or this machine's own address at the hub's or the proxy's port. Private network addresses are
@@ -5045,6 +5047,11 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
     checking, key deletion, config save and key setting share one registry operation lock, so interleaved requests cannot pair a key with an address it was never set for.
   - **Prefer deletion on failure**: delete whether or not key-presence can be read (idempotent); unreadable presence still returns `secrets_cleared`. If deletion fails, save nothing, return 500 `secret_not_cleared`;
     if config save fails after deletion (database write failure, 409), the error also includes `secrets_cleared` and the old address remains. Invalid form config (400) changes nothing and keeps the key.
+- **The official package** (#16264): the official market's `voice` package may take this extension's row over
+  (catalog upgrade on a build with the module, adoption of the row on one without it), with the same settings, key and
+  default meeting transcription; the key keeps following the address there too (`isVoiceProvider`). A hub whose
+  built-in has a manager.json entry, a quota gateway's upstream or a call archive computer (`archive_machine`) is not
+  offered it and keeps the built-in; details in `docs/assistant/voice.md` ("Migration and rollback").
 - **Model fallback**: if the selected model's upstream disappears (address cleared, manager.json changed), no error/disconnect: use default model and voice, then send nonfatal `error{code: "model_unavailable"}` after connecting.
 - **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak", "speech_gate", "meeting", "hold", "dictation"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
 - **`POST /speak`** (#5004, feature `speak`): `{"text", "model"?, "voice"?, "lang"?}` read aloud in its own upstream session (no tools, instructions to say the text exactly as written); answers `200` `audio/pcm` with `X-Persona-Audio-Rate` and the reply's PCM16 as it comes, or, before any audio, `{"error", "code"}` with `400 bad_request`, `403 forbidden` (not a full device), `503 no_upstream`, `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed` or `504 no_audio`. The iPhone says meeting answers with it outside a call; details in `docs/assistant/voice.md` ("Reading a text aloud").

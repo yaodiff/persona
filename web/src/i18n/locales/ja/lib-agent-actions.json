@@ -1,4 +1,5 @@
 {
+  "interrupt_unavailable": "現在この Agent を中断できません。",
   "save_failed": "変更できませんでした：{error}",
   "pinned": "ピン留めしました",
   "unpinned": "ピン留めを外しました",

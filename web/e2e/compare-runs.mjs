@@ -33,8 +33,8 @@ if (shots) mkdirSync(shots, { recursive: true });
 
 // the words the checks look for, as the catalogs say them
 const WORDS = {
-  en: { locale: "en-US", title: "New agent", start: "Start", start3: "Start 3", retry: "Retry", didnt: "Didn't start", menu: "Compare runs", open: "Open", more: "More actions" },
-  "zh-Hans": { locale: "zh-CN", title: "新建 Agent", start: "启动", start3: "启动 3 次", retry: "重试", didnt: "没开起来", menu: "对比运行", open: "打开", more: "更多操作" },
+  en: { locale: "en-US", title: "New agent", start: "Start", start3: "Start 3", retry: "Retry", didnt: "Didn't start", menu: "Compare runs", open: "Open", more: "More actions", submenu: "More" },
+  "zh-Hans": { locale: "zh-CN", title: "新建 Agent", start: "启动", start3: "启动 3 次", retry: "重试", didnt: "没开起来", menu: "对比运行", open: "打开", more: "更多操作", submenu: "更多" },
 };
 const REPO = "/Users/me/code/weather";
 
@@ -151,6 +151,7 @@ async function run(browser, pass) {
   await page.waitForURL((u) => u.href !== compareURL, { timeout: 5000 });
   if (!/\/(s|t)\/studio\//.test(page.url())) fail(`${tag}: Open went to ${page.url()}`);
   await page.getByRole("button", { name: w.more, exact: true }).first().click();
+  await page.getByRole("menuitem", { name: w.submenu, exact: true }).click();
   const item = page.getByRole("menuitem", { name: w.menu, exact: true });
   await item.waitFor({ timeout: 5000 }).catch(() => fail(`${tag}: a run's ⋯ has no ${w.menu}`));
   if (shots) await shot("chat-menu");

@@ -2,7 +2,7 @@
 // A sidebar row's ⋯ toggles the row's menu: a second press closes it. A browser sends a pointerdown before the click,
 // and the menu closes on a pointerdown outside its panel and its anchor, so the ⋯ has to lie inside the anchor.
 // jsdom's click() sends no pointerdown: `press` sends both, in order.
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -14,10 +14,12 @@ vi.hoisted(() => {
 });
 import { t } from "../i18n";
 import { loadPages } from "../lib/lazy-page";
-import { connect, refresh, reset } from "../lib/store";
+import { canInterruptAgentRow, connect, refresh, reset } from "../lib/store";
 import type { PanesResponse } from "../lib/terminals";
 import type { Session } from "../lib/types";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, SessionRow } from "./Sidebar";
+import { AgentRowMenu } from "./AgentMenus";
+import type { RowMenuFn } from "./SidebarParts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -162,6 +164,45 @@ describe("a sidebar row's ⋯", () => {
     await press(more(row)!);
     await vi.waitFor(() => expect(menus()).toHaveLength(0));
   });
+});
+
+// A filtered list owns its rows independently of the root Agent list and the chat detail cache.
+function IndependentRow({ row }: { row?: Session }) {
+  const [menu, setMenu] = useState<Parameters<RowMenuFn> | null>(null);
+  return <>
+    {row && <SessionRow s={row} k={row.session_id} active={false} to={{ name: "session", mid: row.machine_id, sid: row.session_id }}
+      reg={() => () => {}} hover={() => {}} go={() => () => {}} onMenu={(...args) => setMenu(args)} />}
+    {menu && <AgentRowMenu s={menu[0]} anchor={menu[1]} at={menu[2]} readSource={menu[3]} onClose={() => setMenu(null)} onRename={() => {}} onDelete={() => {}} />}
+  </>;
+}
+
+it("checks a retained chat against the live filtered row on a hub without exact lookup", () => {
+  const cached: Session = { ...agent, capabilities: { interrupt: true } };
+  act(() => root.render(<IndependentRow row={cached} />));
+  expect(canInterruptAgentRow(cached, true)).toBe(true);
+  act(() => root.render(<IndependentRow row={{ ...cached, capabilities: { interrupt: false } }} />));
+  expect(canInterruptAgentRow(cached, true)).toBe(false);
+});
+
+it.each(["revoke", "remove", "seen"])("rechecks the independently refreshed row after opening its menu (%s)", async (change) => {
+  const reading = change === "seen";
+  const shown: Session = { ...agent, status: reading ? "idle" : "working", state: reading ? "unread" : "working", capabilities: { interrupt: true } };
+  await act(async () => root.render(<IndependentRow row={shown} />));
+  if (change === "remove") {
+    act(() => void link(agent.title!)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+  } else {
+    await press(more(link(agent.title!))!);
+  }
+  await vi.waitFor(() => expect(menus()).toHaveLength(1));
+  const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((button) =>
+    button.textContent?.includes(t(reading ? "agentmenus.mark_seen" : "chat-chatview.interrupt")))!;
+  expect(item).toBeDefined();
+  const next = change === "remove" ? undefined : { ...shown, state: reading ? "idle" as const : "working" as const, capabilities: { interrupt: false } };
+  await act(async () => root.render(<IndependentRow row={next} />));
+  await act(async () => item.click());
+  await flush();
+  const writes = vi.mocked(fetch).mock.calls.filter(([url]) => /\/(seen|interrupt)$/.test(String(url)));
+  expect(writes).toHaveLength(0);
 });
 
 // The paged Agents list (a hub with sessions_list and nothing pinned or grouped): its rows' ⋯ toggles the same way.

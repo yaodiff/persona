@@ -73,7 +73,7 @@ describe("the Inbox strip's place in ChatView", () => {
   });
 
   it("does not appear in a side panel or a Team panel", async () => {
-    await open(<ChatView mid="m1" sid="s1" panel={{ onClose: () => {} }} />);
+    await open(<ChatView mid="m1" sid="s1" panel={{ kind: "agent", onClose: () => {} }} />);
     expect(host.querySelector("[data-inbox-back]")).toBeNull();
 
     act(() => root.unmount());

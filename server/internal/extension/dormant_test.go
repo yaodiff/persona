@@ -341,24 +341,52 @@ func TestOrphanAdoptionRefusals(t *testing.T) {
 }
 
 // A package rolled back to its first version on a build without the built-in loses the way back to it (there was no
-// built-in to name); on a build with it again, rollback reaches the built-in with the owner's choices (#16263).
+// built-in to name); on a build with it again, rollback reaches the built-in with the owner's choices (#16263). The
+// same holds for a provider of the built-in voice extension's shape (#16264): calls and meeting transcription served
+// over HTTP, the full hub token for the built-in, and a package on named scopes adding an events subscription.
 func TestRollbackReachesBuiltinAfterCrossBuildPackageRollback(t *testing.T) {
+	voiceShaped := func(m map[string]any) {
+		c := m["contributes"].(map[string]any)
+		c["voice"] = []any{map[string]any{"id": "voice", "name": "Voice"}}
+		c["transcription"] = []any{map[string]any{"id": "gpt-live", "name": "GPT-Live"}}
+		m["runtime"].(map[string]any)["http"] = true
+	}
+	for _, tc := range []struct {
+		name         string
+		builtin, pkg func(map[string]any)
+	}{
+		{"speech-shaped", nil, nil},
+		{"voice-shaped", func(m map[string]any) {
+			voiceShaped(m)
+			m["permissions"] = map[string]any{"hub_api": true}
+		}, func(m map[string]any) {
+			voiceShaped(m)
+			m["permissions"] = map[string]any{"hub": []any{"kb.read", "agents.read", "agents.control", "machines.read", "assistant.ask"}}
+			m["contributes"].(map[string]any)["events"] = []any{map[string]any{"id": "runs", "subscribe": []any{"agent.finished"}}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { rollbackAcrossBuilds(t, tc.builtin, tc.pkg) })
+	}
+}
+
+func rollbackAcrossBuilds(t *testing.T, builtinShape, pkgShape func(map[string]any)) {
+	t.Helper()
 	ctx := t.Context()
-	b := dormantBuiltin(t, nil)
+	b := dormantBuiltin(t, builtinShape)
 	store := newMemStore()
 	dir := t.TempDir()
 	official := officialTestMarket(t)
 	withModule := moduleBuild(t, dir, store, b, false)
 	ownerChoices(t, withModule)
 	before, _ := storeState(store)
-	pv, err := official.preview(t, withModule, dormantID, dormantManifest("1.0.0", nil))
+	pv, err := official.preview(t, withModule, dormantID, dormantManifest("1.0.0", pkgShape))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = withModule.UpgradePlan(ctx, dormantID, pv.ID, pv.Digest, nil, "test"); err != nil {
 		t.Fatal(err)
 	}
-	pv, err = official.preview(t, withModule, dormantID, dormantManifest("2.0.0", nil))
+	pv, err = official.preview(t, withModule, dormantID, dormantManifest("2.0.0", pkgShape))
 	if err != nil {
 		t.Fatal(err)
 	}

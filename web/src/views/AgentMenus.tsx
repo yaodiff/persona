@@ -1,18 +1,20 @@
 // The Agents list's menus (iOS AgentRowMenu / SpaceMenuItems): a row's ⋯ or right click, a space's ⋯ on its header,
 // and the confirmation of "Mark all as seen". What they do is in lib/agent-actions.ts.
-import { flipMute, flipPin, handToPersona } from "../lib/agent-actions";
+import { canMarkAgentSeen, flipMute, flipPin, handToPersona, interruptAgent } from "../lib/agent-actions";
 import { errorText } from "../lib/api";
+import { ownRow } from "../lib/folded-rows";
 import { resumeCommand, sessionCanRename, sessionMenuActions } from "../lib/format";
 import { appArchiveDeps, archiveAgent, archiveOffers, closeOffer, offerSessionDelete } from "../lib/agent-archives";
 import { closeAgentAction } from "../lib/close-agent";
 import { machineWithHub } from "../lib/mesh";
 import { isPinned } from "../lib/pins";
 import { isMuted } from "../lib/session-actions";
-import { getState, refresh, refreshTodos, useStore } from "../lib/store";
+import { canInterruptAgentRow, getState, markRowSeen, refresh, refreshTodos, useStore } from "../lib/store";
 import { unlinkAgentFromTodo } from "../lib/todos";
 import type { Session } from "../lib/types";
 import { nodeActions, sessionNode, type NodeActionDeps } from "../lib/node-actions";
 import { copyText, Menu, toast, type MenuItem } from "../ui/atoms";
+import { groupAgentMenu } from "./agent-menu-layout";
 import type { MenuAt } from "../ui/menu-model";
 import type { NodeMenuProps } from "./NodeMenu";
 import { preloadSessionDialogs } from "./chat/SessionDialogs";
@@ -28,6 +30,9 @@ export interface ArchiveCloseActions {
   onNotice?: (message: string, tone: NoticeTone) => void;
 }
 export interface AgentRowMenuActions extends ArchiveCloseActions {
+  readSource?: () => Session | undefined;
+  onInterrupt?: (s: Session) => void | Promise<void>;
+  onMarkSeen?: (s: Session) => void | Promise<void>;
   onAttach?: (s: Session) => void | Promise<void>;
   onTogglePin?: (s: Session) => void | Promise<void>;
   onToggleMute?: (s: Session) => void | Promise<void>;
@@ -65,10 +70,32 @@ function runControlled(fn: () => void | Promise<void>, onNotice?: (message: stri
 export function agentRowMenuItems(s: Session, o: AgentRowMenuItemsOptions): MenuItem[] {
   const { onRename, onDelete, onLinkTodo } = o;
   // "Live link" shows when the chat's ⋯ shows it (sessionMenuActions), and does the same (#3405); so do Archive and Close…
-  const allowed = sessionMenuActions(s);
+  // A child can make its parent row look busy or unread. These actions target the Agent itself.
+  const own = ownRow(s);
+  const allowed = sessionMenuActions(own);
   const features = o.features ?? getState().features;
   const copy = (text: string) => (o.onCopy ? runControlled(() => o.onCopy!(text), o.onNotice) : void copyText(text));
   return [
+    ...(allowed.includes("stop") ? [{
+      key: "stop", label: t("chat-chatview.interrupt"), icon: "stop" as const,
+      onSelect: () => {
+        if (o.onInterrupt) return runControlled(() => o.onInterrupt!(own), o.onNotice);
+        const source = o.readSource ? o.readSource() : own;
+        if (!source || !canInterruptAgentRow(source)) return;
+        return interruptAgent(s.machine_id, s.session_id).then(
+          () => toast(t("chat-chatview.interrupted")),
+          (e) => toast(t("chat-chatview.interrupt_failed", { error: errorText(e) }), "error"),
+        );
+      },
+    }] : []),
+    ...(canMarkAgentSeen(own, o.muted) ? [{
+      key: "seen", label: t("agentmenus.mark_seen"), icon: "check" as const,
+      onSelect: () => {
+        if (o.onMarkSeen) return runControlled(() => o.onMarkSeen!(own), o.onNotice);
+        const source = o.readSource ? o.readSource() : own;
+        if (source && canMarkAgentSeen(source, o.muted)) markRowSeen(source);
+      },
+    }] : []),
     ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => (o.onAttach ? runControlled(() => o.onAttach!(s), o.onNotice) : void import("../lib/attach-live").then((m) => m.attachLive(s))) }] : []),
     { key: "pin", label: o.pinned ? t("agentmenus.unpin") : t("agentmenus.pin"), icon: "pin", accel: "p", onSelect: () => (o.onTogglePin ? runControlled(() => o.onTogglePin!(s), o.onNotice) : void flipPin(s)) },
     // as the chat's ⋯: by capabilities.rename where the node says so (a runtime's session, #6294)
@@ -154,7 +181,7 @@ function AgentRowMenuView({ s, anchor, at, onClose, pinned, muted, features, onl
   const menuKey = `${s.machine_id}/${s.session_id}`;
   if (nodeItems !== undefined || nodeDeps !== undefined) {
     const own = nodeItems ?? nodeActions(sessionNode(s, online), nodeDeps!, { omit: ["node-copy-path", "node-rename"] });
-    const items = before.length && own.length ? [...before, { ...own[0], divider: true }, ...own.slice(1)] : [...before, ...own];
+    const items = groupAgentMenu(before, own);
     return <Menu key={menuKey} anchor={place.anchor ?? null} point={place.point} onClose={onClose} align="right" width={224} headerAsWritten items={items} />;
   }
   return <NodeMenu key={menuKey} node={sessionNode(s, online)} at={place} onClose={onClose} before={before} omit={["node-copy-path", "node-rename"]} />;
